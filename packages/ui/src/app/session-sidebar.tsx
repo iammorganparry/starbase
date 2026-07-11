@@ -1,5 +1,5 @@
 import type { CliInfo, GhStatus, Session } from "@starbase/core"
-import { GitBranch, Search } from "lucide-react"
+import { GitBranch, Layers, Plus, Search } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
@@ -73,9 +73,29 @@ export function SessionSidebar({
         </div>
       </div>
 
-      {/* Groups */}
+      {/* Groups (or the empty hint when there are no sessions yet) */}
       <div className="flex flex-1 flex-col overflow-auto px-2 pb-2 pt-0.5">
-        {groups.map(([repo, list]) => (
+        {sessions.length === 0 ? (
+          <div className="flex flex-1 flex-col px-1">
+            <button
+              type="button"
+              onClick={onNewSession}
+              className="flex items-center gap-2.5 rounded-lg border border-dashed border-line px-3 py-2.5 text-[13px] text-text-body outline-none transition-colors hover:border-blue hover:bg-surface hover:text-text-bright focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Plus size={15} />
+              New session
+            </button>
+            <div className="m-auto flex flex-col items-center gap-2.5 px-4 text-center">
+              <Layers size={22} className="text-line-strong" />
+              <span className="text-[12px] leading-[1.5] text-muted-foreground">
+                No sessions yet.
+                <br />
+                They&apos;ll appear here as you start them.
+              </span>
+            </div>
+          </div>
+        ) : (
+          groups.map(([repo, list]) => (
           <div key={repo}>
             <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
               <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
@@ -96,7 +116,8 @@ export function SessionSidebar({
               ))}
             </div>
           </div>
-        ))}
+          ))
+        )}
       </div>
 
       {/* Discovered CLIs (live) */}

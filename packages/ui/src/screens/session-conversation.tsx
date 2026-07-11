@@ -5,6 +5,7 @@ import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
 import { TerminalPanel } from "../app/terminal-panel.js"
 import { SEED_CONVERSATION } from "../seed.js"
+import { EmptyConversation } from "./empty-conversation.js"
 import { StubScreen } from "./stub-screen.js"
 
 export interface SessionConversationProps {
@@ -18,6 +19,11 @@ export interface SessionConversationProps {
    * (stories / standalone).
    */
   conversationPane?: ReactNode
+  /**
+   * Show the empty state instead of a transcript — the real app sets this when
+   * no session is active (first launch), so the seeded demo never renders.
+   */
+  showEmpty?: boolean
   /** Unified-diff patch for the Changes rail. */
   patch: string
   /** GitHub CLI status for the harnesses strip. */
@@ -49,11 +55,18 @@ export function SessionConversation(props: SessionConversationProps) {
         <TabBar
           active={tab}
           onChange={setTab}
+          prNumber={active?.prNumber ?? null}
           status={active?.status === "thinking" ? { label: "Thinking", tone: "yellow" } : undefined}
           cost={active ? `${Math.round(active.tokens / 1000)}k · $${active.costUsd.toFixed(2)}` : undefined}
         />
 
-        {tab === "conversation" ? (
+        {props.showEmpty ? (
+          <EmptyConversation
+            clis={props.clis}
+            version={props.version}
+            onNewSession={props.onNewSession}
+          />
+        ) : tab === "conversation" ? (
           <>
             <div className="flex min-h-0 flex-1">
               {props.conversationPane ?? (

@@ -67,6 +67,9 @@ export function StarbaseApp({
         {renderConversation(active)}
       </div>
     ) : undefined
+  // In the real app (renderConversation wired) with nothing selected, show the
+  // empty state rather than the Storybook-only seeded demo transcript.
+  const showEmpty = Boolean(renderConversation) && active === null
 
   // ⌘N / Ctrl-N opens the New Session dialog (only when creation is wired).
   useEffect(() => {
@@ -98,6 +101,7 @@ export function StarbaseApp({
         activeSessionId={selected}
         onSelectSession={setSelected}
         conversationPane={conversationPane}
+        showEmpty={showEmpty}
         patch={patch}
         ghStatus={ghStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}

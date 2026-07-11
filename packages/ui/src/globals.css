@@ -114,6 +114,19 @@
   --animate-pulse-dot: sb-pulse 1.4s ease-in-out infinite;
   --animate-shine: sb-shine 1.3s linear infinite;
   --animate-spin-fast: sb-spin 0.8s linear infinite;
+  --animate-breathe: sb-breathe 3.6s ease-in-out infinite;
+}
+
+@keyframes sb-breathe {
+  0%,
+  100% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.9);
+  }
 }
 
 @keyframes sb-pulse {
