@@ -3,6 +3,7 @@ import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
 import { Badge } from "../components/badge.js"
 import { DiffStat } from "../components/diff-stat.js"
+import { ProviderIcon } from "../components/provider-icon.js"
 import { statusLabel, statusTextClass } from "../tokens.js"
 
 /** A session row for the sidebar list. Active state gets the blue ring. */
@@ -41,6 +42,8 @@ export function SessionRow({
         >
           {session.title}
         </span>
+        {/* The harness in use, so it's visible at a glance in the list. */}
+        <ProviderIcon cli={session.cli} size={13} />
       </div>
       <div className="flex items-center gap-[7px] font-mono text-[10.5px] text-muted-foreground">
         <span className={cn(active ? "text-blue" : "text-muted-foreground")}>{session.branch}</span>

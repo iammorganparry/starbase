@@ -199,10 +199,9 @@ export function NewSessionDialog({
                 disabled={availableClis.length === 0}
               >
                 <SelectTrigger>
-                  <span className="flex items-center gap-2">
-                    {cli && <ProviderIcon cli={cli} className="text-text-bright" />}
-                    <SelectValue placeholder="No harness available" />
-                  </span>
+                  {/* SelectValue mirrors the chosen item (logo + label), so the
+                      trigger needs no separate icon. */}
+                  <SelectValue placeholder="No harness available" />
                 </SelectTrigger>
                 <SelectContent>
                   {availableClis.map((c) => (
