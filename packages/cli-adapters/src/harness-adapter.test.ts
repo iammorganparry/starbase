@@ -11,16 +11,21 @@ describe("selectHarness", () => {
     expect(selectHarness("claude", "/usr/bin/claude", false)).toBe("claude")
   })
 
+  it("routes an installed codex to the real adapter", () => {
+    expect(selectHarness("codex", "/usr/bin/codex", false)).toBe("codex")
+  })
+
   it("falls back to scripted when the binary is missing", () => {
     expect(selectHarness("claude", null, false)).toBe("scripted")
+    expect(selectHarness("codex", null, false)).toBe("scripted")
   })
 
   it("forces scripted regardless of binary when forceScripted is set (tests/e2e)", () => {
     expect(selectHarness("claude", "/usr/bin/claude", true)).toBe("scripted")
+    expect(selectHarness("codex", "/usr/bin/codex", true)).toBe("scripted")
   })
 
-  it("falls back to scripted for harnesses without a real adapter yet", () => {
-    expect(selectHarness("codex", "/usr/bin/codex", false)).toBe("scripted")
+  it("falls back to scripted for harnesses without a real adapter yet (Cursor)", () => {
     expect(selectHarness("cursor", "/usr/bin/cursor-agent", false)).toBe("scripted")
   })
 })

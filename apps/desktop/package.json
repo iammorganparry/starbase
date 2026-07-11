@@ -28,6 +28,7 @@
     "@effect/platform": "^0.96.2",
     "@effect/platform-node": "^0.107.0",
     "@effect/rpc": "^0.75.1",
+    "@openai/codex-sdk": "^0.144.1",
     "@starbase/cli-adapters": "workspace:*",
     "@starbase/contracts": "workspace:*",
     "@starbase/core": "workspace:*",

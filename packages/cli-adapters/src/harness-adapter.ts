@@ -2,23 +2,26 @@ import type { CliKind } from "@starbase/core"
 import { Effect, Layer } from "effect"
 import { CliAdapter, scriptedRun } from "./adapter.js"
 import { runClaude } from "./claude-adapter.js"
+import { runCodex } from "./codex-adapter.js"
 
 /** When set (e2e / tests), force the deterministic scripted adapter. */
 const SCRIPTED_ENV = "STARBASE_SCRIPTED_AGENT"
 
 /**
  * Which adapter handles a spec. Pure so the routing is unit-tested without
- * spawning a harness: forced scripted (env), or no binary → scripted; a `claude`
- * binary → the real Claude adapter; other harnesses fall back to scripted until
- * their adapters land.
+ * spawning a harness: forced scripted (env), or no binary → scripted; otherwise
+ * the harness's real adapter (`claude` / `codex`), falling back to scripted for
+ * harnesses without one yet (Cursor).
  */
 export const selectHarness = (
   cli: CliKind,
   binPath: string | null,
   forceScripted: boolean
-): "claude" | "scripted" => {
+): "claude" | "codex" | "scripted" => {
   if (forceScripted || binPath === null) return "scripted"
-  return cli === "claude" ? "claude" : "scripted"
+  if (cli === "claude") return "claude"
+  if (cli === "codex") return "codex"
+  return "scripted"
 }
 
 const isScriptedEnv = (): boolean =>
@@ -34,10 +37,16 @@ export const HarnessCliAdapterLive: Layer.Layer<CliAdapter> = Layer.sync(CliAdap
   const resume = new Map<string, string>()
   const scripted = scriptedRun(320)
   return CliAdapter.of({
-    run: (sessionId, spec, ctx) =>
-      selectHarness(spec.cli, spec.binPath, isScriptedEnv()) === "claude"
-        ? runClaude(sessionId, spec, ctx, resume)
-        : scripted(sessionId, spec, ctx),
+    run: (sessionId, spec, ctx) => {
+      switch (selectHarness(spec.cli, spec.binPath, isScriptedEnv())) {
+        case "claude":
+          return runClaude(sessionId, spec, ctx, resume)
+        case "codex":
+          return runCodex(sessionId, spec, ctx, resume)
+        default:
+          return scripted(sessionId, spec, ctx)
+      }
+    },
     stop: () => Effect.void
   })
 })
