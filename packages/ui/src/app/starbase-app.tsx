@@ -25,8 +25,8 @@ export interface StarbaseAppProps {
   liveStatus?: Record<string, SessionStatus>
   /** Provider usage snapshot for the Usage & limits modal. */
   usage?: Usage | null
-  /** Fetch fresh usage (called when the modal opens). */
-  onLoadUsage?: () => void
+  /** Fetch fresh usage (called when the modal opens); may be async. */
+  onLoadUsage?: () => Promise<void> | void
   activeSessionId?: string | null
   patch?: string
   /**
@@ -70,10 +70,15 @@ export function StarbaseApp({
   )
   const [newOpen, setNewOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [usageLoading, setUsageLoading] = useState(false)
 
   const openUsage = useCallback(() => {
-    onLoadUsage?.()
     setUsageOpen(true)
+    const result = onLoadUsage?.()
+    if (result && typeof (result as Promise<void>).then === "function") {
+      setUsageLoading(true)
+      void (result as Promise<void>).finally(() => setUsageLoading(false))
+    }
   }, [onLoadUsage])
 
   const active = sessions.find((s) => s.id === selected) ?? null
@@ -137,7 +142,12 @@ export function StarbaseApp({
         />
       )}
       {onLoadUsage && (
-        <UsageModal open={usageOpen} usage={usage} onClose={() => setUsageOpen(false)} />
+        <UsageModal
+          open={usageOpen}
+          usage={usage}
+          loading={usageLoading}
+          onClose={() => setUsageOpen(false)}
+        />
       )}
     </AppShell>
   )

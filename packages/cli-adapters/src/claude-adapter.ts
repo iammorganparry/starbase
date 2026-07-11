@@ -3,8 +3,6 @@ import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
-import { recordClaudeRateLimit } from "./usage-store.js"
-import type { RateLimitInfo } from "./usage-store.js"
 
 /**
  * Real Claude harness, driven by `@anthropic-ai/claude-agent-sdk`'s `query()`.
@@ -257,10 +255,6 @@ export const runClaude = (
         for await (const msg of iterator) {
           const sid = (msg as { session_id?: unknown }).session_id
           if (typeof sid === "string" && sid.length > 0) resume.set(sessionId, sid)
-          // Capture rate-limit windows for the Usage & limits modal.
-          if (msg.type === "rate_limit_event") {
-            recordClaudeRateLimit(((msg as { rate_limit_info?: RateLimitInfo }).rate_limit_info ?? {}))
-          }
           for (const event of streamEventsFor(msg, tools)) {
             await runP(ctx.emit(event))
           }

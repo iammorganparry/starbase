@@ -82,10 +82,13 @@ function ProviderSection({ provider: p }: { provider: ProviderUsage }) {
 export function UsageModal({
   open,
   usage,
+  loading = false,
   onClose
 }: {
   open: boolean
   usage?: Usage | null
+  /** A usage fetch is in flight (the live read takes a couple of seconds). */
+  loading?: boolean
   onClose?: () => void
 }) {
   const providers = usage?.providers ?? []
@@ -99,6 +102,11 @@ export function UsageModal({
         <DialogBody className="py-0">
           {providers.length > 0 ? (
             providers.map((p) => <ProviderSection key={p.cli} provider={p} />)
+          ) : loading ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-muted-foreground">
+              <RefreshCw size={13} className="animate-spin" />
+              Reading plan usage…
+            </div>
           ) : (
             <div className="py-8 text-center text-[13px] text-muted-foreground">
               No harnesses detected on this machine.
@@ -106,8 +114,8 @@ export function UsageModal({
           )}
         </DialogBody>
         <DialogFooter className="justify-start text-[11px] text-muted-foreground">
-          <RefreshCw size={12} />
-          Last updated: {fmtUpdated(usage?.fetchedAt ?? null)}
+          <RefreshCw size={12} className={loading ? "animate-spin" : undefined} />
+          {loading && providers.length > 0 ? "Refreshing…" : `Last updated: ${fmtUpdated(usage?.fetchedAt ?? null)}`}
         </DialogFooter>
       </DialogContent>
     </Dialog>

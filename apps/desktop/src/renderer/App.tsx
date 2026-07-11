@@ -18,9 +18,7 @@ export function App() {
   const { clis, ghStatus, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
   const [usage, setUsage] = useState<Usage | null>(null)
-  const loadUsage = () => {
-    void rpc.usageGet().then(setUsage)
-  }
+  const loadUsage = () => rpc.usageGet().then(setUsage)
 
   const createSession = async (input: CreateSessionInput) => {
     const session = await rpc.sessionsCreate(input)
