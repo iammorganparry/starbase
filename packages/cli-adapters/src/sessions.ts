@@ -1,86 +1,118 @@
-import type { Session } from "@starbase/core"
-import { SessionNotFoundError } from "@starbase/core"
-import { Effect } from "effect"
+import type { CreateSessionInput, Session } from "@starbase/core"
+import { GitError, SessionNotFoundError } from "@starbase/core"
+import { Session as SessionSchema } from "@starbase/core"
+import { FileSystem, Path } from "@effect/platform"
+import type { CommandExecutor } from "@effect/platform"
+import { Effect, Schema } from "effect"
+import { AppPaths } from "./app-paths.js"
+import { GitService } from "./git.js"
+
+const SessionArray = Schema.Array(SessionSchema)
+
+/** Lowercase, collapse non-alphanumeric runs to single dashes, trim; fallback "session". */
+const kebab = (input: string): string =>
+  input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "session"
+
+type PersistEnv = FileSystem.FileSystem | AppPaths
 
 /**
- * Seed sessions mirroring the sidebar in the Starbase design (`Starbase.dc.html`
- * screen 01). Real sessions will come from a persistent store + live CLI runs;
- * for milestone 1 this gives the UI realistic data to render.
- */
-const SEED: ReadonlyArray<Session> = [
-  {
-    id: "s_refactor_auth",
-    repo: "trigify/api",
-    branch: "feat/oauth",
-    title: "Refactor auth flow",
-    status: "thinking",
-    cli: "claude",
-    diff: { added: 313, removed: 23 },
-    prNumber: 482,
-    costUsd: 1.24,
-    tokens: 218_000,
-    updatedAt: "2026-07-11T09:41:00.000Z"
-  },
-  {
-    id: "s_bump_deps",
-    repo: "trigify/api",
-    branch: "chore/deps",
-    title: "Bump dependencies",
-    status: "idle",
-    cli: "claude",
-    diff: { added: 0, removed: 0 },
-    prNumber: null,
-    costUsd: 0.12,
-    tokens: 14_200,
-    updatedAt: "2026-07-11T08:12:00.000Z"
-  },
-  {
-    id: "s_flaky_tests",
-    repo: "trigify/web",
-    branch: "main",
-    title: "Fix flaky tests",
-    status: "needs-input",
-    cli: "codex",
-    diff: { added: 47, removed: 9 },
-    prNumber: null,
-    costUsd: 0.44,
-    tokens: 61_800,
-    updatedAt: "2026-07-11T09:05:00.000Z"
-  },
-  {
-    id: "s_docs_guides",
-    repo: "trigify/docs",
-    branch: "docs/guides",
-    title: "Rewrite onboarding guides",
-    status: "done",
-    cli: "cursor",
-    diff: { added: 128, removed: 64 },
-    prNumber: 91,
-    costUsd: 0.31,
-    tokens: 38_400,
-    updatedAt: "2026-07-10T18:20:00.000Z"
-  }
-]
-
-/**
- * Read access to the set of agent sessions. In-memory and seeded for now.
+ * The session store, persisted to `~/starbase/sessions.json`. Starts empty — real
+ * sessions are created via `create`, which forks an isolated git worktree
+ * (`GitService`) before recording the session. Reads are best-effort: a missing
+ * or malformed file yields an empty list so the app still boots.
  */
 export class SessionStore extends Effect.Service<SessionStore>()(
   "@starbase/SessionStore",
   {
     accessors: true,
     sync: () => {
-      const sessions = new Map<string, Session>(SEED.map((s) => [s.id, s]))
-      return {
-        list: (): Effect.Effect<ReadonlyArray<Session>> =>
-          Effect.succeed([...sessions.values()]),
-        get: (id: string): Effect.Effect<Session, SessionNotFoundError> => {
-          const found = sessions.get(id)
-          return found
-            ? Effect.succeed(found)
-            : Effect.fail(new SessionNotFoundError({ sessionId: id }))
-        }
-      }
+      const readAll = (): Effect.Effect<ReadonlyArray<Session>, never, PersistEnv> =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const paths = yield* AppPaths
+          const exists = yield* fs
+            .exists(paths.sessionsFile)
+            .pipe(Effect.orElseSucceed(() => false))
+          if (!exists) return []
+          const raw = yield* fs
+            .readFileString(paths.sessionsFile)
+            .pipe(Effect.orElseSucceed(() => ""))
+          if (raw.trim().length === 0) return []
+          return yield* Schema.decodeUnknown(Schema.parseJson(SessionArray))(raw).pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<Session>)
+          )
+        })
+
+      const writeAll = (
+        sessions: ReadonlyArray<Session>
+      ): Effect.Effect<void, GitError, PersistEnv> =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const paths = yield* AppPaths
+          yield* fs
+            .makeDirectory(paths.root, { recursive: true })
+            .pipe(Effect.mapError((cause) => new GitError({ message: "Failed to create ~/starbase", cause })))
+          const encoded = yield* Schema.encode(SessionArray)(sessions).pipe(
+            Effect.mapError((cause) => new GitError({ message: "Failed to encode sessions", cause }))
+          )
+          yield* fs
+            .writeFileString(paths.sessionsFile, JSON.stringify(encoded, null, 2))
+            .pipe(Effect.mapError((cause) => new GitError({ message: "Failed to persist session", cause })))
+        })
+
+      const list = (): Effect.Effect<ReadonlyArray<Session>, never, PersistEnv> => readAll()
+
+      const get = (id: string): Effect.Effect<Session, SessionNotFoundError, PersistEnv> =>
+        Effect.gen(function* () {
+          const found = (yield* readAll()).find((s) => s.id === id)
+          return found ?? (yield* Effect.fail(new SessionNotFoundError({ sessionId: id })))
+        })
+
+      const create = (
+        input: CreateSessionInput
+      ): Effect.Effect<
+        Session,
+        GitError,
+        | GitService
+        | FileSystem.FileSystem
+        | Path.Path
+        | CommandExecutor.CommandExecutor
+        | AppPaths
+      > =>
+        Effect.gen(function* () {
+          const slug = kebab(input.title)
+          const worktree = yield* GitService.createWorktree({
+            repoPath: input.repoPath,
+            repoName: input.repoName,
+            slug,
+            baseBranch: input.baseBranch
+          })
+          const now = yield* Effect.sync(() => new Date().toISOString())
+          const stamp = yield* Effect.sync(() => Date.now().toString(36))
+          const session: Session = {
+            id: `s_${slug}_${stamp}`,
+            repo: input.repoName,
+            branch: worktree.branch,
+            title: input.title,
+            status: "idle",
+            cli: input.cli,
+            diff: { added: 0, removed: 0 },
+            prNumber: null,
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: now,
+            worktreePath: worktree.path,
+            baseBranch: input.baseBranch
+          }
+          const existing = yield* readAll()
+          yield* writeAll([session, ...existing])
+          return session
+        })
+
+      return { list, get, create }
     }
   }
 ) {}

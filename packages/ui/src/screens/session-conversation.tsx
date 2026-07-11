@@ -1,5 +1,5 @@
 import { useState } from "react"
-import type { CliInfo, Message, Session } from "@starbase/core"
+import type { CliInfo, GhStatus, Message, Session } from "@starbase/core"
 import { SessionSidebar } from "../app/session-sidebar.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
@@ -15,6 +15,10 @@ export interface SessionConversationProps {
   messages: ReadonlyArray<Message>
   /** Unified-diff patch for the Changes rail. */
   patch: string
+  /** GitHub CLI status for the harnesses strip. */
+  ghStatus?: GhStatus
+  /** Open the New Session dialog. */
+  onNewSession?: () => void
 }
 
 /** Screen 01 — the primary session workspace. */
@@ -29,6 +33,8 @@ export function SessionConversation(props: SessionConversationProps) {
         clis={props.clis}
         activeSessionId={props.activeSessionId}
         onSelect={props.onSelectSession}
+        ghStatus={props.ghStatus}
+        onNewSession={props.onNewSession}
       />
 
       <div className="flex min-w-0 flex-1 flex-col bg-editor">

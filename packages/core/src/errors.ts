@@ -39,3 +39,37 @@ export class SessionNotFoundError extends Schema.TaggedError<SessionNotFoundErro
     sessionId: Schema.String
   }
 ) {}
+
+/**
+ * Raised when an operation needs a configured repos directory but the user has
+ * not completed first-run setup yet. A `Schema.TaggedError` — it is the
+ * `Workspace.repos` RPC error channel.
+ */
+export class WorkspaceNotConfiguredError extends Schema.TaggedError<WorkspaceNotConfiguredError>()(
+  "WorkspaceNotConfiguredError",
+  {}
+) {}
+
+/**
+ * Raised when reading or writing the persisted config/sessions files fails.
+ * A `Schema.TaggedError` so it can cross the RPC boundary.
+ */
+export class ConfigError extends Schema.TaggedError<ConfigError>()(
+  "ConfigError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}
+
+/**
+ * Raised when a git operation (branch lookup, `worktree add`, repo scan) fails.
+ * A `Schema.TaggedError` — it is the error channel for the worktree/branch RPCs.
+ */
+export class GitError extends Schema.TaggedError<GitError>()(
+  "GitError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}

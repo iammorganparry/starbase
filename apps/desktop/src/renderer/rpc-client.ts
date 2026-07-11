@@ -4,7 +4,14 @@
  * (`window.starbase`), driving a real `RpcClient` built from the shared
  * `StarbaseRpcs` group. Callers get plain, typed Promises back.
  */
-import type { CliInfo, Session } from "@starbase/core"
+import type {
+  CliInfo,
+  CreateSessionInput,
+  GhStatus,
+  Repo,
+  Session,
+  WorkspaceConfig
+} from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcClient } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -56,8 +63,20 @@ const run = <A>(
 export const rpc = {
   discoveryList: (): Promise<ReadonlyArray<CliInfo>> =>
     run((c) => c.Discovery.list()),
+  configGet: (): Promise<WorkspaceConfig | null> =>
+    run((c) => c.Config.get()),
+  chooseReposDir: (): Promise<WorkspaceConfig | null> =>
+    run((c) => c.Setup.chooseReposDir()),
+  workspaceRepos: (): Promise<ReadonlyArray<Repo>> =>
+    run((c) => c.Workspace.repos()),
+  workspaceBranches: (repoPath: string): Promise<ReadonlyArray<string>> =>
+    run((c) => c.Workspace.branches({ repoPath })),
+  ghStatus: (): Promise<GhStatus> =>
+    run((c) => c.Gh.status()),
   sessionsList: (): Promise<ReadonlyArray<Session>> =>
     run((c) => c.Sessions.list()),
   sessionsGet: (id: string): Promise<Session> =>
-    run((c) => c.Sessions.get({ id }))
+    run((c) => c.Sessions.get({ id })),
+  sessionsCreate: (input: CreateSessionInput): Promise<Session> =>
+    run((c) => c.Sessions.create(input))
 }

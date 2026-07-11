@@ -16,6 +16,9 @@ export * from "./components/diff-stat.js"
 export * from "./components/segmented-control.js"
 export * from "./components/callout.js"
 export * from "./components/card.js"
+export * from "./components/dialog.js"
+export * from "./components/input.js"
+export * from "./components/select.js"
 
 // Molecules / composites
 export * from "./composites/tool-call.js"
@@ -27,6 +30,7 @@ export * from "./composites/slash-command-row.js"
 export * from "./composites/mcp-server-row.js"
 export * from "./composites/session-row.js"
 export * from "./composites/composer.js"
+export * from "./composites/new-session-dialog.js"
 
 // Diff engine (virtualized)
 export * from "./diff/parse.js"
@@ -47,6 +51,7 @@ export * from "./app/starbase-app.js"
 export * from "./screens/session-conversation.js"
 export * from "./screens/component-library.js"
 export * from "./screens/stub-screen.js"
+export * from "./screens/setup-screen.js"
 
 // Seed data
 export * from "./seed.js"

@@ -1,7 +1,7 @@
 import type { CliInfo, CliKind } from "@starbase/core"
-import { Command } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
+import { expandHome, runString, which } from "./command.js"
 
 /**
  * Static description of how to find each supported CLI: the binary names to look
@@ -30,33 +30,6 @@ const CLI_SPECS: Record<CliKind, CliSpec> = {
     candidates: ["~/.local/bin/cursor-agent"]
   }
 }
-
-const home = () =>
-  Effect.sync(() => process.env.HOME ?? process.env.USERPROFILE ?? "")
-
-const expandHome = (p: string) =>
-  Effect.map(home(), (h) => (p.startsWith("~") ? h + p.slice(1) : p))
-
-/** Run a command and return trimmed stdout, or null on any failure. */
-const runString = (
-  bin: string,
-  ...args: string[]
-): Effect.Effect<string | null, never, CommandExecutor.CommandExecutor> =>
-  Command.make(bin, ...args).pipe(
-    Command.string,
-    Effect.map((out) => {
-      const trimmed = out.trim()
-      return trimmed.length > 0 ? trimmed : null
-    }),
-    Effect.catchAll(() => Effect.succeed(null))
-  )
-
-/** Resolve a binary on PATH via `which`/`where`; returns the first hit or null. */
-const which = (bin: string) =>
-  Effect.map(
-    runString(process.platform === "win32" ? "where" : "which", bin),
-    (out) => out?.split("\n")[0]?.trim() ?? null
-  )
 
 /** Capture a CLI's version string by invoking `<bin> --version`. */
 const versionOf = (bin: string) => runString(bin, "--version")

@@ -19,7 +19,9 @@
     "@effect/platform": "^0.96.2",
     "@effect/platform-node": "^0.107.0",
     "@effect/rpc": "^0.75.1",
-    "effect": "^3.21.4"
+    "@xstate/react": "^6.1.0",
+    "effect": "^3.21.4",
+    "xstate": "^5.32.4"
   },
   "devDependencies": {
     "@starbase/tsconfig": "workspace:*",

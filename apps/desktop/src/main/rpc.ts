@@ -12,13 +12,20 @@
  * frames carry Effect `Exit`/`Cause` class instances that don't survive
  * Electron's structured-clone IPC.)
  */
-import { DiscoveryService, SessionStore } from "@starbase/cli-adapters"
+import {
+  ConfigService,
+  DiscoveryService,
+  GhService,
+  SessionStore,
+  WorkspaceService
+} from "@starbase/cli-adapters"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
 import { Effect, Layer, Mailbox, Option, Runtime } from "effect"
 import type { WebContents } from "electron"
 import { ipcMain } from "electron"
+import { DialogService } from "./dialog.js"
 
 /** The single IPC channel both directions of the RPC transport ride on. */
 export const RPC_CHANNEL = "starbase/rpc"
@@ -31,8 +38,21 @@ export const RPC_CHANNEL = "starbase/rpc"
  */
 const HandlersLayer = StarbaseRpcs.toLayer({
   "Discovery.list": () => DiscoveryService.list(),
+  // Malformed/absent config decodes to "not configured" → renderer shows setup.
+  "Config.get": () => ConfigService.get().pipe(Effect.orElseSucceed(() => null)),
+  "Setup.chooseReposDir": () =>
+    Effect.gen(function* () {
+      const dialog = yield* DialogService
+      const dir = yield* dialog.chooseDirectory()
+      if (dir === null) return null
+      return yield* ConfigService.setReposDir(dir)
+    }).pipe(Effect.orElseSucceed(() => null)),
+  "Workspace.repos": () => WorkspaceService.listRepos(),
+  "Workspace.branches": ({ repoPath }) => WorkspaceService.branches(repoPath),
   "Sessions.list": () => SessionStore.list(),
-  "Sessions.get": ({ id }) => SessionStore.get(id)
+  "Sessions.get": ({ id }) => SessionStore.get(id),
+  "Sessions.create": (input) => SessionStore.create(input),
+  "Gh.status": () => GhService.status()
 })
 
 /**
