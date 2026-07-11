@@ -52,6 +52,7 @@ export * from "./screens/session-conversation.js"
 export * from "./screens/component-library.js"
 export * from "./screens/stub-screen.js"
 export * from "./screens/setup-screen.js"
+export * from "./screens/loading-screen.js"
 
 // Seed data
 export * from "./seed.js"

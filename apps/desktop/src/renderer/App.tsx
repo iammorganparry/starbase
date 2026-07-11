@@ -1,6 +1,6 @@
 import { useMachine } from "@xstate/react"
 import type { CreateSessionInput } from "@starbase/core"
-import { SetupScreen, StarbaseApp } from "@starbase/ui"
+import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { rpc } from "./rpc-client.js"
 
@@ -21,11 +21,7 @@ export function App() {
   }
 
   if (state.matches("loading") || state.matches("starting")) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-canvas font-mono text-[13px] text-muted-foreground">
-        Starting Starbase…
-      </div>
-    )
+    return <LoadingScreen />
   }
 
   if (state.matches("failure")) {
