@@ -219,7 +219,10 @@ export function NewSessionDialog({
               <Eyebrow>Base</Eyebrow>
               <Select
                 value={base}
-                onValueChange={setBase}
+                // Ignore the spurious empty-value change Radix emits when the
+                // programmatic default is applied as the select flips from
+                // disabled → enabled on branch load; a real pick is never empty.
+                onValueChange={(v) => v && setBase(v)}
                 disabled={loadingBranches || branches.length === 0}
               >
                 <SelectTrigger className="font-mono">

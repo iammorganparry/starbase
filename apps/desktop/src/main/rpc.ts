@@ -31,6 +31,26 @@ import { DialogService } from "./dialog.js"
 export const RPC_CHANNEL = "starbase/rpc"
 
 /**
+ * `Config.get` handler. A malformed or absent config folds to `null` so the
+ * renderer treats it as "not configured yet" and shows first-run setup, rather
+ * than surfacing a read error. Exported so its folding behaviour is unit-tested.
+ */
+export const configGet = () => ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+
+/**
+ * `Setup.chooseReposDir` handler. Opens the native picker; a cancelled dialog (or
+ * any failure) folds to `null`, otherwise the chosen dir is persisted and the new
+ * config returned. Exported so the cancel/persist branches are unit-tested.
+ */
+export const chooseReposDir = () =>
+  Effect.gen(function* () {
+    const dialog = yield* DialogService
+    const dir = yield* dialog.chooseDirectory()
+    if (dir === null) return null
+    return yield* ConfigService.setReposDir(dir)
+  }).pipe(Effect.orElseSucceed(() => null))
+
+/**
  * Handlers for every procedure in the group. Each one delegates straight to an
  * Effect service, so the group remains the sole contract. `Discovery.list`
  * pulls in a `CommandExecutor` requirement (via `DiscoveryService.list()`) that
@@ -38,15 +58,8 @@ export const RPC_CHANNEL = "starbase/rpc"
  */
 const HandlersLayer = StarbaseRpcs.toLayer({
   "Discovery.list": () => DiscoveryService.list(),
-  // Malformed/absent config decodes to "not configured" → renderer shows setup.
-  "Config.get": () => ConfigService.get().pipe(Effect.orElseSucceed(() => null)),
-  "Setup.chooseReposDir": () =>
-    Effect.gen(function* () {
-      const dialog = yield* DialogService
-      const dir = yield* dialog.chooseDirectory()
-      if (dir === null) return null
-      return yield* ConfigService.setReposDir(dir)
-    }).pipe(Effect.orElseSucceed(() => null)),
+  "Config.get": configGet,
+  "Setup.chooseReposDir": chooseReposDir,
   "Workspace.repos": () => WorkspaceService.listRepos(),
   "Workspace.branches": ({ repoPath }) => WorkspaceService.branches(repoPath),
   "Sessions.list": () => SessionStore.list(),

@@ -11,11 +11,12 @@
     "clean": "rimraf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@starbase/core": "workspace:*",
     "@effect/platform": "^0.96.2",
+    "@starbase/core": "workspace:*",
     "effect": "^3.21.4"
   },
   "devDependencies": {
+    "@effect/platform-node": "^0.107.0",
     "@starbase/tsconfig": "workspace:*",
     "@types/node": "^22.10.0"
   }
