@@ -1,5 +1,6 @@
+import { useState } from "react"
 import { useMachine } from "@xstate/react"
-import type { CreateSessionInput, Session } from "@starbase/core"
+import type { CreateSessionInput, Session, Usage } from "@starbase/core"
 import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
@@ -16,6 +17,10 @@ export function App() {
   const [state, send] = useMachine(appMachine)
   const { clis, ghStatus, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const loadUsage = () => {
+    void rpc.usageGet().then(setUsage)
+  }
 
   const createSession = async (input: CreateSessionInput) => {
     const session = await rpc.sessionsCreate(input)
@@ -58,6 +63,8 @@ export function App() {
       repos={repos}
       ghStatus={ghStatus}
       liveStatus={liveStatus}
+      usage={usage}
+      onLoadUsage={loadUsage}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
       renderConversation={(session: Session) => <ConversationPane session={session} />}

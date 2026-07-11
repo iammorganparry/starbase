@@ -41,6 +41,7 @@ export * from "./composites/mode-switch.js"
 export * from "./composites/command-menu.js"
 export * from "./composites/mention-menu.js"
 export * from "./composites/new-session-dialog.js"
+export * from "./composites/usage-modal.js"
 
 // Diff engine (virtualized)
 export * from "./diff/parse.js"

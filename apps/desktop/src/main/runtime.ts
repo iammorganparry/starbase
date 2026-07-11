@@ -17,6 +17,7 @@ import {
   SessionStore,
   SkillsService,
   TranscriptStore,
+  UsageService,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { NodeContext } from "@effect/platform-node"
@@ -35,6 +36,7 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(AgentRunner.Default),
   Layer.provide(SkillsService.Default),
   Layer.provide(ModelsService.Default),
+  Layer.provide(UsageService.Default),
   Layer.provide(GhService.Default),
   Layer.provide(ConfigService.Default),
   Layer.provide(GitService.Default),

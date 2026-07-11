@@ -11,6 +11,7 @@ import {
   Session,
   Skill,
   StreamEvent,
+  Usage,
   WorkspaceConfig
 } from "@starbase/core"
 import {
@@ -144,6 +145,11 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Models.list", {
     success: Schema.Array(ModelOption),
     payload: { cli: CliKind }
+  }),
+
+  /** Provider usage / rate-limit windows for the Usage & limits modal. */
+  Rpc.make("Usage.get", {
+    success: Usage
   }),
 
   /** Detect the GitHub CLI (`gh`) and its authentication status. */

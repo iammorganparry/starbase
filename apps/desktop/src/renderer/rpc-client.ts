@@ -17,6 +17,7 @@ import type {
   Session,
   Skill,
   StreamEvent,
+  Usage,
   WorkspaceConfig
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
@@ -95,6 +96,7 @@ export const rpc = {
     run((c) => c.Skills.list({ sessionId })),
   modelsList: (cli: CliKind): Promise<ReadonlyArray<ModelOption>> =>
     run((c) => c.Models.list({ cli })),
+  usageGet: (): Promise<Usage> => run((c) => c.Usage.get()),
   agentDecideGate: (sessionId: string, gateId: string, decision: GateDecision): Promise<void> =>
     run((c) => c.Agent.decideGate({ sessionId, gateId, decision })),
   agentSetMode: (sessionId: string, mode: PermissionMode): Promise<void> =>

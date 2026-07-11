@@ -1,5 +1,5 @@
 import type { Session, SessionStatus } from "@starbase/core"
-import { GitBranch, Layers, Plus, Search } from "lucide-react"
+import { ChevronRight, GitBranch, Gauge, Layers, Plus, Search } from "lucide-react"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
 import { SessionRow } from "../composites/session-row.js"
@@ -12,6 +12,10 @@ export interface SessionSidebarProps {
   liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
+  /** Open the Usage & limits modal (footer button). */
+  onOpenUsage?: () => void
+  /** Optional usage summary (e.g. "12%") shown on the usage button. */
+  usageSummary?: string
   /** App version (from `__APP_VERSION__`), shown in the footer. */
   version?: string
 }
@@ -23,6 +27,8 @@ export function SessionSidebar({
   onSelect,
   liveStatus,
   onNewSession,
+  onOpenUsage,
+  usageSummary,
   version
 }: SessionSidebarProps) {
   const groups = groupByRepo(sessions)
@@ -114,6 +120,22 @@ export function SessionSidebar({
           ))
         )}
       </div>
+
+      {/* Usage & limits */}
+      {onOpenUsage && (
+        <div className="border-t border-hairline p-2.5">
+          <button
+            type="button"
+            onClick={onOpenUsage}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Gauge size={15} className="text-muted-foreground" />
+            <span className="flex-1 text-[12.5px] text-text-body">Usage &amp; limits</span>
+            {usageSummary && <span className="font-mono text-[10px] text-muted-foreground">{usageSummary}</span>}
+            <ChevronRight size={13} className="text-line-strong" />
+          </button>
+        </div>
+      )}
 
       {/* Footer */}
       <div className="flex h-11 items-center border-t border-hairline px-4 text-[11px] text-dim">

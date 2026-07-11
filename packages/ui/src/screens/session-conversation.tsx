@@ -29,6 +29,8 @@ export interface SessionConversationProps {
   liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog. */
   onNewSession?: () => void
+  /** Open the Usage & limits modal (sidebar footer button). */
+  onOpenUsage?: () => void
   /** App version, shown in the sidebar footer. */
   version?: string
 }
@@ -59,6 +61,7 @@ export function SessionConversation(props: SessionConversationProps) {
         onSelect={props.onSelectSession}
         liveStatus={props.liveStatus}
         onNewSession={props.onNewSession}
+        onOpenUsage={props.onOpenUsage}
         version={props.version}
       />
 

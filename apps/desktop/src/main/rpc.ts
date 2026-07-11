@@ -21,6 +21,7 @@ import {
   SessionStore,
   SkillsService,
   TranscriptStore,
+  UsageService,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
@@ -117,6 +118,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
   "Skills.list": ({ sessionId }) => skillsList(sessionId),
   "Models.list": ({ cli }) => ModelsService.list(cli),
+  "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
   "Gh.status": () => GhService.status()
 })
 

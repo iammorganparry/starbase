@@ -5,10 +5,12 @@ import type {
   GhStatus,
   Repo,
   Session,
-  SessionStatus
+  SessionStatus,
+  Usage
 } from "@starbase/core"
 import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
+import { UsageModal } from "../composites/usage-modal.js"
 import { SessionConversation } from "../screens/session-conversation.js"
 import { SEED_PATCH } from "../seed.js"
 
@@ -21,6 +23,10 @@ export interface StarbaseAppProps {
   ghStatus?: GhStatus
   /** Live per-session agent status (thinking / needs-input) while running. */
   liveStatus?: Record<string, SessionStatus>
+  /** Provider usage snapshot for the Usage & limits modal. */
+  usage?: Usage | null
+  /** Fetch fresh usage (called when the modal opens). */
+  onLoadUsage?: () => void
   activeSessionId?: string | null
   patch?: string
   /**
@@ -50,6 +56,8 @@ export function StarbaseApp({
   repos = [],
   ghStatus,
   liveStatus,
+  usage,
+  onLoadUsage,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -61,6 +69,12 @@ export function StarbaseApp({
     activeSessionId ?? sessions[0]?.id ?? null
   )
   const [newOpen, setNewOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
+
+  const openUsage = useCallback(() => {
+    onLoadUsage?.()
+    setUsageOpen(true)
+  }, [onLoadUsage])
 
   const active = sessions.find((s) => s.id === selected) ?? null
   // Key the pane by session id so each session drives a fresh conversation
@@ -109,6 +123,7 @@ export function StarbaseApp({
         patch={patch}
         liveStatus={liveStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
+        onOpenUsage={onLoadUsage ? openUsage : undefined}
         version={version}
       />
       {onCreateSession && (
@@ -120,6 +135,9 @@ export function StarbaseApp({
           loadBranches={loadBranches}
           onCreate={handleCreate}
         />
+      )}
+      {onLoadUsage && (
+        <UsageModal open={usageOpen} usage={usage} onClose={() => setUsageOpen(false)} />
       )}
     </AppShell>
   )

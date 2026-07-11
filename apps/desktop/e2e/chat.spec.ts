@@ -159,3 +159,17 @@ test("the model chip shows the harness model and switches", async ({ launchApp }
   await window.getByRole("menuitem", { name: "sonnet" }).click()
   await expect(window.getByRole("button", { name: /sonnet/ })).toBeVisible()
 })
+
+test("the sidebar Usage & limits button opens the usage modal", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The sidebar footer surfaces the usage entry point.
+  await window.getByRole("button", { name: /Usage & limits/ }).click()
+
+  // The modal opens with its title and "last updated" footer (provider rows
+  // depend on which harnesses are installed on the runner, so we don't assert them).
+  const dialog = window.getByRole("dialog")
+  await expect(dialog.getByText("Usage & limits")).toBeVisible()
+  await expect(dialog.getByText(/Last updated:/)).toBeVisible()
+})
