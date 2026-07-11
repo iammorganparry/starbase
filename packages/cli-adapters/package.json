@@ -1,0 +1,22 @@
+{
+  "name": "@starbase/cli-adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@starbase/core": "workspace:*",
+    "@effect/platform": "^0.96.2",
+    "effect": "^3.21.4"
+  },
+  "devDependencies": {
+    "@starbase/tsconfig": "workspace:*",
+    "@types/node": "^22.10.0"
+  }
+}

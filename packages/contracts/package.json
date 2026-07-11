@@ -1,0 +1,21 @@
+{
+  "name": "@starbase/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@starbase/core": "workspace:*",
+    "@effect/rpc": "^0.75.1",
+    "effect": "^3.21.4"
+  },
+  "devDependencies": {
+    "@starbase/tsconfig": "workspace:*"
+  }
+}

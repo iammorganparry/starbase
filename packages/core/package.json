@@ -1,0 +1,19 @@
+{
+  "name": "@starbase/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "effect": "^3.21.4"
+  },
+  "devDependencies": {
+    "@starbase/tsconfig": "workspace:*"
+  }
+}

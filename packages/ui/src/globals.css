@@ -1,0 +1,193 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Starbase design system — One Dark Pro, on a shadcn/Tailwind v4 base.
+ * The app renders permanently in dark; One Dark values live on :root and are
+ * exposed to Tailwind via @theme so components use semantic shadcn tokens
+ * (bg-background, text-muted-foreground, border-border, …) AND the brand ramp
+ * (bg-panel, text-blue, border-line, …).
+ */
+
+:root {
+  /* Surfaces (darkest → lightest) */
+  --sb-border: #181a1f;
+  --sb-panel: #21252b;
+  --sb-sunken: #1e2228;
+  --sb-editor: #282c34;
+  --sb-surface: #2c313a;
+  --sb-canvas: #16181d;
+  --sb-line: #3e4451;
+  --sb-line-strong: #4b5263;
+
+  /* Text ramp */
+  --sb-text-bright: #d7dae0;
+  --sb-text-body: #c8ccd4;
+  --sb-text: #abb2bf;
+  --sb-muted: #828997;
+  --sb-dim: #5c6370;
+
+  /* Accents */
+  --sb-blue: #61afef;
+  --sb-green: #98c379;
+  --sb-yellow: #e5c07b;
+  --sb-red: #e06c75;
+  --sb-purple: #c678dd;
+  --sb-cyan: #56b6c2;
+  --sb-orange: #d19a66;
+
+  /* shadcn semantic tokens mapped onto One Dark */
+  --background: var(--sb-editor);
+  --foreground: var(--sb-text);
+  --card: var(--sb-panel);
+  --card-foreground: var(--sb-text-bright);
+  --popover: var(--sb-sunken);
+  --popover-foreground: var(--sb-text-bright);
+  --primary: var(--sb-blue);
+  --primary-foreground: var(--sb-editor);
+  --secondary: var(--sb-surface);
+  --secondary-foreground: var(--sb-text);
+  --muted: var(--sb-panel);
+  --muted-foreground: var(--sb-muted);
+  --accent: var(--sb-surface);
+  --accent-foreground: var(--sb-text-bright);
+  --destructive: var(--sb-red);
+  --destructive-foreground: var(--sb-editor);
+  --border: var(--sb-line);
+  --input: var(--sb-line);
+  --ring: var(--sb-blue);
+
+  /* Editor-tight radii from the design (rows/cards 5, chips 4, gutters 3, callouts 7). */
+  --radius: 5px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Brand ramp → utilities (bg-panel, text-dim, border-line, text-blue, …) */
+  --color-canvas: var(--sb-canvas);
+  --color-panel: var(--sb-panel);
+  --color-sunken: var(--sb-sunken);
+  --color-editor: var(--sb-editor);
+  --color-surface: var(--sb-surface);
+  --color-hairline: var(--sb-border);
+  --color-line: var(--sb-line);
+  --color-line-strong: var(--sb-line-strong);
+  --color-text-bright: var(--sb-text-bright);
+  --color-text-body: var(--sb-text-body);
+  --color-text: var(--sb-text);
+  --color-dim: var(--sb-dim);
+  --color-blue: var(--sb-blue);
+  --color-green: var(--sb-green);
+  --color-yellow: var(--sb-yellow);
+  --color-red: var(--sb-red);
+  --color-purple: var(--sb-purple);
+  --color-cyan: var(--sb-cyan);
+  --color-orange: var(--sb-orange);
+
+  --font-sans: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 5px;
+  --radius-xl: 7px;
+
+  --animate-pulse-dot: sb-pulse 1.4s ease-in-out infinite;
+  --animate-shine: sb-shine 1.3s linear infinite;
+  --animate-spin-fast: sb-spin 0.8s linear infinite;
+}
+
+@keyframes sb-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+}
+@keyframes sb-shine {
+  0% {
+    background-position: -220px 0;
+  }
+  100% {
+    background-position: 340px 0;
+  }
+}
+@keyframes sb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--sb-canvas);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a {
+    color: var(--sb-blue);
+    text-decoration: none;
+  }
+  a:hover {
+    color: #7cc0f5;
+  }
+
+  /* Thin One Dark scrollbars. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #3e4451 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #3e4451;
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #4b5263;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@starbase/tsconfig/base.json",
+  "compilerOptions": {
+    // One config typechecks all three Electron parts. Main/preload are Node,
+    // the renderer is React 19 in the DOM — so we enable both `node` and the
+    // React types plus the DOM lib. Vite/esbuild does the actual transpilation;
+    // this config exists purely for `tsc --noEmit` and editor feedback.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node", "react", "react-dom"]
+  },
+  "include": ["src", "electron.vite.config.ts"]
+}

@@ -1,0 +1,4 @@
+{
+  "extends": "@starbase/tsconfig/base.json",
+  "include": ["src"]
+}
