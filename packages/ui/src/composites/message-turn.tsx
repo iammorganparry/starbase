@@ -2,7 +2,7 @@ import type { CliKind, ContentPart, GateDecision, Message, ToolCall as ToolCallM
 import { Eyebrow } from "../components/eyebrow.js"
 import { DiffPeek } from "../components/diff-peek.js"
 import { Markdown } from "../components/markdown.js"
-import { PROVIDER_LABEL, ProviderIcon } from "../components/provider-icon.js"
+import { PROVIDER_COLOR, PROVIDER_LABEL, ProviderIcon } from "../components/provider-icon.js"
 import { ApprovalGate } from "./approval-gate.js"
 import { ThoughtBlock } from "./thought-block.js"
 import { ToolCall } from "./tool-call.js"
@@ -96,7 +96,8 @@ export function MessageTurn({
   return (
     <div className="flex flex-col gap-3">
       {isAssistant ? (
-        <Eyebrow accent icon={<ProviderIcon cli={cli} className="text-blue" />}>
+        // Provider-branded eyebrow: logo + name in the provider's brand colour.
+        <Eyebrow icon={<ProviderIcon cli={cli} mono />} style={{ color: PROVIDER_COLOR[cli] }}>
           {PROVIDER_LABEL[cli]}
         </Eyebrow>
       ) : (
