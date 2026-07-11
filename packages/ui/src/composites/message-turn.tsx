@@ -1,6 +1,7 @@
 import type { ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
 import { ClaudeGlyph, Eyebrow } from "../components/eyebrow.js"
 import { DiffPeek } from "../components/diff-peek.js"
+import { Markdown } from "../components/markdown.js"
 import { ApprovalGate } from "./approval-gate.js"
 import { ThoughtBlock } from "./thought-block.js"
 import { ToolCall } from "./tool-call.js"
@@ -10,16 +11,31 @@ const WIDTH = "max-w-[640px]"
 const toolMeta = (tool: ToolCallModel): string | undefined =>
   tool.meta ?? (tool.diff ? `+${tool.diff.added} −${tool.diff.removed}` : undefined)
 
+/** A pulsing dots indicator shown while an assistant turn is still streaming. */
+function Working() {
+  return (
+    <div className="flex items-center gap-1.5 py-1" aria-label="Working">
+      <span className="size-1.5 animate-pulse-dot rounded-full bg-blue/70" />
+      <span className="size-1.5 animate-pulse-dot rounded-full bg-blue/70 [animation-delay:0.2s]" />
+      <span className="size-1.5 animate-pulse-dot rounded-full bg-blue/70 [animation-delay:0.4s]" />
+    </div>
+  )
+}
+
 function PartView({
   part,
+  markdown,
   onDecideGate
 }: {
   part: ContentPart
+  markdown: boolean
   onDecideGate?: (gateId: string, decision: GateDecision) => void
 }) {
   switch (part._tag) {
     case "Text":
-      return (
+      return markdown ? (
+        <Markdown className={WIDTH}>{part.text}</Markdown>
+      ) : (
         <p className={`m-0 ${WIDTH} whitespace-pre-wrap text-[14.5px] leading-[1.65] text-text-body`}>
           {part.text}
         </p>
@@ -72,18 +88,21 @@ export function MessageTurn({
   message: Message
   onDecideGate?: (gateId: string, decision: GateDecision) => void
 }) {
+  const isAssistant = message.role === "assistant"
   return (
     <div className="flex flex-col gap-3">
-      {message.role === "user" ? (
-        <Eyebrow>You</Eyebrow>
-      ) : (
+      {isAssistant ? (
         <Eyebrow accent icon={<ClaudeGlyph />}>
           Claude
         </Eyebrow>
+      ) : (
+        <Eyebrow>You</Eyebrow>
       )}
       {message.parts.map((part, i) => (
-        <PartView key={i} part={part} onDecideGate={onDecideGate} />
+        <PartView key={i} part={part} markdown={isAssistant} onDecideGate={onDecideGate} />
       ))}
+      {/* Signal the agent is still working (before/while content streams in). */}
+      {isAssistant && message.streaming && <Working />}
     </div>
   )
 }

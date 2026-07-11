@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Streamdown's animation keyframes (assistant markdown rendering). */
+@import "streamdown/styles.css";
 
 /*
  * Starbase design system — One Dark Pro, on a shadcn/Tailwind v4 base.
@@ -238,4 +240,119 @@
     border: 2px solid transparent;
     background-clip: padding-box;
   }
+}
+
+/*
+ * Assistant markdown (Streamdown output) — One Dark prose tuned for the compact
+ * chat column. Element selectors so we don't depend on Streamdown's own classes.
+ */
+.sb-md > :first-child {
+  margin-top: 0;
+}
+.sb-md > :last-child {
+  margin-bottom: 0;
+}
+.sb-md p {
+  margin: 0 0 12px;
+}
+.sb-md h1,
+.sb-md h2,
+.sb-md h3,
+.sb-md h4 {
+  margin: 20px 0 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sb-text-bright);
+}
+.sb-md h1 {
+  font-size: 18px;
+}
+.sb-md h2 {
+  font-size: 16px;
+}
+.sb-md h3 {
+  font-size: 14.5px;
+}
+.sb-md h4 {
+  font-size: 13.5px;
+}
+.sb-md ul,
+.sb-md ol {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.sb-md li {
+  margin: 3px 0;
+}
+.sb-md ul {
+  list-style: disc;
+}
+.sb-md ol {
+  list-style: decimal;
+}
+.sb-md a {
+  color: var(--sb-blue);
+  text-decoration: none;
+}
+.sb-md a:hover {
+  text-decoration: underline;
+}
+.sb-md strong {
+  font-weight: 600;
+  color: var(--sb-text-bright);
+}
+.sb-md em {
+  font-style: italic;
+}
+.sb-md code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--sb-surface);
+  border: 1px solid var(--sb-line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--sb-cyan);
+}
+.sb-md pre {
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  background: var(--sb-sunken);
+  border: 1px solid var(--sb-line);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.sb-md pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--sb-text-body);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.sb-md blockquote {
+  margin: 0 0 12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--sb-line-strong);
+  color: var(--sb-muted);
+}
+.sb-md hr {
+  margin: 16px 0;
+  border: none;
+  border-top: 1px solid var(--sb-border);
+}
+.sb-md table {
+  margin: 0 0 12px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.sb-md th,
+.sb-md td {
+  border: 1px solid var(--sb-line);
+  padding: 5px 9px;
+  text-align: left;
+}
+.sb-md th {
+  background: var(--sb-surface);
+  color: var(--sb-text-bright);
+  font-weight: 600;
 }

@@ -103,7 +103,6 @@ export function StarbaseApp({
         conversationPane={conversationPane}
         showEmpty={showEmpty}
         patch={patch}
-        ghStatus={ghStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         version={version}
       />

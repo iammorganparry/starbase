@@ -1,9 +1,8 @@
 import { type ReactNode, useState } from "react"
-import type { CliInfo, GhStatus, Session } from "@starbase/core"
+import type { CliInfo, Session } from "@starbase/core"
 import { SessionSidebar } from "../app/session-sidebar.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
-import { TerminalPanel } from "../app/terminal-panel.js"
 import { SEED_CONVERSATION } from "../seed.js"
 import { EmptyConversation } from "./empty-conversation.js"
 import { StubScreen } from "./stub-screen.js"
@@ -24,14 +23,19 @@ export interface SessionConversationProps {
    * no session is active (first launch), so the seeded demo never renders.
    */
   showEmpty?: boolean
-  /** Unified-diff patch for the Changes rail. */
-  patch: string
-  /** GitHub CLI status for the harnesses strip. */
-  ghStatus?: GhStatus
+  /** Unified-diff patch for the Changes rail (fallback demo only). */
+  patch?: string
   /** Open the New Session dialog. */
   onNewSession?: () => void
   /** App version, shown in the sidebar footer. */
   version?: string
+}
+
+/** The tabs relevant to a session — extra tabs only appear once they have data. */
+const visibleTabs = (active: Session | null): ReadonlyArray<TabKey> => {
+  const tabs: TabKey[] = ["conversation"]
+  if (active?.prNumber != null) tabs.push("pr", "review")
+  return tabs
 }
 
 /** Screen 01 — the primary session workspace. */
@@ -39,44 +43,48 @@ export function SessionConversation(props: SessionConversationProps) {
   const [tab, setTab] = useState<TabKey>("conversation")
   const active = props.sessions.find((s) => s.id === props.activeSessionId) ?? null
 
+  const tabs = visibleTabs(active)
+  // Never leave a hidden tab selected (e.g. after switching to a PR-less session).
+  const activeTab = tabs.includes(tab) ? tab : "conversation"
+
   return (
     <div className="flex min-h-0 flex-1">
       <SessionSidebar
         sessions={props.sessions}
-        clis={props.clis}
         activeSessionId={props.activeSessionId}
         onSelect={props.onSelectSession}
-        ghStatus={props.ghStatus}
         onNewSession={props.onNewSession}
         version={props.version}
       />
 
       <div className="flex min-w-0 flex-1 flex-col bg-editor">
-        <TabBar
-          active={tab}
-          onChange={setTab}
-          prNumber={active?.prNumber ?? null}
-          status={active?.status === "thinking" ? { label: "Thinking", tone: "yellow" } : undefined}
-          cost={active ? `${Math.round(active.tokens / 1000)}k · $${active.costUsd.toFixed(2)}` : undefined}
-        />
-
         {props.showEmpty ? (
           <EmptyConversation
             clis={props.clis}
             version={props.version}
             onNewSession={props.onNewSession}
           />
-        ) : tab === "conversation" ? (
-          <>
-            <div className="flex min-h-0 flex-1">
-              {props.conversationPane ?? (
-                <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
-              )}
-            </div>
-            <TerminalPanel />
-          </>
         ) : (
-          <StubScreen tab={tab} />
+          <>
+            <TabBar
+              tabs={tabs}
+              active={activeTab}
+              onChange={setTab}
+              prNumber={active?.prNumber ?? null}
+              status={active?.status === "thinking" ? { label: "Thinking", tone: "yellow" } : undefined}
+              cost={active ? `${Math.round(active.tokens / 1000)}k · $${active.costUsd.toFixed(2)}` : undefined}
+            />
+
+            {activeTab === "conversation" ? (
+              <div className="flex min-h-0 flex-1">
+                {props.conversationPane ?? (
+                  <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
+                )}
+              </div>
+            ) : (
+              <StubScreen tab={activeTab} />
+            )}
+          </>
         )}
       </div>
     </div>

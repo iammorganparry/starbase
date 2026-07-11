@@ -131,14 +131,23 @@ export const streamEventsFor = (
     case "system":
       return msg.subtype === "init" ? [{ _tag: "Started", sessionId: msg.session_id }] : []
 
+    // Token-level streaming: assistant text arrives as content_block deltas.
+    case "stream_event": {
+      const event = (msg as { event?: { type?: string; delta?: Record<string, unknown> } }).event
+      if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
+        const text = strOf(event.delta.text)
+        return text ? [{ _tag: "Assistant", text }] : []
+      }
+      return []
+    }
+
+    // The completed assistant message carries thinking (as a finished block) and
+    // tool_use calls. Text is skipped here — it already streamed via deltas.
     case "assistant": {
       const out: StreamEvent[] = []
       for (const block of contentBlocks(msg.message)) {
         const type = block.type
-        if (type === "text") {
-          const text = strOf(block.text)
-          if (text) out.push({ _tag: "Assistant", text })
-        } else if (type === "thinking") {
+        if (type === "thinking") {
           const text = strOf(block.thinking)
           if (text) out.push({ _tag: "Thinking", text, seconds: null, done: true })
         } else if (type === "tool_use") {
@@ -228,7 +237,7 @@ export const runClaude = (
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "auto" ? { allowDangerouslySkipPermissions: true } : {}),
-            includePartialMessages: false,
+            includePartialMessages: true,
             canUseTool,
             abortController: abort,
             resume: resume.get(sessionId)

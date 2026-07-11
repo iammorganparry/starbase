@@ -63,7 +63,15 @@ describe("streamEventsFor", () => {
     expect(events).toStrictEqual([{ _tag: "Started", sessionId: "s1" }])
   })
 
-  it("maps assistant text, thinking and tool_use blocks in order", () => {
+  it("streams assistant text token-by-token from content_block_delta events", () => {
+    const events = streamEventsFor(
+      msg({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Editing " } } }),
+      new Map()
+    )
+    expect(events).toStrictEqual([{ _tag: "Assistant", text: "Editing " }])
+  })
+
+  it("emits thinking (finished) and tool_use from the assistant message, but not text (already streamed)", () => {
     const tools = new Map<string, ToolMemo>()
     const events = streamEventsFor(
       msg({
@@ -80,7 +88,6 @@ describe("streamEventsFor", () => {
     )
     expect(events).toStrictEqual([
       { _tag: "Thinking", text: "planning", seconds: null, done: true },
-      { _tag: "Assistant", text: "Editing the route." },
       { _tag: "ToolStart", id: "tu_1", name: "Edit", target: "src/billing.ts" }
     ])
     expect(tools.get("tu_1")?.name).toBe("Edit")

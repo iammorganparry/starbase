@@ -1,31 +1,24 @@
-import type { CliInfo, GhStatus, Session } from "@starbase/core"
+import type { Session } from "@starbase/core"
 import { GitBranch, Layers, Plus, Search } from "lucide-react"
-import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
-import { StatusDot } from "../components/status-dot.js"
 import { SessionRow } from "../composites/session-row.js"
 
 export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
-  clis: ReadonlyArray<CliInfo>
   activeSessionId: string | null
   onSelect: (id: string) => void
-  /** GitHub CLI status, shown as a chip in the harnesses strip. */
-  ghStatus?: GhStatus
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
   /** App version (from `__APP_VERSION__`), shown in the footer. */
   version?: string
 }
 
-/** Left rail: sessions grouped by repository + a live CLI-discovery strip. */
+/** Left rail: sessions grouped by repository, with a first-run empty hint. */
 export function SessionSidebar({
   sessions,
-  clis,
   activeSessionId,
   onSelect,
-  ghStatus,
   onNewSession,
   version
 }: SessionSidebarProps) {
@@ -120,30 +113,6 @@ export function SessionSidebar({
         )}
       </div>
 
-      {/* Discovered CLIs (live) */}
-      <div className="flex flex-col gap-[7px] border-t border-hairline px-3.5 py-2.5">
-        <span className="font-mono text-[9.5px] tracking-[0.4px] text-muted-foreground">HARNESSES</span>
-        <div className="flex flex-wrap gap-1.5">
-          {clis.length === 0 && <span className="text-[11px] text-dim">Scanning…</span>}
-          {clis.map((cli) => (
-            <span
-              key={cli.kind}
-              title={cli.available ? `${cli.binPath ?? ""}${cli.version ? ` · ${cli.version}` : ""}` : "Not installed"}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md border px-2 py-[3px] font-mono text-[10.5px]",
-                cli.available
-                  ? "border-green/30 bg-green/10 text-text"
-                  : "border-line bg-white/[0.03] text-dim opacity-60"
-              )}
-            >
-              <StatusDot tone={cli.available ? "bg-green" : "bg-line-strong"} size={6} glow={false} />
-              {cli.label}
-            </span>
-          ))}
-          {ghStatus && <GhChip gh={ghStatus} />}
-        </div>
-      </div>
-
       {/* Footer */}
       <div className="flex h-11 items-center justify-between border-t border-hairline px-4 text-[11px] text-dim">
         <span className="font-mono" title={version ? "App version" : undefined}>
@@ -154,34 +123,6 @@ export function SessionSidebar({
         </span>
       </div>
     </div>
-  )
-}
-
-/** GitHub CLI status chip — green when authenticated, muted otherwise. */
-function GhChip({ gh }: { gh: GhStatus }) {
-  if (!gh.available) {
-    return (
-      <span
-        title="gh not installed"
-        className="flex items-center gap-1.5 rounded-md border border-line bg-white/[0.03] px-2 py-[3px] font-mono text-[10.5px] text-dim opacity-60"
-      >
-        <StatusDot tone="bg-line-strong" size={6} glow={false} />
-        gh
-      </span>
-    )
-  }
-  const authed = gh.authenticated
-  return (
-    <span
-      title={authed ? (gh.host ?? "github.com") : "Not authenticated — run `gh auth login`"}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md border px-2 py-[3px] font-mono text-[10.5px]",
-        authed ? "border-green/30 bg-green/10 text-text" : "border-line bg-white/[0.03] text-dim"
-      )}
-    >
-      <StatusDot tone={authed ? "bg-green" : "bg-line-strong"} size={6} glow={false} />
-      {authed ? `gh · @${gh.login ?? "user"}` : "gh · signed out"}
-    </span>
   )
 }
 
