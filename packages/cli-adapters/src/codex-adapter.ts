@@ -145,6 +145,7 @@ export const runCodex = (
         const threadOptions = {
           workingDirectory: spec.cwd || undefined,
           skipGitRepoCheck: true,
+          ...(spec.model ? { model: spec.model } : {}),
           ...mapCodexPolicy(spec.mode)
         }
         const prior = resume.get(sessionId)

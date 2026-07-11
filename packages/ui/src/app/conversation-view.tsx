@@ -1,18 +1,15 @@
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react"
-import type { GateDecision, Message, PermissionMode, Skill } from "@starbase/core"
+import { useLayoutEffect, useRef, useState } from "react"
+import type { GateDecision, Message, ModelOption, PermissionMode, Skill } from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { useHotkeys } from "react-hotkeys-hook"
 import { PanelRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Composer } from "../composites/composer.js"
 import { MessageTurn } from "../composites/message-turn.js"
-import { ModeSwitch } from "../composites/mode-switch.js"
 import { DiffPanel } from "./diff-panel.js"
 
-const MODE_LABEL: Record<PermissionMode, string> = {
-  ask: "ask each time",
-  "accept-edits": "accept edits",
-  auto: "auto"
-}
+/** Shift+Tab cycles through the HITL modes, Claude-Code style. */
+const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
 
 export interface ConversationViewProps {
   messages: ReadonlyArray<Message>
@@ -22,7 +19,10 @@ export interface ConversationViewProps {
   /** The worktree's unified diff, shown in the Changes rail. */
   patch?: string
   paused?: boolean
-  model?: ReactNode
+  /** Current harness model id + the models it supports (composer model chip). */
+  model?: string
+  models?: ReadonlyArray<ModelOption>
+  onSetModel?: (model: string) => void
   onSend?: (text: string) => void
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onSetMode?: (mode: PermissionMode) => void
@@ -54,6 +54,8 @@ export function ConversationView({
   patch = "",
   paused = false,
   model,
+  models = [],
+  onSetModel,
   onSend,
   onDecideGate,
   onSetMode
@@ -61,6 +63,17 @@ export function ConversationView({
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevCount = useRef(messages.length)
   const [showChanges, setShowChanges] = useState(true)
+
+  // Shift+Tab cycles the HITL mode (works while typing in the composer).
+  useHotkeys(
+    "shift+tab",
+    () => {
+      const i = MODE_CYCLE.indexOf(mode)
+      onSetMode?.(MODE_CYCLE[(i + 1) % MODE_CYCLE.length]!)
+    },
+    { enableOnFormTags: true, preventDefault: true },
+    [mode, onSetMode]
+  )
 
   const counts = diffCounts(patch)
   const hasChanges = counts.added + counts.removed > 0
@@ -94,11 +107,9 @@ export function ConversationView({
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-none items-center gap-2 border-b border-hairline px-[30px] py-2">
-          <div className="flex-1" />
-          <ModeSwitch mode={mode} onChange={onSetMode} paused={paused} />
-          {/* Show/hide the Changes rail — only offered when there are changes. */}
-          {hasChanges && (
+        {/* Slim bar just for the Changes toggle — only when there are changes. */}
+        {hasChanges && (
+          <div className="flex flex-none items-center justify-end border-b border-hairline px-[30px] py-2">
             <button
               type="button"
               onClick={() => setShowChanges((v) => !v)}
@@ -108,8 +119,8 @@ export function ConversationView({
             >
               <PanelRight size={15} className={cn(showChanges ? "text-blue" : "text-dim")} />
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         <div ref={scrollRef} className="flex-1 overflow-auto px-[30px] py-[26px]">
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
@@ -139,7 +150,10 @@ export function ConversationView({
             files={files}
             paused={paused}
             model={model}
-            mode={MODE_LABEL[mode]}
+            models={models}
+            onSetModel={onSetModel}
+            mode={mode}
+            onSetMode={onSetMode}
             onSend={onSend}
           />
         </div>

@@ -113,7 +113,11 @@ export type Skill = Schema.Schema.Type<typeof Skill>
 // ── Normalized stream events (the harness-agnostic seam) ──────────────────────
 
 export const StreamEvent = Schema.Union(
-  Schema.TaggedStruct("Started", { sessionId: Schema.String }),
+  Schema.TaggedStruct("Started", {
+    sessionId: Schema.String,
+    /** The actual model the harness is running, when known (from init). */
+    model: Schema.optional(Schema.String)
+  }),
   Schema.TaggedStruct("Thinking", {
     text: Schema.String,
     seconds: Schema.NullOr(Schema.Number),

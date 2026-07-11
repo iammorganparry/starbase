@@ -1,7 +1,9 @@
-import type { GateDecision, PermissionMode, StreamEvent } from "@starbase/core"
+import { mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import type { GateDecision, PermissionMode, Session, StreamEvent } from "@starbase/core"
 import { Effect, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { makeScriptedCliAdapter } from "./adapter.js"
+import { CliAdapter, makeScriptedCliAdapter } from "./adapter.js"
 import { AgentRunner } from "./agent-runner.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -133,5 +135,56 @@ describe("AgentRunner allowlist", () => {
     const events = await Effect.runPromise(program.pipe(Effect.provide(base)))
     expect(gates(events)).toHaveLength(0)
     expect(ranTool(events, "bash-1")).toBe(true)
+  })
+})
+
+describe("AgentRunner model", () => {
+  // A harness that reports its real model on init (as the Claude adapter does).
+  const modelReportingAdapter = Layer.succeed(
+    CliAdapter,
+    CliAdapter.of({
+      run: (sessionId, _spec, ctx) =>
+        ctx
+          .emit({ _tag: "Started", sessionId, model: "opus-live" })
+          .pipe(Effect.zipRight(ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 }))),
+      stop: () => Effect.void
+    })
+  )
+
+  it("persists the harness's actual model (reported on init) onto the session", async () => {
+    // Seed a session on disk so the runner can persist its model back.
+    const session: Session = {
+      id: SESSION,
+      repo: "r",
+      branch: "b",
+      title: "t",
+      status: "idle",
+      cli: "claude",
+      diff: { added: 0, removed: 0 },
+      prNumber: null,
+      costUsd: 0,
+      tokens: 0,
+      updatedAt: "2026-07-11T10:00:00.000Z"
+    }
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(join(temp.root, "sessions.json"), JSON.stringify([session]))
+
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      modelReportingAdapter,
+      DiscoveryService.Default,
+      temp.layer
+    )
+    const model = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.prompt(SESSION, "hi").pipe(Stream.runDrain)
+        const persisted = yield* SessionStore.get(SESSION)
+        return persisted.model
+      }).pipe(Effect.provide(base))
+    )
+    expect(model).toBe("opus-live")
   })
 })

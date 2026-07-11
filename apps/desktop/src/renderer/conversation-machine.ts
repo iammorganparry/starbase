@@ -8,8 +8,16 @@
  * normalized `StreamEvent` back as a `STREAM_EVENT`; the machine folds it into
  * the transcript with the same `applyStreamEvent` the main process persists with.
  */
-import type { GateDecision, Message, PermissionMode, Session, Skill, StreamEvent } from "@starbase/core"
-import { applyStreamEvent, assistantMessage, setGateStatus, userMessage } from "@starbase/core"
+import type {
+  GateDecision,
+  Message,
+  ModelOption,
+  PermissionMode,
+  Session,
+  Skill,
+  StreamEvent
+} from "@starbase/core"
+import { applyStreamEvent, assistantMessage, defaultModel, setGateStatus, userMessage } from "@starbase/core"
 import { assign, fromCallback, fromPromise, setup } from "xstate"
 import { rpc } from "./rpc-client.js"
 
@@ -19,6 +27,9 @@ export interface ConversationContext {
   readonly mode: PermissionMode
   readonly skills: ReadonlyArray<Skill>
   readonly files: ReadonlyArray<string>
+  /** Current harness model id + the models it supports (composer chip). */
+  readonly model: string
+  readonly models: ReadonlyArray<ModelOption>
   /** The worktree's current unified diff, for the Changes rail. */
   readonly patch: string
   readonly pendingText: string
@@ -29,26 +40,29 @@ type ConversationEvent =
   | { type: "STREAM_EVENT"; event: StreamEvent }
   | { type: "DECIDE_GATE"; gateId: string; decision: GateDecision }
   | { type: "SET_MODE"; mode: PermissionMode }
+  | { type: "SET_MODEL"; model: string }
   | { type: "STOP" }
 
 interface LoadedData {
   readonly transcript: ReadonlyArray<Message>
   readonly skills: ReadonlyArray<Skill>
   readonly files: ReadonlyArray<string>
+  readonly models: ReadonlyArray<ModelOption>
   readonly patch: string
 }
 
-/** Load the persisted transcript, the harness skills, the worktree files + diff. */
+/** Load the persisted transcript, harness skills + models, worktree files + diff. */
 const loadConversation = fromPromise<LoadedData, { session: Session }>(async ({ input }) => {
-  const [transcript, skills, files, patch] = await Promise.all([
+  const [transcript, skills, files, models, patch] = await Promise.all([
     rpc.sessionsTranscript(input.session.id),
     rpc.skillsList(input.session.id),
     input.session.worktreePath
       ? rpc.workspaceFiles(input.session.worktreePath)
       : Promise.resolve([] as ReadonlyArray<string>),
+    rpc.modelsList(input.session.cli),
     rpc.sessionsDiff(input.session.id)
   ])
-  return { transcript, skills, files, patch }
+  return { transcript, skills, files, models, patch }
 })
 
 /** Re-read the worktree diff after a turn completes (edits may have landed). */
@@ -105,7 +119,11 @@ export const conversationMachine = setup({
     }),
     foldEvent: assign(({ context, event }) => {
       if (event.type !== "STREAM_EVENT") return {}
-      return { messages: patchLast(context.messages, (last) => applyStreamEvent(last, event.event)) }
+      const messages = patchLast(context.messages, (last) => applyStreamEvent(last, event.event))
+      // The harness reports its actual model on init — reflect it in the chip.
+      return event.event._tag === "Started" && event.event.model
+        ? { messages, model: event.event.model }
+        : { messages }
     }),
     optimisticGate: assign(({ context, event }) => {
       if (event.type !== "DECIDE_GATE") return {}
@@ -117,6 +135,11 @@ export const conversationMachine = setup({
       if (event.type !== "SET_MODE") return {}
       void rpc.agentSetMode(context.session.id, event.mode)
       return { mode: event.mode }
+    }),
+    persistModel: assign(({ context, event }) => {
+      if (event.type !== "SET_MODEL") return {}
+      void rpc.agentSetModel(context.session.id, event.model)
+      return { model: event.model }
     }),
     callStop: ({ context }) => {
       void rpc.agentStop(context.session.id)
@@ -131,6 +154,8 @@ export const conversationMachine = setup({
     mode: input.session.mode ?? "accept-edits",
     skills: [],
     files: [],
+    model: input.session.model ?? defaultModel(input.session.cli),
+    models: [],
     patch: "",
     pendingText: ""
   }),
@@ -145,6 +170,7 @@ export const conversationMachine = setup({
             messages: event.output.transcript,
             skills: event.output.skills,
             files: event.output.files,
+            models: event.output.models,
             patch: event.output.patch
           }))
         },
@@ -154,7 +180,8 @@ export const conversationMachine = setup({
     awaitingInput: {
       on: {
         SEND: { target: "running", actions: "appendTurns" },
-        SET_MODE: { actions: "persistMode" }
+        SET_MODE: { actions: "persistMode" },
+        SET_MODEL: { actions: "persistModel" }
       }
     },
     running: {
@@ -169,6 +196,7 @@ export const conversationMachine = setup({
         ],
         DECIDE_GATE: { actions: "optimisticGate" },
         SET_MODE: { actions: "persistMode" },
+        SET_MODEL: { actions: "persistModel" },
         STOP: { target: "refreshingDiff", actions: "callStop" }
       }
     },
@@ -182,7 +210,8 @@ export const conversationMachine = setup({
         onError: { target: "awaitingInput" }
       },
       on: {
-        SET_MODE: { actions: "persistMode" }
+        SET_MODE: { actions: "persistMode" },
+        SET_MODEL: { actions: "persistModel" }
       }
     }
   }

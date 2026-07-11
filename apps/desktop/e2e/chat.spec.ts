@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { expect, test } from "./fixtures.js"
 import type { SeedSession } from "./fixtures.js"
 
@@ -64,10 +66,13 @@ test("Auto mode runs the command without pausing for approval", async ({ launchA
   })
 
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
-  await window.getByRole("tab", { name: "Auto" }).click()
 
   const composer = window.getByPlaceholder("Message Claude…")
   await composer.click()
+  // Switch to Auto via the composer's mode chip (seeded as accept-edits).
+  await window.getByText("accept edits").click()
+  await window.getByRole("menuitem", { name: "auto" }).click()
+
   await composer.pressSequentially("Add rate limiting.")
   await composer.press("Enter")
 
@@ -76,23 +81,67 @@ test("Auto mode runs the command without pausing for approval", async ({ launchA
   await expect(window.getByText("Approval needed · run a command")).toHaveCount(0)
 })
 
-test("the / menu surfaces skills and the @ menu references worktree files", async ({ launchApp }) => {
+test("the / menu surfaces built-in + project skills and the @ menu references files", async ({
+  launchApp
+}) => {
   const { window } = await launchApp({
     configured: true,
     withRepo: true,
-    sessions: seededSessions
+    sessions: seededSessions,
+    // Seed a project skill BEFORE launch so it exists when the app scans skills.
+    seed: ({ repoPath }) => {
+      const skillDir = join(repoPath, ".claude", "skills", "deploy")
+      mkdirSync(skillDir, { recursive: true })
+      writeFileSync(join(skillDir, "SKILL.md"), "---\nname: deploy\ndescription: Ship it\n---\n")
+    }
   })
 
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
   const composer = window.getByPlaceholder("Message Claude…")
   await composer.click()
 
-  // `/` opens the skills/command palette.
+  // `/` surfaces built-in commands…
   await composer.pressSequentially("/")
   await expect(window.getByText("/plan")).toBeVisible()
+  // …and the project skill scanned from the worktree.
+  await composer.pressSequentially("deploy")
+  await expect(window.getByRole("option", { name: /deploy/ })).toBeVisible()
   await composer.press("Escape")
+  for (let i = 0; i < "/deploy".length; i++) await composer.press("Backspace")
 
   // `@` opens the code-reference palette listing tracked files.
-  await composer.pressSequentially(" @")
+  await composer.pressSequentially("@")
   await expect(window.getByText("README.md").first()).toBeVisible()
+})
+
+test("the mode chip lives in the composer and Shift+Tab cycles it", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  const composer = window.getByPlaceholder("Message Claude…")
+  await composer.click()
+
+  // Seeded mode is accept-edits → the chip reads "accept edits".
+  await expect(window.getByText("accept edits")).toBeVisible()
+
+  // Shift+Tab cycles accept-edits → auto → ask.
+  await window.keyboard.press("Shift+Tab")
+  await expect(window.getByText("auto")).toBeVisible()
+  await window.keyboard.press("Shift+Tab")
+  await expect(window.getByText("ask")).toBeVisible()
+})
+
+test("the model chip shows the harness model and switches", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  await expect(window.getByPlaceholder("Message Claude…")).toBeVisible()
+
+  // Default Claude model is opus (fallback list; no API key in e2e).
+  const modelChip = window.getByRole("button", { name: /opus/ })
+  await expect(modelChip).toBeVisible()
+  await modelChip.click()
+
+  // The menu lists the harness's models — pick sonnet.
+  await window.getByRole("menuitem", { name: "sonnet" }).click()
+  await expect(window.getByRole("button", { name: /sonnet/ })).toBeVisible()
 })

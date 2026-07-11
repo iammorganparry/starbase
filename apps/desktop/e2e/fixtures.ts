@@ -36,6 +36,8 @@ export interface LaunchOptions {
   readonly sessions?:
     | ReadonlyArray<SeedSession>
     | ((ctx: { reposDir: string; repoPath: string }) => ReadonlyArray<SeedSession>)
+  /** Seed extra fixtures (e.g. project skills) after repo creation, before launch. */
+  readonly seed?: (ctx: { reposDir: string; repoPath: string }) => void
 }
 
 export interface LaunchedApp {
@@ -96,6 +98,10 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         mkdirSync(starbaseDir, { recursive: true })
         writeFileSync(join(starbaseDir, "sessions.json"), JSON.stringify(sessions, null, 2))
       }
+
+      // Seed extra fixtures (e.g. project skills) before launch, so they exist
+      // when the app first scans them.
+      options.seed?.({ reposDir, repoPath })
 
       const app = await electron.launch({
         args: [MAIN_ENTRY],

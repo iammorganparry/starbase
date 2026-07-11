@@ -77,7 +77,9 @@ export const Session = Schema.Struct({
   /** HITL permission mode; defaults to "accept-edits" when absent. */
   mode: Schema.optional(PermissionMode),
   /** Commands the operator chose to "Always allow" for this session. */
-  allowlist: Schema.optional(Schema.Array(Schema.String))
+  allowlist: Schema.optional(Schema.Array(Schema.String)),
+  /** The harness model id for this session; defaults to the harness default. */
+  model: Schema.optional(Schema.String)
 })
 export type Session = Schema.Schema.Type<typeof Session>
 

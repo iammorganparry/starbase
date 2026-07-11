@@ -5,7 +5,7 @@ import type {
   Session,
   StreamEvent
 } from "@starbase/core"
-import { applyStreamEvent, assistantMessage, userMessage } from "@starbase/core"
+import { applyStreamEvent, assistantMessage, defaultModel, userMessage } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Deferred, Effect, Mailbox, Ref, Stream } from "effect"
@@ -165,12 +165,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             cwd: session?.worktreePath ?? "",
             prompt: text,
             binPath,
-            mode
+            mode,
+            model: session?.model ?? defaultModel(cli)
           }
 
           // Capture the persistence services so `emit`/`run` handed to the
           // adapter have no residual requirements (R = never).
-          const env = yield* Effect.context<TranscriptStore | FileSystem.FileSystem | Path.Path | AppPaths>()
+          const env = yield* Effect.context<
+            TranscriptStore | SessionStore | FileSystem.FileSystem | Path.Path | AppPaths
+          >()
 
           const now = yield* Effect.sync(() => new Date().toISOString())
           const un = yield* nextId
@@ -188,6 +191,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               const next = applyStreamEvent(yield* Ref.get(acc), event)
               yield* Ref.set(acc, next)
               yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
+              // Persist the harness's actual model (reported on init) so the chip
+              // reflects reality even when the session hadn't pinned one.
+              if (event._tag === "Started" && event.model) {
+                yield* SessionStore.setModel(sessionId, event.model).pipe(Effect.ignore)
+              }
               yield* out.offer(event)
             }).pipe(Effect.provide(env), Effect.asVoid)
 

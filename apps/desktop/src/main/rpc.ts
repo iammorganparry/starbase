@@ -17,11 +17,13 @@ import {
   ConfigService,
   DiscoveryService,
   GhService,
+  ModelsService,
   SessionStore,
   SkillsService,
   TranscriptStore,
   WorkspaceService
 } from "@starbase/cli-adapters"
+import { homedir } from "node:os"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -63,6 +65,9 @@ export const skillsList = (sessionId: string) =>
     const session = yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
     return yield* SkillsService.list({
       cli: session?.cli ?? "claude",
+      // The operator's global skills live under the real home (~/.claude/skills),
+      // never STARBASE_HOME.
+      homeDir: homedir(),
       worktreePath: session?.worktreePath ?? null
     })
   })
@@ -106,9 +111,12 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(AgentRunner, (runner) => runner.decideGate(sessionId, gateId, decision)),
   "Agent.setMode": ({ sessionId, mode }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.setMode(sessionId, mode)),
+  "Agent.setModel": ({ sessionId, model }) =>
+    SessionStore.setModel(sessionId, model).pipe(Effect.ignore),
   "Agent.stop": ({ sessionId }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
   "Skills.list": ({ sessionId }) => skillsList(sessionId),
+  "Models.list": ({ cli }) => ModelsService.list(cli),
   "Gh.status": () => GhService.status()
 })
 

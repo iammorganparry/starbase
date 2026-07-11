@@ -63,6 +63,16 @@ describe("streamEventsFor", () => {
     expect(events).toStrictEqual([{ _tag: "Started", sessionId: "s1" }])
   })
 
+  it("carries the actual model on Started when the init reports one", () => {
+    const events = streamEventsFor(
+      msg({ type: "system", subtype: "init", session_id: "s1", model: "claude-opus-4-20250514" }),
+      new Map()
+    )
+    expect(events).toStrictEqual([
+      { _tag: "Started", sessionId: "s1", model: "claude-opus-4-20250514" }
+    ])
+  })
+
   it("streams assistant text token-by-token from content_block_delta events", () => {
     const events = streamEventsFor(
       msg({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Editing " } } }),

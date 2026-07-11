@@ -23,6 +23,7 @@ export * from "./components/file-icon.js"
 export * from "./components/diff-peek.js"
 export * from "./components/code-chip.js"
 export * from "./components/markdown.js"
+export * from "./components/chip-menu.js"
 
 // Molecules / composites
 export * from "./composites/tool-call.js"

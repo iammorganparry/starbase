@@ -126,6 +126,9 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Persist the session's HITL permission mode. */
       const setMode = (id: string, mode: PermissionMode) => update(id, (s) => ({ ...s, mode }))
 
+      /** Persist the session's harness model. */
+      const setModel = (id: string, model: string) => update(id, (s) => ({ ...s, model }))
+
       /** Add a command to the session's "always allow" list (deduped). */
       const addAllowlist = (id: string, label: string) =>
         update(id, (s) => ({
@@ -133,7 +136,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           allowlist: [...new Set([...(s.allowlist ?? []), label])]
         }))
 
-      return { list, get, create, setMode, addAllowlist }
+      return { list, get, create, setMode, setModel, addAllowlist }
     }
   }
 ) {}

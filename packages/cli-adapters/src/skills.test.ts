@@ -8,48 +8,65 @@ import { NodeContext } from "@effect/platform-node"
 
 /**
  * Skills feed the `/` menu. Behaviours that matter: every harness gets the
- * built-in commands; the Claude reporter also surfaces project-local skills from
- * a real `.claude/skills` directory (with parsed descriptions); a non-Claude
+ * built-in commands; the Claude reporter surfaces the operator's GLOBAL skills
+ * (~/.claude/skills) AND the session's PROJECT skills (<worktree>/.claude/skills),
+ * with a project skill overriding a global one of the same name; a non-Claude
  * harness reports only built-ins. Real temp filesystem.
  */
 
-let temp: ReturnType<typeof mkTemp>
+let home: ReturnType<typeof mkTemp>
+let repo: ReturnType<typeof mkTemp>
 beforeEach(() => {
-  temp = mkTemp("starbase-skills-")
+  home = mkTemp("starbase-home-")
+  repo = mkTemp("starbase-repo-")
 })
-afterEach(() => temp.cleanup())
+afterEach(() => {
+  home.cleanup()
+  repo.cleanup()
+})
 
 const run = <A>(effect: Effect.Effect<A, never, SkillsService | NodeContext.NodeContext>) =>
   Effect.runPromise(
     effect.pipe(Effect.provide(Layer.mergeAll(SkillsService.Default, NodeContext.layer)))
   )
 
+const writeSkill = (root: string, name: string, description: string) => {
+  const dir = join(root, ".claude", "skills", name)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n`)
+}
+
 describe("SkillsService", () => {
-  it("returns only built-in commands when there is no worktree", async () => {
-    const skills = await run(SkillsService.list({ cli: "claude", worktreePath: null }))
+  it("returns only built-in commands when there are no skill dirs", async () => {
+    const skills = await run(SkillsService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
     expect(skills.every((s) => s.source === "command")).toBe(true)
     expect(skills.some((s) => s.name === "/plan")).toBe(true)
   })
 
-  it("surfaces project-local Claude skills with their descriptions", async () => {
-    const skillsDir = join(temp.dir, ".claude", "skills", "deploy")
-    mkdirSync(skillsDir, { recursive: true })
-    writeFileSync(
-      join(skillsDir, "SKILL.md"),
-      "---\nname: deploy\ndescription: Ship the app to production\n---\n# Deploy\n"
-    )
-    const skills = await run(SkillsService.list({ cli: "claude", worktreePath: temp.dir }))
-    const deploy = skills.find((s) => s.name === "/deploy")
-    expect(deploy).toBeDefined()
-    expect(deploy!.source).toBe("skill")
-    expect(deploy!.description).toBe("Ship the app to production")
-    // Built-ins are still present alongside project skills.
+  it("surfaces global skills from ~/.claude/skills", async () => {
+    writeSkill(home.dir, "babysit-pr", "Babysit a PR to green")
+    const skills = await run(SkillsService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    const skill = skills.find((s) => s.name === "/babysit-pr")
+    expect(skill).toBeDefined()
+    expect(skill!.source).toBe("skill")
+    expect(skill!.description).toBe("Babysit a PR to green")
+    // Built-ins still present alongside real skills.
     expect(skills.some((s) => s.name === "/review")).toBe(true)
   })
 
+  it("merges global + project skills, with the project skill winning on a name clash", async () => {
+    writeSkill(home.dir, "deploy", "Global deploy")
+    writeSkill(home.dir, "audit", "Global audit")
+    writeSkill(repo.dir, "deploy", "Project deploy") // same name → overrides global
+    const skills = await run(SkillsService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    expect(skills.filter((s) => s.name === "/deploy")).toHaveLength(1)
+    expect(skills.find((s) => s.name === "/deploy")!.description).toBe("Project deploy")
+    expect(skills.some((s) => s.name === "/audit")).toBe(true)
+  })
+
   it("reports only built-ins for a non-Claude harness", async () => {
-    mkdirSync(join(temp.dir, ".claude", "skills", "deploy"), { recursive: true })
-    const skills = await run(SkillsService.list({ cli: "codex", worktreePath: temp.dir }))
+    writeSkill(home.dir, "deploy", "Global deploy")
+    const skills = await run(SkillsService.list({ cli: "codex", homeDir: home.dir, worktreePath: repo.dir }))
     expect(skills.every((s) => s.source === "command")).toBe(true)
   })
 })

@@ -128,8 +128,15 @@ export const streamEventsFor = (
   tools: Map<string, ToolMemo>
 ): ReadonlyArray<StreamEvent> => {
   switch (msg.type) {
-    case "system":
-      return msg.subtype === "init" ? [{ _tag: "Started", sessionId: msg.session_id }] : []
+    case "system": {
+      if (msg.subtype !== "init") return []
+      const model = strOf(msg.model)
+      return [
+        model
+          ? { _tag: "Started", sessionId: msg.session_id, model }
+          : { _tag: "Started", sessionId: msg.session_id }
+      ]
+    }
 
     // Token-level streaming: assistant text arrives as content_block deltas.
     case "stream_event": {
@@ -235,6 +242,7 @@ export const runClaude = (
           options: {
             cwd: spec.cwd || undefined,
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
+            model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "auto" ? { allowDangerouslySkipPermissions: true } : {}),
             includePartialMessages: true,

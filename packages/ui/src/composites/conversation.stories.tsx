@@ -83,7 +83,12 @@ export const ComposerWithMenus: Story = {
           { name: "/deploy", description: "Ship the app to production", source: "skill" }
         ]}
         files={["src/routes/billing.ts", "README.md"]}
-        mode="accept edits"
+        mode="accept-edits"
+        model="opus"
+        models={[
+          { id: "opus", label: "opus" },
+          { id: "sonnet", label: "sonnet" }
+        ]}
       />
     </div>
   )

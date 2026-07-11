@@ -17,7 +17,9 @@ export function ConversationPane({ session }: { session: Session }) {
       files={convo.files}
       patch={convo.patch}
       paused={convo.paused}
-      model={session.cli}
+      model={convo.model}
+      models={convo.models}
+      onSetModel={convo.setModel}
       onSend={convo.sendPrompt}
       onDecideGate={convo.decideGate}
       onSetMode={convo.setMode}

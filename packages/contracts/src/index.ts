@@ -1,9 +1,11 @@
 import {
   CliInfo,
+  CliKind,
   CreateSessionInput,
   GateDecision,
   GhStatus,
   Message,
+  ModelOption,
   PermissionMode,
   Repo,
   Session,
@@ -122,6 +124,11 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String, mode: PermissionMode }
   }),
 
+  /** Change a session's harness model (used on the next turn). */
+  Rpc.make("Agent.setModel", {
+    payload: { sessionId: Schema.String, model: Schema.String }
+  }),
+
   /** Stop a running agent (denies any pending gate). */
   Rpc.make("Agent.stop", {
     payload: { sessionId: Schema.String }
@@ -131,6 +138,12 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Skills.list", {
     success: Schema.Array(Skill),
     payload: { sessionId: Schema.String }
+  }),
+
+  /** List the models a harness supports (live from the provider; for the chip). */
+  Rpc.make("Models.list", {
+    success: Schema.Array(ModelOption),
+    payload: { cli: CliKind }
   }),
 
   /** Detect the GitHub CLI (`gh`) and its authentication status. */

@@ -69,11 +69,13 @@ describe("Session", () => {
     expect(Either.isRight(decode(Session, base))).toBe(true)
   })
 
-  it("round-trips the optional worktreePath / baseBranch when present", () => {
+  it("round-trips the optional worktreePath / baseBranch / mode / model when present", () => {
     const withWorktree: Session = {
       ...base,
       worktreePath: "/Users/me/starbase/worktrees/trigify-app/fix-login",
-      baseBranch: "main"
+      baseBranch: "main",
+      mode: "auto",
+      model: "opus"
     }
     const roundTripped = Schema.decodeUnknownSync(Session)(
       Schema.encodeSync(Session)(withWorktree)

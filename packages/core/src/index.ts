@@ -1,3 +1,4 @@
 export * from "./domain.js"
 export * from "./conversation.js"
+export * from "./models.js"
 export * from "./errors.js"

@@ -90,4 +90,28 @@ describe("SessionStore", () => {
     expect(exit._tag).toBe("Failure")
     expect(failureOf(exit)?._tag).toBe("SessionNotFoundError")
   })
+
+  it("setMode / setModel persist onto the session across a fresh read", async () => {
+    const exit = await runExit(
+      Effect.gen(function* () {
+        const created = yield* SessionStore.create(input({ title: "Configurable" }))
+        yield* SessionStore.setMode(created.id, "auto")
+        yield* SessionStore.setModel(created.id, "sonnet")
+        return created.id
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    const reread = await runExit(
+      SessionStore.get(exit.value).pipe(Effect.provide(SessionStore.Default)),
+      temp.layer
+    )
+    expect(reread._tag).toBe("Success")
+    if (reread._tag === "Success") {
+      expect(reread.value.mode).toBe("auto")
+      expect(reread.value.model).toBe("sonnet")
+    }
+  })
 })

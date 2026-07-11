@@ -13,6 +13,8 @@ export interface SessionSpec {
   readonly binPath: string | null
   /** The session's HITL permission mode (drives the harness's permission mode). */
   readonly mode: PermissionMode
+  /** The model id to run, or null to use the harness default. */
+  readonly model: string | null
 }
 
 /** What the agent is asking permission to do, surfaced before it acts. */

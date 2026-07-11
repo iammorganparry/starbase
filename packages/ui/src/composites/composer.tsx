@@ -1,12 +1,18 @@
-import { type ReactNode, useMemo, useRef, useState } from "react"
-import type { Skill } from "@starbase/core"
+import { useMemo, useRef, useState } from "react"
+import type { ModelOption, PermissionMode, Skill } from "@starbase/core"
 import { cn } from "../lib/cn.js"
-import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
+import { ChipMenu, type ChipOption } from "../components/chip-menu.js"
 import { CodeChip } from "../components/code-chip.js"
 import { Pill } from "../components/pill.js"
 import { CommandMenu } from "./command-menu.js"
 import { MentionMenu } from "./mention-menu.js"
+
+const MODE_OPTIONS: ReadonlyArray<ChipOption<PermissionMode>> = [
+  { value: "ask", label: "ask" },
+  { value: "accept-edits", label: "accept edits" },
+  { value: "auto", label: "auto" }
+]
 
 type MenuState = { kind: "slash" | "mention"; query: string; start: number }
 
@@ -31,8 +37,11 @@ export function Composer({
   skills = [],
   files = [],
   onSend,
-  model = "claude-sonnet",
-  mode,
+  model,
+  models = [],
+  onSetModel,
+  mode = "accept-edits",
+  onSetMode,
   paused = false,
   placeholder = "Message Claude…",
   className
@@ -40,8 +49,14 @@ export function Composer({
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
   onSend?: (text: string) => void
-  model?: ReactNode
-  mode?: ReactNode
+  /** Current harness model id (shown in the model chip). */
+  model?: string
+  /** Models the harness supports (the model chip's menu). */
+  models?: ReadonlyArray<ModelOption>
+  onSetModel?: (model: string) => void
+  /** Current HITL mode (shown in the mode chip; Shift+Tab cycles it). */
+  mode?: PermissionMode
+  onSetMode?: (mode: PermissionMode) => void
   paused?: boolean
   placeholder?: string
   className?: string
@@ -172,16 +187,15 @@ export function Composer({
           onKeyDown={onKeyDown}
           className="max-h-40 min-h-[22px] w-full resize-none bg-transparent text-[14px] leading-[1.5] text-text-body outline-none placeholder:text-dim"
         />
-        <div className="flex items-center gap-2.5">
-          <Badge tone="neutral" size="sm">
-            {model}
-          </Badge>
-          {mode && (
-            <Badge tone="neutral" size="sm">
-              {mode}
-            </Badge>
-          )}
-          <span className="font-mono text-[11px] text-line-strong">/ for commands · @ for code</span>
+        <div className="flex items-center gap-2">
+          <ChipMenu
+            value={model ?? models[0]?.id ?? ""}
+            options={models.map((m) => ({ value: m.id, label: m.label }))}
+            onSelect={onSetModel}
+            disabled={models.length === 0}
+          />
+          <ChipMenu value={mode} options={MODE_OPTIONS} onSelect={onSetMode} />
+          <span className="font-mono text-[11px] text-line-strong">/ · @</span>
           <div className="flex-1" />
           {paused ? (
             <Pill tone="yellow" dot>

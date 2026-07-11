@@ -133,6 +133,13 @@ describe("StreamEvent", () => {
   it("rejects an unknown event tag", () => {
     expect(Either.isLeft(decode(StreamEvent, { _tag: "Whoops" }))).toBe(true)
   })
+
+  it("decodes a Started event with and without the optional model", () => {
+    expect(Either.isRight(decode(StreamEvent, { _tag: "Started", sessionId: "s1" }))).toBe(true)
+    expect(
+      Either.isRight(decode(StreamEvent, { _tag: "Started", sessionId: "s1", model: "opus" }))
+    ).toBe(true)
+  })
 })
 
 describe("applyStreamEvent fold", () => {

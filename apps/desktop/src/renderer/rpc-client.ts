@@ -6,10 +6,12 @@
  */
 import type {
   CliInfo,
+  CliKind,
   CreateSessionInput,
   GateDecision,
   GhStatus,
   Message,
+  ModelOption,
   PermissionMode,
   Repo,
   Session,
@@ -91,10 +93,14 @@ export const rpc = {
     run((c) => c.Workspace.files({ repoPath })),
   skillsList: (sessionId: string): Promise<ReadonlyArray<Skill>> =>
     run((c) => c.Skills.list({ sessionId })),
+  modelsList: (cli: CliKind): Promise<ReadonlyArray<ModelOption>> =>
+    run((c) => c.Models.list({ cli })),
   agentDecideGate: (sessionId: string, gateId: string, decision: GateDecision): Promise<void> =>
     run((c) => c.Agent.decideGate({ sessionId, gateId, decision })),
   agentSetMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     run((c) => c.Agent.setMode({ sessionId, mode })),
+  agentSetModel: (sessionId: string, model: string): Promise<void> =>
+    run((c) => c.Agent.setModel({ sessionId, model })),
   agentStop: (sessionId: string): Promise<void> => run((c) => c.Agent.stop({ sessionId })),
 
   /**
