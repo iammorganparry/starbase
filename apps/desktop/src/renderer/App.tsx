@@ -3,6 +3,7 @@ import type { CreateSessionInput, Session } from "@starbase/core"
 import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
+import { useSessionStatuses } from "./session-status.js"
 import { rpc } from "./rpc-client.js"
 
 /**
@@ -14,6 +15,7 @@ import { rpc } from "./rpc-client.js"
 export function App() {
   const [state, send] = useMachine(appMachine)
   const { clis, ghStatus, repos, reposDir, sessions } = state.context
+  const liveStatus = useSessionStatuses()
 
   const createSession = async (input: CreateSessionInput) => {
     const session = await rpc.sessionsCreate(input)
@@ -55,6 +57,7 @@ export function App() {
       sessions={sessions}
       repos={repos}
       ghStatus={ghStatus}
+      liveStatus={liveStatus}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
       renderConversation={(session: Session) => <ConversationPane session={session} />}

@@ -4,7 +4,8 @@ import type {
   CreateSessionInput,
   GhStatus,
   Repo,
-  Session
+  Session,
+  SessionStatus
 } from "@starbase/core"
 import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
@@ -18,6 +19,8 @@ export interface StarbaseAppProps {
   repos?: ReadonlyArray<Repo>
   /** GitHub CLI status for the harnesses strip. */
   ghStatus?: GhStatus
+  /** Live per-session agent status (thinking / needs-input) while running. */
+  liveStatus?: Record<string, SessionStatus>
   activeSessionId?: string | null
   patch?: string
   /**
@@ -46,6 +49,7 @@ export function StarbaseApp({
   sessions,
   repos = [],
   ghStatus,
+  liveStatus,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -103,6 +107,7 @@ export function StarbaseApp({
         conversationPane={conversationPane}
         showEmpty={showEmpty}
         patch={patch}
+        liveStatus={liveStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         version={version}
       />

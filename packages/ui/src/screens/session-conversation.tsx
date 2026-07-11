@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react"
-import type { CliInfo, Session } from "@starbase/core"
+import type { CliInfo, Session, SessionStatus } from "@starbase/core"
 import { SessionSidebar } from "../app/session-sidebar.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
@@ -25,6 +25,8 @@ export interface SessionConversationProps {
   showEmpty?: boolean
   /** Unified-diff patch for the Changes rail (fallback demo only). */
   patch?: string
+  /** Live per-session agent status, overriding the persisted status. */
+  liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog. */
   onNewSession?: () => void
   /** App version, shown in the sidebar footer. */
@@ -46,6 +48,8 @@ export function SessionConversation(props: SessionConversationProps) {
   const tabs = visibleTabs(active)
   // Never leave a hidden tab selected (e.g. after switching to a PR-less session).
   const activeTab = tabs.includes(tab) ? tab : "conversation"
+  // The active session's live status (running agent) overrides its persisted one.
+  const activeStatus = (active && props.liveStatus?.[active.id]) ?? active?.status
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -53,6 +57,7 @@ export function SessionConversation(props: SessionConversationProps) {
         sessions={props.sessions}
         activeSessionId={props.activeSessionId}
         onSelect={props.onSelectSession}
+        liveStatus={props.liveStatus}
         onNewSession={props.onNewSession}
         version={props.version}
       />
@@ -71,7 +76,13 @@ export function SessionConversation(props: SessionConversationProps) {
               active={activeTab}
               onChange={setTab}
               prNumber={active?.prNumber ?? null}
-              status={active?.status === "thinking" ? { label: "Thinking", tone: "yellow" } : undefined}
+              status={
+                activeStatus === "thinking"
+                  ? { label: "Thinking", tone: "yellow" }
+                  : activeStatus === "needs-input"
+                    ? { label: "Needs input", tone: "blue" }
+                    : undefined
+              }
             />
 
             {activeTab === "conversation" ? (

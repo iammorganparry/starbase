@@ -1,4 +1,4 @@
-import type { Session } from "@starbase/core"
+import type { Session, SessionStatus } from "@starbase/core"
 import { GitBranch, Layers, Plus, Search } from "lucide-react"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
@@ -8,6 +8,8 @@ export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
   activeSessionId: string | null
   onSelect: (id: string) => void
+  /** Live per-session agent status, overriding the persisted status. */
+  liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
   /** App version (from `__APP_VERSION__`), shown in the footer. */
@@ -19,6 +21,7 @@ export function SessionSidebar({
   sessions,
   activeSessionId,
   onSelect,
+  liveStatus,
   onNewSession,
   version
 }: SessionSidebarProps) {
@@ -101,6 +104,7 @@ export function SessionSidebar({
                 <SessionRow
                   key={s.id}
                   session={s}
+                  status={liveStatus?.[s.id]}
                   active={s.id === activeSessionId}
                   onSelect={onSelect}
                 />

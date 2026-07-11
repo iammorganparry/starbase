@@ -44,6 +44,9 @@ test("streams a turn, pauses at a HITL gate, and resumes on approval", async ({ 
   await composer.pressSequentially("Add rate limiting to the refund endpoint.")
   await composer.press("Enter")
 
+  // The sidebar reflects the live agent state (was "idle", now working).
+  await expect(window.getByText("thinking…")).toBeVisible({ timeout: 10_000 })
+
   // The assistant turn is labelled with the provider (Claude) in the eyebrow.
   await expect(window.getByText("Claude", { exact: true })).toBeVisible({ timeout: 20_000 })
 
@@ -56,6 +59,11 @@ test("streams a turn, pauses at a HITL gate, and resumes on approval", async ({ 
   // accept-edits mode: the edit auto-applied, but the shell command pauses for HITL.
   await expect(window.getByText("Approval needed · run a command")).toBeVisible({ timeout: 20_000 })
   await expect(window.getByRole("button", { name: /Allow once/ })).toBeVisible()
+
+  // Paused for approval → the live status shows in the sidebar ("needs input")
+  // and the tab-bar pill ("Needs input").
+  await expect(window.getByText("needs input", { exact: true })).toBeVisible()
+  await expect(window.getByText("Needs input", { exact: true })).toBeVisible()
 
   await window.getByRole("button", { name: /Allow once/ }).click()
 

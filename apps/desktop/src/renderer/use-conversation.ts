@@ -7,7 +7,15 @@
  */
 import { useMemo } from "react"
 import { useMachine } from "@xstate/react"
-import type { GateDecision, Message, ModelOption, PermissionMode, Session, Skill } from "@starbase/core"
+import type {
+  GateDecision,
+  Message,
+  ModelOption,
+  PermissionMode,
+  Session,
+  SessionStatus,
+  Skill
+} from "@starbase/core"
 import { conversationMachine } from "./conversation-machine.js"
 
 export interface Conversation {
@@ -24,6 +32,8 @@ export interface Conversation {
   readonly busy: boolean
   /** The agent is paused awaiting a HITL decision. */
   readonly paused: boolean
+  /** Live status for the sidebar/tab bar, or null when idle (use persisted). */
+  readonly status: SessionStatus | null
   readonly sendPrompt: (text: string) => void
   readonly decideGate: (gateId: string, decision: GateDecision) => void
   readonly setMode: (mode: PermissionMode) => void
@@ -43,6 +53,9 @@ export function useConversation(session: Session): Conversation {
     )
   }, [messages])
 
+  const busy = state.matches("running")
+  const status: SessionStatus | null = paused ? "needs-input" : busy ? "thinking" : null
+
   return {
     messages,
     mode,
@@ -51,8 +64,9 @@ export function useConversation(session: Session): Conversation {
     model,
     models,
     patch,
-    busy: state.matches("running"),
+    busy,
     paused,
+    status,
     sendPrompt: (text) => send({ type: "SEND", text }),
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),

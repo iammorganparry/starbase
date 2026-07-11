@@ -1,4 +1,4 @@
-import type { Session } from "@starbase/core"
+import type { Session, SessionStatus } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
 import { Badge } from "../components/badge.js"
@@ -9,16 +9,20 @@ import { statusLabel, statusTextClass } from "../tokens.js"
 /** A session row for the sidebar list. Active state gets the blue ring. */
 export function SessionRow({
   session,
+  status: statusOverride,
   active = false,
   onSelect,
   className
 }: {
   session: Session
+  /** Live status while the agent runs; falls back to the persisted status. */
+  status?: SessionStatus
   active?: boolean
   onSelect?: (id: string) => void
   className?: string
 }) {
-  const idle = session.status === "idle"
+  const status = statusOverride ?? session.status
+  const idle = status === "idle"
   const hasMeta = session.prNumber !== null || session.diff.added > 0 || session.diff.removed > 0
   return (
     <div
@@ -33,7 +37,7 @@ export function SessionRow({
       )}
     >
       <div className="flex items-center gap-2">
-        <StatusDot status={session.status} />
+        <StatusDot status={status} />
         <span
           className={cn(
             "flex-1 truncate text-[13px]",
@@ -48,7 +52,7 @@ export function SessionRow({
       <div className="flex items-center gap-[7px] font-mono text-[10.5px] text-muted-foreground">
         <span className={cn(active ? "text-blue" : "text-muted-foreground")}>{session.branch}</span>
         <div className="flex-1" />
-        <span className={statusTextClass[session.status]}>{statusLabel[session.status]}</span>
+        <span className={statusTextClass[status]}>{statusLabel[status]}</span>
       </div>
       {hasMeta && (
         <div className="flex items-center gap-1.5">
