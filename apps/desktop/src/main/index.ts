@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { app, BrowserWindow } from "electron"
 import { Effect } from "effect"
 import { runtime } from "./runtime.js"
+import { initAutoUpdater } from "./updater.js"
 
 const createWindow = () => {
   const window = new BrowserWindow({
@@ -37,6 +38,9 @@ app.whenReady().then(async () => {
   // before the renderer can send its first frame.
   await runtime.runPromise(Effect.void)
   createWindow()
+
+  // Self-update only makes sense in a packaged build (dev has no update feed).
+  if (app.isPackaged) initAutoUpdater()
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

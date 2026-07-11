@@ -1,5 +1,9 @@
 /// <reference types="vite/client" />
 
+// The app version, inlined at build time by electron-vite (see
+// electron.vite.config.ts). Available in main, preload and renderer.
+declare const __APP_VERSION__: string
+
 // The narrow, safe surface the preload bridge exposes on `window`. It only
 // shuttles opaque RPC frames — no business logic lives here. See
 // `src/preload/index.ts` and `src/renderer/rpc-client.ts`.

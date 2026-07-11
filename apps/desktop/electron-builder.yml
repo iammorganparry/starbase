@@ -1,0 +1,65 @@
+# electron-builder — packages the electron-vite `out/` build into distributables
+# and publishes them (+ the electron-updater `latest*.yml` channel files) to
+# GitHub Releases. Run via `pnpm electron:pack` (local) / `pnpm electron:publish`
+# (CI). See .github/workflows/release.yml for the release flow.
+appId: app.starbase.desktop
+productName: Starbase
+copyright: Copyright © Starbase
+
+directories:
+  output: release
+  buildResources: build-resources
+
+# electron-vite emits main/preload/renderer under out/. electron-builder also
+# includes the production `dependencies` node_modules automatically (effect,
+# @effect/*, electron-updater, …), so they don't need listing here.
+files:
+  - out/**
+  - package.json
+
+# No native modules in this app — never let electron-builder rebuild against the
+# pnpm workspace symlink tree.
+npmRebuild: false
+buildDependenciesFromSource: false
+
+# GitHub Releases doubles as the auto-update feed (electron-updater reads the
+# latest*.yml channel files published here).
+publish:
+  provider: github
+  owner: iammorganparry
+  repo: starbase
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    # zip is required by electron-updater on macOS (dmg is first-install only).
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build-resources/entitlements.mac.plist
+  entitlementsInherit: build-resources/entitlements.mac.plist
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # No Authenticode cert yet; without this electron-updater would reject the
+  # unsigned installer and silently break Windows auto-update. Remove once signed.
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  category: Development
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}

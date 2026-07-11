@@ -1,0 +1,142 @@
+name: Release
+
+# Cut a release from main, by hand. Gate → version+tag → per-platform build &
+# publish to a draft GitHub Release → un-draft. Mirrors gtm-grid's flow, adapted
+# for electron-vite. Requires at least one pending changeset (pnpm changeset).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # Nothing ships unless typecheck + tests are green.
+  gate:
+    name: Gate (typecheck + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # Apply pending changesets, bump every @starbase/* package in lockstep, sync the
+  # root version, commit `release: vX.Y.Z`, tag, and push both back to main.
+  version:
+    name: Version & tag
+    needs: gate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-version
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Require a pending changeset
+        run: |
+          if [ -z "$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md')" ]; then
+            echo "::error::No changesets found — add one with 'pnpm changeset' before releasing."
+            exit 1
+          fi
+      - name: Version, commit, tag, push
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          pnpm version-packages
+          VERSION=$(node -p "require('./apps/desktop/package.json').version")
+          TAG="v$VERSION"
+          git add -A
+          git commit -m "release: $TAG"
+          git tag "$TAG"
+          git push origin HEAD:main
+          git push origin "$TAG"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # Build the installers on each native platform and publish them (plus the
+  # electron-updater latest*.yml channel files) to a DRAFT GitHub Release.
+  build:
+    name: Build ${{ matrix.os }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            args: "--mac --arm64"
+          - os: ubuntu-22.04
+            args: "--linux --x64"
+          - os: windows-latest
+            args: "--win --x64"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # macOS notarization: stage the App Store Connect API key from a base64
+      # secret. Skipped (and the build stays unsigned) when the secret is absent.
+      - name: Stage Apple API key (macOS)
+        id: asc
+        if: runner.os == 'macOS' && secrets.APPLE_API_KEY_P8 != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
+          echo "path=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_OUTPUT"
+
+      - name: Build (electron-vite)
+        run: pnpm --filter @starbase/desktop run build
+
+      - name: Package & publish
+        run: pnpm --filter @starbase/desktop exec electron-builder ${{ matrix.args }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple signing/notarization — gated to macOS so the Apple cert is never
+          # applied to the Windows installer (which would break its auto-update).
+          # All empty until the secrets exist → builds stay unsigned but succeed.
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ steps.asc.outputs.path }}
+          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+
+  # Flip the draft release electron-builder created to public + latest.
+  publish:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Un-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.version.outputs.tag }}" --draft=false --latest

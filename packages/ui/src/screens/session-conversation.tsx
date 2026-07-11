@@ -19,6 +19,8 @@ export interface SessionConversationProps {
   ghStatus?: GhStatus
   /** Open the New Session dialog. */
   onNewSession?: () => void
+  /** App version, shown in the sidebar footer. */
+  version?: string
 }
 
 /** Screen 01 — the primary session workspace. */
@@ -35,6 +37,7 @@ export function SessionConversation(props: SessionConversationProps) {
         onSelect={props.onSelectSession}
         ghStatus={props.ghStatus}
         onNewSession={props.onNewSession}
+        version={props.version}
       />
 
       <div className="flex min-w-0 flex-1 flex-col bg-editor">

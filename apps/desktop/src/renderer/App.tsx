@@ -56,6 +56,7 @@ export function App() {
       ghStatus={ghStatus}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
+      version={__APP_VERSION__}
     />
   )
 }

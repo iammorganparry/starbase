@@ -15,6 +15,8 @@ export interface SessionSidebarProps {
   ghStatus?: GhStatus
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
+  /** App version (from `__APP_VERSION__`), shown in the footer. */
+  version?: string
 }
 
 /** Left rail: sessions grouped by repository + a live CLI-discovery strip. */
@@ -24,7 +26,8 @@ export function SessionSidebar({
   activeSessionId,
   onSelect,
   ghStatus,
-  onNewSession
+  onNewSession,
+  version
 }: SessionSidebarProps) {
   const groups = groupByRepo(sessions)
   const totalCost = sessions.reduce((s, x) => s + x.costUsd, 0)
@@ -122,7 +125,9 @@ export function SessionSidebar({
 
       {/* Footer */}
       <div className="flex h-11 items-center justify-between border-t border-hairline px-4 text-[11px] text-dim">
-        <span>Today</span>
+        <span className="font-mono" title={version ? "App version" : undefined}>
+          {version ? `Starbase v${version}` : "Today"}
+        </span>
         <span className="font-mono text-muted-foreground">
           ${totalCost.toFixed(2)} · {Math.round(totalTokens / 1000)}k tok
         </span>

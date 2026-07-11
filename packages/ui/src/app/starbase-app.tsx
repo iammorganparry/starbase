@@ -26,6 +26,8 @@ export interface StarbaseAppProps {
   loadBranches?: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Create a session (forks a real worktree) and return it. */
   onCreateSession?: (input: CreateSessionInput) => Promise<Session>
+  /** App version (from `__APP_VERSION__`), shown in the sidebar footer. */
+  version?: string
 }
 
 const noBranches = async (): Promise<ReadonlyArray<string>> => []
@@ -44,7 +46,8 @@ export function StarbaseApp({
   messages = SEED_CONVERSATION,
   patch = SEED_PATCH,
   loadBranches = noBranches,
-  onCreateSession
+  onCreateSession,
+  version
 }: StarbaseAppProps) {
   const [selected, setSelected] = useState<string | null>(
     activeSessionId ?? sessions[0]?.id ?? null
@@ -84,6 +87,7 @@ export function StarbaseApp({
         patch={patch}
         ghStatus={ghStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
+        version={version}
       />
       {onCreateSession && (
         <NewSessionDialog
