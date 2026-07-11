@@ -1,7 +1,8 @@
-import type { ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
-import { ClaudeGlyph, Eyebrow } from "../components/eyebrow.js"
+import type { CliKind, ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
+import { Eyebrow } from "../components/eyebrow.js"
 import { DiffPeek } from "../components/diff-peek.js"
 import { Markdown } from "../components/markdown.js"
+import { PROVIDER_LABEL, ProviderIcon } from "../components/provider-icon.js"
 import { ApprovalGate } from "./approval-gate.js"
 import { ThoughtBlock } from "./thought-block.js"
 import { ToolCall } from "./tool-call.js"
@@ -80,20 +81,23 @@ function PartView({
   }
 }
 
-/** One transcript turn: a You/Claude eyebrow followed by its ordered parts. */
+/** One transcript turn: a You / provider eyebrow followed by its ordered parts. */
 export function MessageTurn({
   message,
+  cli = "claude",
   onDecideGate
 }: {
   message: Message
+  /** The harness that produced assistant turns — sets the eyebrow logo + name. */
+  cli?: CliKind
   onDecideGate?: (gateId: string, decision: GateDecision) => void
 }) {
   const isAssistant = message.role === "assistant"
   return (
     <div className="flex flex-col gap-3">
       {isAssistant ? (
-        <Eyebrow accent icon={<ClaudeGlyph />}>
-          Claude
+        <Eyebrow accent icon={<ProviderIcon cli={cli} className="text-blue" />}>
+          {PROVIDER_LABEL[cli]}
         </Eyebrow>
       ) : (
         <Eyebrow>You</Eyebrow>

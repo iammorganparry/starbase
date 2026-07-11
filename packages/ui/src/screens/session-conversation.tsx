@@ -72,7 +72,6 @@ export function SessionConversation(props: SessionConversationProps) {
               onChange={setTab}
               prNumber={active?.prNumber ?? null}
               status={active?.status === "thinking" ? { label: "Thinking", tone: "yellow" } : undefined}
-              cost={active ? `${Math.round(active.tokens / 1000)}k · $${active.costUsd.toFixed(2)}` : undefined}
             />
 
             {activeTab === "conversation" ? (

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react"
-import type { GateDecision, Message, ModelOption, PermissionMode, Skill } from "@starbase/core"
+import type { CliKind, GateDecision, Message, ModelOption, PermissionMode, Skill } from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
 import { PanelRight } from "lucide-react"
@@ -14,6 +14,8 @@ const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"
 export interface ConversationViewProps {
   messages: ReadonlyArray<Message>
   mode: PermissionMode
+  /** The harness driving this session — sets the assistant eyebrow logo/name. */
+  cli?: CliKind
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
   /** The worktree's unified diff, shown in the Changes rail. */
@@ -49,6 +51,7 @@ const diffCounts = (patch: string): { added: number; removed: number } => {
 export function ConversationView({
   messages,
   mode,
+  cli = "claude",
   skills = [],
   files = [],
   patch = "",
@@ -136,7 +139,7 @@ export function ConversationView({
                 >
                   {/* pb gives the inter-turn gap (absolute layout drops flex gap). */}
                   <div className="pb-6">
-                    <MessageTurn message={m} onDecideGate={onDecideGate} />
+                    <MessageTurn message={m} cli={cli} onDecideGate={onDecideGate} />
                   </div>
                 </div>
               )

@@ -23,8 +23,6 @@ export function SessionSidebar({
   version
 }: SessionSidebarProps) {
   const groups = groupByRepo(sessions)
-  const totalCost = sessions.reduce((s, x) => s + x.costUsd, 0)
-  const totalTokens = sessions.reduce((s, x) => s + x.tokens, 0)
 
   return (
     <div className="flex w-[266px] flex-none flex-col border-r border-hairline bg-panel">
@@ -114,12 +112,9 @@ export function SessionSidebar({
       </div>
 
       {/* Footer */}
-      <div className="flex h-11 items-center justify-between border-t border-hairline px-4 text-[11px] text-dim">
+      <div className="flex h-11 items-center border-t border-hairline px-4 text-[11px] text-dim">
         <span className="font-mono" title={version ? "App version" : undefined}>
-          {version ? `Starbase v${version}` : "Today"}
-        </span>
-        <span className="font-mono text-muted-foreground">
-          ${totalCost.toFixed(2)} · {Math.round(totalTokens / 1000)}k tok
+          {version ? `Starbase v${version}` : "Starbase"}
         </span>
       </div>
     </div>

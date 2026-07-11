@@ -44,6 +44,12 @@ test("streams a turn, pauses at a HITL gate, and resumes on approval", async ({ 
   await composer.pressSequentially("Add rate limiting to the refund endpoint.")
   await composer.press("Enter")
 
+  // The assistant turn is labelled with the provider (Claude) in the eyebrow.
+  await expect(window.getByText("Claude", { exact: true })).toBeVisible({ timeout: 20_000 })
+
+  // Cost/token readouts were removed (a usage widget replaces them later).
+  await expect(window.getByText(/\$0\.00/)).toHaveCount(0)
+
   // The streamed tool cards render (interleaved with thinking + text).
   await expect(window.getByText("src/routes/billing.ts").first()).toBeVisible({ timeout: 20_000 })
 

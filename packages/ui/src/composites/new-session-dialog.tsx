@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue
 } from "../components/select.js"
-import { StatusDot } from "../components/status-dot.js"
+import { ProviderIcon } from "../components/provider-icon.js"
 
 export interface NewSessionDialogProps {
   open: boolean
@@ -200,14 +200,17 @@ export function NewSessionDialog({
               >
                 <SelectTrigger>
                   <span className="flex items-center gap-2">
-                    <StatusDot tone="bg-green" size={7} glow={false} />
+                    {cli && <ProviderIcon cli={cli} className="text-text-bright" />}
                     <SelectValue placeholder="No harness available" />
                   </span>
                 </SelectTrigger>
                 <SelectContent>
                   {availableClis.map((c) => (
                     <SelectItem key={c.kind} value={c.kind}>
-                      {c.label}
+                      <span className="flex items-center gap-2">
+                        <ProviderIcon cli={c.kind} className="text-text-bright" />
+                        {c.label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>

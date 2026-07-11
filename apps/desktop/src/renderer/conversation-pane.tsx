@@ -13,6 +13,7 @@ export function ConversationPane({ session }: { session: Session }) {
     <ConversationView
       messages={convo.messages}
       mode={convo.mode}
+      cli={session.cli}
       skills={convo.skills}
       files={convo.files}
       patch={convo.patch}

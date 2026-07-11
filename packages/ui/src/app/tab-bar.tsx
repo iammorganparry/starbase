@@ -22,8 +22,7 @@ export function TabBar({
   active,
   onChange,
   prNumber = null,
-  status,
-  cost
+  status
 }: {
   tabs: ReadonlyArray<TabKey>
   active: TabKey
@@ -31,7 +30,6 @@ export function TabBar({
   /** Linked PR number for the active session (badges the Pull Request tab). */
   prNumber?: number | null
   status?: { label: string; tone: "yellow" | "blue" | "green" }
-  cost?: string
 }) {
   const items: ReadonlyArray<SegmentItem<TabKey>> = tabs.map((key) => ({
     value: key,
@@ -57,7 +55,6 @@ export function TabBar({
             {status.label}
           </Pill>
         )}
-        {cost && <span className="font-mono text-[11px] text-dim">{cost}</span>}
       </div>
     </div>
   )
