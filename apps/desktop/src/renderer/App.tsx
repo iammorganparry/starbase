@@ -1,7 +1,8 @@
 import { useMachine } from "@xstate/react"
-import type { CreateSessionInput } from "@starbase/core"
+import type { CreateSessionInput, Session } from "@starbase/core"
 import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
+import { ConversationPane } from "./conversation-pane.js"
 import { rpc } from "./rpc-client.js"
 
 /**
@@ -56,6 +57,7 @@ export function App() {
       ghStatus={ghStatus}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
+      renderConversation={(session: Session) => <ConversationPane session={session} />}
       version={__APP_VERSION__}
     />
   )

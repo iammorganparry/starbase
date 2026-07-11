@@ -1,12 +1,18 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AppPaths, ConfigService } from "@starbase/cli-adapters"
+import {
+  AppPaths,
+  ConfigService,
+  SessionStore,
+  SkillsService,
+  WorkspaceService
+} from "@starbase/cli-adapters"
 import { NodeContext } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DialogService } from "./dialog.js"
-import { chooseReposDir, configGet } from "./rpc.js"
+import { chooseReposDir, configGet, sessionDiff, skillsList } from "./rpc.js"
 
 /**
  * The RPC handlers own the app's error-folding policy: a config read error must
@@ -27,7 +33,8 @@ describe("RPC handlers", () => {
         root,
         configFile: join(root, "config.json"),
         sessionsFile: join(root, "sessions.json"),
-        worktreesDir: join(root, "worktrees")
+        worktreesDir: join(root, "worktrees"),
+        transcriptsDir: join(root, "transcripts")
       }),
       NodeContext.layer
     )
@@ -76,6 +83,31 @@ describe("RPC handlers", () => {
       )
       expect(result?.reposDir).toBe("/Users/me/repos")
       expect(existsSync(join(root, "config.json"))).toBe(true)
+    })
+  })
+
+  describe("Skills.list", () => {
+    // An unknown session must not error — the `/` menu still shows built-ins.
+    it("falls back to the built-in commands for an unknown session", async () => {
+      const skills = await Effect.runPromise(
+        skillsList("nope").pipe(
+          Effect.provide(Layer.mergeAll(base, SessionStore.Default, SkillsService.Default))
+        )
+      )
+      expect(skills.length).toBeGreaterThan(0)
+      expect(skills.some((s) => s.name === "/plan")).toBe(true)
+    })
+  })
+
+  describe("Sessions.diff", () => {
+    // An unknown session (or one without a worktree) yields no diff, not an error.
+    it("returns an empty diff for an unknown session", async () => {
+      const patch = await Effect.runPromise(
+        sessionDiff("nope").pipe(
+          Effect.provide(Layer.mergeAll(base, SessionStore.Default, WorkspaceService.Default))
+        )
+      )
+      expect(patch).toBe("")
     })
   })
 })

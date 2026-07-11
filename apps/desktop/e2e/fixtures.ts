@@ -20,6 +20,8 @@ export interface SeedSession {
   readonly costUsd: number
   readonly tokens: number
   readonly updatedAt: string
+  readonly worktreePath?: string
+  readonly mode?: "ask" | "accept-edits" | "auto"
 }
 
 export interface LaunchOptions {
@@ -27,8 +29,13 @@ export interface LaunchOptions {
   readonly configured?: boolean
   /** Create a real git repo in the seeded repos dir (for the create-session flow). */
   readonly withRepo?: boolean
-  /** Seed sessions.json with these sessions. */
-  readonly sessions?: ReadonlyArray<SeedSession>
+  /**
+   * Seed sessions.json — either a fixed list, or a function of the launch context
+   * (so a session's `worktreePath` can point at the just-created repo).
+   */
+  readonly sessions?:
+    | ReadonlyArray<SeedSession>
+    | ((ctx: { reposDir: string; repoPath: string }) => ReadonlyArray<SeedSession>)
 }
 
 export interface LaunchedApp {
@@ -82,13 +89,24 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         )
       }
       if (options.sessions) {
+        const sessions =
+          typeof options.sessions === "function"
+            ? options.sessions({ reposDir, repoPath })
+            : options.sessions
         mkdirSync(starbaseDir, { recursive: true })
-        writeFileSync(join(starbaseDir, "sessions.json"), JSON.stringify(options.sessions, null, 2))
+        writeFileSync(join(starbaseDir, "sessions.json"), JSON.stringify(sessions, null, 2))
       }
 
       const app = await electron.launch({
         args: [MAIN_ENTRY],
-        env: { ...process.env, STARBASE_HOME: home, ELECTRON_RENDERER_URL: "" }
+        env: {
+          ...process.env,
+          STARBASE_HOME: home,
+          ELECTRON_RENDERER_URL: "",
+          // Force the deterministic scripted agent so chat e2e never spawns a
+          // real harness (no auth, no network, reproducible).
+          STARBASE_SCRIPTED_AGENT: "1"
+        }
       })
       apps.push(app)
       const window = await app.firstWindow()

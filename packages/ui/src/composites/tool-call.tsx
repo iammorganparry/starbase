@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
+import { FileIcon } from "../components/file-icon.js"
 
 export type ToolCallStatus = "success" | "running" | "error"
 
@@ -12,12 +13,25 @@ export interface ToolCallProps {
   target?: ReactNode
   /** Trailing meta, e.g. line count or "exit 1". */
   meta?: ReactNode
+  /** Show a file-type glyph before the target (when `target` is a path). */
+  filePath?: string | null
+  /** Inline body under the header — e.g. a `DiffPeek` for an edit. */
+  children?: ReactNode
   icon?: ReactNode
   className?: string
 }
 
-/** A single agent tool invocation row (success / running / error). */
-export function ToolCall({ status, name, target, meta, icon, className }: ToolCallProps) {
+/** A single agent tool invocation (success / running / error), with optional peek. */
+export function ToolCall({
+  status,
+  name,
+  target,
+  meta,
+  filePath,
+  children,
+  icon,
+  className
+}: ToolCallProps) {
   return (
     <div
       className={cn(
@@ -40,11 +54,17 @@ export function ToolCall({ status, name, target, meta, icon, className }: ToolCa
         {status === "running" && <StatusDot tone="bg-yellow" size={8} pulse />}
         <span className="text-muted-foreground">{name}</span>
         {icon}
+        {filePath && <FileIcon path={filePath} />}
         <span className="flex-1 truncate text-text-bright">{target}</span>
         {meta && (
           <span className={cn("shrink-0", status === "error" ? "text-red" : "text-dim")}>{meta}</span>
         )}
       </div>
+      {/* While running with no peek yet, a shimmer bar signals live work. */}
+      {status === "running" && children == null && (
+        <div className="h-[22px] animate-shine bg-[length:220px_100%] bg-gradient-to-r from-white/[0.02] via-white/[0.07] to-white/[0.02]" />
+      )}
+      {children}
     </div>
   )
 }

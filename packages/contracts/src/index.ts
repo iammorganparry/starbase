@@ -1,9 +1,14 @@
 import {
   CliInfo,
   CreateSessionInput,
+  GateDecision,
   GhStatus,
+  Message,
+  PermissionMode,
   Repo,
   Session,
+  Skill,
+  StreamEvent,
   WorkspaceConfig
 } from "@starbase/core"
 import {
@@ -54,6 +59,13 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { repoPath: Schema.String }
   }),
 
+  /** List a repo's tracked files (for the `@` code-reference menu). */
+  Rpc.make("Workspace.files", {
+    success: Schema.Array(Schema.String),
+    error: GitError,
+    payload: { repoPath: Schema.String }
+  }),
+
   /** List all agent sessions for the sidebar. */
   Rpc.make("Sessions.list", {
     success: Schema.Array(Session)
@@ -71,6 +83,54 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: Session,
     error: GitError,
     payload: CreateSessionInput
+  }),
+
+  /** Load a session's persisted conversation transcript. */
+  Rpc.make("Sessions.transcript", {
+    success: Schema.Array(Message),
+    payload: { id: Schema.String }
+  }),
+
+  /** The session worktree's unified working diff, for the Changes rail. */
+  Rpc.make("Sessions.diff", {
+    success: Schema.String,
+    payload: { id: Schema.String }
+  }),
+
+  /**
+   * Send a prompt and stream the agent's normalized events back. This is the
+   * harness-agnostic seam: the renderer folds the same `StreamEvent`s the runner
+   * persisted, so the experience is identical across models/harnesses.
+   */
+  Rpc.make("Agent.run", {
+    success: StreamEvent,
+    stream: true,
+    payload: { sessionId: Schema.String, text: Schema.String }
+  }),
+
+  /** Resolve a pending HITL approval gate (allow / deny / always). */
+  Rpc.make("Agent.decideGate", {
+    payload: {
+      sessionId: Schema.String,
+      gateId: Schema.String,
+      decision: GateDecision
+    }
+  }),
+
+  /** Change a session's HITL permission mode (ask / accept-edits / auto). */
+  Rpc.make("Agent.setMode", {
+    payload: { sessionId: Schema.String, mode: PermissionMode }
+  }),
+
+  /** Stop a running agent (denies any pending gate). */
+  Rpc.make("Agent.stop", {
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** List the skills/slash-commands the session's harness exposes (the `/` menu). */
+  Rpc.make("Skills.list", {
+    success: Schema.Array(Skill),
+    payload: { sessionId: Schema.String }
   }),
 
   /** Detect the GitHub CLI (`gh`) and its authentication status. */

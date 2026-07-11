@@ -44,6 +44,15 @@ export const DiffStat = Schema.Struct({
 })
 export type DiffStat = Schema.Schema.Type<typeof DiffStat>
 
+/**
+ * Human-in-the-loop permission mode for a session:
+ * - `ask` — pause for approval before every edit and command,
+ * - `accept-edits` — auto-apply file edits, still pause for shell commands,
+ * - `auto` — auto-apply edits and run allowlisted commands without prompting.
+ */
+export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto")
+export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
+
 /** A single agent session shown in the sidebar and opened in the main pane. */
 export const Session = Schema.Struct({
   id: Schema.String,
@@ -64,7 +73,11 @@ export const Session = Schema.Struct({
   /** Absolute path to this session's isolated git worktree, when one exists. */
   worktreePath: Schema.optional(Schema.String),
   /** The branch this session's worktree was forked from. */
-  baseBranch: Schema.optional(Schema.String)
+  baseBranch: Schema.optional(Schema.String),
+  /** HITL permission mode; defaults to "accept-edits" when absent. */
+  mode: Schema.optional(PermissionMode),
+  /** Commands the operator chose to "Always allow" for this session. */
+  allowlist: Schema.optional(Schema.Array(Schema.String))
 })
 export type Session = Schema.Schema.Type<typeof Session>
 
@@ -142,42 +155,5 @@ export const CreateSessionInput = Schema.Struct({
 })
 export type CreateSessionInput = Schema.Schema.Type<typeof CreateSessionInput>
 
-// ── Conversation ─────────────────────────────────────────────────────────────
-
-export const MessageRole = Schema.Literal("user", "assistant")
-export type MessageRole = Schema.Schema.Type<typeof MessageRole>
-
-/** A tool invocation rendered as a card in the conversation. */
-export const ToolCall = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  /** e.g. "src/auth/refresh.ts" — the primary target of the tool call. */
-  target: Schema.NullOr(Schema.String),
-  summary: Schema.String,
-  diff: Schema.NullOr(DiffStat)
-})
-export type ToolCall = Schema.Schema.Type<typeof ToolCall>
-
-/** An approval gate that pauses the agent for a human decision (HITL). */
-export const ApprovalGate = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  detail: Schema.String,
-  status: Schema.Literal("pending", "approved", "rejected")
-})
-export type ApprovalGate = Schema.Schema.Type<typeof ApprovalGate>
-
-/** One turn in the conversation transcript. */
-export const Message = Schema.Struct({
-  id: Schema.String,
-  role: MessageRole,
-  /** Free-text body of the turn. */
-  text: Schema.String,
-  /** Optional collapsed "thinking" content for assistant turns. */
-  thinking: Schema.NullOr(Schema.String),
-  /** Tool calls attached to this turn, in order. */
-  toolCalls: Schema.Array(ToolCall),
-  /** Approval gate attached to this turn, if any. */
-  gate: Schema.NullOr(ApprovalGate)
-})
-export type Message = Schema.Schema.Type<typeof Message>
+// The conversation/transcript model (Message, ToolCall, ApprovalGate) and the
+// normalized StreamEvent seam live in ./conversation.ts.

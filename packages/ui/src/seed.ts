@@ -8,27 +8,54 @@ export const SEED_CONVERSATION: ReadonlyArray<Message> = [
   {
     id: "m1",
     role: "user",
-    text: "Migrate the session middleware to the new token store and add refresh handling.",
-    thinking: null,
-    toolCalls: [],
-    gate: null
+    streaming: false,
+    createdAt: "2026-07-11T10:00:00.000Z",
+    parts: [
+      { _tag: "Text", text: "Migrate the session middleware to the new token store and add refresh handling." }
+    ]
   },
   {
     id: "m2",
     role: "assistant",
-    text: "Swapped the store and added a refresh guard, then opened PR #482. A reviewer requested a change on the 401 path — addressing it now.",
-    thinking:
-      "The 401 path currently throws before the refresh guard runs. I'll reorder so a stale token triggers a refresh-and-retry instead of surfacing a 500.",
-    toolCalls: [
-      { id: "t1", name: "Edit", target: "src/auth/refresh.ts", summary: "add 401 retry path", diff: { added: 9, removed: 1 } }
-    ],
-    gate: {
-      id: "g1",
-      title: "Approve edit to src/auth/refresh.ts",
-      detail:
-        "The refresh guard now handles the 401 retry path so a stale token refreshes instead of 500ing. Approve to apply.",
-      status: "pending"
-    }
+    streaming: false,
+    createdAt: "2026-07-11T10:00:04.000Z",
+    parts: [
+      {
+        _tag: "Thinking",
+        text: "The 401 path currently throws before the refresh guard runs. I'll reorder so a stale token triggers a refresh-and-retry instead of surfacing a 500.",
+        seconds: 5,
+        streaming: false
+      },
+      {
+        _tag: "Text",
+        text: "Swapped the store and added a refresh guard, then opened PR #482. A reviewer requested a change on the 401 path — addressing it now."
+      },
+      {
+        _tag: "Tool",
+        tool: {
+          id: "t1",
+          name: "Edit",
+          target: "src/auth/refresh.ts",
+          status: "success",
+          meta: null,
+          diff: { added: 9, removed: 1 },
+          preview: "27  + return refresh(session)"
+        }
+      },
+      {
+        _tag: "Gate",
+        gate: {
+          id: "g1",
+          kind: "command",
+          title: "Approval needed · run a command",
+          detail:
+            "Not in your allowlist. Agents never run shell commands until you allow — the edit above was applied under this mode.",
+          command: "npm test -- auth",
+          allowLabel: "npm test",
+          status: "pending"
+        }
+      }
+    ]
   }
 ]
 

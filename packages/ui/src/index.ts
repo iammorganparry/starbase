@@ -19,6 +19,9 @@ export * from "./components/card.js"
 export * from "./components/dialog.js"
 export * from "./components/input.js"
 export * from "./components/select.js"
+export * from "./components/file-icon.js"
+export * from "./components/diff-peek.js"
+export * from "./components/code-chip.js"
 
 // Molecules / composites
 export * from "./composites/tool-call.js"
@@ -30,6 +33,10 @@ export * from "./composites/slash-command-row.js"
 export * from "./composites/mcp-server-row.js"
 export * from "./composites/session-row.js"
 export * from "./composites/composer.js"
+export * from "./composites/message-turn.js"
+export * from "./composites/mode-switch.js"
+export * from "./composites/command-menu.js"
+export * from "./composites/mention-menu.js"
 export * from "./composites/new-session-dialog.js"
 
 // Diff engine (virtualized)

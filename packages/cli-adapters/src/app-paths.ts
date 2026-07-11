@@ -15,6 +15,8 @@ export interface AppPathsShape {
   readonly sessionsFile: string
   /** `~/starbase/worktrees` — parent of every session's isolated worktree. */
   readonly worktreesDir: string
+  /** `~/starbase/transcripts` — parent of every session's persisted transcript. */
+  readonly transcriptsDir: string
 }
 
 export class AppPaths extends Context.Tag("@starbase/AppPaths")<AppPaths, AppPathsShape>() {}

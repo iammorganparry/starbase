@@ -138,7 +138,29 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
               .map((line) => line.trim())
               .filter((line) => line.length > 0)
           )
-        )
+        ),
+
+      /** Tracked files in a repo (git ls-files), for the `@` code-reference menu. */
+      files: (
+        repoPath: string
+      ): Effect.Effect<ReadonlyArray<string>, GitError, CommandExecutor.CommandExecutor> =>
+        runGit(repoPath, ["ls-files"]).pipe(
+          Effect.map((out) =>
+            out
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0)
+          )
+        ),
+
+      /**
+       * The unified working diff for a worktree (`git diff` incl. untracked, via
+       * `--`), for the Changes rail. Empty string when the tree is clean.
+       */
+      diff: (
+        worktreePath: string
+      ): Effect.Effect<string, GitError, CommandExecutor.CommandExecutor> =>
+        runGit(worktreePath, ["diff", "HEAD"])
     })
   }
 ) {}

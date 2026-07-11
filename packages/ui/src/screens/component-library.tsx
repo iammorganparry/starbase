@@ -198,7 +198,14 @@ export function ComponentLibrary() {
           <Callout tone="green">Verified by a reviewer.</Callout>
         </Spec>
         <Spec title="ApprovalGate" wide>
-          <ApprovalGate command="npm test -- billing" />
+          <ApprovalGate
+            kind="command"
+            title="Approval needed · run a command"
+            detail="Not in your allowlist. Agents never run shell commands until you allow."
+            command="npm test -- billing"
+            allowLabel="npm test"
+            status="pending"
+          />
         </Spec>
         <Spec title="SlashCommandRow">
           <SlashCommandRow name="review" description="Review the current diff" badge="built-in" active />

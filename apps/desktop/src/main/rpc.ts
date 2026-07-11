@@ -13,16 +13,19 @@
  * Electron's structured-clone IPC.)
  */
 import {
+  AgentRunner,
   ConfigService,
   DiscoveryService,
   GhService,
   SessionStore,
+  SkillsService,
+  TranscriptStore,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
-import { Effect, Layer, Mailbox, Option, Runtime } from "effect"
+import { Effect, Layer, Mailbox, Option, Runtime, Stream } from "effect"
 import type { WebContents } from "electron"
 import { ipcMain } from "electron"
 import { DialogService } from "./dialog.js"
@@ -51,6 +54,33 @@ export const chooseReposDir = () =>
   }).pipe(Effect.orElseSucceed(() => null))
 
 /**
+ * `Skills.list` handler. Resolves the session's harness + worktree (best-effort;
+ * an unknown session falls back to Claude with no worktree) so `SkillsService`
+ * can report the harness-appropriate skills for the `/` menu. Exported for tests.
+ */
+export const skillsList = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+    return yield* SkillsService.list({
+      cli: session?.cli ?? "claude",
+      worktreePath: session?.worktreePath ?? null
+    })
+  })
+
+/**
+ * `Sessions.diff` handler. Resolves the session's worktree and returns its
+ * unified working diff (empty when there's no worktree or the tree is clean, or
+ * on any git failure — the Changes rail treats that as "no changes yet").
+ * Exported for tests.
+ */
+export const sessionDiff = (id: string) =>
+  Effect.gen(function* () {
+    const session = yield* SessionStore.get(id).pipe(Effect.orElseSucceed(() => null))
+    if (!session?.worktreePath) return ""
+    return yield* WorkspaceService.diff(session.worktreePath).pipe(Effect.orElseSucceed(() => ""))
+  })
+
+/**
  * Handlers for every procedure in the group. Each one delegates straight to an
  * Effect service, so the group remains the sole contract. `Discovery.list`
  * pulls in a `CommandExecutor` requirement (via `DiscoveryService.list()`) that
@@ -62,9 +92,23 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Setup.chooseReposDir": chooseReposDir,
   "Workspace.repos": () => WorkspaceService.listRepos(),
   "Workspace.branches": ({ repoPath }) => WorkspaceService.branches(repoPath),
+  "Workspace.files": ({ repoPath }) => WorkspaceService.files(repoPath),
   "Sessions.list": () => SessionStore.list(),
   "Sessions.get": ({ id }) => SessionStore.get(id),
   "Sessions.create": (input) => SessionStore.create(input),
+  "Sessions.transcript": ({ id }) => TranscriptStore.list(id),
+  "Sessions.diff": ({ id }) => sessionDiff(id),
+  // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
+  // renderer subscribes to normalized events, harness-agnostic.
+  "Agent.run": ({ sessionId, text }) =>
+    Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.prompt(sessionId, text))),
+  "Agent.decideGate": ({ sessionId, gateId, decision }) =>
+    Effect.flatMap(AgentRunner, (runner) => runner.decideGate(sessionId, gateId, decision)),
+  "Agent.setMode": ({ sessionId, mode }) =>
+    Effect.flatMap(AgentRunner, (runner) => runner.setMode(sessionId, mode)),
+  "Agent.stop": ({ sessionId }) =>
+    Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
+  "Skills.list": ({ sessionId }) => skillsList(sessionId),
   "Gh.status": () => GhService.status()
 })
 

@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useState } from "react"
 import type {
   CliInfo,
   CreateSessionInput,
   GhStatus,
-  Message,
   Repo,
   Session
 } from "@starbase/core"
 import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { SessionConversation } from "../screens/session-conversation.js"
-import { SEED_CONVERSATION, SEED_PATCH } from "../seed.js"
+import { SEED_PATCH } from "../seed.js"
 
 export interface StarbaseAppProps {
   clis: ReadonlyArray<CliInfo>
@@ -20,8 +19,13 @@ export interface StarbaseAppProps {
   /** GitHub CLI status for the harnesses strip. */
   ghStatus?: GhStatus
   activeSessionId?: string | null
-  messages?: ReadonlyArray<Message>
   patch?: string
+  /**
+   * Render the live conversation for the active session. Called with the active
+   * session and mounted keyed by its id, so each session drives a fresh
+   * conversation machine. Absent in stories → the seeded fallback renders.
+   */
+  renderConversation?: (session: Session) => ReactNode
   /** Load branch names for a repo (New Session base picker). */
   loadBranches?: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Create a session (forks a real worktree) and return it. */
@@ -43,8 +47,8 @@ export function StarbaseApp({
   repos = [],
   ghStatus,
   activeSessionId,
-  messages = SEED_CONVERSATION,
   patch = SEED_PATCH,
+  renderConversation,
   loadBranches = noBranches,
   onCreateSession,
   version
@@ -53,6 +57,16 @@ export function StarbaseApp({
     activeSessionId ?? sessions[0]?.id ?? null
   )
   const [newOpen, setNewOpen] = useState(false)
+
+  const active = sessions.find((s) => s.id === selected) ?? null
+  // Key the pane by session id so each session drives a fresh conversation
+  // machine (the deterministic per-session reset — no session-sync effect).
+  const conversationPane =
+    active && renderConversation ? (
+      <div key={active.id} className="flex min-w-0 flex-1">
+        {renderConversation(active)}
+      </div>
+    ) : undefined
 
   // ⌘N / Ctrl-N opens the New Session dialog (only when creation is wired).
   useEffect(() => {
@@ -83,7 +97,7 @@ export function StarbaseApp({
         clis={clis}
         activeSessionId={selected}
         onSelectSession={setSelected}
-        messages={messages}
+        conversationPane={conversationPane}
         patch={patch}
         ghStatus={ghStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}

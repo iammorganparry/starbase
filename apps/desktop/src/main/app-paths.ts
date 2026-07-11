@@ -20,5 +20,6 @@ export const AppPathsLive = Layer.succeed(AppPaths, {
   root,
   configFile: join(root, "config.json"),
   sessionsFile: join(root, "sessions.json"),
-  worktreesDir: join(root, "worktrees")
+  worktreesDir: join(root, "worktrees"),
+  transcriptsDir: join(root, "transcripts")
 })

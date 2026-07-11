@@ -7,12 +7,15 @@
  * alive for the lifetime of the app.
  */
 import {
+  AgentRunner,
   ConfigService,
   DiscoveryService,
   GhService,
   GitService,
-  MockCliAdapterLive,
+  HarnessCliAdapterLive,
   SessionStore,
+  SkillsService,
+  TranscriptStore,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { NodeContext } from "@effect/platform-node"
@@ -27,10 +30,13 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(DiscoveryService.Default),
   Layer.provide(WorkspaceService.Default),
   Layer.provide(SessionStore.Default),
+  Layer.provide(TranscriptStore.Default),
+  Layer.provide(AgentRunner.Default),
+  Layer.provide(SkillsService.Default),
   Layer.provide(GhService.Default),
   Layer.provide(ConfigService.Default),
   Layer.provide(GitService.Default),
-  Layer.provide(MockCliAdapterLive),
+  Layer.provide(HarnessCliAdapterLive),
   Layer.provide(DialogServiceLive),
   Layer.provide(AppPathsLive),
   // NodeContext bundles CommandExecutor + FileSystem + Path used by the git/gh/

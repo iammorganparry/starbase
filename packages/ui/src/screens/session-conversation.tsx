@@ -1,10 +1,10 @@
-import { useState } from "react"
-import type { CliInfo, GhStatus, Message, Session } from "@starbase/core"
+import { type ReactNode, useState } from "react"
+import type { CliInfo, GhStatus, Session } from "@starbase/core"
 import { SessionSidebar } from "../app/session-sidebar.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
-import { DiffPanel } from "../app/diff-panel.js"
 import { TerminalPanel } from "../app/terminal-panel.js"
+import { SEED_CONVERSATION } from "../seed.js"
 import { StubScreen } from "./stub-screen.js"
 
 export interface SessionConversationProps {
@@ -12,7 +12,12 @@ export interface SessionConversationProps {
   clis: ReadonlyArray<CliInfo>
   activeSessionId: string | null
   onSelectSession: (id: string) => void
-  messages: ReadonlyArray<Message>
+  /**
+   * The live conversation pane (the renderer's session-keyed
+   * `ConversationView`). Falls back to a static seeded transcript when absent
+   * (stories / standalone).
+   */
+  conversationPane?: ReactNode
   /** Unified-diff patch for the Changes rail. */
   patch: string
   /** GitHub CLI status for the harnesses strip. */
@@ -51,8 +56,9 @@ export function SessionConversation(props: SessionConversationProps) {
         {tab === "conversation" ? (
           <>
             <div className="flex min-h-0 flex-1">
-              <ConversationView messages={props.messages} />
-              <DiffPanel patch={props.patch} added={21} removed={5} />
+              {props.conversationPane ?? (
+                <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
+              )}
             </div>
             <TerminalPanel />
           </>

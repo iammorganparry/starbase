@@ -63,7 +63,14 @@ export const Callouts: Story = {
 export const Approval: Story = {
   render: () => (
     <div className="w-[456px]">
-      <ApprovalGate command="npm test -- billing" />
+      <ApprovalGate
+        kind="command"
+        title="Approval needed · run a command"
+        detail="Not in your allowlist. Agents never run shell commands until you allow."
+        command="npm test -- billing"
+        allowLabel="npm test"
+        status="pending"
+      />
     </div>
   )
 }

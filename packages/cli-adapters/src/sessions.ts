@@ -1,4 +1,4 @@
-import type { CreateSessionInput, Session } from "@starbase/core"
+import type { CreateSessionInput, PermissionMode, Session } from "@starbase/core"
 import { GitError, SessionNotFoundError } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
@@ -112,7 +112,28 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           return session
         })
 
-      return { list, get, create }
+      /** Apply `patch` to the matching session and persist; no-op if absent. */
+      const update = (
+        id: string,
+        patch: (session: Session) => Session
+      ): Effect.Effect<void, GitError, PersistEnv> =>
+        Effect.gen(function* () {
+          const all = yield* readAll()
+          if (!all.some((s) => s.id === id)) return
+          yield* writeAll(all.map((s) => (s.id === id ? patch(s) : s)))
+        })
+
+      /** Persist the session's HITL permission mode. */
+      const setMode = (id: string, mode: PermissionMode) => update(id, (s) => ({ ...s, mode }))
+
+      /** Add a command to the session's "always allow" list (deduped). */
+      const addAllowlist = (id: string, label: string) =>
+        update(id, (s) => ({
+          ...s,
+          allowlist: [...new Set([...(s.allowlist ?? []), label])]
+        }))
+
+      return { list, get, create, setMode, addAllowlist }
     }
   }
 ) {}

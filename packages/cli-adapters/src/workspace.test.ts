@@ -1,4 +1,5 @@
-import { mkdirSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { NodeContext } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
@@ -106,5 +107,44 @@ describe("WorkspaceService", () => {
     if (exit._tag === "Success") {
       expect([...exit.value].sort()).toStrictEqual(["develop", "feat/scoring", "main"])
     }
+  })
+
+  it("files() lists the repo's tracked files (for the @ menu)", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "tracked"))
+    writeFileSync(join(repoPath, "src.ts"), "export const x = 1\n")
+    execFileSync("git", ["add", "-A"], { cwd: repoPath })
+    execFileSync("git", ["commit", "-m", "add src", "--no-gpg-sign"], { cwd: repoPath })
+    const exit = await runExit(
+      WorkspaceService.files(repoPath).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect([...exit.value].sort()).toStrictEqual(["README.md", "src.ts"])
+    }
+  })
+
+  it("diff() returns the worktree's unified diff of an uncommitted change", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "dirty"))
+    writeFileSync(join(repoPath, "README.md"), "# dirty repo\nchanged line\n")
+    const exit = await runExit(
+      WorkspaceService.diff(repoPath).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value).toContain("+changed line")
+      expect(exit.value).toContain("README.md")
+    }
+  })
+
+  it("diff() is empty for a clean worktree", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "clean"))
+    const exit = await runExit(
+      WorkspaceService.diff(repoPath).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") expect(exit.value).toBe("")
   })
 })
