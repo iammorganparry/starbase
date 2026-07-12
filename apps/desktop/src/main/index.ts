@@ -5,10 +5,16 @@
  * through the RPC transport in `./rpc.ts`.
  */
 import { join } from "node:path"
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, ipcMain, shell } from "electron"
 import { Effect } from "effect"
 import { runtime } from "./runtime.js"
 import { initAutoUpdater } from "./updater.js"
+
+/** Open an http(s) URL (e.g. a PR link) in the user's default browser. */
+ipcMain.handle("starbase/open-external", (_event, url: unknown) => {
+  if (typeof url === "string" && /^https?:\/\//i.test(url)) return shell.openExternal(url)
+  return undefined
+})
 
 const createWindow = () => {
   const window = new BrowserWindow({

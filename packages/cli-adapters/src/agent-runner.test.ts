@@ -103,6 +103,42 @@ describe("AgentRunner HITL gating", () => {
   })
 })
 
+describe("AgentRunner ids", () => {
+  // The id counter is in-memory (resets on app restart) but the transcript
+  // persists — so a run after a restart must not re-emit colliding ids, which
+  // would make the virtualized transcript stack rows keyed by id.
+  it("does not reuse message ids across a runner restart", async () => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      makeScriptedCliAdapter(0),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    // Each provide of AgentRunner.Default builds a fresh runner (fresh counter),
+    // so two separate runs against the same temp root simulate a restart.
+    const runOnce = (text: string) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const runner = yield* AgentRunner
+          yield* runner.setMode(SESSION, "auto")
+          yield* runner.prompt(SESSION, text).pipe(Stream.runDrain)
+        }).pipe(Effect.provide(base))
+      )
+
+    await runOnce("first")
+    await runOnce("second")
+
+    const transcript = await Effect.runPromise(
+      TranscriptStore.list(SESSION).pipe(Effect.provide(Layer.merge(TranscriptStore.Default, temp.layer)))
+    )
+    const ids = transcript.map((m) => m.id)
+    expect(ids.length).toBeGreaterThan(2)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
 describe("AgentRunner allowlist", () => {
   it('"always allow" a command means the next run does not gate it', async () => {
     const base = Layer.mergeAll(

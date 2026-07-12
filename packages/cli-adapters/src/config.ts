@@ -1,3 +1,4 @@
+import type { GithubConfig } from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
@@ -39,7 +40,35 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           const existing = yield* get()
           const createdAt =
             existing?.createdAt ?? (yield* Effect.sync(() => new Date().toISOString()))
-          const config: WorkspaceConfig = { reposDir: dir, createdAt }
+          // Preserve any configured GitHub prefs when the repos dir changes.
+          const config: WorkspaceConfig = {
+            reposDir: dir,
+            createdAt,
+            ...(existing?.github ? { github: existing.github } : {})
+          }
+          return yield* persist(config)
+        })
+
+      const setGithub = (
+        github: GithubConfig
+      ): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
+        Effect.gen(function* () {
+          const existing = yield* get()
+          const createdAt =
+            existing?.createdAt ?? (yield* Effect.sync(() => new Date().toISOString()))
+          const config: WorkspaceConfig = {
+            reposDir: existing?.reposDir ?? null,
+            createdAt,
+            github
+          }
+          return yield* persist(config)
+        })
+
+      /** Encode + write the config to disk, mapping every failure to `ConfigError`. */
+      const persist = (config: WorkspaceConfig): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const paths = yield* AppPaths
           yield* fs
             .makeDirectory(paths.root, { recursive: true })
             .pipe(Effect.mapError((cause) => new ConfigError({ message: "Failed to create ~/starbase", cause })))
@@ -52,7 +81,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           return config
         })
 
-      return { get, setReposDir }
+      return { get, setReposDir, setGithub }
     }
   }
 ) {}

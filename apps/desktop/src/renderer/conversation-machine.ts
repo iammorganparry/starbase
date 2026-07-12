@@ -41,6 +41,7 @@ type ConversationEvent =
   | { type: "DECIDE_GATE"; gateId: string; decision: GateDecision }
   | { type: "SET_MODE"; mode: PermissionMode }
   | { type: "SET_MODEL"; model: string }
+  | { type: "REFRESH_DIFF" }
   | { type: "STOP" }
 
 interface LoadedData {
@@ -181,7 +182,9 @@ export const conversationMachine = setup({
       on: {
         SEND: { target: "running", actions: "appendTurns" },
         SET_MODE: { actions: "persistMode" },
-        SET_MODEL: { actions: "persistModel" }
+        SET_MODEL: { actions: "persistModel" },
+        // Re-read the worktree diff on demand (e.g. after a revert from the rail).
+        REFRESH_DIFF: { target: "refreshingDiff" }
       }
     },
     running: {

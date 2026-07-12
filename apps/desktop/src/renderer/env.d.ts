@@ -12,6 +12,8 @@ interface StarbaseBridge {
   readonly send: (data: unknown) => void
   /** Subscribe to server→client RPC frames. Returns an unsubscribe fn. */
   readonly on: (cb: (data: unknown) => void) => () => void
+  /** Open an http(s) URL in the user's default browser. */
+  readonly openExternal: (url: string) => Promise<void>
 }
 
 interface Window {

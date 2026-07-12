@@ -61,4 +61,35 @@ describe("ConfigService", () => {
     expect(exit._tag).toBe("Failure")
     expect(failureOf(exit)?._tag).toBe("ConfigError")
   })
+
+  it("persists github prefs and preserves the repos dir + createdAt", async () => {
+    const github = { enabled: true, autoCreatePr: false, autoDetectPr: true }
+    const exit = await provided(
+      Effect.gen(function* () {
+        const first = yield* ConfigService.setReposDir("/repos/a")
+        yield* ConfigService.setGithub(github)
+        // A later setReposDir must keep the github prefs.
+        yield* ConfigService.setReposDir("/repos/b")
+        const final = yield* ConfigService.get()
+        return { first, final }
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value.final?.github).toStrictEqual(github)
+      expect(exit.value.final?.reposDir).toBe("/repos/b")
+      expect(exit.value.final?.createdAt).toBe(exit.value.first.createdAt)
+    }
+  })
+
+  it("decodes a config written without a github field (backward compatible)", async () => {
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(`${temp.root}/config.json`, JSON.stringify({ reposDir: "/x", createdAt: "2026-01-01" }))
+    const exit = await provided(ConfigService.get())
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.reposDir).toBe("/x")
+      expect(exit.value?.github).toBeUndefined()
+    }
+  })
 })

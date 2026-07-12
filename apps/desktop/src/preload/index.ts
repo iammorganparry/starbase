@@ -15,5 +15,7 @@ contextBridge.exposeInMainWorld("starbase", {
     const listener = (_event: Electron.IpcRendererEvent, data: unknown) => cb(data)
     ipcRenderer.on(RPC_CHANNEL, listener)
     return () => ipcRenderer.removeListener(RPC_CHANNEL, listener)
-  }
+  },
+  /** Open an http(s) URL in the user's default browser (not an Electron window). */
+  openExternal: (url: string) => ipcRenderer.invoke("starbase/open-external", url)
 })

@@ -4,21 +4,12 @@
  * pick + scan, session load) inside declarative `fromPromise` actors — no
  * data-fetching `useEffect`s, minimal `useState`.
  */
-import type { CliInfo, GhStatus, Repo, Session } from "@starbase/core"
+import type { CliInfo, Repo, Session } from "@starbase/core"
 import { assign, fromPromise, setup } from "xstate"
 import { rpc } from "./rpc-client.js"
 
-const GH_UNKNOWN: GhStatus = {
-  available: false,
-  authenticated: false,
-  login: null,
-  host: null,
-  version: null
-}
-
 export interface AppContext {
   readonly clis: ReadonlyArray<CliInfo>
-  readonly ghStatus: GhStatus
   readonly reposDir: string | null
   readonly repos: ReadonlyArray<Repo>
   readonly sessions: ReadonlyArray<Session>
@@ -28,23 +19,21 @@ export interface AppContext {
 interface InitialData {
   readonly configured: boolean
   readonly clis: ReadonlyArray<CliInfo>
-  readonly ghStatus: GhStatus
   readonly repos: ReadonlyArray<Repo>
   readonly sessions: ReadonlyArray<Session>
 }
 
-/** Initial load: config + discovered CLIs + gh status decide setup vs. app. */
+/**
+ * Initial load: config + discovered CLIs decide setup vs. app. `gh` status is a
+ * react-query in the view (App.tsx), not part of the load gate.
+ */
 const initialLoad = fromPromise<InitialData>(async () => {
-  const [config, clis, ghStatus] = await Promise.all([
-    rpc.configGet(),
-    rpc.discoveryList(),
-    rpc.ghStatus()
-  ])
+  const [config, clis] = await Promise.all([rpc.configGet(), rpc.discoveryList()])
   if (config?.reposDir) {
     const [repos, sessions] = await Promise.all([rpc.workspaceRepos(), rpc.sessionsList()])
-    return { configured: true, clis, ghStatus, repos, sessions }
+    return { configured: true, clis, repos, sessions }
   }
-  return { configured: false, clis, ghStatus, repos: [], sessions: [] }
+  return { configured: false, clis, repos: [], sessions: [] }
 })
 
 /** Open the native picker, persist, and scan; null when the user cancels. */
@@ -69,6 +58,7 @@ export const appMachine = setup({
       | { type: "CHOOSE" }
       | { type: "CONTINUE" }
       | { type: "SESSION_CREATED"; session: Session }
+      | { type: "SESSION_PR_LINKED"; sessionId: string; prNumber: number }
       | { type: "RETRY" }
   },
   actors: { initialLoad, chooseDir, loadSessions }
@@ -77,7 +67,6 @@ export const appMachine = setup({
   initial: "loading",
   context: {
     clis: [],
-    ghStatus: GH_UNKNOWN,
     reposDir: null,
     repos: [],
     sessions: [],
@@ -93,7 +82,6 @@ export const appMachine = setup({
             target: "ready",
             actions: assign(({ event }) => ({
               clis: event.output.clis,
-              ghStatus: event.output.ghStatus,
               repos: event.output.repos,
               sessions: event.output.sessions
             }))
@@ -101,8 +89,7 @@ export const appMachine = setup({
           {
             target: "setup",
             actions: assign(({ event }) => ({
-              clis: event.output.clis,
-              ghStatus: event.output.ghStatus
+              clis: event.output.clis
             }))
           }
         ],
@@ -161,6 +148,15 @@ export const appMachine = setup({
         SESSION_CREATED: {
           actions: assign(({ context, event }) => ({
             sessions: [event.session, ...context.sessions]
+          }))
+        },
+        // A PR was created/detected for a session — reflect its number so the
+        // sidebar badge and the Pull Request / Code Review tabs light up.
+        SESSION_PR_LINKED: {
+          actions: assign(({ context, event }) => ({
+            sessions: context.sessions.map((s) =>
+              s.id === event.sessionId ? { ...s, prNumber: event.prNumber } : s
+            )
           }))
         }
       }

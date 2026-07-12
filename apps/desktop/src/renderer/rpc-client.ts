@@ -10,10 +10,14 @@ import type {
   CreateSessionInput,
   GateDecision,
   GhStatus,
+  GithubConfig,
   Message,
   ModelOption,
   PermissionMode,
+  PrFileChange,
+  PullRequest,
   Repo,
+  ReviewSubmitKind,
   Session,
   Skill,
   StreamEvent,
@@ -92,6 +96,14 @@ export const rpc = {
   sessionsDiff: (id: string): Promise<string> => run((c) => c.Sessions.diff({ id })),
   workspaceFiles: (repoPath: string): Promise<ReadonlyArray<string>> =>
     run((c) => c.Workspace.files({ repoPath })),
+  workspaceRevertFile: (sessionId: string, path: string): Promise<void> =>
+    run((c) => c.Workspace.revertFile({ sessionId, path })),
+  workspaceRevertLines: (
+    sessionId: string,
+    path: string,
+    startLine: number,
+    endLine: number
+  ): Promise<void> => run((c) => c.Workspace.revertLines({ sessionId, path, startLine, endLine })),
   skillsList: (sessionId: string): Promise<ReadonlyArray<Skill>> =>
     run((c) => c.Skills.list({ sessionId })),
   modelsList: (cli: CliKind): Promise<ReadonlyArray<ModelOption>> =>
@@ -104,6 +116,28 @@ export const rpc = {
   agentSetModel: (sessionId: string, model: string): Promise<void> =>
     run((c) => c.Agent.setModel({ sessionId, model })),
   agentStop: (sessionId: string): Promise<void> => run((c) => c.Agent.stop({ sessionId })),
+
+  configSetGithub: (github: GithubConfig): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setGithub(github)),
+  githubPr: (sessionId: string): Promise<PullRequest | null> =>
+    run((c) => c.Github.pr({ sessionId })),
+  githubFiles: (sessionId: string): Promise<ReadonlyArray<PrFileChange>> =>
+    run((c) => c.Github.files({ sessionId })),
+  githubDiff: (sessionId: string): Promise<string> =>
+    run((c) => c.Github.diff({ sessionId })),
+  githubDetectPr: (sessionId: string): Promise<number | null> =>
+    run((c) => c.Github.detectPr({ sessionId })),
+  githubCreatePr: (input: {
+    sessionId: string
+    title: string
+    body: string
+    base: string
+    draft: boolean
+  }): Promise<number> => run((c) => c.Github.createPr(input)),
+  githubComment: (sessionId: string, body: string, toGithub: boolean): Promise<void> =>
+    run((c) => c.Github.comment({ sessionId, body, toGithub })),
+  githubReview: (sessionId: string, kind: ReviewSubmitKind, body: string): Promise<void> =>
+    run((c) => c.Github.review({ sessionId, kind, body })),
 
   /**
    * Subscribe to a prompt's normalized event stream. Forks the RPC stream on the

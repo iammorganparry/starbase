@@ -39,6 +39,8 @@ export interface Conversation {
   readonly setMode: (mode: PermissionMode) => void
   readonly setModel: (model: string) => void
   readonly stop: () => void
+  /** Re-read the worktree diff (e.g. after reverting from the Changes rail). */
+  readonly refreshDiff: () => void
 }
 
 export function useConversation(session: Session): Conversation {
@@ -71,6 +73,7 @@ export function useConversation(session: Session): Conversation {
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),
     setModel: (m) => send({ type: "SET_MODEL", model: m }),
-    stop: () => send({ type: "STOP" })
+    stop: () => send({ type: "STOP" }),
+    refreshDiff: () => send({ type: "REFRESH_DIFF" })
   }
 }

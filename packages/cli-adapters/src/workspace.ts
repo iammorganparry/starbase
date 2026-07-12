@@ -28,6 +28,49 @@ const parseGithubSlug = (url: string | null): string | null => {
   return match?.[1] ?? null
 }
 
+/**
+ * Keep only the hunks of a unified `diff` whose NEW-side line range overlaps
+ * [startLine, endLine], reassembled with the file header so it stays a valid
+ * patch. Returns null when the diff has no hunks, or none overlap. Pure — used
+ * to reverse-apply just the selected lines when reverting a range.
+ */
+export const filterDiffHunks = (
+  diff: string,
+  startLine: number,
+  endLine: number
+): string | null => {
+  const lines = diff.split("\n")
+  const firstHunk = lines.findIndex((l) => l.startsWith("@@"))
+  if (firstHunk === -1) return null
+  const header = lines.slice(0, firstHunk)
+
+  const hunks: Array<Array<string>> = []
+  let current: Array<string> | null = null
+  for (const line of lines.slice(firstHunk)) {
+    if (line.startsWith("@@")) {
+      if (current) hunks.push(current)
+      current = [line]
+    } else if (current) {
+      current.push(line)
+    }
+  }
+  if (current) hunks.push(current)
+
+  const lo = Math.min(startLine, endLine)
+  const hi = Math.max(startLine, endLine)
+  const kept = hunks.filter((h) => {
+    const m = h[0]!.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/)
+    if (!m) return false
+    const newStart = Number(m[1])
+    const newCount = m[2] === undefined ? 1 : Number(m[2])
+    // A zero-line hunk (pure deletion) still anchors at newStart.
+    const newEnd = newStart + Math.max(newCount, 1) - 1
+    return newStart <= hi && newEnd >= lo
+  })
+  if (kept.length === 0) return null
+  return [...header, ...kept.flat()].join("\n") + "\n"
+}
+
 type ScanEnv = FileSystem.FileSystem | Path.Path
 
 /** Bounded-recursive scan for git repos under `rootDir`; stops at the first `.git`. */
@@ -160,7 +203,50 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
       diff: (
         worktreePath: string
       ): Effect.Effect<string, GitError, CommandExecutor.CommandExecutor> =>
-        runGit(worktreePath, ["diff", "HEAD"])
+        runGit(worktreePath, ["diff", "HEAD"]),
+
+      /** The uncommitted working diff for one file (`git diff HEAD -- <path>`). */
+      fileDiff: (
+        worktreePath: string,
+        path: string
+      ): Effect.Effect<string, GitError, CommandExecutor.CommandExecutor> =>
+        runGit(worktreePath, ["diff", "HEAD", "--", path]),
+
+      /** Discard ALL uncommitted changes to one file (`git checkout HEAD -- <path>`). */
+      revertFile: (
+        worktreePath: string,
+        path: string
+      ): Effect.Effect<void, GitError, CommandExecutor.CommandExecutor> =>
+        runGit(worktreePath, ["checkout", "HEAD", "--", path]).pipe(Effect.asVoid),
+
+      /**
+       * Revert just the uncommitted changes in a NEW-file line range: take the
+       * file's working diff, keep the hunks overlapping [startLine, endLine], and
+       * reverse-apply them to the worktree (`git apply -R`). A no-op when nothing
+       * in that range changed. Reverting whole overlapping hunks keeps the patch
+       * valid — sub-hunk splitting would corrupt context.
+       */
+      revertRange: (
+        worktreePath: string,
+        path: string,
+        startLine: number,
+        endLine: number
+      ): Effect.Effect<void, GitError, FileSystem.FileSystem | CommandExecutor.CommandExecutor> =>
+        Effect.gen(function* () {
+          const full = yield* runGit(worktreePath, ["diff", "HEAD", "--", path])
+          const patch = filterDiffHunks(full, startLine, endLine)
+          if (patch === null) return
+          const fs = yield* FileSystem.FileSystem
+          const tmp = yield* fs
+            .makeTempFile()
+            .pipe(Effect.mapError((cause) => new GitError({ message: "Failed to stage revert patch", cause })))
+          yield* fs
+            .writeFileString(tmp, patch)
+            .pipe(Effect.mapError((cause) => new GitError({ message: "Failed to write revert patch", cause })))
+          yield* runGit(worktreePath, ["apply", "-R", tmp]).pipe(
+            Effect.ensuring(fs.remove(tmp).pipe(Effect.ignore))
+          )
+        })
     })
   }
 ) {}
