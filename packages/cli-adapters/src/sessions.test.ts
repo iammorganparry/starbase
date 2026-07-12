@@ -1,10 +1,19 @@
 import { join } from "node:path"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import type { CreateSessionInput } from "@starbase/core"
+import type { CreateSessionFromPrInput, CreateSessionInput } from "@starbase/core"
+import { GhService } from "./gh.js"
 import { GitService } from "./git.js"
 import { SessionStore } from "./sessions.js"
-import { failureOf, initGitRepo, mkTemp, runExit, withTempRoot } from "./test-support.js"
+import {
+  failureOf,
+  fakeCommandExecutor,
+  initGitRepo,
+  mkTemp,
+  runExit,
+  withTempRoot
+} from "./test-support.js"
+import type { FakeCommandHandler } from "./test-support.js"
 
 /**
  * SessionStore persists sessions to disk and forks a real worktree per session.
@@ -143,5 +152,82 @@ describe("SessionStore", () => {
       expect(reread.value.mode).toBe("auto")
       expect(reread.value.model).toBe("sonnet")
     }
+  })
+
+  // `createFromPr` orchestrates real GitService (worktree add) + GhService
+  // (`gh pr checkout`). `gh` isn't available in CI and the fork isn't real, so we
+  // drive both binaries with a fake executor overlaid on the real temp FS: the
+  // worktree dir + sessions.json are real, only the git/gh *processes* are canned.
+  const prServices = Layer.mergeAll(SessionStore.Default, GitService.Default, GhService.Default)
+
+  const prInput = (over: Partial<CreateSessionFromPrInput["pr"]> = {}): CreateSessionFromPrInput => ({
+    repoPath,
+    repoName: "trigify-app",
+    cli: "claude",
+    pr: { number: 482, title: "Fix Auth Refresh", headRefName: "chore/bump", baseRefName: "main", ...over }
+  })
+
+  /** Fake git/gh: record the argv, echo `headBranch` for rev-parse. */
+  const prExecutor = (headBranch: string, calls: Array<string>): FakeCommandHandler => (cmd, args) => {
+    calls.push(`${cmd} ${args.join(" ")}`)
+    if (cmd === "gh") return { stdout: "" }
+    if (cmd === "git" && args.includes("rev-parse")) return { stdout: headBranch }
+    return { exitCode: 0, stdout: "" }
+  }
+
+  it("createFromPr checks out the PR head branch and links the PR number", async () => {
+    const calls: Array<string> = []
+    const env = Layer.mergeAll(temp.layer, fakeCommandExecutor(prExecutor("chore/bump", calls)))
+    const exit = await runExit(
+      SessionStore.createFromPr(prInput()).pipe(Effect.provide(prServices)),
+      env
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const s = exit.value
+    expect(s.prNumber).toBe(482)
+    expect(s.branch).toBe("chore/bump") // the live branch after `gh pr checkout`
+    expect(s.baseBranch).toBe("main")
+    expect(s.title).toBe("Fix Auth Refresh")
+    expect(s.worktreePath).toBe(join(temp.root, "worktrees", "trigify-app", "fix-auth-refresh"))
+
+    // Sequence: detached worktree → gh pr checkout → resolve the head branch.
+    const detach = calls.findIndex((c) => c.includes("worktree add --detach"))
+    const checkout = calls.findIndex((c) => c.startsWith("gh pr checkout 482"))
+    const revparse = calls.findIndex((c) => c.includes("rev-parse"))
+    expect(detach).toBeGreaterThanOrEqual(0)
+    expect(checkout).toBeGreaterThan(detach)
+    expect(revparse).toBeGreaterThan(checkout)
+
+    // Persisted across a fresh read.
+    const reread = await runExit(
+      SessionStore.get(s.id).pipe(Effect.provide(SessionStore.Default)),
+      temp.layer
+    )
+    expect(reread._tag === "Success" && reread.value.prNumber).toBe(482)
+  })
+
+  it("createFromPr falls back to the PR head ref when HEAD is detached", async () => {
+    const calls: Array<string> = []
+    // "HEAD" (detached) → branchAt yields null → the reported head ref is used.
+    const env = Layer.mergeAll(temp.layer, fakeCommandExecutor(prExecutor("HEAD", calls)))
+    const exit = await runExit(
+      SessionStore.createFromPr(prInput({ headRefName: "feat/from-fork" })).pipe(
+        Effect.provide(prServices)
+      ),
+      env
+    )
+    expect(exit._tag === "Success" && exit.value.branch).toBe("feat/from-fork")
+  })
+
+  it("createFromPr fails with GhError when `gh pr checkout` fails", async () => {
+    const handler: FakeCommandHandler = (cmd, args) =>
+      cmd === "gh" && args[1] === "checkout" ? { exitCode: 1, stderr: "gh: no such PR" } : { stdout: "" }
+    const env = Layer.mergeAll(temp.layer, fakeCommandExecutor(handler))
+    const exit = await runExit(
+      SessionStore.createFromPr(prInput()).pipe(Effect.provide(prServices)),
+      env
+    )
+    expect(failureOf(exit)?._tag).toBe("GhError")
   })
 })

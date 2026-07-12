@@ -1,7 +1,7 @@
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import { GhService, mapPrView } from "./gh.js"
+import { GhService, mapPrSummary, mapPrView } from "./gh.js"
 import { failureOf, fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
 
@@ -190,7 +190,108 @@ describe("GhService pull-request reads", () => {
   })
 })
 
+const RAW_PR_LIST = [
+  {
+    number: 482,
+    title: "Fix auth refresh",
+    headRefName: "chore/bump",
+    baseRefName: "main",
+    author: { login: "octocat" },
+    state: "OPEN",
+    isDraft: false,
+    additions: 31,
+    deletions: 4,
+    updatedAt: "2026-07-10T12:00:00Z"
+  },
+  {
+    number: 471,
+    title: "WIP usage window",
+    headRefName: "feat/usage",
+    baseRefName: "main",
+    author: { login: "hubot" },
+    state: "OPEN",
+    isDraft: true,
+    additions: 12,
+    deletions: 0,
+    updatedAt: "2026-07-09T09:00:00Z"
+  }
+]
+
+describe("mapPrSummary", () => {
+  it("maps a raw gh pr list item, synthesizing the draft state", () => {
+    const [open, draft] = RAW_PR_LIST.map(mapPrSummary)
+    expect(open).toMatchObject({
+      number: 482,
+      title: "Fix auth refresh",
+      headRefName: "chore/bump",
+      baseRefName: "main",
+      author: { login: "octocat", avatarUrl: null },
+      state: "open",
+      additions: 31,
+      deletions: 4
+    })
+    // isDraft on an OPEN PR synthesizes state "draft".
+    expect(draft?.state).toBe("draft")
+  })
+
+  it("tolerates a sparse payload", () => {
+    const s = mapPrSummary({ number: 3 })
+    expect(s.number).toBe(3)
+    expect(s.title).toBe("")
+    expect(s.author.login).toBe("unknown")
+    expect(s.state).toBe("open")
+  })
+})
+
+describe("GhService.listPrs", () => {
+  it("appends --author @me / --search only when requested, and maps results", async () => {
+    const calls: Array<ReadonlyArray<string>> = []
+    const capturing =
+      (stdout: string): FakeCommandHandler =>
+      (cmd, args) => {
+        if (cmd === "gh") calls.push(args)
+        return { stdout }
+      }
+
+    const both = await providePr(
+      GhService.listPrs("/wt", { mine: true, search: "auth" }),
+      capturing(JSON.stringify(RAW_PR_LIST))
+    )
+    expect(both._tag).toBe("Success")
+    if (both._tag === "Success") {
+      expect(both.value.map((p) => p.number)).toEqual([482, 471])
+    }
+    const args = calls[0]!
+    expect(args).toContain("--author")
+    expect(args).toContain("@me")
+    expect(args).toContain("--search")
+    expect(args).toContain("auth")
+    expect(args).toContain("--state")
+    expect(args).toContain("open")
+
+    calls.length = 0
+    await providePr(GhService.listPrs("/wt", { mine: false, search: "  " }), capturing("[]"))
+    const plain = calls[0]!
+    expect(plain).not.toContain("--author")
+    expect(plain).not.toContain("--search")
+  })
+
+  it("folds malformed JSON to an empty list", async () => {
+    const bad = await providePr(GhService.listPrs("/wt", { mine: false, search: "" }), () => ({
+      stdout: "not json"
+    }))
+    expect(bad._tag === "Success" && bad.value).toEqual([])
+  })
+})
+
 describe("GhService pull-request writes", () => {
+  it("checkoutPr fails with GhError on a non-zero exit", async () => {
+    const exit = await providePr(GhService.checkoutPr("/wt", 482), (cmd, args) =>
+      cmd === "gh" && args[1] === "checkout" ? { exitCode: 1, stderr: "gh: no such PR" } : undefined
+    )
+    expect(failureOf(exit)?._tag).toBe("GhError")
+  })
+
   it("prCreate parses the number from the created PR url", async () => {
     const exit = await providePr(
       GhService.prCreate("/wt", { title: "T", body: "B", base: "main", draft: false }),

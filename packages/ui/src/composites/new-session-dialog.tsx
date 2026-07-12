@@ -1,5 +1,14 @@
 import * as React from "react"
-import type { CliInfo, CliKind, CreateSessionInput, Repo } from "@starbase/core"
+import type {
+  CliInfo,
+  CliKind,
+  CreateSessionFromPrInput,
+  CreateSessionInput,
+  PrSummary,
+  Repo
+} from "@starbase/core"
+import { useMachine } from "@xstate/react"
+import { Search } from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import {
@@ -19,7 +28,12 @@ import {
   SelectTrigger,
   SelectValue
 } from "../components/select.js"
+import { SegmentedControl } from "../components/segmented-control.js"
+import { Toggle } from "../components/toggle.js"
 import { ProviderIcon } from "../components/provider-icon.js"
+import { PrPickerList } from "./pr-picker-list.js"
+import { newSessionMachine } from "./new-session-machine.js"
+import type { NewSessionDeps, NewSessionMode } from "./new-session-machine.js"
 
 export interface NewSessionDialogProps {
   open: boolean
@@ -32,6 +46,13 @@ export interface NewSessionDialogProps {
   loadBranches: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Submit — performs the real worktree creation upstream (throws on failure). */
   onCreate: (input: CreateSessionInput) => Promise<void>
+  /**
+   * List open PRs for a repo. Presence (with `onCreateFromPr`) wires the
+   * `Blank | From PR` toggle; absent hides it (blank-only dialog).
+   */
+  loadPrs?: (repoPath: string, opts: { mine: boolean; search: string }) => Promise<ReadonlyArray<PrSummary>>
+  /** Submit a "from PR" session (checks out the PR's head branch upstream). */
+  onCreateFromPr?: (input: CreateSessionFromPrInput) => Promise<void>
 }
 
 /** Lowercase, collapse non-alphanumeric runs to single dashes, trim dashes. */
@@ -42,105 +63,67 @@ function kebab(input: string): string {
     .replace(/^-+|-+$/g, "")
 }
 
-/** Preferred default base branch for a repo. */
-function defaultBase(repo: Repo | undefined, branches: ReadonlyArray<string>): string {
-  return repo?.currentBranch ?? repo?.defaultBranch ?? branches[0] ?? ""
-}
-
-/** The ⌘N "New Session" form, rendered inside the One Dark Dialog. */
+/**
+ * The ⌘N "New Session" form, rendered inside the One Dark Dialog. All form state
+ * lives in `newSessionMachine` (edit / submit lifecycle + debounced branch & PR
+ * loading); this component is a thin projection — it maps `context` to inputs
+ * and dispatches events. A `Blank | From PR` toggle (when the PR flow is wired)
+ * swaps the title/base fields for a searchable open-PR picker.
+ */
 export function NewSessionDialog({
   open,
   onClose,
   repos,
   clis,
   loadBranches,
-  onCreate
+  onCreate,
+  loadPrs,
+  onCreateFromPr
 }: NewSessionDialogProps) {
   const availableClis = React.useMemo(() => clis.filter((c) => c.available), [clis])
+  const canFromPr = Boolean(loadPrs && onCreateFromPr)
 
-  const [repoPath, setRepoPath] = React.useState("")
-  const [title, setTitle] = React.useState("")
-  const [cli, setCli] = React.useState<CliKind | "">("")
-  const [base, setBase] = React.useState("")
-  const [branches, setBranches] = React.useState<ReadonlyArray<string>>([])
-  const [loadingBranches, setLoadingBranches] = React.useState(false)
-  const [submitting, setSubmitting] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-
-  const selectedRepo = React.useMemo(
-    () => repos.find((r) => r.path === repoPath),
-    [repos, repoPath]
-  )
-
-  // Guards against out-of-order branch loads when the repo changes quickly.
-  const loadToken = React.useRef(0)
-
-  const loadFor = React.useCallback(
-    async (path: string) => {
-      const token = ++loadToken.current
-      setLoadingBranches(true)
-      try {
-        const list = await loadBranches(path)
-        if (token !== loadToken.current) return
-        setBranches(list)
-        const repo = repos.find((r) => r.path === path)
-        setBase(defaultBase(repo, list))
-      } catch {
-        if (token !== loadToken.current) return
-        setBranches([])
-        setBase("")
-      } finally {
-        if (token === loadToken.current) setLoadingBranches(false)
-      }
-    },
-    [loadBranches, repos]
-  )
-
-  // Seed defaults whenever the dialog opens.
-  React.useEffect(() => {
-    if (!open) return
-    setError(null)
-    setSubmitting(false)
-    setTitle("")
-    setCli(availableClis[0]?.kind ?? "")
-    const first = repos[0]
-    setRepoPath(first?.path ?? "")
-    if (first) void loadFor(first.path)
-    else {
-      setBranches([])
-      setBase("")
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-
-  const onRepoChange = (path: string) => {
-    setRepoPath(path)
-    void loadFor(path)
+  // The machine reads live deps through a stable getter so changing props never
+  // tear down and rebuild it mid-edit.
+  const deps: NewSessionDeps = {
+    repos,
+    availableClis,
+    loadBranches,
+    loadPrs,
+    onCreate,
+    onCreateFromPr,
+    onClose
   }
+  const depsRef = React.useRef(deps)
+  depsRef.current = deps
+  const getDeps = React.useCallback(() => depsRef.current, [])
+
+  const [state, send] = useMachine(newSessionMachine, { input: { getDeps } })
+  const {
+    mode,
+    repoPath,
+    title,
+    cli,
+    base,
+    branches,
+    search,
+    mine,
+    prs,
+    selectedPr,
+    error
+  } = state.context
+
+  const submitting = state.matches({ submission: "submitting" })
+  const loadingBranches = state.matches({ branchLoad: "loading" })
+  const loadingPrs = state.matches({ prLoad: "loading" }) || state.matches({ prLoad: "debouncing" })
+  const canCreate = state.can({ type: "SUBMIT" })
+
+  // Seed / reset the form each time the dialog opens.
+  React.useEffect(() => {
+    if (open) send({ type: "OPEN" })
+  }, [open, send])
 
   const slug = title.trim() ? `starbase/${kebab(title)}` : ""
-  const canCreate =
-    !submitting && title.trim() !== "" && repoPath !== "" && cli !== "" && base !== ""
-
-  const submit = async () => {
-    // `canCreate` narrows `cli` to CliKind here (aliased-condition analysis).
-    if (!canCreate || !selectedRepo) return
-    setError(null)
-    setSubmitting(true)
-    try {
-      await onCreate({
-        repoPath: selectedRepo.path,
-        repoName: selectedRepo.name,
-        title: title.trim(),
-        cli,
-        baseBranch: base
-      })
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create session.")
-      setSubmitting(false)
-    }
-  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -157,14 +140,27 @@ export function NewSessionDialog({
             id="new-session-form"
             onSubmit={(e) => {
               e.preventDefault()
-              void submit()
+              send({ type: "SUBMIT" })
             }}
             className="flex flex-col gap-4"
           >
+            {/* Mode toggle — only when the "from PR" flow is wired. */}
+            {canFromPr && (
+              <SegmentedControl<NewSessionMode>
+                className="self-start"
+                value={mode}
+                onChange={(next) => send({ type: "SET_MODE", mode: next })}
+                items={[
+                  { value: "blank", label: "Blank" },
+                  { value: "pr", label: "From PR" }
+                ]}
+              />
+            )}
+
             {/* Repo */}
             <div className="flex flex-col gap-1.5">
               <Eyebrow>Repo</Eyebrow>
-              <Select value={repoPath} onValueChange={onRepoChange}>
+              <Select value={repoPath} onValueChange={(v) => send({ type: "SET_REPO", repoPath: v })}>
                 <SelectTrigger className="font-mono">
                   <SelectValue placeholder="No repositories" />
                 </SelectTrigger>
@@ -178,24 +174,26 @@ export function NewSessionDialog({
               </Select>
             </div>
 
-            {/* Title */}
-            <div className="flex flex-col gap-1.5">
-              <Eyebrow>Title</Eyebrow>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Refactor auth refresh"
-                autoFocus
-              />
-              <span className="font-mono text-[10.5px] text-dim">{slug || "starbase/…"}</span>
-            </div>
+            {/* Title (blank mode only — a from-PR session's title is the PR title) */}
+            {mode === "blank" && (
+              <div className="flex flex-col gap-1.5">
+                <Eyebrow>Title</Eyebrow>
+                <Input
+                  value={title}
+                  onChange={(e) => send({ type: "SET_TITLE", title: e.target.value })}
+                  placeholder="Refactor auth refresh"
+                  autoFocus
+                />
+                <span className="font-mono text-[10.5px] text-dim">{slug || "starbase/…"}</span>
+              </div>
+            )}
 
             {/* Harness */}
             <div className="flex flex-col gap-1.5">
               <Eyebrow>Harness</Eyebrow>
               <Select
                 value={cli}
-                onValueChange={(v) => setCli(v as CliKind)}
+                onValueChange={(v) => send({ type: "SET_CLI", cli: v as CliKind })}
                 disabled={availableClis.length === 0}
               >
                 <SelectTrigger>
@@ -216,34 +214,71 @@ export function NewSessionDialog({
               </Select>
             </div>
 
-            {/* Base branch */}
-            <div className="flex flex-col gap-1.5">
-              <Eyebrow>Base</Eyebrow>
-              <Select
-                value={base}
-                // Ignore the spurious empty-value change Radix emits when the
-                // programmatic default is applied as the select flips from
-                // disabled → enabled on branch load; a real pick is never empty.
-                onValueChange={(v) => v && setBase(v)}
-                disabled={loadingBranches || branches.length === 0}
-              >
-                <SelectTrigger className="font-mono">
-                  <SelectValue
-                    placeholder={loadingBranches ? "Loading branches…" : "No branches"}
+            {/* Base branch (blank mode) */}
+            {mode === "blank" && (
+              <div className="flex flex-col gap-1.5">
+                <Eyebrow>Base</Eyebrow>
+                <Select
+                  value={base}
+                  // Ignore the spurious empty-value change Radix emits when the
+                  // programmatic default is applied as the select flips from
+                  // disabled → enabled on branch load; a real pick is never empty.
+                  onValueChange={(v) => v && send({ type: "SET_BASE", base: v })}
+                  disabled={loadingBranches || branches.length === 0}
+                >
+                  <SelectTrigger className="font-mono">
+                    <SelectValue
+                      placeholder={loadingBranches ? "Loading branches…" : "No branches"}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {branches.map((b) => (
+                      <SelectItem key={b} value={b} className="font-mono">
+                        {b}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-[10.5px] text-dim">
+                  The new worktree forks from this branch.
+                </span>
+              </div>
+            )}
+
+            {/* Pull request picker (from-PR mode) */}
+            {mode === "pr" && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Eyebrow className="flex-1">Pull request</Eyebrow>
+                  <label className="flex cursor-pointer items-center gap-2 text-[11.5px] text-muted-foreground">
+                    Just mine
+                    <Toggle
+                      checked={mine}
+                      onCheckedChange={(next) => send({ type: "SET_MINE", mine: next })}
+                      aria-label="Only my pull requests"
+                    />
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 rounded-md border border-line bg-sunken px-2.5 py-[7px] text-[12.5px] focus-within:border-line-strong">
+                  <Search size={13} className="text-dim" />
+                  <input
+                    value={search}
+                    onChange={(e) => send({ type: "SET_SEARCH", search: e.target.value })}
+                    placeholder="Search open pull requests…"
+                    className="min-w-0 flex-1 bg-transparent text-text-body outline-none placeholder:text-dim"
                   />
-                </SelectTrigger>
-                <SelectContent>
-                  {branches.map((b) => (
-                    <SelectItem key={b} value={b} className="font-mono">
-                      {b}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-[10.5px] text-dim">
-                The new worktree forks from this branch.
-              </span>
-            </div>
+                </div>
+                <PrPickerList
+                  prs={prs}
+                  selected={selectedPr?.number ?? null}
+                  onSelect={(pr) => send({ type: "SELECT_PR", pr })}
+                  loading={loadingPrs}
+                />
+                <span className="text-[10.5px] text-dim">
+                  The session checks out the PR&apos;s branch — the agent&apos;s commits update it.
+                </span>
+              </div>
+            )}
 
             {error && <Callout tone="red">{error}</Callout>}
           </form>

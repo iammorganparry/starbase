@@ -4,7 +4,7 @@ import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { AppPaths } from "./app-paths.js"
-import { runGit } from "./command.js"
+import { gitLine, runGit } from "./command.js"
 
 /** Parameters for forking an isolated worktree from a repo. */
 export interface CreateWorktreeInput {
@@ -35,19 +35,16 @@ export class GitService extends Effect.Service<GitService>()(
   "@starbase/GitService",
   {
     accessors: true,
-    sync: () => ({
-      createWorktree: (
+    sync: () => {
+      /** Resolve + create the `~/starbase/worktrees/<repo>/<slug>` directory. */
+      const resolveWorktreePath = (
         input: CreateWorktreeInput
-      ): Effect.Effect<Worktree, GitError, GitEnv> =>
+      ): Effect.Effect<string, GitError, AppPaths | Path.Path | FileSystem.FileSystem> =>
         Effect.gen(function* () {
           const paths = yield* AppPaths
           const path = yield* Path.Path
           const fs = yield* FileSystem.FileSystem
-
-          const branch = `starbase/${input.slug}`
           const repoWorktreesDir = path.join(paths.worktreesDir, input.repoName)
-          const worktreePath = path.join(repoWorktreesDir, input.slug)
-
           yield* fs
             .makeDirectory(repoWorktreesDir, { recursive: true })
             .pipe(
@@ -56,19 +53,21 @@ export class GitService extends Effect.Service<GitService>()(
                   new GitError({ message: "Failed to create worktrees directory", cause })
               )
             )
+          return path.join(repoWorktreesDir, input.slug)
+        })
 
-          yield* runGit(input.repoPath, [
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            worktreePath,
-            input.baseBranch
-          ])
-
-          // Anti-bloat: point the worktree's node_modules at the origin repo's,
-          // so no deps are copied or reinstalled. Best-effort — never fatal.
-          const originNodeModules = path.join(input.repoPath, "node_modules")
+      /**
+       * Anti-bloat: point the worktree's node_modules at the origin repo's, so
+       * no deps are copied or reinstalled. Best-effort — never fatal.
+       */
+      const linkNodeModules = (
+        repoPath: string,
+        worktreePath: string
+      ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path
+          const fs = yield* FileSystem.FileSystem
+          const originNodeModules = path.join(repoPath, "node_modules")
           const hasNodeModules = yield* fs
             .exists(originNodeModules)
             .pipe(Effect.orElseSucceed(() => false))
@@ -77,14 +76,66 @@ export class GitService extends Effect.Service<GitService>()(
               .symlink(originNodeModules, path.join(worktreePath, "node_modules"))
               .pipe(Effect.ignore)
           }
+        })
 
+      /** Fork an isolated worktree on a fresh `starbase/<slug>` branch. */
+      const createWorktree = (
+        input: CreateWorktreeInput
+      ): Effect.Effect<Worktree, GitError, GitEnv> =>
+        Effect.gen(function* () {
+          const branch = `starbase/${input.slug}`
+          const worktreePath = yield* resolveWorktreePath(input)
+          yield* runGit(input.repoPath, [
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            worktreePath,
+            input.baseBranch
+          ])
+          yield* linkNodeModules(input.repoPath, worktreePath)
+          return { path: worktreePath, branch, baseBranch: input.baseBranch, repoPath: input.repoPath }
+        })
+
+      /**
+       * Add a worktree with a DETACHED HEAD at `baseBranch` (no new branch). Used
+       * as the landing pad for a "session from PR" flow: the caller then runs
+       * `gh pr checkout <n>` inside it, which switches this worktree onto the PR's
+       * head branch. Detaching first avoids a name collision between
+       * `git worktree add -b` and the PR head branch it's about to check out.
+       */
+      const createDetachedWorktree = (
+        input: CreateWorktreeInput
+      ): Effect.Effect<Worktree, GitError, GitEnv> =>
+        Effect.gen(function* () {
+          const worktreePath = yield* resolveWorktreePath(input)
+          yield* runGit(input.repoPath, [
+            "worktree",
+            "add",
+            "--detach",
+            worktreePath,
+            input.baseBranch
+          ])
+          yield* linkNodeModules(input.repoPath, worktreePath)
+          // `branch` is a placeholder — the caller overwrites it with the real
+          // head branch after `gh pr checkout` moves this worktree's HEAD.
           return {
             path: worktreePath,
-            branch,
+            branch: input.baseBranch,
             baseBranch: input.baseBranch,
             repoPath: input.repoPath
           }
         })
-    })
+
+      /** The current branch name checked out at `cwd`, or null (detached / error). */
+      const branchAt = (
+        cwd: string
+      ): Effect.Effect<string | null, never, CommandExecutor.CommandExecutor> =>
+        gitLine(cwd, "rev-parse", "--abbrev-ref", "HEAD").pipe(
+          Effect.map((b) => (b === null || b === "HEAD" ? null : b))
+        )
+
+      return { createWorktree, createDetachedWorktree, branchAt }
+    }
   }
 ) {}

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test as base } from "@playwright/test"
@@ -38,6 +38,27 @@ export interface LaunchOptions {
     | ((ctx: { reposDir: string; repoPath: string }) => ReadonlyArray<SeedSession>)
   /** Seed extra fixtures (e.g. project skills) after repo creation, before launch. */
   readonly seed?: (ctx: { reposDir: string; repoPath: string }) => void
+  /**
+   * Install a deterministic fake `gh` on PATH so the GitHub flows run offline:
+   * `gh` reports authenticated, `gh pr list` returns these PRs, and
+   * `gh pr checkout <n>` checks out the matching head branch (pre-created in the
+   * repo). Lets the "new session from a PR" flow run end-to-end against real git.
+   */
+  readonly gh?: {
+    readonly login: string
+    readonly prs: ReadonlyArray<{
+      number: number
+      title: string
+      headRefName: string
+      baseRefName: string
+      author: { login: string }
+      state?: string
+      isDraft?: boolean
+      additions?: number
+      deletions?: number
+      updatedAt?: string
+    }>
+  }
 }
 
 export interface LaunchedApp {
@@ -63,6 +84,62 @@ const initRepo = (dir: string): void => {
   writeFileSync(join(dir, "README.md"), "# e2e repo\n")
   git(dir, ["add", "-A"])
   git(dir, ["commit", "-m", "init", "--no-gpg-sign"])
+}
+
+/**
+ * Install a fake `gh` into `binDir` and pre-create each PR's head branch in the
+ * repo, so `gh pr checkout` has a real branch to switch onto. Returns the env
+ * vars the shim reads (the PR-list JSON + a number→head-ref map). The shim is a
+ * tiny bash script — deterministic, offline, no real GitHub.
+ */
+const installFakeGh = (
+  binDir: string,
+  repoPath: string,
+  gh: NonNullable<LaunchOptions["gh"]>
+): Record<string, string> => {
+  mkdirSync(binDir, { recursive: true })
+  const prs = gh.prs.map((p) => ({
+    number: p.number,
+    title: p.title,
+    headRefName: p.headRefName,
+    baseRefName: p.baseRefName,
+    author: p.author,
+    state: p.state ?? "OPEN",
+    isDraft: p.isDraft ?? false,
+    additions: p.additions ?? 0,
+    deletions: p.deletions ?? 0,
+    updatedAt: p.updatedAt ?? "2026-07-11T00:00:00Z"
+  }))
+  // Pre-create the head branches off main so `gh pr checkout` can land on them.
+  for (const p of prs) {
+    if (repoPath) git(repoPath, ["branch", p.headRefName, "main"])
+  }
+  const heads = prs.map((p) => `${p.number}:${p.headRefName}`).join(",")
+  const script = `#!/usr/bin/env bash
+case "$1" in
+  --version) echo "gh version 2.60.0 (2026-01-01)"; exit 0;;
+esac
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+  echo "github.com" 1>&2
+  echo "  ✓ Logged in to github.com account ${gh.login} (keyring)" 1>&2
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  printf '%s' "$STARBASE_E2E_GH_PRS"; exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
+  ref=$(printf '%s' "$STARBASE_E2E_GH_HEADS" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
+  git checkout "$ref" >/dev/null 2>&1; exit $?
+fi
+exit 0
+`
+  const ghPath = join(binDir, "gh")
+  writeFileSync(ghPath, script)
+  chmodSync(ghPath, 0o755)
+  return {
+    STARBASE_E2E_GH_PRS: JSON.stringify(prs),
+    STARBASE_E2E_GH_HEADS: heads
+  }
 }
 
 export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promise<LaunchedApp> }>({
@@ -103,10 +180,21 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       // when the app first scans them.
       options.seed?.({ reposDir, repoPath })
 
+      // Optional fake `gh` on PATH for the GitHub flows (offline + deterministic).
+      let ghEnv: Record<string, string> = {}
+      let pathPrefix = ""
+      if (options.gh) {
+        const binDir = join(home, "bin")
+        ghEnv = installFakeGh(binDir, repoPath, options.gh)
+        pathPrefix = `${binDir}:`
+      }
+
       const app = await electron.launch({
         args: [MAIN_ENTRY],
         env: {
           ...process.env,
+          ...ghEnv,
+          PATH: `${pathPrefix}${process.env.PATH ?? ""}`,
           STARBASE_HOME: home,
           ELECTRON_RENDERER_URL: "",
           // Force the deterministic scripted agent so chat e2e never spawns a

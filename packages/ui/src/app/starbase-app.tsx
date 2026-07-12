@@ -1,9 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react"
 import type {
   CliInfo,
+  CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
   GithubConfig,
+  PrSummary,
   Repo,
   Session,
   SessionStatus,
@@ -59,6 +61,13 @@ export interface StarbaseAppProps {
   loadBranches?: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Create a session (forks a real worktree) and return it. */
   onCreateSession?: (input: CreateSessionInput) => Promise<Session>
+  /**
+   * List open PRs for a repo (the New Session "From PR" picker). Presence wires
+   * the `Blank | From PR` toggle; absent (e.g. GitHub not connected) hides it.
+   */
+  loadPrs?: (repoPath: string, opts: { mine: boolean; search: string }) => Promise<ReadonlyArray<PrSummary>>
+  /** Create a session from an existing PR (checks out its head branch) and return it. */
+  onCreateSessionFromPr?: (input: CreateSessionFromPrInput) => Promise<Session>
   /** App version (from `__APP_VERSION__`), shown in the sidebar footer. */
   version?: string
 }
@@ -88,6 +97,8 @@ export function StarbaseApp({
   renderConversation,
   loadBranches = noBranches,
   onCreateSession,
+  loadPrs,
+  onCreateSessionFromPr,
   version
 }: StarbaseAppProps) {
   const [selected, setSelected] = useState<string | null>(
@@ -153,6 +164,15 @@ export function StarbaseApp({
     [onCreateSession]
   )
 
+  const handleCreateFromPr = useCallback(
+    async (input: CreateSessionFromPrInput) => {
+      if (!onCreateSessionFromPr) return
+      const session = await onCreateSessionFromPr(input)
+      setSelected(session.id)
+    },
+    [onCreateSessionFromPr]
+  )
+
   return (
     <AppShell title="Starbase">
       <SessionConversation
@@ -180,6 +200,8 @@ export function StarbaseApp({
           clis={clis}
           loadBranches={loadBranches}
           onCreate={handleCreate}
+          loadPrs={loadPrs}
+          onCreateFromPr={onCreateSessionFromPr ? handleCreateFromPr : undefined}
         />
       )}
       {onLoadUsage && (

@@ -215,6 +215,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.14.5
         version: 3.14.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@xstate/react':
+        specifier: ^6.1.0
+        version: 6.1.0(@types/react@19.2.17)(react@19.2.7)(xstate@5.32.4)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -236,6 +239,9 @@ importers:
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0
+      xstate:
+        specifier: ^5.32.4
+        version: 5.32.4
     devDependencies:
       '@starbase/tsconfig':
         specifier: workspace:*
