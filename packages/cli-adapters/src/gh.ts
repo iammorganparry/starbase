@@ -7,6 +7,7 @@ import type {
   PrReviewer,
   PrReviewKind,
   PrState,
+  PrSummary,
   PrTimelineItem,
   PullRequest,
   ReviewSubmitKind
@@ -70,6 +71,25 @@ const rec = (v: unknown): Json => (typeof v === "object" && v !== null ? (v as J
 const arr = (v: unknown): ReadonlyArray<Json> => (Array.isArray(v) ? (v as ReadonlyArray<Json>) : [])
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null)
 const num = (v: unknown): number | null => (typeof v === "number" ? v : null)
+
+/**
+ * Declaratively build a `gh` argv: a fixed `base` followed by optional pieces.
+ * Each optional is `[flag, value]` (emitted as `flag value` only when `value`
+ * is a non-empty string) or a bare `[flag]` (emitted only when `flag` is set).
+ * A falsy entry is dropped, so callers read as a list of "include this when …".
+ */
+const ghArgs = (
+  base: ReadonlyArray<string>,
+  optional: ReadonlyArray<readonly [string, (string | false | null | undefined)?] | false>
+): ReadonlyArray<string> => [
+  ...base,
+  ...optional.flatMap((entry) => {
+    if (!entry) return []
+    const [flag, value] = entry
+    if (value === undefined) return [flag] // bare flag (e.g. "--draft")
+    return value ? [flag, value] : [] // flag + value, when present
+  })
+]
 
 /** Narrow review state → the three timeline kinds (never "pending"). */
 const timelineKindOf = (state: string | null): "commented" | "approved" | "changes_requested" => {
@@ -249,6 +269,51 @@ const PR_VIEW_FIELDS = [
   "url"
 ].join(",")
 
+/**
+ * Map a raw `gh pr list --json …` item into the lightweight `PrSummary` used by
+ * the "new session from a PR" picker. Pure + defensive — the unit-test target.
+ * "draft" state is synthesized from `isDraft` (as in `mapPrView`).
+ */
+export const mapPrSummary = (raw: unknown): PrSummary => {
+  const j = rec(raw)
+  const rawState = str(j.state)?.toUpperCase()
+  const isDraft = j.isDraft === true
+  const state: PrState =
+    rawState === "MERGED"
+      ? "merged"
+      : rawState === "CLOSED"
+        ? "closed"
+        : isDraft
+          ? "draft"
+          : "open"
+  return {
+    number: num(j.number) ?? 0,
+    title: str(j.title) ?? "",
+    headRefName: str(j.headRefName) ?? "",
+    baseRefName: str(j.baseRefName) ?? "",
+    author: { login: str(rec(j.author).login) ?? "unknown", avatarUrl: null },
+    state,
+    isDraft,
+    additions: num(j.additions) ?? 0,
+    deletions: num(j.deletions) ?? 0,
+    updatedAt: str(j.updatedAt) ?? ""
+  }
+}
+
+/** The `--json` field set requested from `gh pr list` (drives `mapPrSummary`). */
+const PR_LIST_FIELDS = [
+  "number",
+  "title",
+  "headRefName",
+  "baseRefName",
+  "author",
+  "state",
+  "isDraft",
+  "additions",
+  "deletions",
+  "updatedAt"
+].join(",")
+
 /** Map `gh pr review` submit kind → the corresponding gh flag. */
 const REVIEW_FLAG: Record<ReviewSubmitKind, string> = {
   comment: "--comment",
@@ -332,6 +397,27 @@ export class GhService extends Effect.Service<GhService>()(
           Effect.map((raw) => num(rec(raw).number))
         ),
 
+      /**
+       * List open PRs for the repo at `cwd`, for the "new session from a PR"
+       * picker. `mine` filters to the authenticated user (`--author @me`);
+       * `search` passes a free-text query through `--search`. Never fails —
+       * folds to an empty list.
+       */
+      listPrs: (
+        cwd: string,
+        opts: { mine: boolean; search: string }
+      ): Effect.Effect<ReadonlyArray<PrSummary>, never, CommandExecutor.CommandExecutor> =>
+        ghJson(
+          cwd,
+          ghArgs(
+            ["pr", "list", "--state", "open", "--json", PR_LIST_FIELDS, "--limit", "50"],
+            [
+              ["--author", opts.mine && "@me"],
+              ["--search", opts.search.trim()]
+            ]
+          )
+        ).pipe(Effect.map((raw) => arr(raw).map(mapPrSummary))),
+
       /** The full `PullRequest` view model for `number`, or null on any failure. */
       prView: (
         cwd: string,
@@ -366,6 +452,17 @@ export class GhService extends Effect.Service<GhService>()(
         readStdout(cwd, ["pr", "diff", String(number)]).pipe(Effect.map((out) => out ?? "")),
 
       // ── Pull-request writes (surface GhError) ──────────────────────────────
+
+      /**
+       * Check out PR `number` into the worktree at `cwd` (`gh pr checkout`).
+       * Fetches the head branch and switches this worktree's HEAD onto it,
+       * configuring the fork remote for cross-repo PRs. Surfaces `GhError`.
+       */
+      checkoutPr: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["pr", "checkout", String(number)]).pipe(Effect.asVoid),
 
       /** Open a PR from the worktree's branch; returns the new PR number. */
       prCreate: (

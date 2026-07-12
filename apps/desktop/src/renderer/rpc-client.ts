@@ -7,6 +7,7 @@
 import type {
   CliInfo,
   CliKind,
+  CreateSessionFromPrInput,
   CreateSessionInput,
   GateDecision,
   GhStatus,
@@ -15,6 +16,7 @@ import type {
   ModelOption,
   PermissionMode,
   PrFileChange,
+  PrSummary,
   PullRequest,
   QuestionAnswer,
   Repo,
@@ -92,6 +94,8 @@ export const rpc = {
     run((c) => c.Sessions.get({ id })),
   sessionsCreate: (input: CreateSessionInput): Promise<Session> =>
     run((c) => c.Sessions.create(input)),
+  sessionsCreateFromPr: (input: CreateSessionFromPrInput): Promise<Session> =>
+    run((c) => c.Sessions.createFromPr(input)),
   sessionsTranscript: (id: string): Promise<ReadonlyArray<Message>> =>
     run((c) => c.Sessions.transcript({ id })),
   sessionsDiff: (id: string): Promise<string> => run((c) => c.Sessions.diff({ id })),
@@ -127,6 +131,11 @@ export const rpc = {
     run((c) => c.Config.setGithub(github)),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
     run((c) => c.Github.pr({ sessionId })),
+  githubListPrs: (
+    repoPath: string,
+    opts: { mine: boolean; search: string }
+  ): Promise<ReadonlyArray<PrSummary>> =>
+    run((c) => c.Github.listPrs({ repoPath, mine: opts.mine, search: opts.search })),
   githubFiles: (sessionId: string): Promise<ReadonlyArray<PrFileChange>> =>
     run((c) => c.Github.files({ sessionId })),
   githubDiff: (sessionId: string): Promise<string> =>

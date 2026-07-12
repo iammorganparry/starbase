@@ -1,10 +1,16 @@
-import type { CreateSessionInput, PermissionMode, Session } from "@starbase/core"
-import { GitError, SessionNotFoundError } from "@starbase/core"
+import type {
+  CreateSessionFromPrInput,
+  CreateSessionInput,
+  PermissionMode,
+  Session
+} from "@starbase/core"
+import { GhError, GitError, SessionNotFoundError } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect, Schema } from "effect"
 import { AppPaths } from "./app-paths.js"
+import { GhService } from "./gh.js"
 import { GitService } from "./git.js"
 
 const SessionArray = Schema.Array(SessionSchema)
@@ -112,6 +118,58 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           return session
         })
 
+      /**
+       * Create a session from an *existing* PR. Lands a detached worktree on the
+       * PR's base, then `gh pr checkout`s the PR — so the worktree tracks the PR's
+       * head branch and the agent's commits update that PR directly. `prNumber`
+       * is linked up front, so the sidebar badge + PR/Code-Review tabs light up.
+       */
+      const createFromPr = (
+        input: CreateSessionFromPrInput
+      ): Effect.Effect<
+        Session,
+        GitError | GhError,
+        | GitService
+        | GhService
+        | FileSystem.FileSystem
+        | Path.Path
+        | CommandExecutor.CommandExecutor
+        | AppPaths
+      > =>
+        Effect.gen(function* () {
+          const slug = kebab(input.pr.title)
+          const worktree = yield* GitService.createDetachedWorktree({
+            repoPath: input.repoPath,
+            repoName: input.repoName,
+            slug,
+            baseBranch: input.pr.baseRefName
+          })
+          yield* GhService.checkoutPr(worktree.path, input.pr.number)
+          // The live branch after checkout is the PR head; fall back to the
+          // reported head ref if `rev-parse` can't resolve it.
+          const branch = (yield* GitService.branchAt(worktree.path)) ?? input.pr.headRefName
+          const now = yield* Effect.sync(() => new Date().toISOString())
+          const stamp = yield* Effect.sync(() => Date.now().toString(36))
+          const session: Session = {
+            id: `s_${slug}_${stamp}`,
+            repo: input.repoName,
+            branch,
+            title: input.pr.title,
+            status: "idle",
+            cli: input.cli,
+            diff: { added: 0, removed: 0 },
+            prNumber: input.pr.number,
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: now,
+            worktreePath: worktree.path,
+            baseBranch: input.pr.baseRefName
+          }
+          const existing = yield* readAll()
+          yield* writeAll([session, ...existing])
+          return session
+        })
+
       /** Apply `patch` to the matching session and persist; no-op if absent. */
       const update = (
         id: string,
@@ -140,7 +198,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       const setPrNumber = (id: string, prNumber: number | null) =>
         update(id, (s) => ({ ...s, prNumber }))
 
-      return { list, get, create, setMode, setModel, addAllowlist, setPrNumber }
+      return { list, get, create, createFromPr, setMode, setModel, addAllowlist, setPrNumber }
     }
   }
 ) {}

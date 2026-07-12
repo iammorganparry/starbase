@@ -231,6 +231,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.list": () => SessionStore.list(),
   "Sessions.get": ({ id }) => SessionStore.get(id),
   "Sessions.create": (input) => SessionStore.create(input),
+  "Sessions.createFromPr": (input) => SessionStore.createFromPr(input),
   "Sessions.transcript": ({ id }) => TranscriptStore.list(id),
   "Sessions.diff": ({ id }) => sessionDiff(id),
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
@@ -253,6 +254,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
+  "Github.listPrs": ({ repoPath, mine, search }) => GhService.listPrs(repoPath, { mine, search }),
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),

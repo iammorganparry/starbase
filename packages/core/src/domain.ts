@@ -274,6 +274,28 @@ export const PullRequest = Schema.Struct({
 })
 export type PullRequest = Schema.Schema.Type<typeof PullRequest>
 
+/**
+ * A lightweight PR list-item for the "new session from a PR" picker (from
+ * `gh pr list --json …`). Distinct from the full `PullRequest` view model —
+ * only the fields the picker row + session creation need.
+ */
+export const PrSummary = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  /** Source (PR head) branch — the session's worktree checks this out. */
+  headRefName: Schema.String,
+  /** Target (base) branch. */
+  baseRefName: Schema.String,
+  author: GithubUser,
+  state: PrState,
+  isDraft: Schema.Boolean,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+  /** ISO-8601 last-updated timestamp (for the relative "2h ago" label). */
+  updatedAt: Schema.String
+})
+export type PrSummary = Schema.Schema.Type<typeof PrSummary>
+
 /** A pending inline review comment anchored to a file + line. */
 export const ReviewComment = Schema.Struct({
   path: Schema.String,
@@ -297,6 +319,29 @@ export const CreateSessionInput = Schema.Struct({
   baseBranch: Schema.String
 })
 export type CreateSessionInput = Schema.Schema.Type<typeof CreateSessionInput>
+
+/**
+ * Parameters for creating a session from an *existing* pull request. Unlike
+ * `CreateSessionInput` (which forks a fresh `starbase/<slug>` branch), this
+ * checks out the PR's head branch into the worktree so the agent's commits
+ * update the PR directly. Title + base come from the PR itself.
+ */
+export const CreateSessionFromPrInput = Schema.Struct({
+  /** Absolute path to the origin repo. */
+  repoPath: Schema.String,
+  /** The repo's folder name, used for grouping + the worktree directory. */
+  repoName: Schema.String,
+  /** Which CLI will drive the session. */
+  cli: CliKind,
+  /** The pull request to base the session on. */
+  pr: Schema.Struct({
+    number: Schema.Number,
+    title: Schema.String,
+    headRefName: Schema.String,
+    baseRefName: Schema.String
+  })
+})
+export type CreateSessionFromPrInput = Schema.Schema.Type<typeof CreateSessionFromPrInput>
 
 // The conversation/transcript model (Message, ToolCall, ApprovalGate) and the
 // normalized StreamEvent seam live in ./conversation.ts.

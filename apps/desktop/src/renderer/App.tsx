@@ -1,7 +1,13 @@
 import { useEffect, useRef } from "react"
 import { useMachine } from "@xstate/react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import type { CreateSessionInput, GhStatus, GithubConfig, Session } from "@starbase/core"
+import type {
+  CreateSessionFromPrInput,
+  CreateSessionInput,
+  GhStatus,
+  GithubConfig,
+  Session
+} from "@starbase/core"
 import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
@@ -49,6 +55,11 @@ export function App() {
 
   const createSession = async (input: CreateSessionInput) => {
     const session = await rpc.sessionsCreate(input)
+    send({ type: "SESSION_CREATED", session })
+    return session
+  }
+  const createSessionFromPr = async (input: CreateSessionFromPrInput) => {
+    const session = await rpc.sessionsCreateFromPr(input)
     send({ type: "SESSION_CREATED", session })
     return session
   }
@@ -116,6 +127,8 @@ export function App() {
       onRecheckGh={recheckGh}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
+      loadPrs={connected ? rpc.githubListPrs : undefined}
+      onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
       renderConversation={(session: Session) => <ConversationPane session={session} />}
       renderPullRequest={(session, ctx) => (
         <PullRequestPane

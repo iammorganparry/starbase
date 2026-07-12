@@ -1,6 +1,7 @@
 import {
   CliInfo,
   CliKind,
+  CreateSessionFromPrInput,
   CreateSessionInput,
   GateDecision,
   GhStatus,
@@ -9,6 +10,7 @@ import {
   ModelOption,
   PermissionMode,
   PrFileChange,
+  PrSummary,
   PullRequest,
   QuestionAnswer,
   Repo,
@@ -112,6 +114,16 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: CreateSessionInput
   }),
 
+  /**
+   * Create a session from an existing PR: land a worktree on the PR's head
+   * branch (`gh pr checkout`), link `prNumber`, persist, and return it.
+   */
+  Rpc.make("Sessions.createFromPr", {
+    success: Session,
+    error: Schema.Union(GitError, GhError),
+    payload: CreateSessionFromPrInput
+  }),
+
   /** Load a session's persisted conversation transcript. */
   Rpc.make("Sessions.transcript", {
     success: Schema.Array(Message),
@@ -206,6 +218,20 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: Schema.NullOr(PullRequest),
     error: GhError,
     payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * List open PRs for a repo (for the "new session from a PR" picker). `mine`
+   * filters to the authenticated user; `search` is a free-text query. Never
+   * errors — folds to an empty list.
+   */
+  Rpc.make("Github.listPrs", {
+    success: Schema.Array(PrSummary),
+    payload: {
+      repoPath: Schema.String,
+      mine: Schema.Boolean,
+      search: Schema.String
+    }
   }),
 
   /** The changed files of a session's PR, for the Code Review file list. */
