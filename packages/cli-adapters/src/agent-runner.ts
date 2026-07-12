@@ -176,6 +176,17 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           >()
 
           const now = yield* Effect.sync(() => new Date().toISOString())
+          // The id counter is in-memory and resets when the app restarts, but the
+          // transcript persists — so seed it past any id already recorded for this
+          // session, otherwise a run after a restart re-emits colliding ids
+          // (`u_<sid>_1`, `a_<sid>_2`, …) and the virtualized transcript stacks
+          // rows keyed by those ids. Deterministic: empty transcript → starts at 1.
+          const priorMax = (yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => [])))
+            .reduce((max, m) => {
+              const n = Number(m.id.split("_").pop())
+              return Number.isFinite(n) && n > max ? n : max
+            }, 0)
+          yield* Ref.update(counter, (c) => Math.max(c, priorMax))
           const un = yield* nextId
           yield* TranscriptStore.append(sessionId, userMessage(`u_${sessionId}_${un}`, text, now))
           const an = yield* nextId

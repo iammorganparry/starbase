@@ -7,6 +7,7 @@ import { cn } from "../lib/cn.js"
 import { Composer } from "../composites/composer.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { DiffPanel } from "./diff-panel.js"
+import type { DiffActions } from "../diff/diff-view.js"
 
 /** Shift+Tab cycles through the HITL modes, Claude-Code style. */
 const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
@@ -28,6 +29,8 @@ export interface ConversationViewProps {
   onSend?: (text: string) => void
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onSetMode?: (mode: PermissionMode) => void
+  /** Revert / comment interactions for the Changes rail (worktree diff). */
+  changeActions?: DiffActions
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
@@ -61,7 +64,8 @@ export function ConversationView({
   onSetModel,
   onSend,
   onDecideGate,
-  onSetMode
+  onSetMode,
+  changeActions
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevCount = useRef(messages.length)
@@ -92,7 +96,11 @@ export function ConversationView({
     count: messages.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 140,
-    getItemKey: (i) => messages[i]!.id,
+    // Include the index so a stray duplicate message id (e.g. from an older
+    // transcript recorded before ids were seeded per-session) can't collide in
+    // the measurement cache and stack rows. The transcript is append-only, so
+    // the index is stable per message.
+    getItemKey: (i) => `${messages[i]!.id}-${i}`,
     paddingEnd: room,
     overscan: 6
   })
@@ -163,7 +171,7 @@ export function ConversationView({
       </div>
 
       {hasChanges && showChanges && (
-        <DiffPanel patch={patch} added={counts.added} removed={counts.removed} />
+        <DiffPanel patch={patch} added={counts.added} removed={counts.removed} actions={changeActions} />
       )}
     </div>
   )

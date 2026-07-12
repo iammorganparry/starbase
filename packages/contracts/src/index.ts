@@ -4,10 +4,14 @@ import {
   CreateSessionInput,
   GateDecision,
   GhStatus,
+  GithubConfig,
   Message,
   ModelOption,
   PermissionMode,
+  PrFileChange,
+  PullRequest,
   Repo,
+  ReviewSubmitKind,
   Session,
   Skill,
   StreamEvent,
@@ -15,7 +19,9 @@ import {
   WorkspaceConfig
 } from "@starbase/core"
 import {
+  ConfigError,
   DiscoveryError,
+  GhError,
   GitError,
   SessionNotFoundError,
   WorkspaceNotConfiguredError
@@ -67,6 +73,23 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: Schema.Array(Schema.String),
     error: GitError,
     payload: { repoPath: Schema.String }
+  }),
+
+  /** Discard ALL uncommitted changes to a file in a session's worktree. */
+  Rpc.make("Workspace.revertFile", {
+    error: GitError,
+    payload: { sessionId: Schema.String, path: Schema.String }
+  }),
+
+  /** Revert just the uncommitted changes in a NEW-file line range (reverse-apply). */
+  Rpc.make("Workspace.revertLines", {
+    error: GitError,
+    payload: {
+      sessionId: Schema.String,
+      path: Schema.String,
+      startLine: Schema.Number,
+      endLine: Schema.Number
+    }
   }),
 
   /** List all agent sessions for the sidebar. */
@@ -155,5 +178,72 @@ export class StarbaseRpcs extends RpcGroup.make(
   /** Detect the GitHub CLI (`gh`) and its authentication status. */
   Rpc.make("Gh.status", {
     success: GhStatus
+  }),
+
+  /** Persist the user's GitHub integration preferences. */
+  Rpc.make("Config.setGithub", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: GithubConfig
+  }),
+
+  /**
+   * The pull request linked to a session (its `prNumber`), assembled from `gh pr
+   * view`. Null when the session has no worktree or no linked PR. Embeds CI
+   * checks, reviewers, and the review timeline for the Pull Request tab.
+   */
+  Rpc.make("Github.pr", {
+    success: Schema.NullOr(PullRequest),
+    error: GhError,
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** The changed files of a session's PR, for the Code Review file list. */
+  Rpc.make("Github.files", {
+    success: Schema.Array(PrFileChange),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** The unified diff of a session's PR vs its base branch. */
+  Rpc.make("Github.diff", {
+    success: Schema.String,
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * Detect a PR already open on the session's branch, link it (persist
+   * `prNumber`), and return its number (null if none).
+   */
+  Rpc.make("Github.detectPr", {
+    success: Schema.NullOr(Schema.Number),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** Open a PR from the session's branch and link it; returns the PR number. */
+  Rpc.make("Github.createPr", {
+    success: Schema.Number,
+    error: GhError,
+    payload: {
+      sessionId: Schema.String,
+      title: Schema.String,
+      body: Schema.String,
+      base: Schema.String,
+      draft: Schema.Boolean
+    }
+  }),
+
+  /**
+   * Post a top-level comment on the session's PR. `toGithub` gates the actual
+   * `gh pr comment` write (the renderer separately routes the body to the agent).
+   */
+  Rpc.make("Github.comment", {
+    error: GhError,
+    payload: { sessionId: Schema.String, body: Schema.String, toGithub: Schema.Boolean }
+  }),
+
+  /** Submit a review (comment / approve / request-changes) on the session's PR. */
+  Rpc.make("Github.review", {
+    error: GhError,
+    payload: { sessionId: Schema.String, kind: ReviewSubmitKind, body: Schema.String }
   })
 ) {}

@@ -3,6 +3,7 @@ import type {
   CliInfo,
   CreateSessionInput,
   GhStatus,
+  GithubConfig,
   Repo,
   Session,
   SessionStatus,
@@ -11,8 +12,17 @@ import type {
 import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
+import { SettingsDialog } from "../composites/settings-dialog.js"
 import { SessionConversation } from "../screens/session-conversation.js"
 import { SEED_PATCH } from "../seed.js"
+
+const GH_UNAVAILABLE: GhStatus = {
+  available: false,
+  authenticated: false,
+  login: null,
+  host: null,
+  version: null
+}
 
 export interface StarbaseAppProps {
   clis: ReadonlyArray<CliInfo>
@@ -27,6 +37,16 @@ export interface StarbaseAppProps {
   usage?: Usage | null
   /** Fetch fresh usage (called when the modal opens); may be async. */
   onLoadUsage?: () => Promise<void> | void
+  /** Persisted GitHub integration preferences (for the settings modal). */
+  githubConfig?: GithubConfig | null
+  /** Persist GitHub preferences; presence wires the GitHub settings entry point. */
+  onSaveGithubConfig?: (config: GithubConfig) => Promise<void> | void
+  /** Re-run `gh auth status` (the settings modal "Recheck" button); may be async. */
+  onRecheckGh?: () => Promise<void> | void
+  /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
+  renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
+  renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   activeSessionId?: string | null
   patch?: string
   /**
@@ -58,6 +78,11 @@ export function StarbaseApp({
   liveStatus,
   usage,
   onLoadUsage,
+  githubConfig,
+  onSaveGithubConfig,
+  onRecheckGh,
+  renderPullRequest,
+  renderReview,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -71,6 +96,8 @@ export function StarbaseApp({
   const [newOpen, setNewOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageLoading, setUsageLoading] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [ghRechecking, setGhRechecking] = useState(false)
 
   const openUsage = useCallback(() => {
     setUsageOpen(true)
@@ -80,6 +107,16 @@ export function StarbaseApp({
       void (result as Promise<void>).finally(() => setUsageLoading(false))
     }
   }, [onLoadUsage])
+
+  const handleRecheckGh = useCallback(() => {
+    const result = onRecheckGh?.()
+    if (result && typeof (result as Promise<void>).then === "function") {
+      setGhRechecking(true)
+      void (result as Promise<void>).finally(() => setGhRechecking(false))
+    }
+  }, [onRecheckGh])
+
+  const ghConnected = Boolean(ghStatus?.available && ghStatus?.authenticated)
 
   const active = sessions.find((s) => s.id === selected) ?? null
   // Key the pane by session id so each session drives a fresh conversation
@@ -129,6 +166,10 @@ export function StarbaseApp({
         liveStatus={liveStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         onOpenUsage={onLoadUsage ? openUsage : undefined}
+        onOpenSettings={onSaveGithubConfig ? () => setSettingsOpen(true) : undefined}
+        ghConnected={ghConnected}
+        renderPullRequest={renderPullRequest}
+        renderReview={renderReview}
         version={version}
       />
       {onCreateSession && (
@@ -147,6 +188,17 @@ export function StarbaseApp({
           usage={usage}
           loading={usageLoading}
           onClose={() => setUsageOpen(false)}
+        />
+      )}
+      {onSaveGithubConfig && (
+        <SettingsDialog
+          open={settingsOpen}
+          ghStatus={ghStatus ?? GH_UNAVAILABLE}
+          github={githubConfig}
+          rechecking={ghRechecking}
+          onRecheck={onRecheckGh ? handleRecheckGh : undefined}
+          onSaveGithub={onSaveGithubConfig}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
     </AppShell>

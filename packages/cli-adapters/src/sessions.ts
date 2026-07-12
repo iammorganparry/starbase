@@ -136,7 +136,11 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           allowlist: [...new Set([...(s.allowlist ?? []), label])]
         }))
 
-      return { list, get, create, setMode, setModel, addAllowlist }
+      /** Link (or clear) the session's pull-request number. */
+      const setPrNumber = (id: string, prNumber: number | null) =>
+        update(id, (s) => ({ ...s, prNumber }))
+
+      return { list, get, create, setMode, setModel, addAllowlist, setPrNumber }
     }
   }
 ) {}

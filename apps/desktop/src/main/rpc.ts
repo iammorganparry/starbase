@@ -25,6 +25,8 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
+import { GhError } from "@starbase/core"
+import type { ReviewSubmitKind } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -86,6 +88,131 @@ export const sessionDiff = (id: string) =>
     return yield* WorkspaceService.diff(session.worktreePath).pipe(Effect.orElseSucceed(() => ""))
   })
 
+/** Resolve a session (best-effort; unknown → null) for the GitHub handlers. */
+const resolveSession = (sessionId: string) =>
+  SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+
+/**
+ * `Workspace.revertFile` handler — discard all uncommitted changes to `path` in
+ * the session's worktree. A no-op for an unknown / worktree-less session.
+ */
+export const workspaceRevertFile = (input: { sessionId: string; path: string }) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath) return
+    yield* WorkspaceService.revertFile(session.worktreePath, input.path)
+  })
+
+/**
+ * `Workspace.revertLines` handler — revert just the uncommitted changes in a
+ * line range of `path` in the session's worktree. No-op for an unknown session.
+ */
+export const workspaceRevertLines = (input: {
+  sessionId: string
+  path: string
+  startLine: number
+  endLine: number
+}) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath) return
+    yield* WorkspaceService.revertRange(session.worktreePath, input.path, input.startLine, input.endLine)
+  })
+
+/**
+ * `Github.pr` handler. Returns the linked PR (via `gh pr view`) or null when the
+ * session has no worktree or no linked PR. Exported for tests.
+ */
+export const githubPr = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath || session.prNumber === null) return null
+    return yield* GhService.prView(session.worktreePath, session.prNumber)
+  })
+
+/** `Github.files` handler — the PR's changed files (empty without a linked PR). */
+export const githubFiles = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath || session.prNumber === null) return []
+    return yield* GhService.prFiles(session.worktreePath, session.prNumber)
+  })
+
+/** `Github.diff` handler — the PR's unified diff (empty without a linked PR). */
+export const githubDiff = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath || session.prNumber === null) return ""
+    return yield* GhService.prDiff(session.worktreePath, session.prNumber)
+  })
+
+/**
+ * `Github.detectPr` handler. Looks up a PR open on the session's branch and, when
+ * found, links it (persists `prNumber`). Returns the number, or null. Exported for tests.
+ */
+export const githubDetectPr = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath) return null
+    // Resolve against the worktree's live branch — the stored `session.branch`
+    // drifts once the agent checks out / creates a different branch there.
+    const n = yield* GhService.prForWorktree(session.worktreePath)
+    if (n !== null) yield* SessionStore.setPrNumber(session.id, n).pipe(Effect.ignore)
+    return n
+  })
+
+/** `Github.createPr` handler — open a PR from the session's branch and link it. */
+export const githubCreatePr = (input: {
+  sessionId: string
+  title: string
+  body: string
+  base: string
+  draft: boolean
+}) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath) {
+      return yield* Effect.fail(new GhError({ message: "Session has no worktree to open a PR from" }))
+    }
+    const n = yield* GhService.prCreate(session.worktreePath, {
+      title: input.title,
+      body: input.body,
+      base: input.base,
+      draft: input.draft
+    })
+    yield* SessionStore.setPrNumber(session.id, n).pipe(Effect.ignore)
+    return n
+  })
+
+/**
+ * `Github.comment` handler — post a top-level PR comment when `toGithub`. The
+ * renderer separately feeds the body to the agent (`Agent.run`), so this only
+ * owns the GitHub write.
+ */
+export const githubComment = (input: { sessionId: string; body: string; toGithub: boolean }) =>
+  Effect.gen(function* () {
+    if (!input.toGithub) return
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to comment on" }))
+    }
+    yield* GhService.prComment(session.worktreePath, session.prNumber, input.body)
+  })
+
+/** `Github.review` handler — submit a review (comment/approve/request-changes). */
+export const githubReview = (input: {
+  sessionId: string
+  kind: ReviewSubmitKind
+  body: string
+}) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to review" }))
+    }
+    yield* GhService.prReview(session.worktreePath, session.prNumber, input.kind, input.body)
+  })
+
 /**
  * Handlers for every procedure in the group. Each one delegates straight to an
  * Effect service, so the group remains the sole contract. `Discovery.list`
@@ -99,6 +226,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Workspace.repos": () => WorkspaceService.listRepos(),
   "Workspace.branches": ({ repoPath }) => WorkspaceService.branches(repoPath),
   "Workspace.files": ({ repoPath }) => WorkspaceService.files(repoPath),
+  "Workspace.revertFile": (input) => workspaceRevertFile(input),
+  "Workspace.revertLines": (input) => workspaceRevertLines(input),
   "Sessions.list": () => SessionStore.list(),
   "Sessions.get": ({ id }) => SessionStore.get(id),
   "Sessions.create": (input) => SessionStore.create(input),
@@ -119,7 +248,15 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Skills.list": ({ sessionId }) => skillsList(sessionId),
   "Models.list": ({ cli }) => ModelsService.list(cli),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
-  "Gh.status": () => GhService.status()
+  "Gh.status": () => GhService.status(),
+  "Config.setGithub": (github) => ConfigService.setGithub(github),
+  "Github.pr": ({ sessionId }) => githubPr(sessionId),
+  "Github.files": ({ sessionId }) => githubFiles(sessionId),
+  "Github.diff": ({ sessionId }) => githubDiff(sessionId),
+  "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
+  "Github.createPr": (input) => githubCreatePr(input),
+  "Github.comment": (input) => githubComment(input),
+  "Github.review": (input) => githubReview(input)
 })
 
 /**

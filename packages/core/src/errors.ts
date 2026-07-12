@@ -73,3 +73,16 @@ export class GitError extends Schema.TaggedError<GitError>()(
     cause: Schema.optional(Schema.Unknown)
   }
 ) {}
+
+/**
+ * Raised when a `gh` (GitHub CLI) write fails — `gh pr create`, `gh pr comment`,
+ * `gh pr review`. A `Schema.TaggedError` so it can cross the RPC boundary as the
+ * error channel for the `Github.*` write RPCs. Reads never fail (fold to null).
+ */
+export class GhError extends Schema.TaggedError<GhError>()(
+  "GhError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}

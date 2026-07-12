@@ -173,3 +173,89 @@ test("the sidebar Usage & limits button opens the usage modal", async ({ launchA
   await expect(dialog.getByText("Usage & limits")).toBeVisible()
   await expect(dialog.getByText(/Last updated:/)).toBeVisible()
 })
+
+// A session linked to a PR — drives the sidebar badge + the PR/Code Review tabs.
+const seededPrSessions = ({ repoPath }: { repoPath: string }): ReadonlyArray<SeedSession> => [
+  {
+    id: "s_pr",
+    repo: "widget",
+    branch: "starbase/refactor",
+    title: "Refactor auth flow",
+    status: "idle",
+    cli: "claude",
+    diff: { added: 313, removed: 23 },
+    prNumber: 482,
+    costUsd: 0,
+    tokens: 0,
+    updatedAt: "2026-07-11T00:00:00.000Z",
+    worktreePath: repoPath,
+    mode: "accept-edits"
+  }
+]
+
+test("a linked PR shows the sidebar badge and the Pull Request / Code Review tabs", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions
+  })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The sidebar row badges the linked PR number.
+  await expect(window.getByText(/#482/).first()).toBeVisible()
+
+  // The PR + Code Review tabs appear once a session has a linked PR.
+  await expect(window.getByText("Pull Request").first()).toBeVisible()
+  const reviewTab = window.getByText("Code Review").first()
+  await expect(reviewTab).toBeVisible()
+
+  // The Code Review tab is reachable (its view mounts in place of the stub).
+  await reviewTab.click()
+  await expect(window.getByText("Next milestone")).toHaveCount(0)
+})
+
+test("Code Review shows the Uncommitted source and reverts a whole file", async ({ launchApp }) => {
+  // A session whose worktree (the e2e repo) has an uncommitted change. gh isn't
+  // authenticated on the runner, so the PR source is empty and the view falls
+  // back to the "Uncommitted" (local) diff — where Revert is enabled.
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    seed: ({ repoPath }) => {
+      writeFileSync(join(repoPath, "README.md"), "# e2e repo\nan uncommitted edit\n")
+    }
+  })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  await window.getByText("Code Review").first().click()
+
+  // The pane mounts (gh calls for the empty PR source can be slow), the source
+  // toggle shows "Uncommitted" selected (the view falls back to the local source),
+  // and the local diff renders the changed file + edit.
+  await expect(window.getByText("Changed files")).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByRole("tab", { name: "Uncommitted" })).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByText("an uncommitted edit")).toBeVisible({ timeout: 20_000 })
+
+  // Revert the whole file → the uncommitted change disappears from the diff.
+  await window.getByRole("button", { name: /Revert file/ }).click()
+  await expect(window.getByText("an uncommitted edit")).toHaveCount(0, { timeout: 20_000 })
+})
+
+test("the sidebar Settings cog opens the settings view with the GitHub section", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  await window.getByRole("button", { name: "Settings" }).click()
+
+  // The Settings view opens with its title, the GitHub section, and the toggles
+  // (the exact gh connection line depends on the runner, so we don't assert it).
+  const dialog = window.getByRole("dialog")
+  await expect(dialog.getByText("Settings", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("GitHub", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("Enable pull-request features")).toBeVisible()
+})

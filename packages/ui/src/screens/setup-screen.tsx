@@ -1,5 +1,5 @@
 import type { CliInfo, GhStatus, Repo } from "@starbase/core"
-import { ArrowRight, FolderSearch, GitBranch } from "lucide-react"
+import { ArrowRight, FolderSearch, GitBranch, RefreshCw } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
@@ -22,6 +22,10 @@ export interface SetupScreenProps {
   onContinue: () => void
   /** The currently chosen repos directory path, or null before selection. */
   reposDir?: string | null
+  /** Re-run `gh auth status` after the user signs in from their terminal. */
+  onRecheckGh?: () => void
+  /** A `gh` recheck is in flight. */
+  recheckingGh?: boolean
 }
 
 /** First-run welcome. Points Starbase at the folder that holds your git repos. */
@@ -32,7 +36,9 @@ export function SetupScreen({
   busy = false,
   onChooseDir,
   onContinue,
-  reposDir = null
+  reposDir = null,
+  onRecheckGh,
+  recheckingGh = false
 }: SetupScreenProps) {
   const chosen = reposDir !== null
   const shownRepos = repos.slice(0, 6)
@@ -115,6 +121,30 @@ export function SetupScreen({
               <Callout tone="blue">
                 <span className="font-mono text-text">gh</span> isn't installed — that's fine.
                 It's optional, and only needed later for pull-request features.
+              </Callout>
+            )}
+
+            {ghStatus.available && !ghStatus.authenticated && (
+              <Callout tone="blue">
+                <div className="flex flex-col gap-2">
+                  <span>
+                    Sign in to GitHub for pull-request features — run{" "}
+                    <span className="font-mono text-text">gh auth login</span> in your terminal, then
+                    recheck. (Optional; you can do this later.)
+                  </span>
+                  {onRecheckGh && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={onRecheckGh}
+                      disabled={recheckingGh}
+                      className="self-start"
+                    >
+                      <RefreshCw size={12} className={cn(recheckingGh && "animate-spin")} />
+                      Recheck
+                    </Button>
+                  )}
+                </div>
               </Callout>
             )}
           </div>

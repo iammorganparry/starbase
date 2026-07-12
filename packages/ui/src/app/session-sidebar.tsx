@@ -1,7 +1,8 @@
 import type { Session, SessionStatus } from "@starbase/core"
-import { ChevronRight, GitBranch, Gauge, Layers, Plus, Search } from "lucide-react"
+import { GitBranch, Gauge, Layers, Plus, Search, Settings } from "lucide-react"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
+import { StatusDot } from "../components/status-dot.js"
 import { SessionRow } from "../composites/session-row.js"
 
 export interface SessionSidebarProps {
@@ -12,10 +13,12 @@ export interface SessionSidebarProps {
   liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
-  /** Open the Usage & limits modal (footer button). */
+  /** Open the Usage & limits modal (footer icon button). */
   onOpenUsage?: () => void
-  /** Optional usage summary (e.g. "12%") shown on the usage button. */
-  usageSummary?: string
+  /** Open the Settings view (footer cog icon button). */
+  onOpenSettings?: () => void
+  /** Whether GitHub is connected (green dot on the Settings cog). */
+  ghConnected?: boolean
   /** App version (from `__APP_VERSION__`), shown in the footer. */
   version?: string
 }
@@ -28,7 +31,8 @@ export function SessionSidebar({
   liveStatus,
   onNewSession,
   onOpenUsage,
-  usageSummary,
+  onOpenSettings,
+  ghConnected = false,
   version
 }: SessionSidebarProps) {
   const groups = groupByRepo(sessions)
@@ -121,25 +125,37 @@ export function SessionSidebar({
         )}
       </div>
 
-      {/* Usage & limits */}
-      {onOpenUsage && (
-        <div className="border-t border-hairline p-2.5">
+      {/* Footer: icon actions + version */}
+      <div className="flex h-11 flex-none items-center gap-0.5 border-t border-hairline px-2">
+        {onOpenUsage && (
           <button
             type="button"
             onClick={onOpenUsage}
-            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring"
+            title="Usage & limits"
+            aria-label="Usage & limits"
+            className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <Gauge size={15} className="text-muted-foreground" />
-            <span className="flex-1 text-[12.5px] text-text-body">Usage &amp; limits</span>
-            {usageSummary && <span className="font-mono text-[10px] text-muted-foreground">{usageSummary}</span>}
-            <ChevronRight size={13} className="text-line-strong" />
+            <Gauge size={15} />
           </button>
-        </div>
-      )}
-
-      {/* Footer */}
-      <div className="flex h-11 items-center border-t border-hairline px-4 text-[11px] text-dim">
-        <span className="font-mono" title={version ? "App version" : undefined}>
+        )}
+        {onOpenSettings && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title="Settings"
+            aria-label="Settings"
+            className="relative flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Settings size={15} />
+            {ghConnected && (
+              <span className="absolute right-[5px] top-[5px]">
+                <StatusDot tone="bg-green" size={6} glow />
+              </span>
+            )}
+          </button>
+        )}
+        <div className="flex-1" />
+        <span className="font-mono text-[11px] text-dim" title={version ? "App version" : undefined}>
           {version ? `Starbase v${version}` : "Starbase"}
         </span>
       </div>

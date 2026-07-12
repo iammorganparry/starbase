@@ -33,6 +33,7 @@
     "@starbase/contracts": "workspace:*",
     "@starbase/core": "workspace:*",
     "@starbase/ui": "workspace:*",
+    "@tanstack/react-query": "^5.101.2",
     "@xstate/react": "^6.1.0",
     "effect": "^3.21.4",
     "electron-updater": "^6.3.9",

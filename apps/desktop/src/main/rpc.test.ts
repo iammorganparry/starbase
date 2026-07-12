@@ -4,6 +4,7 @@ import { join } from "node:path"
 import {
   AppPaths,
   ConfigService,
+  GhService,
   SessionStore,
   SkillsService,
   WorkspaceService
@@ -12,7 +13,16 @@ import { NodeContext } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DialogService } from "./dialog.js"
-import { chooseReposDir, configGet, sessionDiff, skillsList } from "./rpc.js"
+import {
+  chooseReposDir,
+  configGet,
+  githubDetectPr,
+  githubPr,
+  sessionDiff,
+  skillsList,
+  workspaceRevertFile,
+  workspaceRevertLines
+} from "./rpc.js"
 
 /**
  * The RPC handlers own the app's error-folding policy: a config read error must
@@ -108,6 +118,35 @@ describe("RPC handlers", () => {
         )
       )
       expect(patch).toBe("")
+    })
+  })
+
+  describe("Workspace.revert*", () => {
+    // Revert on an unknown / worktree-less session must be a safe no-op.
+    it("no-ops for an unknown session (no worktree to touch)", async () => {
+      const ws = Layer.mergeAll(base, SessionStore.Default, WorkspaceService.Default)
+      await expect(
+        Effect.runPromise(workspaceRevertFile({ sessionId: "nope", path: "a.ts" }).pipe(Effect.provide(ws)))
+      ).resolves.toBeUndefined()
+      await expect(
+        Effect.runPromise(
+          workspaceRevertLines({ sessionId: "nope", path: "a.ts", startLine: 1, endLine: 2 }).pipe(
+            Effect.provide(ws)
+          )
+        )
+      ).resolves.toBeUndefined()
+    })
+  })
+
+  describe("Github.pr / Github.detectPr", () => {
+    // A PR-less / unknown session must be a no-op (null), never an error, so the
+    // renderer shows the empty "Create pull request" state.
+    it("returns null for an unknown session without spawning gh", async () => {
+      const gh = Layer.mergeAll(base, SessionStore.Default, GhService.Default)
+      const pr = await Effect.runPromise(githubPr("nope").pipe(Effect.provide(gh)))
+      expect(pr).toBeNull()
+      const detected = await Effect.runPromise(githubDetectPr("nope").pipe(Effect.provide(gh)))
+      expect(detected).toBeNull()
     })
   })
 })

@@ -86,6 +86,20 @@ export type Session = Schema.Schema.Type<typeof Session>
 // ── Workspace ────────────────────────────────────────────────────────────────
 
 /**
+ * The user's GitHub integration preferences. Persisted inside `WorkspaceConfig`;
+ * absent until the user configures the integration (so it stays optional there).
+ */
+export const GithubConfig = Schema.Struct({
+  /** Master switch for the pull-request features (PR/Code Review tabs, writes). */
+  enabled: Schema.Boolean,
+  /** Open a PR automatically once a session's branch has pushable commits. */
+  autoCreatePr: Schema.Boolean,
+  /** Auto-detect a PR already open on a session's branch and link it. */
+  autoDetectPr: Schema.Boolean
+})
+export type GithubConfig = Schema.Schema.Type<typeof GithubConfig>
+
+/**
  * Persisted app configuration, stored at `~/starbase/config.json`. `reposDir` is
  * null until the user completes first-run setup by choosing a repos directory.
  */
@@ -93,7 +107,9 @@ export const WorkspaceConfig = Schema.Struct({
   /** Absolute path to the directory that contains the user's git repos. */
   reposDir: Schema.NullOr(Schema.String),
   /** ISO-8601 timestamp of when the config was first created. */
-  createdAt: Schema.String
+  createdAt: Schema.String,
+  /** GitHub integration prefs; absent until configured (older configs lack it). */
+  github: Schema.optional(GithubConfig)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 
@@ -141,6 +157,131 @@ export const GhStatus = Schema.Struct({
   version: Schema.NullOr(Schema.String)
 })
 export type GhStatus = Schema.Schema.Type<typeof GhStatus>
+
+// ── Pull requests / code review ──────────────────────────────────────────────
+
+/** Overall state of a pull request. "draft" is synthesized from `isDraft`. */
+export const PrState = Schema.Literal("open", "closed", "merged", "draft")
+export type PrState = Schema.Schema.Type<typeof PrState>
+
+/** Normalized CI check status (mapped from `gh pr checks` buckets). */
+export const PrCheckStatus = Schema.Literal("pass", "fail", "running", "pending")
+export type PrCheckStatus = Schema.Schema.Type<typeof PrCheckStatus>
+
+/** How a reviewer/timeline review resolved. "pending" = requested, not yet done. */
+export const PrReviewKind = Schema.Literal(
+  "commented",
+  "approved",
+  "changes_requested",
+  "pending"
+)
+export type PrReviewKind = Schema.Schema.Type<typeof PrReviewKind>
+
+/** The kind of review a composer submits back to GitHub. */
+export const ReviewSubmitKind = Schema.Literal("comment", "approve", "request-changes")
+export type ReviewSubmitKind = Schema.Schema.Type<typeof ReviewSubmitKind>
+
+/** A GitHub account reference (author / reviewer). */
+export const GithubUser = Schema.Struct({
+  login: Schema.String,
+  avatarUrl: Schema.NullOr(Schema.String)
+})
+export type GithubUser = Schema.Schema.Type<typeof GithubUser>
+
+/** A PR label chip. */
+export const PrLabel = Schema.Struct({
+  name: Schema.String,
+  color: Schema.NullOr(Schema.String)
+})
+export type PrLabel = Schema.Schema.Type<typeof PrLabel>
+
+/** A requested/actual reviewer and their current state. */
+export const PrReviewer = Schema.Struct({
+  login: Schema.String,
+  state: PrReviewKind
+})
+export type PrReviewer = Schema.Schema.Type<typeof PrReviewer>
+
+/** One CI check on a PR. */
+export const PrCheck = Schema.Struct({
+  name: Schema.String,
+  status: PrCheckStatus,
+  /** Link to the run's details page, or null. */
+  detailsUrl: Schema.NullOr(Schema.String),
+  /** Duration in milliseconds when known, or null (still running / not reported). */
+  durationMs: Schema.NullOr(Schema.Number)
+})
+export type PrCheck = Schema.Schema.Type<typeof PrCheck>
+
+/**
+ * A review / comment entry in the PR timeline. `path`/`line` are set only for
+ * inline review comments (null for issue comments / v1 — see the plan).
+ */
+export const PrTimelineItem = Schema.Struct({
+  id: Schema.String,
+  author: Schema.String,
+  kind: Schema.Literal("commented", "approved", "changes_requested"),
+  body: Schema.String,
+  createdAt: Schema.String,
+  path: Schema.NullOr(Schema.String),
+  line: Schema.NullOr(Schema.Number)
+})
+export type PrTimelineItem = Schema.Schema.Type<typeof PrTimelineItem>
+
+/** A changed file in a PR, for the Code Review file list. */
+export const PrFileChange = Schema.Struct({
+  path: Schema.String,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+  /** Inline-comment count on this file (0 in v1 — not exposed by `gh pr view`). */
+  commentCount: Schema.Number,
+  /** Whether the reviewer marked the file viewed (false in v1). */
+  viewed: Schema.Boolean
+})
+export type PrFileChange = Schema.Schema.Type<typeof PrFileChange>
+
+/**
+ * A pull request linked to a session, assembled from `gh pr view` + `gh pr
+ * checks`. Read-only view model for the Pull Request tab.
+ */
+export const PullRequest = Schema.Struct({
+  number: Schema.Number,
+  state: PrState,
+  title: Schema.String,
+  body: Schema.NullOr(Schema.String),
+  url: Schema.String,
+  /** Source (PR head) branch. */
+  headRefName: Schema.String,
+  /** Target (base) branch. */
+  baseRefName: Schema.String,
+  isDraft: Schema.Boolean,
+  author: GithubUser,
+  createdAt: Schema.String,
+  commits: Schema.Number,
+  changedFiles: Schema.Number,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+  labels: Schema.Array(PrLabel),
+  reviewers: Schema.Array(PrReviewer),
+  timeline: Schema.Array(PrTimelineItem),
+  checks: Schema.Array(PrCheck),
+  /** GitHub `mergeable` (MERGEABLE | CONFLICTING | UNKNOWN), or null. */
+  mergeable: Schema.NullOr(Schema.String),
+  /** GitHub `mergeStateStatus` (CLEAN | BLOCKED | DIRTY | BEHIND | …), or null. */
+  mergeStateStatus: Schema.NullOr(Schema.String),
+  /** Human-readable reasons merging is blocked (synthesized). Empty when clear. */
+  mergeBlockers: Schema.Array(Schema.String)
+})
+export type PullRequest = Schema.Schema.Type<typeof PullRequest>
+
+/** A pending inline review comment anchored to a file + line. */
+export const ReviewComment = Schema.Struct({
+  path: Schema.String,
+  line: Schema.Number,
+  body: Schema.String,
+  side: Schema.optional(Schema.Literal("LEFT", "RIGHT"))
+})
+export type ReviewComment = Schema.Schema.Type<typeof ReviewComment>
 
 /** Parameters for creating a new session (and its isolated worktree). */
 export const CreateSessionInput = Schema.Struct({

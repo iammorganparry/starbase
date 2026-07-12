@@ -1,7 +1,7 @@
 import { Command } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import type { PlatformError } from "@effect/platform/Error"
-import { GitError } from "@starbase/core"
+import { GhError, GitError } from "@starbase/core"
 import { Effect, Stream } from "effect"
 
 /** The user's home directory, from the environment (empty string if unset). */
@@ -80,5 +80,38 @@ export const runGit = (
       error instanceof GitError
         ? Effect.fail(error)
         : Effect.fail(new GitError({ message: `git ${args.join(" ")} failed`, cause: error }))
+    )
+  )
+
+/**
+ * Run `gh` in `cwd` and FAIL with `GhError` on a non-zero exit — used for the
+ * mutating GitHub operations (`pr create`, `pr comment`, `pr review`) where a
+ * failure must surface to the user. Captures stderr for the failure message.
+ */
+export const runGh = (
+  cwd: string,
+  args: ReadonlyArray<string>
+): Effect.Effect<string, GhError, CommandExecutor.CommandExecutor> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const proc = yield* Command.make("gh", ...args).pipe(
+        Command.workingDirectory(cwd),
+        Command.start
+      )
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [decodeStream(proc.stdout), decodeStream(proc.stderr), proc.exitCode],
+        { concurrency: 3 }
+      )
+      if (exitCode !== 0) {
+        const detail = stderr.trim() || stdout.trim() || `gh ${args.join(" ")} exited ${exitCode}`
+        return yield* Effect.fail(new GhError({ message: detail }))
+      }
+      return stdout.trim()
+    })
+  ).pipe(
+    Effect.catchAll((error) =>
+      error instanceof GhError
+        ? Effect.fail(error)
+        : Effect.fail(new GhError({ message: `gh ${args.join(" ")} failed`, cause: error }))
     )
   )

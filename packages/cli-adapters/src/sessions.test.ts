@@ -91,6 +91,36 @@ describe("SessionStore", () => {
     expect(failureOf(exit)?._tag).toBe("SessionNotFoundError")
   })
 
+  it("setPrNumber links (and clears) a session's PR across a fresh read", async () => {
+    const exit = await runExit(
+      Effect.gen(function* () {
+        const created = yield* SessionStore.create(input({ title: "PR Session" }))
+        yield* SessionStore.setPrNumber(created.id, 482)
+        return created.id
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const id = exit.value
+
+    const linked = await runExit(
+      SessionStore.get(id).pipe(Effect.provide(SessionStore.Default)),
+      temp.layer
+    )
+    expect(linked._tag === "Success" && linked.value.prNumber).toBe(482)
+
+    // Clearing it (null) round-trips too.
+    const cleared = await runExit(
+      Effect.gen(function* () {
+        yield* SessionStore.setPrNumber(id, null)
+        return yield* SessionStore.get(id)
+      }).pipe(Effect.provide(SessionStore.Default)),
+      temp.layer
+    )
+    expect(cleared._tag === "Success" && cleared.value.prNumber).toBe(null)
+  })
+
   it("setMode / setModel persist onto the session across a fresh read", async () => {
     const exit = await runExit(
       Effect.gen(function* () {
