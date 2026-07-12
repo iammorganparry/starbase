@@ -11,7 +11,7 @@ export function DiffStat({
   className?: string
 }) {
   return (
-    <span className={cn("inline-flex gap-1.5 font-mono text-[10px]", className)}>
+    <span className={cn("inline-flex gap-1.5 font-mono text-[10px] tabular-nums", className)}>
       {added > 0 && <span className="text-green">+{added}</span>}
       {removed !== undefined && removed > 0 && <span className="text-red">−{removed}</span>}
     </span>

@@ -123,7 +123,7 @@ export function AsyncButton({
       onClick={run}
       style={minW ? { minWidth: minW } : undefined}
       className={cn(
-        "inline-flex items-center justify-center gap-1.5 rounded-md font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default",
+        "inline-flex items-center justify-center gap-1.5 rounded-md font-semibold outline-none transition-[color,background-color,border-color,scale] duration-100 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] disabled:cursor-default disabled:active:scale-100",
         size === "md" ? "px-3.5 py-1.5 text-[13px]" : "px-3 py-1 text-[12px]",
         tone,
         className
