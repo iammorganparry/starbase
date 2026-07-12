@@ -17,7 +17,14 @@ import type {
   Skill,
   StreamEvent
 } from "@starbase/core"
-import { applyStreamEvent, assistantMessage, defaultModel, setGateStatus, userMessage } from "@starbase/core"
+import {
+  applyStreamEvent,
+  assistantMessage,
+  defaultModel,
+  setGateStatus,
+  settleStreaming,
+  userMessage
+} from "@starbase/core"
 import { assign, fromCallback, fromPromise, setup } from "xstate"
 import { rpc } from "./rpc-client.js"
 
@@ -54,7 +61,7 @@ interface LoadedData {
 
 /** Load the persisted transcript, harness skills + models, worktree files + diff. */
 const loadConversation = fromPromise<LoadedData, { session: Session }>(async ({ input }) => {
-  const [transcript, skills, files, models, patch] = await Promise.all([
+  const [rawTranscript, skills, files, models, patch] = await Promise.all([
     rpc.sessionsTranscript(input.session.id),
     rpc.skillsList(input.session.id),
     input.session.worktreePath
@@ -63,6 +70,9 @@ const loadConversation = fromPromise<LoadedData, { session: Session }>(async ({ 
     rpc.modelsList(input.session.cli),
     rpc.sessionsDiff(input.session.id)
   ])
+  // A loaded transcript has no live run — settle any turn left mid-stream (the
+  // app was closed mid-response) so it doesn't show the typing indicator forever.
+  const transcript = rawTranscript.map(settleStreaming)
   return { transcript, skills, files, models, patch }
 })
 
