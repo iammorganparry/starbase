@@ -5,6 +5,7 @@ import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { AsyncButton } from "../components/async-button.js"
 import { Callout } from "../components/callout.js"
+import { Spinner } from "../components/loading.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { StatusDot } from "../components/status-dot.js"
 import { PrReviewComposer } from "./pr-review-composer.js"
@@ -104,6 +105,15 @@ export function PullRequestView({
   onOpenOnGithub,
   onMerge
 }: PullRequestViewProps) {
+  // Loading — avoid flashing the "Create PR" empty state before the PR resolves.
+  if (pr === null && busy) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Spinner size={20} />
+        <span className="text-[13px]">Loading pull request…</span>
+      </div>
+    )
+  }
   if (pr === null) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
@@ -111,7 +121,7 @@ export function PullRequestView({
           <GitPullRequest size={26} />
         </span>
         <div className="flex flex-col gap-1.5">
-          <h2 className="text-[15px] font-semibold text-text-bright">
+          <h2 className="text-balance text-[15px] font-semibold text-text-bright">
             No pull request yet for this branch
           </h2>
           <p className="max-w-xs text-[13px] text-muted-foreground">
@@ -165,7 +175,9 @@ export function PullRequestView({
                 </button>
               )}
             </div>
-            <h2 className="text-[20px] font-bold tracking-[-0.2px] text-text-bright">{pr.title}</h2>
+            <h2 className="text-pretty text-[20px] font-bold tracking-[-0.2px] text-text-bright">
+              {pr.title}
+            </h2>
             <div className="flex flex-wrap items-center gap-x-[10px] gap-y-1.5 font-mono text-[11.5px] text-muted-foreground">
               <Badge tone="neutral" size="sm">
                 {pr.headRefName} → {pr.baseRefName}

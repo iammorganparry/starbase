@@ -208,12 +208,7 @@ export function CodeReviewView({
         </div>
 
         {/* Review tray */}
-        <ReviewTray
-          drafts={drafts}
-          routeTargetSession={routeTargetSession}
-          onRemoveDraft={onRemoveDraft}
-          onFinishReview={onFinishReview}
-        />
+        <ReviewTray drafts={drafts} onRemoveDraft={onRemoveDraft} onFinishReview={onFinishReview} />
       </div>
     </div>
   )

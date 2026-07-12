@@ -18,12 +18,10 @@ export interface ReviewDraft {
  */
 export function ReviewTray({
   drafts,
-  routeTargetSession,
   onRemoveDraft,
   onFinishReview
 }: {
   drafts: readonly ReviewDraft[]
-  routeTargetSession: string | null
   onRemoveDraft: (id: string) => void
   onFinishReview: (mode: "comment_only" | "send_to_agent") => void
 }) {
@@ -78,19 +76,6 @@ export function ReviewTray({
       </div>
 
       <div className="flex flex-none flex-col gap-[11px] border-t border-hairline p-[11px]">
-        {routeTargetSession && (
-          <div className="flex items-center gap-[9px] rounded-md border border-blue/30 bg-blue/[0.06] px-2.5 py-2">
-            <span className="flex size-[22px] flex-none items-center justify-center rounded-md bg-blue font-mono text-[11px] font-bold text-editor">
-              C
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[12px] text-muted-foreground">Added to context of</div>
-              <div className="truncate text-[12.5px] font-semibold text-text-bright">
-                {routeTargetSession}
-              </div>
-            </div>
-          </div>
-        )}
         <div className="flex gap-[9px]">
           <Button
             variant="secondary"

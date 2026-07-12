@@ -126,14 +126,14 @@ export function SessionSidebar({
       </div>
 
       {/* Footer: icon actions + version */}
-      <div className="flex h-11 flex-none items-center gap-0.5 border-t border-hairline px-2">
+      <div className="flex h-11 flex-none items-center gap-1 border-t border-hairline px-2">
         {onOpenUsage && (
           <button
             type="button"
             onClick={onOpenUsage}
             title="Usage & limits"
             aria-label="Usage & limits"
-            className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,background-color,scale] duration-100 hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96]"
           >
             <Gauge size={15} />
           </button>
@@ -144,7 +144,7 @@ export function SessionSidebar({
             onClick={onOpenSettings}
             title="Settings"
             aria-label="Settings"
-            className="relative flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,background-color,scale] duration-100 hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96]"
           >
             <Settings size={15} />
             {ghConnected && (

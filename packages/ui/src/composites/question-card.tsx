@@ -131,7 +131,7 @@ export function QuestionCard({
       <div className="flex items-center gap-[9px] border-b border-hairline px-[14px] py-2.5">
         <CircleHelp size={14} className="flex-none text-blue" />
         <Eyebrow className="flex-1 text-muted-foreground">Claude needs your input</Eyebrow>
-        <span className="font-mono text-[10.5px] text-dim">
+        <span className="font-mono text-[10.5px] tabular-nums text-dim">
           Question {qi + 1} of {n}
         </span>
         <div className="flex items-center gap-[5px]">
@@ -150,7 +150,7 @@ export function QuestionCard({
       {/* Body */}
       <div className="px-[15px] pb-1 pt-[15px]">
         <div className="flex items-center gap-2">
-          <span className="text-[15.5px] font-semibold text-text-bright">{q.question}</span>
+          <span className="text-pretty text-[15.5px] font-semibold text-text-bright">{q.question}</span>
           {q.multiSelect && (
             <Badge tone="purple" size="xs">
               select all that apply

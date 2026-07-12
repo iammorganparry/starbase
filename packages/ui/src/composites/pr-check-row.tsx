@@ -37,7 +37,7 @@ export function PrCheckRow({ check }: { check: PrCheck }) {
         <span className="font-mono text-[10.5px] text-yellow">running</span>
       ) : (
         check.durationMs !== null && (
-          <span className="font-mono text-[10.5px] text-dim">
+          <span className="font-mono text-[10.5px] tabular-nums text-dim">
             {formatDuration(check.durationMs)}
           </span>
         )
