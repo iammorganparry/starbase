@@ -92,4 +92,25 @@ describe("ConfigService", () => {
       expect(exit.value?.github).toBeUndefined()
     }
   })
+
+  it("setGit persists the git lever and preserves reposDir + github", async () => {
+    const github = { enabled: true, autoCreatePr: false, autoDetectPr: true }
+    const git = { shareCheckedOutBranches: true }
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setReposDir("/repos/a")
+        yield* ConfigService.setGithub(github)
+        yield* ConfigService.setGit(git)
+        // A later setGithub must keep the git prefs, and vice-versa.
+        yield* ConfigService.setGithub({ ...github, autoCreatePr: true })
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.git).toStrictEqual(git)
+      expect(exit.value?.github?.autoCreatePr).toBe(true)
+      expect(exit.value?.reposDir).toBe("/repos/a")
+    }
+  })
 })

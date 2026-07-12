@@ -125,7 +125,8 @@ export class SessionStore extends Effect.Service<SessionStore>()(
        * is linked up front, so the sidebar badge + PR/Code-Review tabs light up.
        */
       const createFromPr = (
-        input: CreateSessionFromPrInput
+        input: CreateSessionFromPrInput,
+        opts: { allowSharedCheckout: boolean } = { allowSharedCheckout: false }
       ): Effect.Effect<
         Session,
         GitError | GhError,
@@ -144,7 +145,21 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             slug,
             baseBranch: input.pr.baseRefName
           })
-          yield* GhService.checkoutPr(worktree.path, input.pr.number)
+          // `gh pr checkout` fetches + switches the worktree onto the PR head
+          // (and configures the fork remote for cross-repo PRs). When the head
+          // branch is ALREADY checked out elsewhere (e.g. you're on it in your
+          // main repo — common in dev), git refuses the switch. If the user has
+          // opted in (the git "share checked-out branches" lever), fall back to a
+          // shared checkout so the PR can still be opened as a session.
+          const checkout = GhService.checkoutPr(worktree.path, input.pr.number)
+          yield* opts.allowSharedCheckout
+            ? checkout.pipe(
+                Effect.catchIf(
+                  (e) => /already checked out|already used by worktree/i.test(e.message),
+                  () => GitService.checkoutBranch(worktree.path, input.pr.headRefName)
+                )
+              )
+            : checkout
           // The live branch after checkout is the PR head; fall back to the
           // reported head ref if `rev-parse` can't resolve it.
           const branch = (yield* GitService.branchAt(worktree.path)) ?? input.pr.headRefName

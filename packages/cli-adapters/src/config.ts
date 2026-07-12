@@ -1,4 +1,4 @@
-import type { GithubConfig } from "@starbase/core"
+import type { GitConfig, GithubConfig } from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
@@ -33,24 +33,13 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           )
         })
 
-      const setReposDir = (dir: string): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem
-          const paths = yield* AppPaths
-          const existing = yield* get()
-          const createdAt =
-            existing?.createdAt ?? (yield* Effect.sync(() => new Date().toISOString()))
-          // Preserve any configured GitHub prefs when the repos dir changes.
-          const config: WorkspaceConfig = {
-            reposDir: dir,
-            createdAt,
-            ...(existing?.github ? { github: existing.github } : {})
-          }
-          return yield* persist(config)
-        })
-
-      const setGithub = (
-        github: GithubConfig
+      /**
+       * Apply `patch` on top of the persisted config, preserving every other
+       * section (so saving one lever never drops another). Seeds `createdAt` +
+       * a null `reposDir` on first write.
+       */
+      const patch = (
+        patch: Partial<WorkspaceConfig>
       ): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
         Effect.gen(function* () {
           const existing = yield* get()
@@ -59,10 +48,18 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           const config: WorkspaceConfig = {
             reposDir: existing?.reposDir ?? null,
             createdAt,
-            github
+            ...(existing?.github ? { github: existing.github } : {}),
+            ...(existing?.git ? { git: existing.git } : {}),
+            ...patch
           }
           return yield* persist(config)
         })
+
+      const setReposDir = (dir: string) => patch({ reposDir: dir })
+
+      const setGithub = (github: GithubConfig) => patch({ github })
+
+      const setGit = (git: GitConfig) => patch({ git })
 
       /** Encode + write the config to disk, mapping every failure to `ConfigError`. */
       const persist = (config: WorkspaceConfig): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
@@ -81,7 +78,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           return config
         })
 
-      return { get, setReposDir, setGithub }
+      return { get, setReposDir, setGithub, setGit }
     }
   }
 ) {}

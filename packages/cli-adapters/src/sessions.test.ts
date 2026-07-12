@@ -230,4 +230,44 @@ describe("SessionStore", () => {
     )
     expect(failureOf(exit)?._tag).toBe("GhError")
   })
+
+  // When the PR head branch is already checked out elsewhere, `gh pr checkout`
+  // fails with git's "already checked out" error. The share-checked-out lever
+  // decides whether to fall back to a shared checkout or surface the error.
+  const alreadyCheckedOut = (calls: Array<string>): FakeCommandHandler => (cmd, args) => {
+    calls.push(`${cmd} ${args.join(" ")}`)
+    if (cmd === "gh" && args[1] === "checkout") {
+      return { exitCode: 1, stderr: "fatal: 'chore/bump' is already checked out at '/repo'" }
+    }
+    if (cmd === "git" && args.includes("rev-parse")) return { stdout: "chore/bump" }
+    return { exitCode: 0, stdout: "" }
+  }
+
+  it("createFromPr falls back to a shared checkout when allowSharedCheckout is on", async () => {
+    const calls: Array<string> = []
+    const env = Layer.mergeAll(temp.layer, fakeCommandExecutor(alreadyCheckedOut(calls)))
+    const exit = await runExit(
+      SessionStore.createFromPr(prInput(), { allowSharedCheckout: true }).pipe(
+        Effect.provide(prServices)
+      ),
+      env
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") expect(exit.value.branch).toBe("chore/bump")
+    // It retried with the ignore-other-worktrees checkout after gh failed.
+    expect(calls.some((c) => c.includes("checkout --ignore-other-worktrees chore/bump"))).toBe(true)
+  })
+
+  it("createFromPr surfaces the error when allowSharedCheckout is off", async () => {
+    const calls: Array<string> = []
+    const env = Layer.mergeAll(temp.layer, fakeCommandExecutor(alreadyCheckedOut(calls)))
+    const exit = await runExit(
+      SessionStore.createFromPr(prInput(), { allowSharedCheckout: false }).pipe(
+        Effect.provide(prServices)
+      ),
+      env
+    )
+    expect(failureOf(exit)?._tag).toBe("GhError")
+    expect(calls.some((c) => c.includes("--ignore-other-worktrees"))).toBe(false)
+  })
 })

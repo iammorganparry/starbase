@@ -99,6 +99,18 @@ export const GithubConfig = Schema.Struct({
 })
 export type GithubConfig = Schema.Schema.Type<typeof GithubConfig>
 
+/** The user's git behaviour preferences. Persisted inside `WorkspaceConfig`. */
+export const GitConfig = Schema.Struct({
+  /**
+   * Allow opening a session from a PR whose head branch is already checked out
+   * in another worktree (e.g. your main repo). When on, the session's worktree
+   * shares the branch ref (`git checkout --ignore-other-worktrees`); when off,
+   * git's safeguard is respected and the create fails with a clear error.
+   */
+  shareCheckedOutBranches: Schema.Boolean
+})
+export type GitConfig = Schema.Schema.Type<typeof GitConfig>
+
 /**
  * Persisted app configuration, stored at `~/starbase/config.json`. `reposDir` is
  * null until the user completes first-run setup by choosing a repos directory.
@@ -109,7 +121,9 @@ export const WorkspaceConfig = Schema.Struct({
   /** ISO-8601 timestamp of when the config was first created. */
   createdAt: Schema.String,
   /** GitHub integration prefs; absent until configured (older configs lack it). */
-  github: Schema.optional(GithubConfig)
+  github: Schema.optional(GithubConfig),
+  /** Git behaviour prefs; absent until configured (older configs lack it). */
+  git: Schema.optional(GitConfig)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 

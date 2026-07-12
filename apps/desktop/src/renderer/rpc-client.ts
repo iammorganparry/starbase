@@ -11,6 +11,7 @@ import type {
   CreateSessionInput,
   GateDecision,
   GhStatus,
+  GitConfig,
   GithubConfig,
   Message,
   ModelOption,
@@ -129,6 +130,8 @@ export const rpc = {
 
   configSetGithub: (github: GithubConfig): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setGithub(github)),
+  configSetGit: (git: GitConfig): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setGit(git)),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
     run((c) => c.Github.pr({ sessionId })),
   githubListPrs: (
