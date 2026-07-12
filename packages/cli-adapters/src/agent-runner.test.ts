@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { GateDecision, PermissionMode, Session, StreamEvent } from "@starbase/core"
+import type { GateDecision, Message, PermissionMode, Session, StreamEvent } from "@starbase/core"
 import { Effect, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter } from "./adapter.js"
@@ -215,6 +215,150 @@ describe("AgentRunner allowlist", () => {
     const events = await Effect.runPromise(program.pipe(Effect.provide(base)))
     expect(gates(events)).toHaveLength(0)
     expect(ranTool(events, "bash-1")).toBe(true)
+  })
+})
+
+describe("AgentRunner plan mode", () => {
+  const base = () =>
+    Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      makeScriptedCliAdapter(0),
+      DiscoveryService.Default,
+      temp.layer
+    )
+
+  const planParts = (transcript: ReadonlyArray<Message>) => {
+    const out: Array<Extract<Message["parts"][number], { _tag: "Plan" }>> = []
+    for (const m of transcript) for (const p of m.parts) if (p._tag === "Plan") out.push(p)
+    return out
+  }
+
+  /** Seed a session on disk so `SessionStore.get`/`setMode` have a record to patch. */
+  const seedSession = (mode: PermissionMode) => {
+    const session: Session = {
+      id: SESSION,
+      repo: "r",
+      branch: "b",
+      title: "t",
+      status: "idle",
+      cli: "claude",
+      diff: { added: 0, removed: 0 },
+      prNumber: null,
+      costUsd: 0,
+      tokens: 0,
+      updatedAt: "2026-07-11T10:00:00.000Z",
+      mode
+    }
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(join(temp.root, "sessions.json"), JSON.stringify([session]))
+  }
+
+  it("proposes a plan, records a step comment, and executes on approval", async () => {
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      yield* runner.setMode(SESSION, "plan")
+      const events: Array<StreamEvent> = []
+      yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+        Stream.tap((ev) =>
+          ev._tag === "PlanProposed"
+            ? runner
+                .commentPlanStep(SESSION, ev.plan.id, "s_4a", "Guard the refresh loop.")
+                .pipe(Effect.zipRight(runner.approvePlan(SESSION, ev.plan.id)))
+            : Effect.void
+        ),
+        Stream.runForEach((e) => Effect.sync(() => events.push(e)))
+      )
+      const transcript = yield* TranscriptStore.list(SESSION)
+      return { events, transcript }
+    })
+    const { events, transcript } = await Effect.runPromise(program.pipe(Effect.provide(base())))
+
+    expect(events.some((e) => e._tag === "PlanProposed")).toBe(true)
+    // Execution started only after approval.
+    expect(ranTool(events, "plan-edit-1")).toBe(true)
+    expect(events.some((e) => e._tag === "Done")).toBe(true)
+
+    const parts = planParts(transcript)
+    expect(parts).toHaveLength(1)
+    const plan = parts[0]!.plan
+    expect(plan.status).toBe("approved")
+    expect(plan.comments.map((c) => c.body)).toContain("Guard the refresh loop.")
+    expect(plan.steps.find((s) => s.id === "s_4a")?.flagged).toBe(true)
+  })
+
+  it("restores the exec mode on approval so edits then run without a plan gate", async () => {
+    seedSession("accept-edits")
+    const mode = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        // Start in accept-edits, switch to plan (captures accept-edits as prior).
+        yield* runner.setMode(SESSION, "accept-edits")
+        yield* runner.setMode(SESSION, "plan")
+        yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+          Stream.tap((ev) =>
+            ev._tag === "PlanProposed" ? runner.approvePlan(SESSION, ev.plan.id) : Effect.void
+          ),
+          Stream.runDrain
+        )
+        return (yield* SessionStore.get(SESSION)).mode
+      }).pipe(Effect.provide(base()))
+    )
+    expect(mode).toBe("accept-edits")
+  })
+
+  it("routes an open comment as a revision, then executes the revised plan", async () => {
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      yield* runner.setMode(SESSION, "plan")
+      const seen: Array<string> = []
+      const events: Array<StreamEvent> = []
+      yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+        Stream.tap((ev) => {
+          if (ev._tag !== "PlanProposed") return Effect.void
+          const first = seen.length === 0
+          seen.push(ev.plan.id)
+          return first
+            ? runner
+                .commentPlanStep(SESSION, ev.plan.id, "s_4a", "Add a single-flight guard.")
+                .pipe(Effect.zipRight(runner.revisePlan(SESSION, ev.plan.id)))
+            : runner.approvePlan(SESSION, ev.plan.id)
+        }),
+        Stream.runForEach((e) => Effect.sync(() => events.push(e)))
+      )
+      const transcript = yield* TranscriptStore.list(SESSION)
+      return { events, seen, transcript }
+    })
+    const { events, seen, transcript } = await Effect.runPromise(program.pipe(Effect.provide(base())))
+
+    // The original plan and a distinct revised plan were both proposed.
+    expect(new Set(seen).size).toBe(2)
+    expect(ranTool(events, "plan-edit-1")).toBe(true)
+
+    const parts = planParts(transcript)
+    expect(parts).toHaveLength(2)
+    expect(parts[0]!.plan.status).toBe("revising")
+    expect(parts[0]!.plan.comments[0]?.routed).toBe(true)
+    expect(parts[1]!.plan.status).toBe("approved")
+  })
+
+  it("stop rejects a pending plan (no dead buttons on reload)", async () => {
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      yield* runner.setMode(SESSION, "plan")
+      const events: Array<StreamEvent> = []
+      yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+        Stream.tap((ev) => (ev._tag === "PlanProposed" ? runner.stop(SESSION) : Effect.void)),
+        Stream.runForEach((e) => Effect.sync(() => events.push(e)))
+      )
+      const transcript = yield* TranscriptStore.list(SESSION)
+      return { events, transcript }
+    })
+    const { events, transcript } = await Effect.runPromise(program.pipe(Effect.provide(base())))
+
+    expect(ranTool(events, "plan-edit-1")).toBe(false)
+    expect(planParts(transcript)[0]!.plan.status).toBe("rejected")
   })
 })
 

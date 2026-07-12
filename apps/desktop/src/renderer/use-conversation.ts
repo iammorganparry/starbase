@@ -12,13 +12,14 @@ import type {
   Message,
   ModelOption,
   PermissionMode,
+  Plan,
   QuestionAnswer,
   QuestionRequest,
   Session,
   SessionStatus,
   Skill
 } from "@starbase/core"
-import { pendingQuestion } from "@starbase/core"
+import { latestPlan, pendingPlan, pendingQuestion } from "@starbase/core"
 import { conversationMachine } from "./conversation-machine.js"
 
 export interface Conversation {
@@ -38,6 +39,11 @@ export interface Conversation {
   /** A pending AskUserQuestion group (the composer is replaced while set), or null. */
   readonly question: QuestionRequest | null
   readonly answerQuestion: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
+  /** The latest open plan (proposed / revising), for the Plan Review tab, or null. */
+  readonly plan: Plan | null
+  readonly commentPlanStep: (planId: string, stepId: string, body: string) => void
+  readonly revisePlan: (planId: string) => void
+  readonly approvePlan: (planId: string) => void
   /** Live status for the sidebar/tab bar, or null when idle (use persisted). */
   readonly status: SessionStatus | null
   readonly sendPrompt: (text: string) => void
@@ -62,9 +68,13 @@ export function useConversation(session: Session): Conversation {
   }, [messages])
 
   const question = useMemo(() => pendingQuestion(messages), [messages])
+  // `plan` (any status) drives the Plan Review view; `openPlan` (proposed/revising)
+  // drives the actionable "needs-input" status.
+  const plan = useMemo(() => latestPlan(messages), [messages])
+  const openPlan = useMemo(() => pendingPlan(messages), [messages])
   const busy = state.matches("running")
   const status: SessionStatus | null =
-    paused || question ? "needs-input" : busy ? "thinking" : null
+    paused || question || openPlan ? "needs-input" : busy ? "thinking" : null
 
   return {
     messages,
@@ -77,6 +87,10 @@ export function useConversation(session: Session): Conversation {
     busy,
     paused,
     question,
+    plan,
+    commentPlanStep: (planId, stepId, body) => send({ type: "COMMENT_PLAN_STEP", planId, stepId, body }),
+    revisePlan: (planId) => send({ type: "REVISE_PLAN", planId }),
+    approvePlan: (planId) => send({ type: "APPROVE_PLAN", planId }),
     status,
     sendPrompt: (text) => send({ type: "SEND", text }),
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),

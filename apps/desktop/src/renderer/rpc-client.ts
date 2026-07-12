@@ -132,6 +132,12 @@ export const rpc = {
   ): Promise<void> => run((c) => c.Agent.answerQuestion({ sessionId, requestId, answers })),
   agentSetMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     run((c) => c.Agent.setMode({ sessionId, mode })),
+  agentCommentPlanStep: (sessionId: string, planId: string, stepId: string, body: string): Promise<void> =>
+    run((c) => c.Agent.commentPlanStep({ sessionId, planId, stepId, body })),
+  agentRevisePlan: (sessionId: string, planId: string): Promise<void> =>
+    run((c) => c.Agent.revisePlan({ sessionId, planId })),
+  agentApprovePlan: (sessionId: string, planId: string): Promise<void> =>
+    run((c) => c.Agent.approvePlan({ sessionId, planId })),
   agentSetModel: (sessionId: string, model: string): Promise<void> =>
     run((c) => c.Agent.setModel({ sessionId, model })),
   agentStop: (sessionId: string): Promise<void> => run((c) => c.Agent.stop({ sessionId })),

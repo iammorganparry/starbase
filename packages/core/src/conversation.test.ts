@@ -6,16 +6,21 @@ import {
   Message,
   Skill,
   StreamEvent,
+  addPlanComment,
   applyStreamEvent,
   assistantMessage,
+  latestPlan,
+  pendingPlan,
   pendingQuestion,
   setGateStatus,
+  setPlanStatus,
+  setPlanStepStatus,
   setQuestionAnswers,
   settleLoaded,
   settleStreaming,
   userMessage
 } from "./conversation.js"
-import type { QuestionRequest } from "./conversation.js"
+import type { Plan, PlanComment, QuestionRequest } from "./conversation.js"
 
 /**
  * These schemas cross the RPC boundary and back persistence (transcripts.json),
@@ -384,5 +389,133 @@ describe("settleLoaded", () => {
     expect(settleLoaded(resolved)).toBe(resolved)
     const cleanUser = userMessage("m1", "hi", now)
     expect(settleLoaded(cleanUser)).toBe(cleanUser)
+  })
+})
+
+describe("Plan flow", () => {
+  const now = "2026-07-12T10:00:00.000Z"
+
+  const step = (over: Partial<Plan["steps"][number]> = {}): Plan["steps"][number] => ({
+    id: "s1",
+    number: "01",
+    title: "Audit middleware",
+    intent: "Understand the current auth flow",
+    approach: ["Read session.ts", "Trace the token path"],
+    kind: "step",
+    condition: null,
+    parentId: null,
+    dependsOn: [],
+    blocks: [],
+    files: [],
+    guards: [],
+    diff: null,
+    status: "proposed",
+    flagged: false,
+    ...over
+  })
+
+  const plan = (over: Partial<Plan> = {}): Plan => ({
+    id: "plan_1",
+    summary: "Refactor auth flow",
+    graph: {
+      nodes: [
+        { id: "n0", label: "start", kind: "start", detail: null, stepId: null },
+        { id: "n1", label: "token expired?", kind: "decision", detail: null, stepId: "s1" }
+      ],
+      edges: [{ id: "e0", from: "n0", to: "n1", label: null }]
+    },
+    steps: [step(), step({ id: "s2", number: "02", title: "Create TokenStore" })],
+    comments: [],
+    status: "proposed",
+    raw: "# Refactor auth flow",
+    ...over
+  })
+
+  it("decodes a full Plan content part (branch, files, guards, comments)", () => {
+    const branchy = plan({
+      steps: [
+        step({
+          id: "s4",
+          number: "04",
+          title: "Handle token refresh",
+          kind: "branch",
+          condition: "token expired",
+          dependsOn: ["s3"],
+          blocks: ["s5"]
+        }),
+        step({
+          id: "s4a",
+          number: "4a",
+          title: "refresh() + retry on 401",
+          kind: "branch-arm",
+          parentId: "s4",
+          files: [{ path: "src/auth/refresh.ts", change: "M", added: 18, removed: 0 }],
+          guards: [{ text: "No refresh loop", status: "warn" }],
+          diff: { added: 42, removed: 1 }
+        })
+      ],
+      comments: [
+        { id: "c1", stepId: "s4a", body: "guard the loop", author: "user", createdAt: now, routed: false }
+      ]
+    })
+    expect(Either.isRight(decode(ContentPart, { _tag: "Plan", plan: branchy }))).toBe(true)
+  })
+
+  it("rejects an invalid plan status literal", () => {
+    expect(Either.isLeft(decode(ContentPart, { _tag: "Plan", plan: plan({ status: "bogus" as never }) }))).toBe(true)
+  })
+
+  it("PlanProposed appends a plan part; PlanUpdated replaces it by id", () => {
+    const proposed = applyStreamEvent(assistantMessage("a0", now), { _tag: "PlanProposed", plan: plan() })
+    expect(proposed.parts).toHaveLength(1)
+    expect(proposed.parts[0]).toMatchObject({ _tag: "Plan", plan: { id: "plan_1", status: "proposed" } })
+
+    const revised = applyStreamEvent(proposed, { _tag: "PlanUpdated", plan: plan({ status: "revising" }) })
+    expect(revised.parts).toHaveLength(1)
+    expect(revised.parts[0]).toMatchObject({ _tag: "Plan", plan: { status: "revising" } })
+  })
+
+  it("pendingPlan surfaces the latest open plan, and nothing once approved", () => {
+    const msg = applyStreamEvent(assistantMessage("a0", now), { _tag: "PlanProposed", plan: plan() })
+    expect(pendingPlan([msg])?.id).toBe("plan_1")
+    const approved = setPlanStatus(msg, "plan_1", "approved")
+    expect(pendingPlan([approved])).toBe(null)
+    // latestPlan keeps the plan visible after approval (the Plan Review tab).
+    expect(latestPlan([approved])?.id).toBe("plan_1")
+    expect(latestPlan([approved])?.status).toBe("approved")
+  })
+
+  it("addPlanComment appends the comment and flags its step", () => {
+    const msg = applyStreamEvent(assistantMessage("a0", now), { _tag: "PlanProposed", plan: plan() })
+    const comment: PlanComment = { id: "c1", stepId: "s2", body: "target main", author: "user", createdAt: now, routed: false }
+    const commented = setPlanStepStatus(addPlanComment(msg, "plan_1", comment), "plan_1", "s2", "revising")
+    const p = commented.parts[0]
+    if (!p || p._tag !== "Plan") throw new Error("expected a plan part")
+    expect(p.plan.comments).toHaveLength(1)
+    expect(p.plan.steps[1]).toMatchObject({ id: "s2", flagged: true, status: "revising" })
+  })
+
+  it("settleLoaded stales an orphaned open plan (no dead approve buttons)", () => {
+    const stuck: Message = {
+      id: "a0",
+      role: "assistant",
+      streaming: false,
+      createdAt: now,
+      parts: [{ _tag: "Plan", plan: plan({ status: "revising" }) }]
+    }
+    const settled = settleLoaded(stuck)
+    expect(settled.parts[0]).toMatchObject({ _tag: "Plan", plan: { status: "stale" } })
+    expect(pendingPlan([settled])).toBe(null)
+  })
+
+  it("leaves an already-approved plan untouched", () => {
+    const done: Message = {
+      id: "a1",
+      role: "assistant",
+      streaming: false,
+      createdAt: now,
+      parts: [{ _tag: "Plan", plan: plan({ status: "approved" }) }]
+    }
+    expect(settleLoaded(done)).toBe(done)
   })
 })

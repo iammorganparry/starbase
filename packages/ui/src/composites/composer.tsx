@@ -13,6 +13,8 @@ const MODE_OPTIONS: ReadonlyArray<ChipOption<PermissionMode>> = [
   { value: "accept-edits", label: "accept edits" },
   { value: "auto", label: "auto" }
 ]
+/** Plan mode is Claude-only (the other harnesses are autonomous). */
+const PLAN_OPTION: ChipOption<PermissionMode> = { value: "plan", label: "plan" }
 
 type MenuState = { kind: "slash" | "mention"; query: string; start: number }
 
@@ -42,6 +44,7 @@ export function Composer({
   onSetModel,
   mode = "accept-edits",
   onSetMode,
+  allowPlan = false,
   paused = false,
   placeholder = "Message Claude…",
   className
@@ -57,10 +60,13 @@ export function Composer({
   /** Current HITL mode (shown in the mode chip; Shift+Tab cycles it). */
   mode?: PermissionMode
   onSetMode?: (mode: PermissionMode) => void
+  /** Offer the Plan mode option (Claude sessions only). */
+  allowPlan?: boolean
   paused?: boolean
   placeholder?: string
   className?: string
 }) {
+  const modeOptions = allowPlan ? [...MODE_OPTIONS, PLAN_OPTION] : MODE_OPTIONS
   const [value, setValue] = useState("")
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -194,7 +200,7 @@ export function Composer({
             onSelect={onSetModel}
             disabled={models.length === 0}
           />
-          <ChipMenu value={mode} options={MODE_OPTIONS} onSelect={onSetMode} />
+          <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} />
           <span className="font-mono text-[11px] text-line-strong">/ · @</span>
           <div className="flex-1" />
           {paused ? (

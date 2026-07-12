@@ -1,8 +1,9 @@
-import type { DiffStat, PermissionMode, Question, StreamEvent } from "@starbase/core"
+import type { DiffStat, PermissionMode, Question, QuestionAnswer, StreamEvent } from "@starbase/core"
 import { CliExecError } from "@starbase/core"
-import type { PermissionMode as SdkPermissionMode, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
+import { parsePlan, planModeInstructions } from "./plan-parse.js"
 
 /**
  * Real Claude harness, driven by `@anthropic-ai/claude-agent-sdk`'s `query()`.
@@ -22,9 +23,22 @@ const numOf = (v: unknown): number => (typeof v === "number" ? v : 0)
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Update"])
 export const isEditTool = (name: string): boolean => EDIT_TOOLS.has(name)
 
+/**
+ * Interactive tools surfaced via dedicated UI (the plan card / question card),
+ * so their raw tool cards are suppressed from the transcript to avoid a redundant
+ * (and confusingly "pending") duplicate.
+ */
+const SUPPRESSED_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"])
+
 /** Map our HITL mode onto the SDK's permission mode. */
 export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
-  mode === "auto" ? "bypassPermissions" : mode === "accept-edits" ? "acceptEdits" : "default"
+  mode === "auto"
+    ? "bypassPermissions"
+    : mode === "accept-edits"
+      ? "acceptEdits"
+      : mode === "plan"
+        ? "plan"
+        : "default"
 
 /**
  * The gate request for a tool the SDK asked about, or null for read-only tools
@@ -73,6 +87,25 @@ export const parseSdkQuestions = (payload: Record<string, unknown>): ReadonlyArr
       }
     })
     .filter((q) => q.question.length > 0 && q.options.length > 0)
+}
+
+/**
+ * Format the operator's answers as the reply the model reads. AskUserQuestion is
+ * a permission-gated tool in this SDK (not a dialog), and `canUseTool` can only
+ * allow/deny — so the deny `message` is the only channel that carries content
+ * back. We phrase the picks as the answer so the model continues with them.
+ * Pure + exported for regression coverage of the exact wording.
+ */
+export const formatQuestionAnswer = (
+  questions: ReadonlyArray<Question>,
+  answers: ReadonlyArray<QuestionAnswer>
+): string => {
+  const lines = questions.map((q, i) => {
+    const a = answers[i]
+    const picks = a ? [...a.selected, ...(a.other ? [a.other] : [])] : []
+    return `• ${q.header || q.question}: ${picks.join(", ") || "(no selection)"}`
+  })
+  return `The user answered your question(s):\n${lines.join("\n")}\n\nUse these answers and continue — do not ask again.`
 }
 
 const toolTarget = (name: string, input: Record<string, unknown>): string | null => {
@@ -189,6 +222,7 @@ export const streamEventsFor = (
           const name = String(block.name)
           const input = (block.input ?? {}) as Record<string, unknown>
           tools.set(id, { name, input })
+          if (SUPPRESSED_TOOLS.has(name)) continue
           out.push({ _tag: "ToolStart", id, name, target: toolTarget(name, input) })
         }
       }
@@ -201,6 +235,7 @@ export const streamEventsFor = (
         if (block.type !== "tool_result") continue
         const id = String(block.tool_use_id)
         const memo = tools.get(id)
+        if (memo && SUPPRESSED_TOOLS.has(memo.name)) continue
         const stats = memo && isEditTool(memo.name) ? editStats(memo.name, memo.input) : { diff: null, preview: null }
         out.push({
           _tag: "ToolEnd",
@@ -252,44 +287,52 @@ export const runClaude = (
         const { query } = await import("@anthropic-ai/claude-agent-sdk")
         const tools = new Map<string, ToolMemo>()
 
+        // Set once `query()` returns, so `canUseTool` can flip the run out of plan
+        // mode when the operator approves the plan.
+        let planQuery: Query | null = null
+        let planCount = 0
+        let qn = 0
+
         const canUseTool = async (
           toolName: string,
-          input: Record<string, unknown>
+          input: Record<string, unknown>,
+          options: { toolUseID: string }
         ): Promise<PermissionResult> => {
+          // Plan mode: the SDK routes ExitPlanMode approval here. Turn the plan
+          // into a structured, reviewable Plan and honour the operator's verdict.
+          if (toolName === "ExitPlanMode") {
+            planCount += 1
+            const plan = parsePlan(strOf(input.plan) ?? "", `plan_${sessionId}_${planCount}`)
+            const decision = await runP(ctx.proposePlan(plan))
+            if (decision._tag === "Approve") {
+              await planQuery?.setPermissionMode(mapPermissionMode(decision.mode))
+              return { behavior: "allow", updatedInput: input }
+            }
+            return {
+              behavior: "deny",
+              message: decision._tag === "Revise" ? decision.feedback : "Plan rejected by the operator."
+            }
+          }
+          // AskUserQuestion arrives as a PERMISSION request (not a dialog) in this
+          // SDK — running it headlessly just skips. So we intercept it: dock our
+          // question card, collect the picks, and hand them back. `canUseTool` can
+          // only allow/deny, and `deny.message` is the only channel that returns
+          // content to the model — so we deny with the answers phrased as the reply.
+          if (toolName === "AskUserQuestion") {
+            const questions = parseSdkQuestions(input)
+            if (questions.length === 0) return { behavior: "allow", updatedInput: input }
+            qn += 1
+            const answers = await runP(
+              ctx.askQuestion({ id: options.toolUseID ?? `q_${sessionId}_${qn}`, questions })
+            )
+            return { behavior: "deny", message: formatQuestionAnswer(questions, answers) }
+          }
           const req = toPermissionRequest(toolName, input)
           if (req === null) return { behavior: "allow", updatedInput: input }
           const decision = await runP(ctx.canUseTool(req))
           return decision === "allow"
             ? { behavior: "allow", updatedInput: input }
             : { behavior: "deny", message: "Denied by the operator." }
-        }
-
-        // Surface the AskUserQuestion tool's structured questions as a docked
-        // question card and return the user's answers. The dialog `result` shape
-        // is defined per dialogKind by the CLI (transported opaquely); we return
-        // the selected answers per question as a best-effort completion.
-        let qn = 0
-        const onUserDialog = async (request: {
-          dialogKind: string
-          payload: Record<string, unknown>
-          toolUseID?: string
-        }): Promise<{ behavior: "completed"; result: unknown } | { behavior: "cancelled" }> => {
-          const questions = parseSdkQuestions(request.payload)
-          if (questions.length === 0) return { behavior: "cancelled" }
-          qn += 1
-          const answers = await runP(
-            ctx.askQuestion({ id: request.toolUseID ?? `q_${sessionId}_${qn}`, questions })
-          )
-          return {
-            behavior: "completed",
-            result: {
-              questions: answers.map((a, i) => ({
-                header: questions[i]?.header,
-                question: questions[i]?.question,
-                answers: [...a.selected, ...(a.other ? [a.other] : [])]
-              }))
-            }
-          }
         }
 
         const iterator = query({
@@ -300,14 +343,14 @@ export const runClaude = (
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "auto" ? { allowDangerouslySkipPermissions: true } : {}),
+            ...(spec.mode === "plan" ? { planModeInstructions } : {}),
             includePartialMessages: true,
             canUseTool,
-            onUserDialog,
-            supportedDialogKinds: ["ask_user_question"],
             abortController: abort,
             resume: resume.get(sessionId)
           }
         })
+        planQuery = iterator
 
         for await (const msg of iterator) {
           const sid = (msg as { session_id?: unknown }).session_id

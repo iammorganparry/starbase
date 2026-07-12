@@ -1,8 +1,11 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { describe, expect, it } from "vitest"
+import type { Question, QuestionAnswer } from "@starbase/core"
 import {
   editStats,
+  formatQuestionAnswer,
   mapPermissionMode,
+  parseSdkQuestions,
   streamEventsFor,
   toPermissionRequest,
   type ToolMemo
@@ -136,5 +139,67 @@ describe("streamEventsFor", () => {
       new Map()
     )
     expect(events).toStrictEqual([{ _tag: "Done", costUsd: 0.42, tokens: 140 }])
+  })
+})
+
+describe("plan mode + AskUserQuestion (canUseTool path)", () => {
+  it("maps our 'plan' mode onto the SDK's plan permission mode", () => {
+    expect(mapPermissionMode("plan")).toBe("plan")
+    expect(mapPermissionMode("auto")).toBe("bypassPermissions")
+    expect(mapPermissionMode("accept-edits")).toBe("acceptEdits")
+    expect(mapPermissionMode("ask")).toBe("default")
+  })
+
+  it("suppresses the ExitPlanMode + AskUserQuestion raw tool cards (dedicated UI)", () => {
+    const assistant = (name: string) =>
+      streamEventsFor(
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t", name, input: {} }] } } as never,
+        new Map()
+      )
+    expect(assistant("ExitPlanMode")).toStrictEqual([])
+    expect(assistant("AskUserQuestion")).toStrictEqual([])
+    // A normal tool still emits a ToolStart card.
+    expect(assistant("Read")[0]).toMatchObject({ _tag: "ToolStart", name: "Read" })
+  })
+
+  it("parseSdkQuestions reads the AskUserQuestion tool input shape", () => {
+    const questions = parseSdkQuestions({
+      questions: [
+        {
+          question: "Which strategy?",
+          header: "Strategy",
+          multiSelect: false,
+          options: [
+            { label: "Rotating", description: "secure" },
+            { label: "Sliding", description: "simple", preview: "code" }
+          ]
+        }
+      ]
+    })
+    expect(questions).toHaveLength(1)
+    expect(questions[0]).toMatchObject({ question: "Which strategy?", header: "Strategy", multiSelect: false })
+    expect(questions[0]!.options[1]).toMatchObject({ label: "Sliding", preview: "code" })
+  })
+
+  it("formatQuestionAnswer phrases the picks as the model's reply (deny-message channel)", () => {
+    const questions: ReadonlyArray<Question> = [
+      { question: "Which strategy?", header: "Strategy", multiSelect: false, options: [] },
+      { question: "Which surfaces?", header: "Surfaces", multiSelect: true, options: [] }
+    ]
+    const answers: ReadonlyArray<QuestionAnswer> = [
+      { selected: ["Rotating"], other: null },
+      { selected: ["HTTP middleware", "Workers"], other: "CLI" }
+    ]
+    const msg = formatQuestionAnswer(questions, answers)
+    expect(msg).toContain("• Strategy: Rotating")
+    expect(msg).toContain("• Surfaces: HTTP middleware, Workers, CLI")
+    expect(msg).toMatch(/do not ask again/)
+  })
+
+  it("formatQuestionAnswer marks an unanswered question rather than dropping it", () => {
+    const questions: ReadonlyArray<Question> = [
+      { question: "Which?", header: "Pick", multiSelect: false, options: [] }
+    ]
+    expect(formatQuestionAnswer(questions, [])).toContain("(no selection)")
   })
 })

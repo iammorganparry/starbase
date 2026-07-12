@@ -19,6 +19,17 @@ export interface SessionConversationProps {
    */
   conversationPane?: ReactNode
   /**
+   * The real app's session-keyed pane, rendered for BOTH the Conversation and
+   * Plan tabs from the same machine (so switching to Plan never aborts a parked
+   * plan run). `view` selects the face; `ctx.onOpenPlanReview` switches the tab.
+   */
+  renderConversationPane?: (
+    view: "conversation" | "plan",
+    ctx: { onOpenPlanReview: () => void }
+  ) => ReactNode
+  /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
+  planSessions?: ReadonlySet<string>
+  /**
    * Show the empty state instead of a transcript — the real app sets this when
    * no session is active (first launch), so the seeded demo never renders.
    */
@@ -48,8 +59,12 @@ export interface SessionConversationProps {
  * The Pull Request tab also shows for a branch with changes but no PR yet, so the
  * "Create pull request" empty state is reachable; Code Review needs a linked PR.
  */
-const visibleTabs = (active: Session | null): ReadonlyArray<TabKey> => {
+const visibleTabs = (
+  active: Session | null,
+  planSessions?: ReadonlySet<string>
+): ReadonlyArray<TabKey> => {
   const tabs: TabKey[] = ["conversation"]
+  if (active && planSessions?.has(active.id)) tabs.push("plan")
   if (active?.prNumber != null) tabs.push("pr", "review")
   else if (active?.worktreePath) tabs.push("pr")
   return tabs
@@ -60,7 +75,7 @@ export function SessionConversation(props: SessionConversationProps) {
   const [tab, setTab] = useState<TabKey>("conversation")
   const active = props.sessions.find((s) => s.id === props.activeSessionId) ?? null
 
-  const tabs = visibleTabs(active)
+  const tabs = visibleTabs(active, props.planSessions)
   // Never leave a hidden tab selected (e.g. after switching to a PR-less session).
   const activeTab = tabs.includes(tab) ? tab : "conversation"
   const connectGithub = props.onOpenSettings ?? (() => {})
@@ -105,30 +120,40 @@ export function SessionConversation(props: SessionConversationProps) {
             />
 
             {/*
-              Each tab's content fully unmounts when you leave it and remounts
-              fresh on return — the Conversation transcript is virtualized
-              (@tanstack/react-virtual with absolute-positioned rows + a
-              ResizeObserver); keeping it mounted-but-hidden corrupts its
-              measurement cache and stacks rows. `key={activeTab}` guarantees React
-              tears the subtree down and repaints it on every tab change.
+              The Conversation + Plan tabs share ONE persistent pane (same
+              conversation machine), so switching to Plan Review never unmounts —
+              and thus never aborts — a parked plan run. The pane swaps its own
+              inner view; only the OTHER tabs (pr/review/stub) fully unmount on
+              switch (keyed by activeTab), since the virtualized transcript's
+              measurement cache corrupts if kept mounted-but-hidden.
             */}
-            <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
-              {activeTab === "conversation" ? (
-                (props.conversationPane ?? (
-                  <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
-                ))
-              ) : activeTab === "pr" && active ? (
-                (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
-                  <StubScreen tab="pr" />
-                ))
-              ) : activeTab === "review" && active ? (
-                (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
-                  <StubScreen tab="review" />
-                ))
+            {activeTab === "conversation" || activeTab === "plan" ? (
+              props.renderConversationPane ? (
+                props.renderConversationPane(activeTab === "plan" ? "plan" : "conversation", {
+                  onOpenPlanReview: () => setTab("plan")
+                })
               ) : (
-                <StubScreen tab={activeTab} />
-              )}
-            </div>
+                <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
+                  {props.conversationPane ?? (
+                    <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
+                  )}
+                </div>
+              )
+            ) : (
+              <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
+                {activeTab === "pr" && active ? (
+                  (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
+                    <StubScreen tab="pr" />
+                  ))
+                ) : activeTab === "review" && active ? (
+                  (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
+                    <StubScreen tab="review" />
+                  ))
+                ) : (
+                  <StubScreen tab={activeTab} />
+                )}
+              </div>
+            )}
           </>
         )}
       </div>

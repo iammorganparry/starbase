@@ -1,7 +1,10 @@
 import type {
   ApprovalGate,
   GateDecision,
+  Message,
   PermissionMode,
+  Plan,
+  PlanComment,
   QuestionAnswer,
   QuestionRequest,
   Session,
@@ -18,7 +21,7 @@ import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Deferred, Effect, Mailbox, Ref, Stream } from "effect"
 import { AppPaths } from "./app-paths.js"
-import { CliAdapter } from "./adapter.js"
+import { CliAdapter, PlanDecision } from "./adapter.js"
 import type { PermissionDecision, PermissionRequest, SessionSpec } from "./adapter.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -36,6 +39,41 @@ interface PendingGate {
 interface PendingQuestion {
   readonly sessionId: string
   readonly deferred: Deferred.Deferred<ReadonlyArray<QuestionAnswer>>
+}
+
+/** A proposed plan awaiting the operator's decision; the `Deferred` resumes the agent. */
+interface PendingPlan {
+  readonly sessionId: string
+  readonly deferred: Deferred.Deferred<PlanDecision>
+}
+
+/**
+ * Live handles onto the in-flight run for a session, so the out-of-band plan RPCs
+ * (comment / revise / approve) can read + mutate the plan part in the current
+ * assistant turn — updating both the live accumulator and the persisted
+ * transcript, and pushing a `PlanUpdated` so an attached renderer stays in sync.
+ */
+interface ActiveRun {
+  readonly readPlan: (planId: string) => Effect.Effect<Plan | null>
+  readonly applyPlan: (planId: string, f: (plan: Plan) => Plan) => Effect.Effect<void>
+}
+
+const findPlan = (msg: Message, planId: string): Plan | null => {
+  for (const p of msg.parts) if (p._tag === "Plan" && p.plan.id === planId) return p.plan
+  return null
+}
+
+/** Bundle the operator's un-routed step comments into a plain revision instruction. */
+const revisionText = (plan: Plan, comments: ReadonlyArray<PlanComment>): string => {
+  const lines = [
+    "I've reviewed the plan. Please revise it to address these comments, then call ExitPlanMode again with the updated plan:"
+  ]
+  for (const c of comments) {
+    const step = plan.steps.find((s) => s.id === c.stepId)
+    const where = step ? `Step ${step.number} (${step.title})` : "General"
+    lines.push(`- ${where}: ${c.body}`)
+  }
+  return lines.join("\n")
 }
 
 /** The first two words of a command — the "Always allow …" token, e.g. "npm test". */
@@ -113,6 +151,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     // Per-session live HITL state, seeded from the Session record on first use.
     const modes = yield* Ref.make(new Map<string, PermissionMode>())
     const allowlists = yield* Ref.make(new Map<string, Set<string>>())
+    // planId → the pending plan (shared across prompt/approve/revise/stop).
+    const plans = yield* Ref.make(new Map<string, PendingPlan>())
+    // sessionId → the exec mode to restore when a plan is approved (captured on
+    // the switch into "plan").
+    const priorModes = yield* Ref.make(new Map<string, PermissionMode>())
+    // sessionId → live handles onto the current run, for the out-of-band plan RPCs.
+    const active = yield* Ref.make(new Map<string, ActiveRun>())
     // Monotonic id source — deterministic (no Date.now/random) for stable tests.
     const counter = yield* Ref.make(0)
     const nextId = Ref.updateAndGet(counter, (n) => n + 1)
@@ -121,9 +166,21 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
       SessionStore.setMode(sessionId, mode).pipe(Effect.ignore)
 
     const setMode = (sessionId: string, mode: PermissionMode) =>
-      Ref.update(modes, (m) => new Map(m).set(sessionId, mode)).pipe(
-        Effect.zipRight(persistMode(sessionId, mode))
-      )
+      Effect.gen(function* () {
+        // Entering plan mode: remember the exec mode to fall back to on approval.
+        if (mode === "plan") {
+          const current =
+            (yield* Ref.get(modes)).get(sessionId) ??
+            (yield* SessionStore.get(sessionId).pipe(
+              Effect.map((s) => s.mode),
+              Effect.orElseSucceed(() => undefined)
+            ))
+          const prior: PermissionMode = current && current !== "plan" ? current : "accept-edits"
+          yield* Ref.update(priorModes, (m) => new Map(m).set(sessionId, prior))
+        }
+        yield* Ref.update(modes, (m) => new Map(m).set(sessionId, mode))
+        yield* persistMode(sessionId, mode)
+      })
 
     const decideGate = (sessionId: string, gateId: string, decision: GateDecision) =>
       Effect.gen(function* () {
@@ -157,7 +214,58 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         yield* Deferred.succeed(entry.deferred, answers)
       })
 
-    /** Deny every pending gate + question for a session — a graceful stop. */
+    /** Resolve a session's pending plan `Deferred` (guards session ownership). */
+    const resolvePlan = (sessionId: string, planId: string, decision: PlanDecision) =>
+      Effect.gen(function* () {
+        const entry = (yield* Ref.get(plans)).get(planId)
+        if (entry === undefined || entry.sessionId !== sessionId) return
+        yield* Deferred.succeed(entry.deferred, decision)
+      })
+
+    /** Thread a comment onto a plan step (persisted + streamed); doesn't resume the agent. */
+    const commentPlanStep = (sessionId: string, planId: string, stepId: string, body: string) =>
+      Effect.gen(function* () {
+        const run = (yield* Ref.get(active)).get(sessionId)
+        if (run === undefined) return
+        const cn = yield* nextId
+        const now = yield* Effect.sync(() => new Date().toISOString())
+        const comment: PlanComment = { id: `pc_${sessionId}_${cn}`, stepId, body, author: "user", createdAt: now, routed: false }
+        yield* run.applyPlan(planId, (plan) => ({
+          ...plan,
+          comments: [...plan.comments, comment],
+          steps: plan.steps.map((s) => (s.id === stepId ? { ...s, flagged: true } : s))
+        }))
+      })
+
+    /** Route the open comments back to the agent as a revision and resume planning. */
+    const revisePlan = (sessionId: string, planId: string) =>
+      Effect.gen(function* () {
+        const run = (yield* Ref.get(active)).get(sessionId)
+        if (run === undefined) return
+        const plan = yield* run.readPlan(planId)
+        if (plan === null) return
+        const open = plan.comments.filter((c) => !c.routed && c.author === "user")
+        // Mark the plan under revision + flush its comments as routed.
+        yield* run.applyPlan(planId, (p) => ({
+          ...p,
+          status: "revising",
+          comments: p.comments.map((c) => (c.routed ? c : { ...c, routed: true }))
+        }))
+        yield* resolvePlan(sessionId, planId, PlanDecision.Revise({ feedback: revisionText(plan, open) }))
+      })
+
+    /** Approve a plan: mark it approved, restore the exec mode, and start execution. */
+    const approvePlan = (sessionId: string, planId: string) =>
+      Effect.gen(function* () {
+        const run = (yield* Ref.get(active)).get(sessionId)
+        if (run !== undefined) yield* run.applyPlan(planId, (p) => ({ ...p, status: "approved" }))
+        const mode = (yield* Ref.get(priorModes)).get(sessionId) ?? "accept-edits"
+        // Restore the exec mode live (canUseTool re-reads it) and persist it.
+        yield* setMode(sessionId, mode)
+        yield* resolvePlan(sessionId, planId, PlanDecision.Approve({ mode }))
+      })
+
+    /** Deny every pending gate + question + plan for a session — a graceful stop. */
     const stop = (sessionId: string) =>
       Effect.gen(function* () {
         const allGates = yield* Ref.get(gates)
@@ -170,6 +278,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         yield* Effect.forEach(
           [...allQuestions.values()].filter((q) => q.sessionId === sessionId),
           (q) => Deferred.succeed(q.deferred, []),
+          { discard: true }
+        )
+        const allPlans = yield* Ref.get(plans)
+        const run = (yield* Ref.get(active)).get(sessionId)
+        yield* Effect.forEach(
+          [...allPlans.entries()].filter(([, p]) => p.sessionId === sessionId),
+          ([planId, p]) =>
+            (run ? run.applyPlan(planId, (pl) => ({ ...pl, status: "rejected" })) : Effect.void).pipe(
+              Effect.zipRight(Deferred.succeed(p.deferred, PlanDecision.Reject()))
+            ),
           { discard: true }
         )
       })
@@ -248,7 +366,10 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
 
           const canUseTool = (req: PermissionRequest): Effect.Effect<PermissionDecision> =>
             Effect.gen(function* () {
-              if (verdict(mode, allow, req) === "allow") return "allow" as const
+              // Re-read the live mode each call so an in-run change (e.g. a plan
+              // approval restoring the exec mode) takes effect on this same turn.
+              const liveMode = (yield* Ref.get(modes)).get(sessionId) ?? mode
+              if (verdict(liveMode, allow, req) === "allow") return "allow" as const
               const gn = yield* nextId
               const gateId = `g_${sessionId}_${gn}`
               const gate = buildGate(gateId, req)
@@ -290,8 +411,56 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               return answers
             })
 
-          const run = adapter.run(sessionId, spec, { emit, canUseTool, askQuestion }).pipe(
+          // Read the current plan from the live accumulator (for the out-of-band RPCs).
+          const readPlan = (planId: string): Effect.Effect<Plan | null> =>
+            Effect.map(Ref.get(acc), (m) => findPlan(m, planId))
+
+          // Replace a plan part in place: update the accumulator + persisted
+          // transcript, and push a `PlanUpdated` so an attached renderer syncs.
+          const applyPlan = (planId: string, f: (plan: Plan) => Plan): Effect.Effect<void> =>
+            Effect.gen(function* () {
+              const cur = yield* Ref.get(acc)
+              const plan = findPlan(cur, planId)
+              if (plan === null) return
+              const nextPlan = f(plan)
+              const next: Message = {
+                ...cur,
+                parts: cur.parts.map((p) =>
+                  p._tag === "Plan" && p.plan.id === planId ? { _tag: "Plan", plan: nextPlan } : p
+                )
+              }
+              yield* Ref.set(acc, next)
+              yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
+              yield* out.offer({ _tag: "PlanUpdated", plan: nextPlan })
+            }).pipe(Effect.provide(env), Effect.asVoid)
+
+          const proposePlan = (plan: Plan): Effect.Effect<PlanDecision> =>
+            Effect.gen(function* () {
+              const deferred = yield* Deferred.make<PlanDecision>()
+              yield* Ref.update(plans, (m) => new Map(m).set(plan.id, { sessionId, deferred }))
+              yield* emit({ _tag: "PlanProposed", plan })
+              const decision = yield* Deferred.await(deferred)
+              yield* Ref.update(plans, (m) => {
+                const nextMap = new Map(m)
+                nextMap.delete(plan.id)
+                return nextMap
+              })
+              return decision
+            })
+
+          // Publish live handles so comment/revise/approve can reach this run;
+          // torn down when the run ends so out-of-band calls become no-ops.
+          yield* Ref.update(active, (m) => new Map(m).set(sessionId, { readPlan, applyPlan }))
+
+          const run = adapter.run(sessionId, spec, { emit, canUseTool, askQuestion, proposePlan }).pipe(
             Effect.catchAllCause(() => emit({ _tag: "Failed", message: "The agent run failed." })),
+            Effect.ensuring(
+              Ref.update(active, (m) => {
+                const nextMap = new Map(m)
+                nextMap.delete(sessionId)
+                return nextMap
+              })
+            ),
             Effect.ensuring(out.end)
           )
           yield* Effect.forkScoped(run)
@@ -299,6 +468,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         })
       )
 
-    return { prompt, decideGate, answerQuestion, setMode, stop } as const
+    return {
+      prompt,
+      decideGate,
+      answerQuestion,
+      setMode,
+      stop,
+      commentPlanStep,
+      revisePlan,
+      approvePlan
+    } as const
   })
 }) {}

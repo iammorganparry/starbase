@@ -220,6 +220,64 @@ test("AskUserQuestion replaces the composer with a question card and resumes on 
   // The agent resumes with the answers, and the composer returns.
   await expect(window.getByText(/Got it — starting with/)).toBeVisible({ timeout: 15_000 })
   await expect(window.getByPlaceholder("Message Claude…")).toBeVisible()
+
+  // The answered question persists inline as a "Your answer" record with the picks.
+  await expect(window.getByText("Your answer", { exact: true })).toBeVisible()
+  await expect(window.getByText("Rotating refresh tokens").last()).toBeVisible()
+  await expect(window.getByText("HTTP middleware").last()).toBeVisible()
+})
+
+test("a storm of consecutive tool calls collapses to the latest with a +N more toggle", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  const composer = window.getByPlaceholder("Message Claude…")
+  await composer.fill("[[storm]] scan the codebase")
+  await composer.press("Enter")
+
+  // Four consecutive Reads collapse: only the latest card + a "+3 more" toggle show.
+  await expect(window.getByRole("button", { name: /\+ 3 more tool calls/ })).toBeVisible({ timeout: 15_000 })
+  await expect(window.getByText("src/file-1.ts")).toHaveCount(0)
+  await expect(window.getByText("src/file-4.ts")).toBeVisible()
+
+  // Expanding reveals the earlier calls; collapsing hides them again.
+  await window.getByRole("button", { name: /\+ 3 more tool calls/ }).click()
+  await expect(window.getByText("src/file-1.ts")).toBeVisible()
+  await window.getByRole("button", { name: /Hide 3 earlier calls/ }).click()
+  await expect(window.getByText("src/file-1.ts")).toHaveCount(0)
+})
+
+test("Plan mode: propose a plan, review a step, and approve to start execution", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The `[[plan]]` marker drives the scripted plan-mode flow: the agent proposes
+  // a structured plan and parks awaiting approval.
+  const composer = window.getByPlaceholder("Message Claude…")
+  await composer.fill("[[plan]] refactor auth to a TokenStore")
+  await composer.press("Enter")
+
+  // The inline plan card lands in the transcript with the plan's steps + actions.
+  await expect(window.getByRole("button", { name: /Approve plan & start/ }).first()).toBeVisible({
+    timeout: 15_000
+  })
+  await expect(window.getByText("Audit session middleware").first()).toBeVisible()
+
+  // The Plan Review tab surfaces (live plan-presence); open it.
+  await window.getByText("Plan Review").first().click()
+
+  // The step list renders; drill into a branch step to open its spec.
+  await expect(window.getByText("Handle token refresh").first()).toBeVisible()
+  await window.getByText("Handle token refresh").first().click()
+  await expect(window.getByText("Decide the refresh path on expiry.")).toBeVisible()
+
+  // Approve the plan from the header → the plan flips read-only and execution starts.
+  await window.getByRole("button", { name: /Approve plan & start/ }).click()
+  await expect(window.getByText(/execution started/i)).toBeVisible({ timeout: 15_000 })
 })
 
 test("a linked PR shows the sidebar badge and the Pull Request / Code Review tabs", async ({

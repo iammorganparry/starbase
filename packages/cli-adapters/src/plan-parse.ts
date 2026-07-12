@@ -1,0 +1,327 @@
+import type {
+  DiffStat,
+  Plan,
+  PlanEdge,
+  PlanFileChange,
+  PlanGraph,
+  PlanGuard,
+  PlanNode,
+  PlanNodeKind,
+  PlanStep
+} from "@starbase/core"
+
+/**
+ * Turn the plan text Claude produces via `ExitPlanMode` into a structured `Plan`.
+ *
+ * We can't rely on the model to emit JSON, so we ask it (via
+ * `planModeInstructions`) to include a small, line-oriented ` ```plan ` block and
+ * parse that here. Everything is best-effort and forgiving: a missing/garbled
+ * block falls back to a single step that carries the raw markdown, so the plan is
+ * always renderable and never lost. Pure and deterministic given `(raw, id)` —
+ * the primary unit-test seam for plan mode.
+ */
+
+// ── The output protocol injected into the plan-mode system prompt ─────────────
+
+/**
+ * Appended to the plan-mode instructions. Documents the ` ```plan ` block so the
+ * agent's `ExitPlanMode` payload parses into structured steps. Kept declarative:
+ * one block, documented field names, no per-call string assembly elsewhere.
+ */
+export const planModeInstructions = `When you present your plan with ExitPlanMode, put a fenced \`\`\`plan block at the top of the plan text, then your normal human-readable markdown below it. Starbase renders the block as an interactive, reviewable plan.
+
+Format of the \`\`\`plan block (one step per header line; two-space-indented fields):
+
+  summary: <one short line naming the whole change>
+  01 <step title>
+    intent: <one sentence — why this step exists>
+    approach: <how, step one; how, step two>          (semicolon-separated)
+    files: M path/to/file.ts +12 -3; A path/to/new.ts +40   (A add / M modify / D delete, then +added -removed)
+    guards: <acceptance criterion>; <another> (warn)   (append (warn)/(open)/(review) to flag one)
+    depends: 01; blocks: 03
+  02 <next step title>
+    ...
+  04 <a branching step>
+    branch: <the yes/no condition, e.g. "token expired?">
+    4a <arm taken when yes>
+      intent: ...
+    4b <arm taken when no>
+      intent: ...
+  05 <step>
+  06 <step>
+
+Rules: number steps 01, 02, … in order; a branch's arms are numbered 4a, 4b under it (two extra spaces). Keep each step's title under ~6 words and its intent to one sentence. Only ExitPlanMode; do not edit files or run commands in plan mode.
+
+ALSO include a fenced \`\`\`flow block that maps the DECISIONS and how logic flows through the change — this is the most important visual. It renders as an interactive graph, so focus on the branch points, not a linear list of steps. One node or edge per line:
+
+  start   n0  "HTTP request"
+  action  n1  "authMiddleware" file src/auth/session.ts
+  decision n2 "token expired?"
+  action  n3  "refresh() + retry once" step 4a
+  action  n4  "proceed" step 4b
+  terminal n5 "response"
+  n0 -> n1
+  n1 -> n2
+  n2 -> n3 : yes
+  n2 -> n4 : no
+  n3 -> n5
+  n4 -> n5
+
+Node syntax: \`<kind> <id> "<label>"\` where kind is start|decision|action|io|terminal|note; optionally add \`file <path>\` (a detail line) and \`step <NN>\` (links the node to that plan step). Edge syntax: \`<from> -> <to>\` with an optional \`: <condition>\` label (put the yes/no or condition on the edges LEAVING a decision node).`
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+const GUARD_STATUS: Record<string, PlanGuard["status"]> = {
+  warn: "warn",
+  open: "open",
+  ok: "ok",
+  review: "under-review"
+}
+
+/** Extract the first fenced block with the given language tag, or null. */
+const fenced = (raw: string, lang: string): string | null => {
+  const re = new RegExp("```" + lang + "[^\\n]*\\n([\\s\\S]*?)```", "i")
+  const m = re.exec(raw)
+  return m ? m[1]!.replace(/\s+$/, "") : null
+}
+
+/** Numeric-only ordinals pad to two digits ("4" → "04"); arms ("4a") stay as-is. */
+const normNum = (n: string): string => (/^\d+$/.test(n) ? n.padStart(2, "0") : n)
+
+const stepId = (n: string): string => `s_${normNum(n)}`
+
+/** The branch step id an arm hangs off — "4a" → the parent's id "s_04". */
+const parentIdOf = (armNumber: string): string | null => {
+  const m = /^(\d+)[a-z]$/.exec(armNumber)
+  return m ? `s_${m[1]!.padStart(2, "0")}` : null
+}
+
+const splitList = (v: string): ReadonlyArray<string> =>
+  v
+    .split(/[;,]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+
+const parseFile = (token: string): PlanFileChange | null => {
+  const m = /^([AMD])\s+(\S+)(?:\s+\+(\d+))?(?:\s+-(\d+))?/.exec(token.trim())
+  if (!m) return null
+  return { path: m[2]!, change: m[1] as PlanFileChange["change"], added: Number(m[3] ?? 0), removed: Number(m[4] ?? 0) }
+}
+
+const parseGuard = (token: string): PlanGuard => {
+  const m = /^(.*?)\s*(?:\((warn|open|ok|review)\))?\s*$/i.exec(token.trim())
+  const text = (m?.[1] ?? token).trim()
+  const status = m?.[2] ? GUARD_STATUS[m[2].toLowerCase()]! : "ok"
+  return { text, status }
+}
+
+const sumDiff = (files: ReadonlyArray<PlanFileChange>): DiffStat | null => {
+  if (files.length === 0) return null
+  return files.reduce((acc, f) => ({ added: acc.added + f.added, removed: acc.removed + f.removed }), {
+    added: 0,
+    removed: 0
+  })
+}
+
+/** A mutable working copy of a step, assembled field-by-field then frozen as `PlanStep`. */
+type MutableStep = { -readonly [K in keyof PlanStep]: PlanStep[K] }
+
+/** A blank, well-formed step keyed by its ordinal. */
+const emptyStep = (number: string, title: string): MutableStep => {
+  const arm = /^\d+[a-z]$/.test(number)
+  return {
+    id: stepId(number),
+    number: normNum(number),
+    title,
+    intent: "",
+    approach: [],
+    kind: arm ? "branch-arm" : "step",
+    condition: null,
+    parentId: arm ? parentIdOf(number) : null,
+    dependsOn: [],
+    blocks: [],
+    files: [],
+    guards: [],
+    diff: null,
+    status: "proposed",
+    flagged: false
+  }
+}
+
+const STEP_HEADER = /^\s*(\d+[a-z]?)\s+(.+?)\s*$/
+const FIELD = /^\s+([a-z]+)\s*:\s*(.+?)\s*$/i
+
+/** Parse the lines inside a `plan` block into steps + a summary. */
+const parseBlock = (block: string): { summary: string; steps: PlanStep[] } => {
+  const steps: MutableStep[] = []
+  let summary = ""
+  let current: MutableStep | null = null
+  const setDiff = (s: MutableStep): MutableStep => ({ ...s, diff: sumDiff(s.files) })
+
+  const flush = () => {
+    if (current) steps.push(setDiff(current))
+    current = null
+  }
+
+  for (const line of block.split("\n")) {
+    if (line.trim().length === 0) continue
+    const summaryMatch = /^\s*summary\s*:\s*(.+?)\s*$/i.exec(line)
+    if (summaryMatch && current === null) {
+      summary = summaryMatch[1]!
+      continue
+    }
+    const field = current ? FIELD.exec(line) : null
+    const header = STEP_HEADER.exec(line)
+    // A field only counts when it's more-indented than a step header would be
+    // and matches a known key — otherwise a header wins (e.g. "04 Handle…").
+    if (field && (!header || line.startsWith("  "))) {
+      const key = field[1]!.toLowerCase()
+      const value = field[2]!
+      const s = current!
+      switch (key) {
+        case "intent":
+          s.intent = value
+          break
+        case "approach":
+          s.approach = splitList(value)
+          break
+        case "files":
+          s.files = splitList(value).map(parseFile).filter((f): f is PlanFileChange => f !== null)
+          break
+        case "guards":
+          s.guards = splitList(value).map(parseGuard)
+          break
+        case "depends":
+          s.dependsOn = splitList(value).map(normNum)
+          break
+        case "blocks":
+          s.blocks = splitList(value).map(normNum)
+          break
+        case "branch":
+          s.kind = "branch"
+          s.condition = value
+          break
+      }
+      continue
+    }
+    if (header) {
+      flush()
+      current = emptyStep(header[1]!, header[2]!)
+    }
+  }
+  flush()
+
+  // Any step that an arm hangs off is a branch, even without an explicit field.
+  const parents = new Set(steps.filter((s) => s.kind === "branch-arm").map((s) => s.parentId))
+  for (const s of steps) {
+    if (parents.has(s.id) && s.kind !== "branch") s.kind = "branch"
+  }
+  return { summary, steps }
+}
+
+const NODE_KINDS = new Set<PlanNodeKind>(["start", "decision", "action", "io", "terminal", "note"])
+const NODE_LINE = /^(start|decision|action|io|terminal|note)\s+(\S+)\s+"([^"]*)"(.*)$/
+const EDGE_LINE = /^(\S+)\s*->\s*(\S+)(?:\s*:\s*(.+?))?\s*$/
+
+const parseNode = (m: RegExpExecArray): PlanNode => {
+  const rest = m[4] ?? ""
+  const step = /\bstep\s+(\S+)/.exec(rest)
+  const file = /\bfile\s+(\S+)/.exec(rest)
+  const detailQuoted = /"([^"]*)"/.exec(rest)
+  return {
+    id: m[2]!,
+    label: m[3]!,
+    kind: m[1] as PlanNodeKind,
+    detail: file?.[1] ?? detailQuoted?.[1] ?? null,
+    stepId: step ? stepId(step[1]!) : null
+  }
+}
+
+/**
+ * Parse a fenced ` ```flow ` block into a decision graph (nodes + edges). Node
+ * lines start with a kind keyword; every other `a -> b` line is an edge whose
+ * optional `: label` carries the condition. Returns null when there's nothing
+ * renderable, so the Flow view falls back to its empty state.
+ */
+export const parseFlow = (raw: string): PlanGraph | null => {
+  const block = fenced(raw, "flow")
+  if (!block) return null
+  const nodes: Array<PlanNode> = []
+  const edges: Array<PlanEdge> = []
+  for (const line of block.split("\n")) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) continue
+    const nodeMatch = NODE_LINE.exec(trimmed)
+    if (nodeMatch && NODE_KINDS.has(nodeMatch[1] as PlanNodeKind)) {
+      nodes.push(parseNode(nodeMatch))
+      continue
+    }
+    const edgeMatch = EDGE_LINE.exec(trimmed)
+    if (edgeMatch) {
+      edges.push({
+        id: `e_${edges.length}`,
+        from: edgeMatch[1]!,
+        to: edgeMatch[2]!,
+        label: edgeMatch[3]?.trim() || null
+      })
+    }
+  }
+  // Drop edges that dangle (reference a node we never declared) — keeps the layout sane.
+  const known = new Set(nodes.map((n) => n.id))
+  const kept = edges.filter((e) => known.has(e.from) && known.has(e.to))
+  return nodes.length > 0 ? { nodes, edges: kept } : null
+}
+
+/**
+ * Parse a raw `ExitPlanMode` plan into a structured `Plan`. Falls back to a
+ * single step wrapping the markdown when there's no parseable ` ```plan ` block.
+ */
+export const parsePlan = (raw: string, id: string): Plan => {
+  const block = fenced(raw, "plan")
+  const graph = parseFlow(raw)
+  const parsed = block ? parseBlock(block) : { summary: "", steps: [] as PlanStep[] }
+
+  if (parsed.steps.length === 0) {
+    // Fallback: no structured block — surface the first heading as the summary and
+    // keep one step so the tab/badge still work; the card renders `raw` markdown.
+    const firstLine = raw.split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).find((l) => l.length > 0)
+    const summary = parsed.summary || firstLine || "Proposed plan"
+    return {
+      id,
+      summary,
+      graph,
+      steps: [
+        {
+          id: "s_01",
+          number: "01",
+          title: summary,
+          intent: "The agent's full plan is shown below.",
+          approach: [],
+          kind: "step",
+          condition: null,
+          parentId: null,
+          dependsOn: [],
+          blocks: [],
+          files: [],
+          guards: [],
+          diff: null,
+          status: "proposed",
+          flagged: false
+        }
+      ],
+      comments: [],
+      status: "proposed",
+      raw
+    }
+  }
+
+  return {
+    id,
+    summary: parsed.summary || parsed.steps[0]!.title,
+    graph,
+    steps: parsed.steps,
+    comments: [],
+    status: "proposed",
+    raw
+  }
+}
