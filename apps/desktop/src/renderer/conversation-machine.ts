@@ -13,6 +13,7 @@ import type {
   Message,
   ModelOption,
   PermissionMode,
+  QuestionAnswer,
   Session,
   Skill,
   StreamEvent
@@ -22,6 +23,7 @@ import {
   assistantMessage,
   defaultModel,
   setGateStatus,
+  setQuestionAnswers,
   settleStreaming,
   userMessage
 } from "@starbase/core"
@@ -46,6 +48,7 @@ type ConversationEvent =
   | { type: "SEND"; text: string }
   | { type: "STREAM_EVENT"; event: StreamEvent }
   | { type: "DECIDE_GATE"; gateId: string; decision: GateDecision }
+  | { type: "ANSWER_QUESTION"; requestId: string; answers: ReadonlyArray<QuestionAnswer> }
   | { type: "SET_MODE"; mode: PermissionMode }
   | { type: "SET_MODEL"; model: string }
   | { type: "REFRESH_DIFF" }
@@ -142,6 +145,13 @@ export const conversationMachine = setup({
       const status = gateStatusFor(event.decision)
       return { messages: context.messages.map((m) => setGateStatus(m, event.gateId, status)) }
     }),
+    optimisticAnswer: assign(({ context, event }) => {
+      if (event.type !== "ANSWER_QUESTION") return {}
+      void rpc.agentAnswerQuestion(context.session.id, event.requestId, event.answers)
+      return {
+        messages: context.messages.map((m) => setQuestionAnswers(m, event.requestId, event.answers))
+      }
+    }),
     persistMode: assign(({ context, event }) => {
       if (event.type !== "SET_MODE") return {}
       void rpc.agentSetMode(context.session.id, event.mode)
@@ -208,6 +218,7 @@ export const conversationMachine = setup({
           { actions: "foldEvent" }
         ],
         DECIDE_GATE: { actions: "optimisticGate" },
+        ANSWER_QUESTION: { actions: "optimisticAnswer" },
         SET_MODE: { actions: "persistMode" },
         SET_MODEL: { actions: "persistModel" },
         STOP: { target: "refreshingDiff", actions: "callStop" }

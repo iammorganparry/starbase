@@ -193,6 +193,35 @@ const seededPrSessions = ({ repoPath }: { repoPath: string }): ReadonlyArray<See
   }
 ]
 
+test("AskUserQuestion replaces the composer with a question card and resumes on answer", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The `[[ask]]` marker drives the scripted AskUserQuestion flow.
+  const composer = window.getByPlaceholder("Message Claude…")
+  await composer.fill("[[ask]] migrate the store")
+  await composer.press("Enter")
+
+  // The question card takes over the composer slot.
+  await expect(window.getByText("Claude needs your input")).toBeVisible({ timeout: 15_000 })
+  await expect(window.getByText("Which token strategy should the store use?")).toBeVisible()
+
+  // Q1 (single): pick an option and advance.
+  await window.getByText("Rotating refresh tokens").click()
+  await window.getByRole("button", { name: /Next/ }).click()
+
+  // Q2 (multi): pick one and submit.
+  await expect(window.getByText("Which surfaces should adopt the new store?")).toBeVisible()
+  await window.getByText("HTTP middleware").click()
+  await window.getByRole("button", { name: /Submit/ }).click()
+
+  // The agent resumes with the answers, and the composer returns.
+  await expect(window.getByText(/Got it — starting with/)).toBeVisible({ timeout: 15_000 })
+  await expect(window.getByPlaceholder("Message Claude…")).toBeVisible()
+})
+
 test("a linked PR shows the sidebar badge and the Pull Request / Code Review tabs", async ({
   launchApp
 }) => {

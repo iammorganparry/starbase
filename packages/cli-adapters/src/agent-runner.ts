@@ -2,10 +2,18 @@ import type {
   ApprovalGate,
   GateDecision,
   PermissionMode,
+  QuestionAnswer,
+  QuestionRequest,
   Session,
   StreamEvent
 } from "@starbase/core"
-import { applyStreamEvent, assistantMessage, defaultModel, userMessage } from "@starbase/core"
+import {
+  applyStreamEvent,
+  assistantMessage,
+  defaultModel,
+  setQuestionAnswers,
+  userMessage
+} from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Deferred, Effect, Mailbox, Ref, Stream } from "effect"
@@ -22,6 +30,12 @@ interface PendingGate {
   readonly deferred: Deferred.Deferred<PermissionDecision>
   /** Token added to the session allowlist on an "always" decision. */
   readonly allowLabel: string | null
+}
+
+/** A question group awaiting the user's answers; the `Deferred` resumes the agent. */
+interface PendingQuestion {
+  readonly sessionId: string
+  readonly deferred: Deferred.Deferred<ReadonlyArray<QuestionAnswer>>
 }
 
 /** The first two words of a command — the "Always allow …" token, e.g. "npm test". */
@@ -94,6 +108,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
   effect: Effect.gen(function* () {
     // gateId → the pending gate (shared across prompt/decideGate/stop calls).
     const gates = yield* Ref.make(new Map<string, PendingGate>())
+    // requestId → the pending question group (shared across prompt/answerQuestion/stop).
+    const questions = yield* Ref.make(new Map<string, PendingQuestion>())
     // Per-session live HITL state, seeded from the Session record on first use.
     const modes = yield* Ref.make(new Map<string, PermissionMode>())
     const allowlists = yield* Ref.make(new Map<string, Set<string>>())
@@ -127,13 +143,33 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         yield* Deferred.succeed(entry.deferred, decision === "deny" ? "deny" : "allow")
       })
 
-    /** Deny every pending gate for a session — a graceful stop of a paused run. */
+    /** Submit the user's answers to a pending question group, resuming the agent. */
+    const answerQuestion = (
+      sessionId: string,
+      requestId: string,
+      answers: ReadonlyArray<QuestionAnswer>
+    ) =>
+      Effect.gen(function* () {
+        const entry = (yield* Ref.get(questions)).get(requestId)
+        if (entry === undefined || entry.sessionId !== sessionId) return
+        // The answers are recorded onto the transcript inside `askQuestion` (which
+        // owns the run's message accumulator); here we just resume the agent.
+        yield* Deferred.succeed(entry.deferred, answers)
+      })
+
+    /** Deny every pending gate + question for a session — a graceful stop. */
     const stop = (sessionId: string) =>
       Effect.gen(function* () {
-        const all = yield* Ref.get(gates)
+        const allGates = yield* Ref.get(gates)
         yield* Effect.forEach(
-          [...all.values()].filter((g) => g.sessionId === sessionId),
+          [...allGates.values()].filter((g) => g.sessionId === sessionId),
           (g) => Deferred.succeed(g.deferred, "deny"),
+          { discard: true }
+        )
+        const allQuestions = yield* Ref.get(questions)
+        yield* Effect.forEach(
+          [...allQuestions.values()].filter((q) => q.sessionId === sessionId),
+          (q) => Deferred.succeed(q.deferred, []),
           { discard: true }
         )
       })
@@ -230,7 +266,31 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               return decision
             })
 
-          const run = adapter.run(sessionId, spec, { emit, canUseTool }).pipe(
+          const askQuestion = (
+            request: QuestionRequest
+          ): Effect.Effect<ReadonlyArray<QuestionAnswer>> =>
+            Effect.gen(function* () {
+              const deferred = yield* Deferred.make<ReadonlyArray<QuestionAnswer>>()
+              yield* Ref.update(questions, (m) => new Map(m).set(request.id, { sessionId, deferred }))
+              yield* emit({ _tag: "QuestionRequested", request })
+              const answers = yield* Deferred.await(deferred)
+              yield* Ref.update(questions, (m) => {
+                const next = new Map(m)
+                next.delete(request.id)
+                return next
+              })
+              // Record the answers onto the assistant turn's question part — both
+              // the live accumulator (so later emits don't clobber it) and the
+              // persisted transcript (so a reload doesn't re-show the question).
+              yield* Ref.update(acc, (m) => setQuestionAnswers(m, request.id, answers))
+              yield* TranscriptStore.patchLast(sessionId, (m) => setQuestionAnswers(m, request.id, answers)).pipe(
+                Effect.provide(env),
+                Effect.ignore
+              )
+              return answers
+            })
+
+          const run = adapter.run(sessionId, spec, { emit, canUseTool, askQuestion }).pipe(
             Effect.catchAllCause(() => emit({ _tag: "Failed", message: "The agent run failed." })),
             Effect.ensuring(out.end)
           )
@@ -239,6 +299,6 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         })
       )
 
-    return { prompt, decideGate, setMode, stop } as const
+    return { prompt, decideGate, answerQuestion, setMode, stop } as const
   })
 }) {}

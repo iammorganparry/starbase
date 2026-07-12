@@ -1,4 +1,10 @@
-import type { CliKind, PermissionMode, StreamEvent } from "@starbase/core"
+import type {
+  CliKind,
+  PermissionMode,
+  QuestionAnswer,
+  QuestionRequest,
+  StreamEvent
+} from "@starbase/core"
 import { CliExecError } from "@starbase/core"
 import { Context, Effect, Layer } from "effect"
 
@@ -38,14 +44,24 @@ export type PermissionDecision = "allow" | "deny"
 export type CanUseTool = (req: PermissionRequest) => Effect.Effect<PermissionDecision>
 
 /**
+ * Present a group of structured questions to the user and await the answers
+ * (mirrors the SDK's AskUserQuestion tool). The `AgentRunner` supplies one that
+ * emits a `QuestionRequested` event and parks until the user submits.
+ */
+export type AskQuestion = (
+  request: QuestionRequest
+) => Effect.Effect<ReadonlyArray<QuestionAnswer>>
+
+/**
  * What the adapter is handed for a run: an ordered `emit` sink for normalized
- * events and the `canUseTool` gate. Because the adapter drives a single fiber
- * that interleaves `emit` and `canUseTool` in program order, the transcript
- * order (including where an approval gate lands) is deterministic.
+ * events, the `canUseTool` gate, and `askQuestion` for structured input. Because
+ * the adapter drives a single fiber that interleaves these in program order, the
+ * transcript order (where a gate/question lands) is deterministic.
  */
 export interface AgentContext {
   readonly emit: (event: StreamEvent) => Effect.Effect<void>
   readonly canUseTool: CanUseTool
+  readonly askQuestion: AskQuestion
 }
 
 /**
@@ -77,12 +93,55 @@ export class CliAdapter extends Context.Tag("@starbase/CliAdapter")<
  */
 export const scriptedRun =
   (delayMs: number): CliAdapterShape["run"] =>
-  (sessionId, _spec, { emit, canUseTool }) =>
+  (sessionId, spec, { emit, canUseTool, askQuestion }) =>
     Effect.gen(function* () {
       const pause = delayMs > 0 ? Effect.sleep(`${delayMs} millis`) : Effect.void
 
       yield* emit({ _tag: "Started", sessionId })
       yield* pause
+
+      // A `[[ask]]` marker in the prompt drives the AskUserQuestion flow (used by
+      // the question e2e/tests) instead of the default gated edit/command flow.
+      if (spec.prompt.includes("[[ask]]")) {
+        yield* emit({
+          _tag: "Thinking",
+          text: "Before I start I need a couple of decisions.",
+          seconds: 2,
+          done: true
+        })
+        yield* pause
+        const answers = yield* askQuestion({
+          id: `q_${sessionId}`,
+          questions: [
+            {
+              question: "Which token strategy should the store use?",
+              header: "Strategy",
+              multiSelect: false,
+              options: [
+                { label: "Rotating refresh tokens", description: "New refresh token on every use — most secure." },
+                { label: "Sliding session", description: "Extend expiry on activity, single long-lived token." },
+                { label: "Short-lived access + refresh", description: "15-min access, 7-day refresh. The common default." }
+              ]
+            },
+            {
+              question: "Which surfaces should adopt the new store?",
+              header: "Surfaces",
+              multiSelect: true,
+              options: [
+                { label: "HTTP middleware", description: "Express session guard on the API." },
+                { label: "WebSocket handshake", description: "Auth on the realtime channel." },
+                { label: "Background workers", description: "Queue consumers acting on a user's behalf." }
+              ]
+            }
+          ]
+        })
+        const summary = answers
+          .map((a) => [...a.selected, ...(a.other ? [a.other] : [])].join(", ") || "—")
+          .join(" · ")
+        yield* emit({ _tag: "Assistant", text: `Got it — starting with: ${summary}.` })
+        yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+        return
+      }
       yield* emit({ _tag: "Thinking", text: "No limiter middleware exists yet. ", seconds: null, done: false })
       yield* pause
       yield* emit({

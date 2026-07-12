@@ -10,6 +10,7 @@ import {
   PermissionMode,
   PrFileChange,
   PullRequest,
+  QuestionAnswer,
   Repo,
   ReviewSubmitKind,
   Session,
@@ -140,6 +141,15 @@ export class StarbaseRpcs extends RpcGroup.make(
       sessionId: Schema.String,
       gateId: Schema.String,
       decision: GateDecision
+    }
+  }),
+
+  /** Submit answers to a pending AskUserQuestion group, resuming the agent. */
+  Rpc.make("Agent.answerQuestion", {
+    payload: {
+      sessionId: Schema.String,
+      requestId: Schema.String,
+      answers: Schema.Array(QuestionAnswer)
     }
   }),
 
