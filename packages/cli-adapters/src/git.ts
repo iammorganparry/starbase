@@ -36,24 +36,55 @@ export class GitService extends Effect.Service<GitService>()(
   {
     accessors: true,
     sync: () => {
-      /** Resolve + create the `~/starbase/worktrees/<repo>/<slug>` directory. */
+      /** The `~/starbase/worktrees/<repo>/<slug>` path (pure — no side effects). */
+      const worktreePathFor = (
+        repoName: string,
+        slug: string
+      ): Effect.Effect<string, never, AppPaths | Path.Path> =>
+        Effect.gen(function* () {
+          const paths = yield* AppPaths
+          const path = yield* Path.Path
+          return path.join(paths.worktreesDir, repoName, slug)
+        })
+
+      /** Resolve the worktree path and ensure its parent directory exists. */
       const resolveWorktreePath = (
         input: CreateWorktreeInput
       ): Effect.Effect<string, GitError, AppPaths | Path.Path | FileSystem.FileSystem> =>
         Effect.gen(function* () {
-          const paths = yield* AppPaths
           const path = yield* Path.Path
           const fs = yield* FileSystem.FileSystem
-          const repoWorktreesDir = path.join(paths.worktreesDir, input.repoName)
+          const worktreePath = yield* worktreePathFor(input.repoName, input.slug)
           yield* fs
-            .makeDirectory(repoWorktreesDir, { recursive: true })
+            .makeDirectory(path.dirname(worktreePath), { recursive: true })
             .pipe(
               Effect.mapError(
                 (cause) =>
                   new GitError({ message: "Failed to create worktrees directory", cause })
               )
             )
-          return path.join(repoWorktreesDir, input.slug)
+          return worktreePath
+        })
+
+      /**
+       * Reclaim a leftover worktree directory at `worktreePath` before adding a
+       * new one there — an earlier attempt may have created the worktree but
+       * failed before persisting a session, orphaning the directory. Unregister
+       * it (`git worktree remove --force` + `prune`) and delete any remainder.
+       * All best-effort: a clean path is a no-op. The caller is responsible for
+       * not calling this on a path a live session still owns.
+       */
+      const reclaimStaleWorktree = (
+        repoPath: string,
+        worktreePath: string
+      ): Effect.Effect<void, never, FileSystem.FileSystem | CommandExecutor.CommandExecutor> =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const exists = yield* fs.exists(worktreePath).pipe(Effect.orElseSucceed(() => false))
+          if (!exists) return
+          yield* runGit(repoPath, ["worktree", "remove", "--force", worktreePath]).pipe(Effect.ignore)
+          yield* runGit(repoPath, ["worktree", "prune"]).pipe(Effect.ignore)
+          yield* fs.remove(worktreePath, { recursive: true }).pipe(Effect.ignore)
         })
 
       /**
@@ -85,6 +116,7 @@ export class GitService extends Effect.Service<GitService>()(
         Effect.gen(function* () {
           const branch = `starbase/${input.slug}`
           const worktreePath = yield* resolveWorktreePath(input)
+          yield* reclaimStaleWorktree(input.repoPath, worktreePath)
           yield* runGit(input.repoPath, [
             "worktree",
             "add",
@@ -109,6 +141,7 @@ export class GitService extends Effect.Service<GitService>()(
       ): Effect.Effect<Worktree, GitError, GitEnv> =>
         Effect.gen(function* () {
           const worktreePath = yield* resolveWorktreePath(input)
+          yield* reclaimStaleWorktree(input.repoPath, worktreePath)
           yield* runGit(input.repoPath, [
             "worktree",
             "add",
@@ -148,7 +181,7 @@ export class GitService extends Effect.Service<GitService>()(
       ): Effect.Effect<void, GitError, CommandExecutor.CommandExecutor> =>
         runGit(cwd, ["checkout", "--ignore-other-worktrees", branch]).pipe(Effect.asVoid)
 
-      return { createWorktree, createDetachedWorktree, branchAt, checkoutBranch }
+      return { worktreePathFor, createWorktree, createDetachedWorktree, branchAt, checkoutBranch }
     }
   }
 ) {}
