@@ -103,6 +103,50 @@ describe("AgentRunner HITL gating", () => {
   })
 })
 
+describe("AgentRunner AskUserQuestion", () => {
+  it("emits QuestionRequested, resumes on answer, and records it in the transcript", async () => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      makeScriptedCliAdapter(0),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      const events: Array<StreamEvent> = []
+      yield* runner.prompt(SESSION, "[[ask]] migrate the store").pipe(
+        // Answer each question group as it arrives.
+        Stream.tap((ev) =>
+          ev._tag === "QuestionRequested"
+            ? runner.answerQuestion(SESSION, ev.request.id, [
+                { selected: ["Rotating refresh tokens"], other: null },
+                { selected: ["HTTP middleware"], other: null }
+              ])
+            : Effect.void
+        ),
+        Stream.runForEach((e) => Effect.sync(() => events.push(e)))
+      )
+      const transcript = yield* TranscriptStore.list(SESSION)
+      return { events, transcript }
+    })
+    const { events, transcript } = await Effect.runPromise(program.pipe(Effect.provide(base)))
+
+    // The run paused for a question and then completed.
+    expect(events.some((e) => e._tag === "QuestionRequested")).toBe(true)
+    expect(events.some((e) => e._tag === "Done")).toBe(true)
+    // The transcript's question part carries the recorded answers (so a reload
+    // won't re-show it as pending).
+    const qpart = transcript.flatMap((m) => m.parts).find((p) => p._tag === "Question")
+    expect(qpart).toBeDefined()
+    if (qpart && qpart._tag === "Question") {
+      expect(qpart.answers).not.toBeNull()
+      expect(qpart.answers?.[0]?.selected).toStrictEqual(["Rotating refresh tokens"])
+    }
+  })
+})
+
 describe("AgentRunner ids", () => {
   // The id counter is in-memory (resets on app restart) but the transcript
   // persists — so a run after a restart must not re-emit colliding ids, which

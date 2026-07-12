@@ -1,4 +1,4 @@
-import type { DiffStat, PermissionMode, StreamEvent } from "@starbase/core"
+import type { DiffStat, PermissionMode, Question, StreamEvent } from "@starbase/core"
 import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
@@ -46,6 +46,33 @@ export const toPermissionRequest = (
     return { kind: "command", tool: "Bash", target: strOf(input.command), command: strOf(input.command) }
   }
   return null
+}
+
+/**
+ * Parse the SDK AskUserQuestion dialog payload (`{ questions: [...] }`) into our
+ * `Question[]`. Defensive — the payload is transported opaquely, so every field
+ * is treated as possibly-absent. Returns [] when there's nothing renderable.
+ */
+export const parseSdkQuestions = (payload: Record<string, unknown>): ReadonlyArray<Question> => {
+  const raw = Array.isArray(payload.questions) ? (payload.questions as Array<Record<string, unknown>>) : []
+  return raw
+    .map((q): Question => {
+      const opts = Array.isArray(q.options) ? (q.options as Array<Record<string, unknown>>) : []
+      return {
+        question: strOf(q.question) ?? "",
+        header: strOf(q.header) ?? "",
+        multiSelect: q.multiSelect === true,
+        options: opts.map((o) => {
+          const preview = strOf(o.preview)
+          return {
+            label: strOf(o.label) ?? "",
+            description: strOf(o.description) ?? "",
+            ...(preview ? { preview } : {})
+          }
+        })
+      }
+    })
+    .filter((q) => q.question.length > 0 && q.options.length > 0)
 }
 
 const toolTarget = (name: string, input: Record<string, unknown>): string | null => {
@@ -237,6 +264,34 @@ export const runClaude = (
             : { behavior: "deny", message: "Denied by the operator." }
         }
 
+        // Surface the AskUserQuestion tool's structured questions as a docked
+        // question card and return the user's answers. The dialog `result` shape
+        // is defined per dialogKind by the CLI (transported opaquely); we return
+        // the selected answers per question as a best-effort completion.
+        let qn = 0
+        const onUserDialog = async (request: {
+          dialogKind: string
+          payload: Record<string, unknown>
+          toolUseID?: string
+        }): Promise<{ behavior: "completed"; result: unknown } | { behavior: "cancelled" }> => {
+          const questions = parseSdkQuestions(request.payload)
+          if (questions.length === 0) return { behavior: "cancelled" }
+          qn += 1
+          const answers = await runP(
+            ctx.askQuestion({ id: request.toolUseID ?? `q_${sessionId}_${qn}`, questions })
+          )
+          return {
+            behavior: "completed",
+            result: {
+              questions: answers.map((a, i) => ({
+                header: questions[i]?.header,
+                question: questions[i]?.question,
+                answers: [...a.selected, ...(a.other ? [a.other] : [])]
+              }))
+            }
+          }
+        }
+
         const iterator = query({
           prompt: spec.prompt,
           options: {
@@ -247,6 +302,8 @@ export const runClaude = (
             ...(spec.mode === "auto" ? { allowDangerouslySkipPermissions: true } : {}),
             includePartialMessages: true,
             canUseTool,
+            onUserDialog,
+            supportedDialogKinds: ["ask_user_question"],
             abortController: abort,
             resume: resume.get(sessionId)
           }

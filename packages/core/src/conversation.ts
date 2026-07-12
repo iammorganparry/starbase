@@ -66,6 +66,42 @@ export const ApprovalGate = Schema.Struct({
 })
 export type ApprovalGate = Schema.Schema.Type<typeof ApprovalGate>
 
+// ── Ask-user-question (structured multiple-choice, like the SDK tool) ─────────
+
+/** One choice in a question. `preview` is optional rich content for comparison. */
+export const QuestionOption = Schema.Struct({
+  label: Schema.String,
+  description: Schema.String,
+  preview: Schema.optional(Schema.String)
+})
+export type QuestionOption = Schema.Schema.Type<typeof QuestionOption>
+
+/** A single question with 2–4 options; `multiSelect` allows picking several. */
+export const Question = Schema.Struct({
+  /** The full question text (ends with "?"). */
+  question: Schema.String,
+  /** A short chip label (≤12 chars), e.g. "Auth method". */
+  header: Schema.String,
+  options: Schema.Array(QuestionOption),
+  multiSelect: Schema.Boolean
+})
+export type Question = Schema.Schema.Type<typeof Question>
+
+/** The agent's answer to one question: selected option labels + optional "Other". */
+export const QuestionAnswer = Schema.Struct({
+  selected: Schema.Array(Schema.String),
+  /** Free-text "Other" answer, or null. */
+  other: Schema.NullOr(Schema.String)
+})
+export type QuestionAnswer = Schema.Schema.Type<typeof QuestionAnswer>
+
+/** A group of 1–4 questions the agent asked (one AskUserQuestion invocation). */
+export const QuestionRequest = Schema.Struct({
+  id: Schema.String,
+  questions: Schema.Array(Question)
+})
+export type QuestionRequest = Schema.Schema.Type<typeof QuestionRequest>
+
 // ── Content parts (ordered, interleaved) ─────────────────────────────────────
 
 export const TextPart = Schema.TaggedStruct("Text", { text: Schema.String })
@@ -85,8 +121,18 @@ export type ToolPart = Schema.Schema.Type<typeof ToolPart>
 export const GatePart = Schema.TaggedStruct("Gate", { gate: ApprovalGate })
 export type GatePart = Schema.Schema.Type<typeof GatePart>
 
-/** One ordered piece of a turn — text, thinking, a tool card, or a gate. */
-export const ContentPart = Schema.Union(TextPart, ThinkingPart, ToolPart, GatePart)
+/**
+ * A pending (or answered) AskUserQuestion. `answers` is null while awaiting the
+ * user, then one `QuestionAnswer` per question once submitted.
+ */
+export const QuestionPart = Schema.TaggedStruct("Question", {
+  request: QuestionRequest,
+  answers: Schema.NullOr(Schema.Array(QuestionAnswer))
+})
+export type QuestionPart = Schema.Schema.Type<typeof QuestionPart>
+
+/** One ordered piece of a turn — text, thinking, a tool card, a gate, or a question. */
+export const ContentPart = Schema.Union(TextPart, ThinkingPart, ToolPart, GatePart, QuestionPart)
 export type ContentPart = Schema.Schema.Type<typeof ContentPart>
 
 /** One turn in the transcript: an ordered list of content parts. */
@@ -137,6 +183,7 @@ export const StreamEvent = Schema.Union(
     preview: Schema.NullOr(Schema.String)
   }),
   Schema.TaggedStruct("GateRequested", { gate: ApprovalGate }),
+  Schema.TaggedStruct("QuestionRequested", { request: QuestionRequest }),
   Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )
@@ -244,6 +291,11 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       return { ...msg, parts: [...parts, part] }
     }),
 
+    Match.tag("QuestionRequested", (e) => {
+      const part: QuestionPart = { _tag: "Question", request: e.request, answers: null }
+      return { ...msg, parts: [...parts, part] }
+    }),
+
     Match.tag("Done", () => ({ ...msg, streaming: false })),
 
     Match.tag("Failed", (e) => {
@@ -262,3 +314,27 @@ export const setGateStatus = (msg: Message, gateId: string, status: GateStatus):
     p._tag === "Gate" && p.gate.id === gateId ? { _tag: "Gate", gate: { ...p.gate, status } } : p
   )
 })
+
+/** Record the answers on a pending question part (after the user submits them). */
+export const setQuestionAnswers = (
+  msg: Message,
+  requestId: string,
+  answers: ReadonlyArray<QuestionAnswer>
+): Message => ({
+  ...msg,
+  parts: msg.parts.map((p) =>
+    p._tag === "Question" && p.request.id === requestId ? { ...p, answers } : p
+  )
+})
+
+/** The first unanswered question group across a transcript, or null. */
+export const pendingQuestion = (
+  messages: ReadonlyArray<Message>
+): QuestionRequest | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    for (const part of messages[i]!.parts) {
+      if (part._tag === "Question" && part.answers === null) return part.request
+    }
+  }
+  return null
+}

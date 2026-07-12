@@ -1,10 +1,20 @@
 import { useLayoutEffect, useRef, useState } from "react"
-import type { CliKind, GateDecision, Message, ModelOption, PermissionMode, Skill } from "@starbase/core"
+import type {
+  CliKind,
+  GateDecision,
+  Message,
+  ModelOption,
+  PermissionMode,
+  QuestionAnswer,
+  QuestionRequest,
+  Skill
+} from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
 import { PanelRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Composer } from "../composites/composer.js"
+import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { DiffPanel } from "./diff-panel.js"
 import type { DiffActions } from "../diff/diff-view.js"
@@ -29,6 +39,9 @@ export interface ConversationViewProps {
   onSend?: (text: string) => void
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onSetMode?: (mode: PermissionMode) => void
+  /** A pending AskUserQuestion — replaces the composer with the question card. */
+  question?: QuestionRequest | null
+  onAnswerQuestion?: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
   /** Revert / comment interactions for the Changes rail (worktree diff). */
   changeActions?: DiffActions
 }
@@ -65,6 +78,8 @@ export function ConversationView({
   onSend,
   onDecideGate,
   onSetMode,
+  question,
+  onAnswerQuestion,
   changeActions
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -156,17 +171,24 @@ export function ConversationView({
         </div>
 
         <div className="flex-none px-[22px] pb-[18px] pt-[11px]">
-          <Composer
-            skills={skills}
-            files={files}
-            paused={paused}
-            model={model}
-            models={models}
-            onSetModel={onSetModel}
-            mode={mode}
-            onSetMode={onSetMode}
-            onSend={onSend}
-          />
+          {question ? (
+            <QuestionCard
+              request={question}
+              onSubmit={(answers) => onAnswerQuestion?.(question.id, answers)}
+            />
+          ) : (
+            <Composer
+              skills={skills}
+              files={files}
+              paused={paused}
+              model={model}
+              models={models}
+              onSetModel={onSetModel}
+              mode={mode}
+              onSetMode={onSetMode}
+              onSend={onSend}
+            />
+          )}
         </div>
       </div>
 

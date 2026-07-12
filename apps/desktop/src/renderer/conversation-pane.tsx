@@ -51,6 +51,8 @@ export function ConversationPane({ session }: { session: Session }) {
       onSend={convo.sendPrompt}
       onDecideGate={convo.decideGate}
       onSetMode={convo.setMode}
+      question={convo.question}
+      onAnswerQuestion={convo.answerQuestion}
       changeActions={changeActions}
     />
   )

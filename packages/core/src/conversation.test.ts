@@ -8,10 +8,13 @@ import {
   StreamEvent,
   applyStreamEvent,
   assistantMessage,
+  pendingQuestion,
   setGateStatus,
+  setQuestionAnswers,
   settleStreaming,
   userMessage
 } from "./conversation.js"
+import type { QuestionRequest } from "./conversation.js"
 
 /**
  * These schemas cross the RPC boundary and back persistence (transcripts.json),
@@ -212,6 +215,42 @@ describe("message constructors", () => {
     expect(msg.role).toBe("user")
     expect(msg.streaming).toBe(false)
     expect(msg.parts).toStrictEqual([{ _tag: "Text", text: "hello" }])
+  })
+})
+
+describe("AskUserQuestion flow", () => {
+  const now = "2026-07-11T10:00:00.000Z"
+  const request: QuestionRequest = {
+    id: "q1",
+    questions: [
+      {
+        question: "Which strategy?",
+        header: "Strategy",
+        multiSelect: false,
+        options: [
+          { label: "Rotating", description: "secure" },
+          { label: "Sliding", description: "simple" }
+        ]
+      }
+    ]
+  }
+
+  it("folds QuestionRequested into a pending Question part", () => {
+    const msg = applyStreamEvent(assistantMessage("a0", now), { _tag: "QuestionRequested", request })
+    const part = msg.parts.find((p) => p._tag === "Question")
+    expect(part).toBeDefined()
+    expect(part).toMatchObject({ _tag: "Question", answers: null })
+    // pendingQuestion surfaces it across the transcript.
+    expect(pendingQuestion([msg])?.id).toBe("q1")
+  })
+
+  it("records answers and clears the pending question", () => {
+    const asked = applyStreamEvent(assistantMessage("a0", now), { _tag: "QuestionRequested", request })
+    const answered = setQuestionAnswers(asked, "q1", [{ selected: ["Rotating"], other: null }])
+    const part = answered.parts.find((p) => p._tag === "Question")
+    expect(part).toMatchObject({ answers: [{ selected: ["Rotating"], other: null }] })
+    // No longer pending.
+    expect(pendingQuestion([answered])).toBeNull()
   })
 })
 

@@ -16,6 +16,7 @@ import type {
   PermissionMode,
   PrFileChange,
   PullRequest,
+  QuestionAnswer,
   Repo,
   ReviewSubmitKind,
   Session,
@@ -111,6 +112,11 @@ export const rpc = {
   usageGet: (): Promise<Usage> => run((c) => c.Usage.get()),
   agentDecideGate: (sessionId: string, gateId: string, decision: GateDecision): Promise<void> =>
     run((c) => c.Agent.decideGate({ sessionId, gateId, decision })),
+  agentAnswerQuestion: (
+    sessionId: string,
+    requestId: string,
+    answers: ReadonlyArray<QuestionAnswer>
+  ): Promise<void> => run((c) => c.Agent.answerQuestion({ sessionId, requestId, answers })),
   agentSetMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     run((c) => c.Agent.setMode({ sessionId, mode })),
   agentSetModel: (sessionId: string, model: string): Promise<void> =>

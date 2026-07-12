@@ -12,10 +12,13 @@ import type {
   Message,
   ModelOption,
   PermissionMode,
+  QuestionAnswer,
+  QuestionRequest,
   Session,
   SessionStatus,
   Skill
 } from "@starbase/core"
+import { pendingQuestion } from "@starbase/core"
 import { conversationMachine } from "./conversation-machine.js"
 
 export interface Conversation {
@@ -32,6 +35,9 @@ export interface Conversation {
   readonly busy: boolean
   /** The agent is paused awaiting a HITL decision. */
   readonly paused: boolean
+  /** A pending AskUserQuestion group (the composer is replaced while set), or null. */
+  readonly question: QuestionRequest | null
+  readonly answerQuestion: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
   /** Live status for the sidebar/tab bar, or null when idle (use persisted). */
   readonly status: SessionStatus | null
   readonly sendPrompt: (text: string) => void
@@ -55,8 +61,10 @@ export function useConversation(session: Session): Conversation {
     )
   }, [messages])
 
+  const question = useMemo(() => pendingQuestion(messages), [messages])
   const busy = state.matches("running")
-  const status: SessionStatus | null = paused ? "needs-input" : busy ? "thinking" : null
+  const status: SessionStatus | null =
+    paused || question ? "needs-input" : busy ? "thinking" : null
 
   return {
     messages,
@@ -68,9 +76,11 @@ export function useConversation(session: Session): Conversation {
     patch,
     busy,
     paused,
+    question,
     status,
     sendPrompt: (text) => send({ type: "SEND", text }),
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
+    answerQuestion: (requestId, answers) => send({ type: "ANSWER_QUESTION", requestId, answers }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),
     setModel: (m) => send({ type: "SET_MODEL", model: m }),
     stop: () => send({ type: "STOP" }),
