@@ -8,7 +8,6 @@ import type {
   Repo
 } from "@starbase/core"
 import { useMachine } from "@xstate/react"
-import { Search } from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import {
@@ -28,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue
 } from "../components/select.js"
+import { SearchInput } from "../components/search-input.js"
 import { SegmentedControl } from "../components/segmented-control.js"
 import { Toggle } from "../components/toggle.js"
 import { ProviderIcon } from "../components/provider-icon.js"
@@ -259,15 +259,11 @@ export function NewSessionDialog({
                     />
                   </label>
                 </div>
-                <div className="flex items-center gap-2 rounded-md border border-line bg-sunken px-2.5 py-[7px] text-[12.5px] focus-within:border-line-strong">
-                  <Search size={13} className="text-dim" />
-                  <input
-                    value={search}
-                    onChange={(e) => send({ type: "SET_SEARCH", search: e.target.value })}
-                    placeholder="Search open pull requests…"
-                    className="min-w-0 flex-1 bg-transparent text-text-body outline-none placeholder:text-dim"
-                  />
-                </div>
+                <SearchInput
+                  value={search}
+                  onChange={(v) => send({ type: "SET_SEARCH", search: v })}
+                  placeholder="Search open pull requests…"
+                />
                 <PrPickerList
                   prs={prs}
                   selected={selectedPr?.number ?? null}

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { useMachine } from "@xstate/react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   CreateSessionFromPrInput,
   CreateSessionInput,
@@ -72,6 +72,15 @@ export function App() {
   const onPrLinked = (sessionId: string, prNumber: number) =>
     send({ type: "SESSION_PR_LINKED", sessionId, prNumber })
 
+  const restoreSession = async (sessionId: string) => {
+    const session = await rpc.sessionsRestore(sessionId)
+    send({ type: "SESSION_UPDATED", session })
+  }
+  const deleteSession = async (sessionId: string) => {
+    await rpc.sessionsDelete(sessionId)
+    send({ type: "SESSION_DELETED", sessionId })
+  }
+
   const connected = ghStatus.available && ghStatus.authenticated
   const autoDetect = connected && (githubConfig?.autoDetectPr ?? true)
 
@@ -89,6 +98,43 @@ export function App() {
       })
     }
   }, [autoDetect, sessions, send])
+
+  // Archive sweep: once a linked PR is merged or closed, auto-archive the session
+  // so it drops into the sidebar's "Archived" group (read-only, kept). react-query
+  // owns the per-session PR-state reads (cached + retried); `combine` distils them
+  // to the sessions that need archiving, and a mutation performs the archive.
+  const sweepTargets = useMemo(
+    () => sessions.filter((s) => s.prNumber != null && Boolean(s.worktreePath) && !s.archived),
+    [sessions]
+  )
+  const toArchive = useQueries({
+    queries: sweepTargets.map((s) => ({
+      queryKey: ["pr-state", s.id, s.prNumber] as const,
+      queryFn: () => rpc.githubPrState(s.id),
+      enabled: connected,
+      staleTime: 5 * 60_000
+    })),
+    combine: (results) =>
+      sweepTargets.flatMap((s, i) => {
+        const state = results[i]?.data
+        return state === "merged" || state === "closed" ? [{ id: s.id, reason: state }] : []
+      })
+  })
+  const archiveMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: "merged" | "closed" }) =>
+      rpc.sessionsArchive(id, reason),
+    onSuccess: (session) => send({ type: "SESSION_UPDATED", session })
+  })
+  // Fire the archive once per session (the ref guards against re-firing while the
+  // SESSION_UPDATED that removes it from `sweepTargets` is still propagating).
+  const archivedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    for (const { id, reason } of toArchive) {
+      if (archivedRef.current.has(id)) continue
+      archivedRef.current.add(id)
+      archiveMutation.mutate({ id, reason })
+    }
+  }, [toArchive, archiveMutation])
 
   if (state.matches("loading") || state.matches("starting")) {
     return <LoadingScreen />
@@ -137,12 +183,15 @@ export function App() {
       onCreateSession={createSession}
       loadPrs={connected ? rpc.githubListPrs : undefined}
       onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
-      renderConversation={(session: Session) => <ConversationPane session={session} />}
+      renderConversation={(session: Session) => (
+        <ConversationPane session={session} onRestore={restoreSession} onDelete={deleteSession} />
+      )}
       renderPullRequest={(session, ctx) => (
         <PullRequestPane
           session={session}
           connected={connected}
           autoDetect={autoDetect}
+          viewerLogin={ghStatus.login}
           onConnectGithub={ctx.onConnectGithub}
           onPrLinked={onPrLinked}
         />

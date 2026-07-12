@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -256,6 +258,70 @@ describe("SessionStore", () => {
     if (exit._tag === "Success") expect(exit.value.branch).toBe("chore/bump")
     // It retried with the ignore-other-worktrees checkout after gh failed.
     expect(calls.some((c) => c.includes("checkout --ignore-other-worktrees chore/bump"))).toBe(true)
+  })
+
+  it("archive sets archived + reason + archivedAt; restore clears them", async () => {
+    const created = await runExit(
+      SessionStore.create(input({ title: "Archive Me" })).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(created._tag).toBe("Success")
+    if (created._tag !== "Success") return
+    const id = created.value.id
+
+    const archived = await runExit(
+      Effect.gen(function* () {
+        yield* SessionStore.archive(id, "merged")
+        return yield* SessionStore.get(id)
+      }).pipe(Effect.provide(SessionStore.Default)),
+      temp.layer
+    )
+    expect(archived._tag).toBe("Success")
+    if (archived._tag === "Success") {
+      expect(archived.value.archived).toBe(true)
+      expect(archived.value.archiveReason).toBe("merged")
+      expect(typeof archived.value.archivedAt).toBe("string")
+    }
+
+    const restored = await runExit(
+      Effect.gen(function* () {
+        yield* SessionStore.restore(id)
+        return yield* SessionStore.get(id)
+      }).pipe(Effect.provide(SessionStore.Default)),
+      temp.layer
+    )
+    expect(restored._tag).toBe("Success")
+    if (restored._tag === "Success") {
+      expect(restored.value.archived).toBe(false)
+      expect(restored.value.archiveReason).toBeUndefined()
+    }
+  })
+
+  it("remove deletes the session record and its worktree", async () => {
+    const created = await runExit(
+      SessionStore.create(input({ title: "Delete Me" })).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(created._tag).toBe("Success")
+    if (created._tag !== "Success") return
+    const worktreePath = created.value.worktreePath!
+    expect(existsSync(worktreePath)).toBe(true)
+
+    const removed = await runExit(
+      Effect.gen(function* () {
+        yield* SessionStore.remove(created.value.id)
+        return yield* SessionStore.list()
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(removed._tag).toBe("Success")
+    if (removed._tag === "Success") {
+      expect(removed.value.some((s) => s.id === created.value.id)).toBe(false)
+    }
+    // The worktree was removed from disk + unregistered in the origin repo.
+    expect(existsSync(worktreePath)).toBe(false)
+    const worktrees = execFileSync("git", ["worktree", "list"], { cwd: repoPath, encoding: "utf-8" })
+    expect(worktrees).not.toContain(worktreePath)
   })
 
   it("createFromPr surfaces the error when allowSharedCheckout is off", async () => {

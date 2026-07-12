@@ -418,6 +418,21 @@ export class GhService extends Effect.Service<GhService>()(
           )
         ).pipe(Effect.map((raw) => arr(raw).map(mapPrSummary))),
 
+      /**
+       * The lifecycle state of PR `number` — cheap check (`gh pr view --json
+       * state`) used by the archive sweep to spot merged/closed PRs. Never fails.
+       */
+      prState: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<PrState | null, never, CommandExecutor.CommandExecutor> =>
+        ghJson(cwd, ["pr", "view", String(number), "--json", "state"]).pipe(
+          Effect.map((raw) => {
+            const s = str(rec(raw).state)?.toUpperCase()
+            return s === "MERGED" ? "merged" : s === "CLOSED" ? "closed" : s === "OPEN" ? "open" : null
+          })
+        ),
+
       /** The full `PullRequest` view model for `number`, or null on any failure. */
       prView: (
         cwd: string,

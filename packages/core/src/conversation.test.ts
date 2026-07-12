@@ -11,6 +11,7 @@ import {
   pendingQuestion,
   setGateStatus,
   setQuestionAnswers,
+  settleLoaded,
   settleStreaming,
   userMessage
 } from "./conversation.js"
@@ -286,5 +287,102 @@ describe("settleStreaming", () => {
       parts: [{ _tag: "Text", text: "done" }]
     }
     expect(settleStreaming(doneAssistant)).toBe(doneAssistant)
+  })
+})
+
+describe("settleLoaded", () => {
+  const now = "2026-07-11T10:00:00.000Z"
+
+  it("rejects an orphaned pending gate so its dead approve/deny buttons disappear", () => {
+    const stuck: Message = {
+      id: "a0",
+      role: "assistant",
+      streaming: false,
+      createdAt: now,
+      parts: [
+        { _tag: "Text", text: "I'll run this" },
+        {
+          _tag: "Gate",
+          gate: {
+            id: "g_s_1",
+            kind: "command",
+            title: "run a command",
+            detail: "Not in your allowlist.",
+            allowLabel: "find",
+            command: "find .",
+            status: "pending"
+          }
+        }
+      ]
+    }
+    const settled = settleLoaded(stuck)
+    // The gate is resolved (rejected) — no live run can ever answer it.
+    expect(settled.parts[1]).toMatchObject({ _tag: "Gate", gate: { status: "rejected" } })
+    // Surrounding content is preserved.
+    expect(settled.parts[0]).toStrictEqual({ _tag: "Text", text: "I'll run this" })
+  })
+
+  it("marks an orphaned pending question answered-with-nothing", () => {
+    const stuck: Message = {
+      id: "a1",
+      role: "assistant",
+      streaming: false,
+      createdAt: now,
+      parts: [
+        {
+          _tag: "Question",
+          request: {
+            id: "q_s_1",
+            questions: [
+              { question: "Which?", header: "Pick", multiSelect: false, options: [{ label: "A", description: "a" }] }
+            ]
+          },
+          answers: null
+        }
+      ]
+    }
+    const settled = settleLoaded(stuck)
+    expect(settled.parts[0]).toMatchObject({ _tag: "Question", answers: [] })
+    // pendingQuestion no longer surfaces it (so the composer returns).
+    expect(pendingQuestion([settled])).toBe(null)
+  })
+
+  it("still clears a mid-stream turn (superset of settleStreaming)", () => {
+    const stuck: Message = {
+      id: "a2",
+      role: "assistant",
+      streaming: true,
+      createdAt: now,
+      parts: [{ _tag: "Thinking", text: "reasoning", seconds: null, streaming: true }]
+    }
+    const settled = settleLoaded(stuck)
+    expect(settled.streaming).toBe(false)
+    expect(settled.parts[0]).toMatchObject({ _tag: "Thinking", streaming: false })
+  })
+
+  it("returns a clean / already-resolved message unchanged (same reference)", () => {
+    const resolved: Message = {
+      id: "a3",
+      role: "assistant",
+      streaming: false,
+      createdAt: now,
+      parts: [
+        {
+          _tag: "Gate",
+          gate: {
+            id: "g_s_2",
+            kind: "command",
+            title: "run a command",
+            detail: "Approved.",
+            allowLabel: null,
+            command: "ls",
+            status: "approved"
+          }
+        }
+      ]
+    }
+    expect(settleLoaded(resolved)).toBe(resolved)
+    const cleanUser = userMessage("m1", "hi", now)
+    expect(settleLoaded(cleanUser)).toBe(cleanUser)
   })
 })

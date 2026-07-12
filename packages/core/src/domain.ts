@@ -79,9 +79,23 @@ export const Session = Schema.Struct({
   /** Commands the operator chose to "Always allow" for this session. */
   allowlist: Schema.optional(Schema.Array(Schema.String)),
   /** The harness model id for this session; defaults to the harness default. */
-  model: Schema.optional(Schema.String)
+  model: Schema.optional(Schema.String),
+  /**
+   * Whether the session is archived — set automatically once its linked PR is
+   * merged or closed. Archived sessions are read-only (collapsed into the
+   * "Archived" sidebar group) but never deleted; the user restores or deletes them.
+   */
+  archived: Schema.optional(Schema.Boolean),
+  /** Why the session was archived (drives the "Merged"/"Closed" pill). */
+  archiveReason: Schema.optional(Schema.Literal("merged", "closed")),
+  /** ISO-8601 timestamp the session was archived (for the "2d ago" label). */
+  archivedAt: Schema.optional(Schema.String)
 })
 export type Session = Schema.Schema.Type<typeof Session>
+
+/** Why a session was archived — matches `Session.archiveReason`. */
+export const ArchiveReason = Schema.Literal("merged", "closed")
+export type ArchiveReason = Schema.Schema.Type<typeof ArchiveReason>
 
 // ── Workspace ────────────────────────────────────────────────────────────────
 

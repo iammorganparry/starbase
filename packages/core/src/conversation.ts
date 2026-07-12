@@ -226,6 +226,38 @@ export const settleStreaming = (msg: Message): Message => {
   }
 }
 
+/**
+ * Settle a persisted message for display when NO live run is attached — i.e. a
+ * fresh transcript load. Beyond clearing streaming flags (`settleStreaming`), it
+ * resolves orphaned interactive parts: the runner that held their unblocking
+ * `Deferred` died with the previous process, so a still-`pending` gate or an
+ * unanswered question can never be resumed. A pending gate becomes `rejected`
+ * (its command never ran) and a pending question is marked answered-with-nothing,
+ * so neither renders dead approve/deny buttons the user could click to no effect.
+ * Returns the same object when there is nothing to settle.
+ */
+export const settleLoaded = (msg: Message): Message => {
+  const base = settleStreaming(msg)
+  const orphaned = base.parts.some(
+    (p) =>
+      (p._tag === "Gate" && p.gate.status === "pending") ||
+      (p._tag === "Question" && p.answers === null)
+  )
+  if (!orphaned) return base
+  return {
+    ...base,
+    parts: base.parts.map((p) => {
+      if (p._tag === "Gate" && p.gate.status === "pending") {
+        return { ...p, gate: { ...p.gate, status: "rejected" as const } }
+      }
+      if (p._tag === "Question" && p.answers === null) {
+        return { ...p, answers: [] as ReadonlyArray<QuestionAnswer> }
+      }
+      return p
+    })
+  }
+}
+
 const replaceLast = (
   parts: ReadonlyArray<ContentPart>,
   next: ContentPart

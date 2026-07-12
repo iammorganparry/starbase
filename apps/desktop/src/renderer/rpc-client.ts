@@ -5,6 +5,7 @@
  * `StarbaseRpcs` group. Callers get plain, typed Promises back.
  */
 import type {
+  ArchiveReason,
   CliInfo,
   CliKind,
   CreateSessionFromPrInput,
@@ -17,6 +18,7 @@ import type {
   ModelOption,
   PermissionMode,
   PrFileChange,
+  PrState,
   PrSummary,
   PullRequest,
   QuestionAnswer,
@@ -97,6 +99,12 @@ export const rpc = {
     run((c) => c.Sessions.create(input)),
   sessionsCreateFromPr: (input: CreateSessionFromPrInput): Promise<Session> =>
     run((c) => c.Sessions.createFromPr(input)),
+  sessionsArchive: (sessionId: string, reason: ArchiveReason): Promise<Session> =>
+    run((c) => c.Sessions.archive({ sessionId, reason })),
+  sessionsRestore: (sessionId: string): Promise<Session> =>
+    run((c) => c.Sessions.restore({ sessionId })),
+  sessionsDelete: (sessionId: string): Promise<void> =>
+    run((c) => c.Sessions.delete({ sessionId })),
   sessionsTranscript: (id: string): Promise<ReadonlyArray<Message>> =>
     run((c) => c.Sessions.transcript({ id })),
   sessionsDiff: (id: string): Promise<string> => run((c) => c.Sessions.diff({ id })),
@@ -134,6 +142,8 @@ export const rpc = {
     run((c) => c.Config.setGit(git)),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
     run((c) => c.Github.pr({ sessionId })),
+  githubPrState: (sessionId: string): Promise<PrState | null> =>
+    run((c) => c.Github.prState({ sessionId })),
   githubListPrs: (
     repoPath: string,
     opts: { mine: boolean; search: string }

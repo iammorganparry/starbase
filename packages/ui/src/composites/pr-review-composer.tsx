@@ -11,18 +11,33 @@ import { Toggle } from "../components/toggle.js"
  */
 export function PrReviewComposer({
   connected,
+  selfAuthored = false,
   onSubmit
 }: {
   connected: boolean
+  /**
+   * The viewer authored this PR. GitHub forbids approving / requesting changes on
+   * your own pull request, so those actions are disabled (Comment stays allowed).
+   */
+  selfAuthored?: boolean
   onSubmit: (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => Promise<void> | void
 }) {
   const [body, setBody] = React.useState("")
   const [routeToAgent, setRouteToAgent] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
 
   const submit = async (kind: ReviewSubmitKind) => {
     if (!connected) return
-    await onSubmit({ body: body.trim(), kind, routeToAgent })
-    setBody("")
+    setError(null)
+    try {
+      await onSubmit({ body: body.trim(), kind, routeToAgent })
+      setBody("")
+    } catch (e) {
+      // Surface the real reason (e.g. "Can not approve your own pull request")
+      // instead of the button's silent shake.
+      setError(e instanceof Error ? e.message : "Failed to submit review.")
+      throw e // let the AsyncButton show its error state too
+    }
   }
 
   return (
@@ -37,6 +52,11 @@ export function PrReviewComposer({
       {!connected && (
         <div className="px-[14px] pb-[11px]">
           <Callout tone="blue">Connect GitHub to post reviews.</Callout>
+        </div>
+      )}
+      {error && (
+        <div className="px-[14px] pb-[11px]">
+          <Callout tone="red">{error}</Callout>
         </div>
       )}
       <div className="flex items-center gap-[9px] border-t border-hairline px-[14px] py-[11px]">
@@ -54,24 +74,30 @@ export function PrReviewComposer({
         >
           Comment
         </AsyncButton>
-        <AsyncButton
-          variant="danger"
-          disabled={!connected}
-          pendingLabel="Requesting…"
-          successLabel="Requested"
-          onClick={() => submit("request-changes")}
-        >
-          Request changes
-        </AsyncButton>
-        <AsyncButton
-          variant="primary"
-          disabled={!connected}
-          pendingLabel="Approving…"
-          successLabel="Approved"
-          onClick={() => submit("approve")}
-        >
-          Approve
-        </AsyncButton>
+        {/* Approve / request-changes are hidden on your own PR — GitHub forbids
+            self-approval, so only Comment is offered. */}
+        {!selfAuthored && (
+          <>
+            <AsyncButton
+              variant="danger"
+              disabled={!connected}
+              pendingLabel="Requesting…"
+              successLabel="Requested"
+              onClick={() => submit("request-changes")}
+            >
+              Request changes
+            </AsyncButton>
+            <AsyncButton
+              variant="primary"
+              disabled={!connected}
+              pendingLabel="Approving…"
+              successLabel="Approved"
+              onClick={() => submit("approve")}
+            >
+              Approve
+            </AsyncButton>
+          </>
+        )}
       </div>
     </div>
   )

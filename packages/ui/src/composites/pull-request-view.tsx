@@ -73,6 +73,8 @@ export interface PullRequestViewProps {
   pr: PullRequest | null
   connected: boolean
   busy?: boolean
+  /** The authenticated GitHub login — to detect the viewer's own PR (no self-approve). */
+  viewerLogin?: string | null
   /** A failed `gh pr create`, shown in the empty state (e.g. "already exists"). */
   createError?: string | null
   /** The owning session's title, for the "routed to <session>" copy. */
@@ -96,6 +98,7 @@ export function PullRequestView({
   pr,
   connected,
   busy = false,
+  viewerLogin,
   createError,
   onCreatePr,
   onConnectGithub,
@@ -221,6 +224,7 @@ export function PullRequestView({
           <div className="sticky bottom-0 mt-auto pt-2">
             <PrReviewComposer
               connected={connected}
+              selfAuthored={Boolean(viewerLogin) && viewerLogin === pr.author.login}
               onSubmit={(input) => onSubmitReview?.(input)}
             />
           </div>

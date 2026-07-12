@@ -59,6 +59,8 @@ export const appMachine = setup({
       | { type: "CONTINUE" }
       | { type: "SESSION_CREATED"; session: Session }
       | { type: "SESSION_PR_LINKED"; sessionId: string; prNumber: number }
+      | { type: "SESSION_UPDATED"; session: Session }
+      | { type: "SESSION_DELETED"; sessionId: string }
       | { type: "RETRY" }
   },
   actors: { initialLoad, chooseDir, loadSessions }
@@ -157,6 +159,18 @@ export const appMachine = setup({
             sessions: context.sessions.map((s) =>
               s.id === event.sessionId ? { ...s, prNumber: event.prNumber } : s
             )
+          }))
+        },
+        // Replace a session with its updated record (archive / restore).
+        SESSION_UPDATED: {
+          actions: assign(({ context, event }) => ({
+            sessions: context.sessions.map((s) => (s.id === event.session.id ? event.session : s))
+          }))
+        },
+        // Drop a permanently-deleted session from the list.
+        SESSION_DELETED: {
+          actions: assign(({ context, event }) => ({
+            sessions: context.sessions.filter((s) => s.id !== event.sessionId)
           }))
         }
       }

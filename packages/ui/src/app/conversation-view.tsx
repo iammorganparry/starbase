@@ -11,11 +11,14 @@ import type {
 } from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
-import { PanelRight } from "lucide-react"
+import { Lock, PanelRight, RotateCcw } from "lucide-react"
+import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
+import { Button } from "../components/button.js"
 import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
+import { ArchivedBanner } from "../composites/archived-banner.js"
 import { DiffPanel } from "./diff-panel.js"
 import type { DiffActions } from "../diff/diff-view.js"
 
@@ -44,6 +47,17 @@ export interface ConversationViewProps {
   onAnswerQuestion?: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
   /** Revert / comment interactions for the Changes rail (worktree diff). */
   changeActions?: DiffActions
+  /**
+   * When set, the session is archived (its PR merged/closed): a banner is shown,
+   * the transcript dims to read-only, and the composer is replaced by a locked bar.
+   */
+  archived?: {
+    reason: ArchiveReason
+    prNumber: number | null
+    base?: string | null
+    onRestore?: () => void
+    onDelete?: () => void
+  }
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
@@ -80,7 +94,8 @@ export function ConversationView({
   onSetMode,
   question,
   onAnswerQuestion,
-  changeActions
+  changeActions,
+  archived
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevCount = useRef(messages.length)
@@ -133,8 +148,17 @@ export function ConversationView({
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
+        {archived && (
+          <ArchivedBanner
+            reason={archived.reason}
+            prNumber={archived.prNumber}
+            base={archived.base}
+            onRestore={archived.onRestore}
+            onDelete={archived.onDelete}
+          />
+        )}
         {/* Slim bar just for the Changes toggle — only when there are changes. */}
-        {hasChanges && (
+        {!archived && hasChanges && (
           <div className="flex flex-none items-center justify-end border-b border-hairline px-[30px] py-2">
             <button
               type="button"
@@ -148,7 +172,13 @@ export function ConversationView({
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-auto px-[30px] py-[26px]">
+        <div
+          ref={scrollRef}
+          className={cn(
+            "flex-1 overflow-auto px-[30px] py-[26px]",
+            archived && "opacity-60"
+          )}
+        >
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const m = messages[item.index]!
@@ -171,7 +201,28 @@ export function ConversationView({
         </div>
 
         <div className="flex-none px-[22px] pb-[18px] pt-[11px]">
-          {question ? (
+          {archived ? (
+            <div className="flex items-center gap-2.5 rounded-xl border border-line bg-sunken px-[14px] py-3 text-[12.5px] text-muted-foreground">
+              <Lock size={14} className="flex-none text-dim" />
+              <span className="min-w-0 flex-1">
+                Composer disabled — this session is archived.{" "}
+                <button
+                  type="button"
+                  onClick={archived.onRestore}
+                  className="text-blue outline-none hover:underline"
+                >
+                  Restore it
+                </button>{" "}
+                to send messages.
+              </span>
+              {archived.onRestore && (
+                <Button variant="secondary" size="sm" className="gap-1.5" onClick={archived.onRestore}>
+                  <RotateCcw size={12} />
+                  Restore
+                </Button>
+              )}
+            </div>
+          ) : question ? (
             <QuestionCard
               request={question}
               onSubmit={(answers) => onAnswerQuestion?.(question.id, answers)}
@@ -192,7 +243,7 @@ export function ConversationView({
         </div>
       </div>
 
-      {hasChanges && showChanges && (
+      {!archived && hasChanges && showChanges && (
         <DiffPanel patch={patch} added={counts.added} removed={counts.removed} actions={changeActions} />
       )}
     </div>

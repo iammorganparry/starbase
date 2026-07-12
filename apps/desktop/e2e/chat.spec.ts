@@ -288,3 +288,141 @@ test("the sidebar Settings cog opens the settings view with the GitHub section",
   await expect(dialog.getByText("GitHub", { exact: true })).toBeVisible()
   await expect(dialog.getByText("Enable pull-request features")).toBeVisible()
 })
+
+test("an orphaned pending gate settles on load (its dead buttons disappear)", async ({
+  launchApp
+}) => {
+  // A transcript persisted with a still-pending gate — as if the app was closed
+  // (or relaunched) while an approval was waiting. The live run that held the
+  // gate's Deferred is gone, so its approve/deny buttons would be dead no-ops.
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    transcripts: {
+      s_seeded: [
+        {
+          id: "a_gate",
+          role: "assistant",
+          streaming: false,
+          createdAt: "2026-07-11T00:00:00.000Z",
+          parts: [
+            { _tag: "Text", text: "I'll run a command." },
+            {
+              _tag: "Gate",
+              gate: {
+                id: "g_s_seeded_1",
+                kind: "command",
+                title: "run a command",
+                detail: "Not in your allowlist.",
+                command: "find . -name orphaned-gate",
+                allowLabel: "find",
+                status: "pending"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  })
+
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  // The seeded session auto-selects; its transcript (with the gate) loads.
+  await expect(window.getByText("find . -name orphaned-gate")).toBeVisible()
+
+  // On load the gate is settled → shown resolved ("Denied"), NOT "waiting", and
+  // its approve/deny buttons are gone (they could never resolve a dead run).
+  await expect(window.getByText("Denied")).toBeVisible()
+  await expect(window.getByText("waiting")).toHaveCount(0)
+  await expect(window.getByRole("button", { name: /Allow once/ })).toHaveCount(0)
+  await expect(window.getByRole("button", { name: "Deny" })).toHaveCount(0)
+})
+
+test("an archived session shows in the Archived group, read-only, and restores", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: ({ repoPath }) => [
+      {
+        id: "s_arch",
+        repo: "widget",
+        branch: "feat/oauth",
+        title: "Refactor auth flow",
+        status: "idle",
+        cli: "claude",
+        diff: { added: 0, removed: 0 },
+        prNumber: 482,
+        costUsd: 0,
+        tokens: 0,
+        updatedAt: "2026-07-11T00:00:00.000Z",
+        worktreePath: repoPath,
+        baseBranch: "main",
+        archived: true,
+        archiveReason: "merged",
+        archivedAt: "2026-07-10T00:00:00.000Z"
+      }
+    ]
+  })
+
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The session sits in the "Archived" sidebar group with a Merged pill.
+  await expect(window.getByText("Archived", { exact: true })).toBeVisible()
+  await expect(window.getByText("Merged #482")).toBeVisible()
+
+  // It auto-selects → the archived banner + locked composer render (read-only).
+  await expect(window.getByText(/was merged/)).toBeVisible()
+  await expect(window.getByText(/Composer disabled/)).toBeVisible()
+
+  // Restore it → archived state clears (banner + lock gone, real composer back).
+  await window.getByRole("button", { name: "Restore session" }).click()
+  await expect(window.getByText(/Composer disabled/)).toHaveCount(0)
+  await expect(window.getByText("Merged #482")).toHaveCount(0)
+})
+
+test("a merged PR auto-archives its linked session on load", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    // gh reports this PR as merged; the sweep should archive the session.
+    gh: {
+      login: "e2e-user",
+      prs: [
+        {
+          number: 500,
+          title: "Old shipped work",
+          headRefName: "chore/shipped",
+          baseRefName: "main",
+          author: { login: "e2e-user" },
+          state: "MERGED"
+        }
+      ]
+    },
+    sessions: ({ repoPath }) => [
+      {
+        id: "s_open",
+        repo: "widget",
+        branch: "chore/shipped",
+        title: "Old shipped work",
+        status: "idle",
+        cli: "claude",
+        diff: { added: 0, removed: 0 },
+        prNumber: 500,
+        costUsd: 0,
+        tokens: 0,
+        updatedAt: "2026-07-11T00:00:00.000Z",
+        worktreePath: repoPath,
+        baseBranch: "main"
+        // NOT archived — the sweep must archive it because PR #500 is merged.
+      }
+    ]
+  })
+
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The archive sweep detects the merged PR → the session moves into Archived.
+  await expect(window.getByText("Archived", { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(window.getByText("Merged #500")).toBeVisible()
+})

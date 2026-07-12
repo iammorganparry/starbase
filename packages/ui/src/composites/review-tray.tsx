@@ -27,7 +27,7 @@ export function ReviewTray({
 }) {
   const count = drafts.length
   return (
-    <div className="flex w-[300px] flex-none flex-col border-l border-hairline bg-panel">
+    <div className="flex h-full w-full min-w-0 flex-col bg-panel">
       <div className="flex h-[42px] flex-none items-center gap-2 border-b border-hairline px-[15px]">
         <span className="flex-1 text-[12px] font-semibold text-text-bright">Your review</span>
         {count > 0 && (

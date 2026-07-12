@@ -1,5 +1,7 @@
 import type { Session, SessionStatus } from "@starbase/core"
+import { GitMerge } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { relativeTime } from "../lib/relative-time.js"
 import { StatusDot } from "../components/status-dot.js"
 import { Badge } from "../components/badge.js"
 import { DiffStat } from "../components/diff-stat.js"
@@ -22,6 +24,43 @@ export function SessionRow({
   className?: string
 }) {
   const status = statusOverride ?? session.status
+
+  // Archived variant (A2 in the design): purple git-merge mark, muted title, a
+  // Merged/Closed pill, and how long ago it was archived. Read-only — no status.
+  if (session.archived) {
+    const closed = session.archiveReason === "closed"
+    return (
+      <div
+        onClick={() => onSelect?.(session.id)}
+        className={cn(
+          "flex cursor-pointer flex-col gap-[6px] rounded-lg border px-2.5 py-2 transition-colors",
+          active ? "border-blue/[0.32] bg-surface" : "border-transparent hover:bg-surface/40",
+          className
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <GitMerge size={13} className={cn("flex-none", closed ? "text-red" : "text-purple")} />
+          <span
+            className={cn(
+              "flex-1 truncate text-[13px]",
+              active ? "font-medium text-text" : "text-muted-foreground"
+            )}
+          >
+            {session.title}
+          </span>
+        </div>
+        <div className="flex items-center gap-[7px] font-mono text-[10.5px] text-muted-foreground">
+          <Badge tone={closed ? "red" : "purple"} size="sm">
+            {closed ? "Closed" : "Merged"}
+            {session.prNumber !== null ? ` #${session.prNumber}` : ""}
+          </Badge>
+          <div className="flex-1" />
+          {session.archivedAt && <span>{relativeTime(session.archivedAt)}</span>}
+        </div>
+      </div>
+    )
+  }
+
   const idle = status === "idle"
   const hasMeta = session.prNumber !== null || session.diff.added > 0 || session.diff.removed > 0
   return (
