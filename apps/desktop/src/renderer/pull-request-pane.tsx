@@ -11,12 +11,15 @@ export function PullRequestPane({
   session,
   connected,
   autoDetect,
+  viewerLogin,
   onConnectGithub,
   onPrLinked
 }: {
   session: Session
   connected: boolean
   autoDetect: boolean
+  /** The authenticated GitHub login (to disable approving your own PR). */
+  viewerLogin?: string | null
   onConnectGithub: () => void
   onPrLinked: (sessionId: string, prNumber: number) => void
 }) {
@@ -28,6 +31,7 @@ export function PullRequestPane({
       pr={pr}
       connected={connected}
       busy={busy}
+      viewerLogin={viewerLogin}
       createError={createError}
       sessionTitle={session.title}
       onCreatePr={createPr}

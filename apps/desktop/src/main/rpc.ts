@@ -25,7 +25,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { GhError } from "@starbase/core"
+import { GhError, GitError } from "@starbase/core"
 import type { CreateSessionFromPrInput, ReviewSubmitKind } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
@@ -142,6 +142,40 @@ export const githubPr = (sessionId: string) =>
     return yield* GhService.prView(session.worktreePath, session.prNumber)
   })
 
+/**
+ * `Github.prState` handler — the lifecycle state of a session's linked PR (or
+ * null when there's no worktree / linked PR). Drives the archive sweep. Exported
+ * for tests.
+ */
+export const githubPrState = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath || session.prNumber === null) return null
+    return yield* GhService.prState(session.worktreePath, session.prNumber)
+  })
+
+/** `Sessions.archive` handler — archive a session and return the updated record. */
+export const archiveSession = (sessionId: string, reason: "merged" | "closed") =>
+  Effect.gen(function* () {
+    yield* SessionStore.archive(sessionId, reason)
+    return yield* SessionStore.get(sessionId)
+  }).pipe(
+    Effect.catchTag("SessionNotFoundError", () =>
+      Effect.fail(new GitError({ message: "Session not found" }))
+    )
+  )
+
+/** `Sessions.restore` handler — un-archive a session and return the updated record. */
+export const restoreSession = (sessionId: string) =>
+  Effect.gen(function* () {
+    yield* SessionStore.restore(sessionId)
+    return yield* SessionStore.get(sessionId)
+  }).pipe(
+    Effect.catchTag("SessionNotFoundError", () =>
+      Effect.fail(new GitError({ message: "Session not found" }))
+    )
+  )
+
 /** `Github.files` handler — the PR's changed files (empty without a linked PR). */
 export const githubFiles = (sessionId: string) =>
   Effect.gen(function* () {
@@ -244,6 +278,9 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.get": ({ id }) => SessionStore.get(id),
   "Sessions.create": (input) => SessionStore.create(input),
   "Sessions.createFromPr": (input) => createSessionFromPr(input),
+  "Sessions.archive": ({ sessionId, reason }) => archiveSession(sessionId, reason),
+  "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
+  "Sessions.delete": ({ sessionId }) => SessionStore.remove(sessionId),
   "Sessions.transcript": ({ id }) => TranscriptStore.list(id),
   "Sessions.diff": ({ id }) => sessionDiff(id),
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
@@ -267,6 +304,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setGithub": (github) => ConfigService.setGithub(github),
   "Config.setGit": (git) => ConfigService.setGit(git),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
+  "Github.prState": ({ sessionId }) => githubPrState(sessionId),
   "Github.listPrs": ({ repoPath, mine, search }) => GhService.listPrs(repoPath, { mine, search }),
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),

@@ -178,6 +178,19 @@ describe("GhService pull-request reads", () => {
     expect(miss._tag === "Success" && miss.value).toBe(null)
   })
 
+  it("prState maps MERGED / CLOSED / OPEN and folds anything else to null", async () => {
+    const view = (state: string): FakeCommandHandler => (cmd, args) =>
+      cmd === "gh" && args[1] === "view" ? { stdout: JSON.stringify({ state }) } : undefined
+    const merged = await providePr(GhService.prState("/wt", 1), view("MERGED"))
+    expect(merged._tag === "Success" && merged.value).toBe("merged")
+    const closed = await providePr(GhService.prState("/wt", 1), view("CLOSED"))
+    expect(closed._tag === "Success" && closed.value).toBe("closed")
+    const open = await providePr(GhService.prState("/wt", 1), view("OPEN"))
+    expect(open._tag === "Success" && open.value).toBe("open")
+    const bad = await providePr(GhService.prState("/wt", 1), () => ({ stdout: "not json" }))
+    expect(bad._tag === "Success" && bad.value).toBe(null)
+  })
+
   it("prView decodes and maps the PR, folding a non-zero exit to null", async () => {
     const ok = await providePr(GhService.prView("/wt", 482), (cmd, args) =>
       cmd === "gh" && args[1] === "view" ? { stdout: JSON.stringify(RAW_PR) } : undefined

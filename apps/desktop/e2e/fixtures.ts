@@ -21,7 +21,11 @@ export interface SeedSession {
   readonly tokens: number
   readonly updatedAt: string
   readonly worktreePath?: string
+  readonly baseBranch?: string
   readonly mode?: "ask" | "accept-edits" | "auto"
+  readonly archived?: boolean
+  readonly archiveReason?: "merged" | "closed"
+  readonly archivedAt?: string
 }
 
 export interface LaunchOptions {
@@ -36,6 +40,12 @@ export interface LaunchOptions {
   readonly sessions?:
     | ReadonlyArray<SeedSession>
     | ((ctx: { reposDir: string; repoPath: string }) => ReadonlyArray<SeedSession>)
+  /**
+   * Seed persisted transcripts, keyed by session id → the message array written to
+   * `~/starbase/transcripts/<id>.json`. Lets a test load a conversation with, e.g.,
+   * an orphaned pending gate (to assert it settles on load).
+   */
+  readonly transcripts?: Record<string, ReadonlyArray<unknown>>
   /** Seed extra fixtures (e.g. project skills) after repo creation, before launch. */
   readonly seed?: (ctx: { reposDir: string; repoPath: string }) => void
   /**
@@ -115,6 +125,7 @@ const installFakeGh = (
     if (repoPath) git(repoPath, ["branch", p.headRefName, "main"])
   }
   const heads = prs.map((p) => `${p.number}:${p.headRefName}`).join(",")
+  const states = prs.map((p) => `${p.number}:${p.state}`).join(",")
   const script = `#!/usr/bin/env bash
 case "$1" in
   --version) echo "gh version 2.60.0 (2026-01-01)"; exit 0;;
@@ -127,6 +138,11 @@ fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   printf '%s' "$STARBASE_E2E_GH_PRS"; exit 0
 fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  st=$(printf '%s' "$STARBASE_E2E_GH_STATES" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
+  [ -z "$st" ] && st="OPEN"
+  printf '{"state":"%s"}' "$st"; exit 0
+fi
 if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
   ref=$(printf '%s' "$STARBASE_E2E_GH_HEADS" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
   git checkout "$ref" >/dev/null 2>&1; exit $?
@@ -138,7 +154,8 @@ exit 0
   chmodSync(ghPath, 0o755)
   return {
     STARBASE_E2E_GH_PRS: JSON.stringify(prs),
-    STARBASE_E2E_GH_HEADS: heads
+    STARBASE_E2E_GH_HEADS: heads,
+    STARBASE_E2E_GH_STATES: states
   }
 }
 
@@ -174,6 +191,13 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
             : options.sessions
         mkdirSync(starbaseDir, { recursive: true })
         writeFileSync(join(starbaseDir, "sessions.json"), JSON.stringify(sessions, null, 2))
+      }
+      if (options.transcripts) {
+        const dir = join(starbaseDir, "transcripts")
+        mkdirSync(dir, { recursive: true })
+        for (const [sessionId, messages] of Object.entries(options.transcripts)) {
+          writeFileSync(join(dir, `${sessionId}.json`), JSON.stringify(messages, null, 2))
+        }
       }
 
       // Seed extra fixtures (e.g. project skills) before launch, so they exist

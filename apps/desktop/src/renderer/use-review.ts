@@ -89,12 +89,45 @@ export interface ReviewState {
 
 const localKey = (sessionId: string) => ["local", "diff", sessionId] as const
 
+/** localStorage key for the set of paths marked "viewed" in a session's review. */
+const viewedStorageKey = (sessionId: string) => `sb.review.viewed.${sessionId}`
+
+const readViewed = (sessionId: string): ReadonlySet<string> => {
+  try {
+    const raw = localStorage.getItem(viewedStorageKey(sessionId))
+    const arr = raw ? (JSON.parse(raw) as unknown) : []
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [])
+  } catch {
+    return new Set()
+  }
+}
+
 export function useReview(session: Session): ReviewState {
   const qc = useQueryClient()
   const [source, setSourceRaw] = useState<ReviewSource>("pr")
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<ReadonlyArray<ReviewDraft>>([])
+  const [viewedPaths, setViewedPaths] = useState<ReadonlySet<string>>(() => readViewed(session.id))
   const seq = useRef(0)
+
+  // "Viewed" is a reviewer-local marker (gh/git don't report it) — persist it per
+  // session in localStorage so ticking a file off survives tab switches + reloads.
+  const toggleViewed = useCallback(
+    (path: string, viewed: boolean) => {
+      setViewedPaths((prev) => {
+        const next = new Set(prev)
+        if (viewed) next.add(path)
+        else next.delete(path)
+        try {
+          localStorage.setItem(viewedStorageKey(session.id), JSON.stringify([...next]))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    },
+    [session.id]
+  )
 
   const prQuery = useQuery({
     queryKey: ["github", "review", session.id],
@@ -124,7 +157,12 @@ export function useReview(session: Session): ReviewState {
         ? "local"
         : source
 
-  const files = effective === "local" ? localFiles : prFiles
+  const sourceFiles = effective === "local" ? localFiles : prFiles
+  // Overlay the reviewer's local "viewed" markers onto the source's file list.
+  const files = useMemo(
+    () => sourceFiles.map((f) => (viewedPaths.has(f.path) ? { ...f, viewed: true } : f)),
+    [sourceFiles, viewedPaths]
+  )
   const fullDiff = effective === "local" ? localDiff : prDiff
   const activePath = selectedPath ?? files[0]?.path ?? null
   const fileDiff = useMemo(() => sliceDiffForFile(fullDiff, activePath), [fullDiff, activePath])
@@ -191,8 +229,7 @@ export function useReview(session: Session): ReviewState {
     drafts,
     busy: prQuery.isPending || localQuery.isPending,
     selectFile: setSelectedPath,
-    // v1: "viewed" isn't persisted — the file list reflects gh/git data only.
-    toggleViewed: () => {},
+    toggleViewed,
     addDraft,
     removeDraft,
     finishReview,

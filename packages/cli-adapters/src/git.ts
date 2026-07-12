@@ -4,7 +4,7 @@ import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { AppPaths } from "./app-paths.js"
-import { gitLine, runGit } from "./command.js"
+import { gitLine, runGit, runString } from "./command.js"
 
 /** Parameters for forking an isolated worktree from a repo. */
 export interface CreateWorktreeInput {
@@ -181,7 +181,41 @@ export class GitService extends Effect.Service<GitService>()(
       ): Effect.Effect<void, GitError, CommandExecutor.CommandExecutor> =>
         runGit(cwd, ["checkout", "--ignore-other-worktrees", branch]).pipe(Effect.asVoid)
 
-      return { worktreePathFor, createWorktree, createDetachedWorktree, branchAt, checkoutBranch }
+      /**
+       * Remove the worktree at `worktreePath` (deleting a session). Resolves the
+       * owning repo from the worktree list — `git worktree remove` must run from
+       * the main working tree, not from inside the worktree being removed — then
+       * `--force`s the removal. Best-effort: a missing/dirty worktree is ignored.
+       */
+      const removeWorktreeAt = (
+        worktreePath: string
+      ): Effect.Effect<void, GitError, CommandExecutor.CommandExecutor> =>
+        Effect.gen(function* () {
+          // The first `worktree <path>` line of the porcelain list is the main tree.
+          const listRaw = yield* runString(
+            "git",
+            "-C",
+            worktreePath,
+            "worktree",
+            "list",
+            "--porcelain"
+          )
+          const mainPath = listRaw?.split("\n")[0]?.replace(/^worktree\s+/, "").trim() ?? null
+          if (mainPath && mainPath !== worktreePath) {
+            yield* runGit(mainPath, ["worktree", "remove", "--force", worktreePath]).pipe(
+              Effect.ignore
+            )
+          }
+        })
+
+      return {
+        worktreePathFor,
+        createWorktree,
+        createDetachedWorktree,
+        branchAt,
+        checkoutBranch,
+        removeWorktreeAt
+      }
     }
   }
 ) {}

@@ -68,7 +68,7 @@ export function SessionConversation(props: SessionConversationProps) {
   const activeStatus = (active && props.liveStatus?.[active.id]) ?? active?.status
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex min-h-0 min-w-0 flex-1">
       <SessionSidebar
         sessions={props.sessions}
         activeSessionId={props.activeSessionId}
@@ -112,7 +112,7 @@ export function SessionConversation(props: SessionConversationProps) {
               measurement cache and stacks rows. `key={activeTab}` guarantees React
               tears the subtree down and repaints it on every tab change.
             */}
-            <div key={activeTab} className="flex min-h-0 flex-1">
+            <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
               {activeTab === "conversation" ? (
                 (props.conversationPane ?? (
                   <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />

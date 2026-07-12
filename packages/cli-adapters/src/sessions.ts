@@ -223,7 +223,61 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       const setPrNumber = (id: string, prNumber: number | null) =>
         update(id, (s) => ({ ...s, prNumber }))
 
-      return { list, get, create, createFromPr, setMode, setModel, addAllowlist, setPrNumber }
+      /** Archive a session (its linked PR was merged/closed) — read-only, kept. */
+      const archive = (id: string, reason: "merged" | "closed") =>
+        Effect.gen(function* () {
+          const now = yield* Effect.sync(() => new Date().toISOString())
+          yield* update(id, (s) => ({
+            ...s,
+            archived: true,
+            archiveReason: reason,
+            archivedAt: now
+          }))
+        })
+
+      /** Restore an archived session back to an editable state. */
+      const restore = (id: string) =>
+        update(id, (s) => ({
+          ...s,
+          archived: false,
+          archiveReason: undefined,
+          archivedAt: undefined
+        }))
+
+      /**
+       * Permanently delete a session: remove its worktree (best-effort) and drop
+       * it from the store. Irreversible — the UI gates this behind a confirm.
+       */
+      const remove = (
+        id: string
+      ): Effect.Effect<
+        void,
+        GitError,
+        GitService | FileSystem.FileSystem | Path.Path | CommandExecutor.CommandExecutor | AppPaths
+      > =>
+        Effect.gen(function* () {
+          const all = yield* readAll()
+          const target = all.find((s) => s.id === id)
+          if (!target) return
+          if (target.worktreePath) {
+            yield* GitService.removeWorktreeAt(target.worktreePath).pipe(Effect.ignore)
+          }
+          yield* writeAll(all.filter((s) => s.id !== id))
+        })
+
+      return {
+        list,
+        get,
+        create,
+        createFromPr,
+        setMode,
+        setModel,
+        addAllowlist,
+        setPrNumber,
+        archive,
+        restore,
+        remove
+      }
     }
   }
 ) {}

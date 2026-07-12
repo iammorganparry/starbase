@@ -1,9 +1,31 @@
+import * as React from "react"
 import type { Session, SessionStatus } from "@starbase/core"
-import { GitBranch, Gauge, Layers, Plus, Search, Settings } from "lucide-react"
+import { Archive, GitBranch, Gauge, Layers, Plus, Search, Settings } from "lucide-react"
+import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
 import { StatusDot } from "../components/status-dot.js"
+import { SearchInput } from "../components/search-input.js"
+import { SegmentedControl } from "../components/segmented-control.js"
 import { SessionRow } from "../composites/session-row.js"
+
+type GroupBy = "repo" | "status"
+
+/** Status groups render in this order (most-active first). */
+const STATUS_ORDER: ReadonlyArray<SessionStatus> = [
+  "needs-input",
+  "thinking",
+  "running",
+  "idle",
+  "done"
+]
+const STATUS_LABEL: Record<SessionStatus, string> = {
+  "needs-input": "Needs input",
+  thinking: "Thinking",
+  running: "Running",
+  idle: "Idle",
+  done: "Done"
+}
 
 export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
@@ -35,7 +57,46 @@ export function SessionSidebar({
   ghConnected = false,
   version
 }: SessionSidebarProps) {
-  const groups = groupByRepo(sessions)
+  const [filter, setFilter] = React.useState("")
+  const [groupBy, setGroupBy] = React.useState<GroupBy>("repo")
+  const filterRef = React.useRef<HTMLInputElement>(null)
+
+  // ⌘K / Ctrl-K focuses the filter.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        filterRef.current?.focus()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  const statusOf = React.useCallback(
+    (s: Session): SessionStatus => liveStatus?.[s.id] ?? s.status,
+    [liveStatus]
+  )
+
+  const filtered = React.useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return sessions
+    return sessions.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.branch.toLowerCase().includes(q) ||
+        s.repo.toLowerCase().includes(q)
+    )
+  }, [sessions, filter])
+
+  // Archived sessions collapse into their own group at the bottom, regardless of
+  // the active grouping; everything else is grouped by repo / status.
+  const activeSessions = React.useMemo(() => filtered.filter((s) => !s.archived), [filtered])
+  const archivedSessions = React.useMemo(() => filtered.filter((s) => s.archived), [filtered])
+  const groups = React.useMemo(
+    () => (groupBy === "status" ? groupByStatus(activeSessions, statusOf) : groupByRepo(activeSessions)),
+    [activeSessions, groupBy, statusOf]
+  )
 
   return (
     <div className="flex w-[266px] flex-none flex-col border-r border-hairline bg-panel">
@@ -63,17 +124,23 @@ export function SessionSidebar({
 
       {/* Filter + group-by */}
       <div className="flex flex-col gap-2 px-3 pb-2">
-        <div className="flex items-center gap-2 rounded-md border border-line bg-sunken px-2.5 py-[7px] text-[12.5px] text-dim">
-          <Search size={13} />
-          <span className="flex-1">Filter sessions…</span>
-          <Kbd>⌘K</Kbd>
-        </div>
+        <SearchInput
+          ref={filterRef}
+          value={filter}
+          onChange={setFilter}
+          placeholder="Filter sessions…"
+          kbd={<Kbd>⌘K</Kbd>}
+        />
         <div className="flex items-center gap-[7px]">
           <span className="font-mono text-[9.5px] tracking-[0.4px] text-muted-foreground">GROUP BY</span>
-          <span className="rounded-md border border-line bg-surface px-2.5 py-0.5 text-[11px] text-text-bright">
-            Repository
-          </span>
-          <span className="px-1 py-0.5 text-[11px] text-dim">Status</span>
+          <SegmentedControl<GroupBy>
+            value={groupBy}
+            onChange={setGroupBy}
+            items={[
+              { value: "repo", label: "Repository" },
+              { value: "status", label: "Status" }
+            ]}
+          />
         </div>
       </div>
 
@@ -98,13 +165,32 @@ export function SessionSidebar({
               </span>
             </div>
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="m-auto flex flex-col items-center gap-2.5 px-4 text-center">
+            <Search size={20} className="text-line-strong" />
+            <span className="text-[12px] leading-[1.5] text-muted-foreground">
+              No sessions match “{filter.trim()}”.
+            </span>
+          </div>
         ) : (
-          groups.map(([repo, list]) => (
-          <div key={repo}>
+          <>
+          {groups.map(([key, list]) => (
+          <div key={key}>
             <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
               <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
-              <GitBranch size={12} className="text-cyan" />
-              <span className="flex-1 font-mono text-[11.5px] font-semibold text-text">{repo}</span>
+              {groupBy === "status" ? (
+                <StatusDot status={key as SessionStatus} size={8} />
+              ) : (
+                <GitBranch size={12} className="text-cyan" />
+              )}
+              <span
+                className={cn(
+                  "flex-1 text-[11.5px] font-semibold text-text",
+                  groupBy === "status" ? "" : "font-mono"
+                )}
+              >
+                {groupBy === "status" ? STATUS_LABEL[key as SessionStatus] : key}
+              </span>
               <Badge tone="count" size="xs">
                 {list.length}
               </Badge>
@@ -121,7 +207,31 @@ export function SessionSidebar({
               ))}
             </div>
           </div>
-          ))
+          ))}
+
+          {archivedSessions.length > 0 && (
+            <div>
+              <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
+                <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
+                <Archive size={12} className="text-purple" />
+                <span className="flex-1 text-[11.5px] font-semibold text-text">Archived</span>
+                <Badge tone="count" size="xs">
+                  {archivedSessions.length}
+                </Badge>
+              </div>
+              <div className="mb-1 flex flex-col gap-[3px]">
+                {archivedSessions.map((s) => (
+                  <SessionRow
+                    key={s.id}
+                    session={s}
+                    active={s.id === activeSessionId}
+                    onSelect={onSelect}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          </>
         )}
       </div>
 
@@ -171,4 +281,19 @@ function groupByRepo(sessions: ReadonlyArray<Session>): ReadonlyArray<readonly [
     map.set(s.repo, list)
   }
   return [...map.entries()]
+}
+
+/** Group by effective status, ordered most-active first; empty statuses omitted. */
+function groupByStatus(
+  sessions: ReadonlyArray<Session>,
+  statusOf: (s: Session) => SessionStatus
+): ReadonlyArray<readonly [string, ReadonlyArray<Session>]> {
+  const map = new Map<SessionStatus, Session[]>()
+  for (const s of sessions) {
+    const status = statusOf(s)
+    const list = map.get(status) ?? []
+    list.push(s)
+    map.set(status, list)
+  }
+  return STATUS_ORDER.filter((s) => map.has(s)).map((s) => [s, map.get(s)!] as const)
 }

@@ -72,6 +72,24 @@ describe("GitService.createWorktree", () => {
     expect(existsSync(join(exit.value.path, "node_modules"))).toBe(false)
   })
 
+  it("removeWorktreeAt deletes a worktree and unregisters it from the origin repo", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "rm"))
+    const created = await create(repoPath, "rm")
+    expect(created._tag).toBe("Success")
+    if (created._tag !== "Success") return
+    const worktreePath = created.value.path
+    expect(existsSync(worktreePath)).toBe(true)
+
+    const removed = await runExit(
+      GitService.removeWorktreeAt(worktreePath).pipe(Effect.provide(GitService.Default)),
+      temp.layer
+    )
+    expect(removed._tag).toBe("Success")
+    expect(existsSync(worktreePath)).toBe(false)
+    const list = execFileSync("git", ["worktree", "list"], { cwd: repoPath, encoding: "utf-8" })
+    expect(list).not.toContain(worktreePath)
+  })
+
   it("createDetachedWorktree reclaims a leftover worktree at the same path (retry-safe)", async () => {
     const repoPath = initGitRepo(join(repos.dir, "retry"))
     const detached = () =>
