@@ -71,4 +71,38 @@ describe("GitService.createWorktree", () => {
     if (exit._tag !== "Success") return
     expect(existsSync(join(exit.value.path, "node_modules"))).toBe(false)
   })
+
+  it("createDetachedWorktree reclaims a leftover worktree at the same path (retry-safe)", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "retry"))
+    const detached = () =>
+      runExit(
+        GitService.createDetachedWorktree({
+          repoPath,
+          repoName: "retry",
+          slug: "from-pr",
+          baseBranch: "main"
+        }).pipe(Effect.provide(GitService.Default)),
+        temp.layer
+      )
+
+    // First attempt leaves a real detached worktree on disk (mimicking a create
+    // that failed AFTER the worktree add — e.g. gh pr checkout errored).
+    const first = await detached()
+    expect(first._tag).toBe("Success")
+    if (first._tag !== "Success") return
+    expect(existsSync(first.value.path)).toBe(true)
+
+    // A retry at the same slug must reclaim the stale worktree, not fail with
+    // "already exists".
+    const second = await detached()
+    expect(second._tag).toBe("Success")
+    if (second._tag !== "Success") return
+    expect(second.value.path).toBe(first.value.path)
+    expect(existsSync(second.value.path)).toBe(true)
+
+    // git tracks exactly one worktree at that path (no stale duplicate).
+    const list = execFileSync("git", ["worktree", "list"], { cwd: repoPath, encoding: "utf-8" })
+    const occurrences = list.split("\n").filter((l) => l.includes(second.value.path)).length
+    expect(occurrences).toBe(1)
+  })
 })

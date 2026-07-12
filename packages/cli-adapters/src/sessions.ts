@@ -139,6 +139,16 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       > =>
         Effect.gen(function* () {
           const slug = kebab(input.pr.title)
+          // Refuse if a live session already owns this worktree path — otherwise
+          // the reclaim step below would delete its worktree. (A leftover dir
+          // from a failed attempt is NOT a live session, so retries still work.)
+          const worktreePath = yield* GitService.worktreePathFor(input.repoName, slug)
+          const priorSessions = yield* readAll()
+          if (priorSessions.some((s) => s.worktreePath === worktreePath)) {
+            return yield* Effect.fail(
+              new GitError({ message: "A session already exists for this pull request." })
+            )
+          }
           const worktree = yield* GitService.createDetachedWorktree({
             repoPath: input.repoPath,
             repoName: input.repoName,
