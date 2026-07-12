@@ -26,7 +26,7 @@ import {
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
 import { GhError } from "@starbase/core"
-import type { ReviewSubmitKind } from "@starbase/core"
+import type { CreateSessionFromPrInput, ReviewSubmitKind } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -91,6 +91,18 @@ export const sessionDiff = (id: string) =>
 /** Resolve a session (best-effort; unknown → null) for the GitHub handlers. */
 const resolveSession = (sessionId: string) =>
   SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+
+/**
+ * `Sessions.createFromPr` handler. Reads the git "share checked-out branches"
+ * lever from config (default on) and passes it through, so a PR whose branch is
+ * already checked out locally can be opened as a session when the user allows it.
+ */
+export const createSessionFromPr = (input: CreateSessionFromPrInput) =>
+  Effect.gen(function* () {
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const allowSharedCheckout = config?.git?.shareCheckedOutBranches ?? true
+    return yield* SessionStore.createFromPr(input, { allowSharedCheckout })
+  })
 
 /**
  * `Workspace.revertFile` handler — discard all uncommitted changes to `path` in
@@ -231,7 +243,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.list": () => SessionStore.list(),
   "Sessions.get": ({ id }) => SessionStore.get(id),
   "Sessions.create": (input) => SessionStore.create(input),
-  "Sessions.createFromPr": (input) => SessionStore.createFromPr(input),
+  "Sessions.createFromPr": (input) => createSessionFromPr(input),
   "Sessions.transcript": ({ id }) => TranscriptStore.list(id),
   "Sessions.diff": ({ id }) => sessionDiff(id),
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
@@ -253,6 +265,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),
+  "Config.setGit": (git) => ConfigService.setGit(git),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
   "Github.listPrs": ({ repoPath, mine, search }) => GhService.listPrs(repoPath, { mine, search }),
   "Github.files": ({ sessionId }) => githubFiles(sessionId),

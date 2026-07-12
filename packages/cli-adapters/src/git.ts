@@ -135,7 +135,20 @@ export class GitService extends Effect.Service<GitService>()(
           Effect.map((b) => (b === null || b === "HEAD" ? null : b))
         )
 
-      return { createWorktree, createDetachedWorktree, branchAt }
+      /**
+       * Check out an existing local `branch` into the worktree at `cwd`, even
+       * when that branch is already checked out in another worktree (the main
+       * repo, typically). `--ignore-other-worktrees` bypasses git's safeguard so
+       * a PR whose branch you already have checked out locally can still be
+       * opened as a session — the two worktrees then share the branch ref.
+       */
+      const checkoutBranch = (
+        cwd: string,
+        branch: string
+      ): Effect.Effect<void, GitError, CommandExecutor.CommandExecutor> =>
+        runGit(cwd, ["checkout", "--ignore-other-worktrees", branch]).pipe(Effect.asVoid)
+
+      return { createWorktree, createDetachedWorktree, branchAt, checkoutBranch }
     }
   }
 ) {}

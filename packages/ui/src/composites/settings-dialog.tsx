@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
-import type { GhStatus, GithubConfig } from "@starbase/core"
-import { Check, Copy, RefreshCw, Settings } from "lucide-react"
+import type { GhStatus, GitConfig, GithubConfig } from "@starbase/core"
+import { Check, Copy, GitBranch, RefreshCw, Settings } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { GithubMark } from "../components/github-mark.js"
 import { Button } from "../components/button.js"
@@ -17,11 +17,15 @@ import {
 } from "../components/dialog.js"
 
 const DEFAULT_GITHUB: GithubConfig = { enabled: false, autoCreatePr: false, autoDetectPr: true }
+const DEFAULT_GIT: GitConfig = { shareCheckedOutBranches: true }
 
 const LOGIN_CMD = "gh auth login"
 
 const sameGithub = (a: GithubConfig, b: GithubConfig): boolean =>
   a.enabled === b.enabled && a.autoCreatePr === b.autoCreatePr && a.autoDetectPr === b.autoDetectPr
+
+const sameGit = (a: GitConfig, b: GitConfig): boolean =>
+  a.shareCheckedOutBranches === b.shareCheckedOutBranches
 
 /** One labelled toggle row (label + description on the left, switch on the right). */
 function ToggleRow({
@@ -58,34 +62,49 @@ export function SettingsDialog({
   open,
   ghStatus,
   github,
+  git,
   rechecking = false,
   onRecheck,
   onSaveGithub,
+  onSaveGit,
   onClose
 }: {
   open: boolean
   ghStatus: GhStatus
   github?: GithubConfig | null
+  git?: GitConfig | null
   /** A `gh auth status` recheck is in flight. */
   rechecking?: boolean
   onRecheck?: () => void
   onSaveGithub?: (config: GithubConfig) => void
+  onSaveGit?: (config: GitConfig) => void
   onClose?: () => void
 }) {
   const initial = github ?? DEFAULT_GITHUB
+  const initialGit = git ?? DEFAULT_GIT
   const [draft, setDraft] = useState<GithubConfig>(initial)
+  const [gitDraft, setGitDraft] = useState<GitConfig>(initialGit)
   const [copied, setCopied] = useState(false)
 
   // Re-seed the form from the persisted config each time the view opens.
   useEffect(() => {
     if (open) {
       setDraft(github ?? DEFAULT_GITHUB)
+      setGitDraft(git ?? DEFAULT_GIT)
       setCopied(false)
     }
-  }, [open, github])
+  }, [open, github, git])
 
   const connected = ghStatus.available && ghStatus.authenticated
-  const dirty = !sameGithub(draft, initial)
+  const githubDirty = !sameGithub(draft, initial)
+  const gitDirty = !sameGit(gitDraft, initialGit)
+  const dirty = githubDirty || gitDirty
+
+  const save = () => {
+    if (githubDirty) onSaveGithub?.(draft)
+    if (gitDirty) onSaveGit?.(gitDraft)
+    onClose?.()
+  }
 
   const copyLogin = () => {
     void navigator.clipboard?.writeText(LOGIN_CMD).then(() => {
@@ -190,19 +209,26 @@ export function SettingsDialog({
               onChange={(autoCreatePr) => setDraft((d) => ({ ...d, autoCreatePr }))}
             />
           </div>
+
+          {/* Git section */}
+          <div className="mt-1 flex items-center gap-2 border-b border-hairline pb-2.5">
+            <GitBranch size={14} className="text-text-bright" />
+            <span className="text-[13px] font-semibold text-text-bright">Git</span>
+          </div>
+          <div className="divide-y divide-hairline">
+            <ToggleRow
+              label="Open PRs whose branch is checked out elsewhere"
+              description="Start a session from a PR even when its branch is already checked out in another worktree (e.g. your main repo). The worktrees then share the branch."
+              checked={gitDraft.shareCheckedOutBranches}
+              onChange={(shareCheckedOutBranches) => setGitDraft({ shareCheckedOutBranches })}
+            />
+          </div>
         </DialogBody>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            disabled={!dirty}
-            onClick={() => {
-              onSaveGithub?.(draft)
-              onClose?.()
-            }}
-          >
+          <Button variant="primary" disabled={!dirty} onClick={save}>
             Save
           </Button>
         </DialogFooter>

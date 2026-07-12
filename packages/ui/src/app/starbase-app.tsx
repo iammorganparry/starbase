@@ -4,6 +4,7 @@ import type {
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
+  GitConfig,
   GithubConfig,
   PrSummary,
   Repo,
@@ -43,6 +44,10 @@ export interface StarbaseAppProps {
   githubConfig?: GithubConfig | null
   /** Persist GitHub preferences; presence wires the GitHub settings entry point. */
   onSaveGithubConfig?: (config: GithubConfig) => Promise<void> | void
+  /** Persisted git preferences (for the settings modal's Git section). */
+  gitConfig?: GitConfig | null
+  /** Persist git preferences (the "share checked-out branches" lever). */
+  onSaveGitConfig?: (config: GitConfig) => Promise<void> | void
   /** Re-run `gh auth status` (the settings modal "Recheck" button); may be async. */
   onRecheckGh?: () => Promise<void> | void
   /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
@@ -89,6 +94,8 @@ export function StarbaseApp({
   onLoadUsage,
   githubConfig,
   onSaveGithubConfig,
+  gitConfig,
+  onSaveGitConfig,
   onRecheckGh,
   renderPullRequest,
   renderReview,
@@ -217,9 +224,11 @@ export function StarbaseApp({
           open={settingsOpen}
           ghStatus={ghStatus ?? GH_UNAVAILABLE}
           github={githubConfig}
+          git={gitConfig}
           rechecking={ghRechecking}
           onRecheck={onRecheckGh ? handleRecheckGh : undefined}
           onSaveGithub={onSaveGithubConfig}
+          onSaveGit={onSaveGitConfig}
           onClose={() => setSettingsOpen(false)}
         />
       )}

@@ -276,6 +276,29 @@
     color: #7cc0f5;
   }
 
+  /*
+   * Tailwind v4's Preflight resets <button> to `cursor: default`, so every
+   * clickable control would otherwise show the arrow cursor. Restore the pointer
+   * on interactive elements (and not-allowed on disabled ones) app-wide, so
+   * individual components don't each have to remember `cursor-pointer`.
+   */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="menuitemradio"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  label:has(> input[type="checkbox"]),
+  label:has(> input[type="radio"]),
+  summary {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
   /* Thin One Dark scrollbars. */
   * {
     scrollbar-width: thin;

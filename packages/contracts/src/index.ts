@@ -5,6 +5,7 @@ import {
   CreateSessionInput,
   GateDecision,
   GhStatus,
+  GitConfig,
   GithubConfig,
   Message,
   ModelOption,
@@ -207,6 +208,13 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: WorkspaceConfig,
     error: ConfigError,
     payload: GithubConfig
+  }),
+
+  /** Persist the user's git behaviour preferences. */
+  Rpc.make("Config.setGit", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: GitConfig
   }),
 
   /**

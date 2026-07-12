@@ -5,6 +5,7 @@ import type {
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
+  GitConfig,
   GithubConfig,
   Session
 } from "@starbase/core"
@@ -42,6 +43,7 @@ export function App() {
   const usageQuery = useQuery({ queryKey: ["usage"], queryFn: () => rpc.usageGet(), enabled: false })
 
   const githubConfig = configQuery.data?.github ?? null
+  const gitConfig = configQuery.data?.git ?? null
   const ghStatus = ghStatusQuery.data ?? GH_UNKNOWN
   const usage = usageQuery.data ?? null
 
@@ -50,6 +52,10 @@ export function App() {
   const recheckGh = () => ghStatusQuery.refetch().then(() => undefined)
   const saveGithubConfig = (config: GithubConfig) =>
     rpc.configSetGithub(config).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  const saveGitConfig = (config: GitConfig) =>
+    rpc.configSetGit(config).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
 
@@ -124,6 +130,8 @@ export function App() {
       onLoadUsage={loadUsage}
       githubConfig={githubConfig}
       onSaveGithubConfig={saveGithubConfig}
+      gitConfig={gitConfig}
+      onSaveGitConfig={saveGitConfig}
       onRecheckGh={recheckGh}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
