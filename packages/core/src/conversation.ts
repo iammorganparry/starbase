@@ -162,6 +162,23 @@ export const assistantMessage = (id: string, createdAt: string): Message => ({
   createdAt
 })
 
+/**
+ * Clear any leftover `streaming` flags from a persisted message. A transcript
+ * loaded from disk has no live run, so a turn still marked streaming (the app was
+ * closed mid-response) would otherwise show the typing indicator forever. Also
+ * settles a `Thinking` part left mid-stream. Returns the same object when nothing
+ * is streaming, so a clean transcript isn't needlessly copied.
+ */
+export const settleStreaming = (msg: Message): Message => {
+  const partStreaming = msg.parts.some((p) => p._tag === "Thinking" && p.streaming)
+  if (!msg.streaming && !partStreaming) return msg
+  return {
+    ...msg,
+    streaming: false,
+    parts: msg.parts.map((p) => (p._tag === "Thinking" && p.streaming ? { ...p, streaming: false } : p))
+  }
+}
+
 const replaceLast = (
   parts: ReadonlyArray<ContentPart>,
   next: ContentPart

@@ -9,6 +9,7 @@ import {
   applyStreamEvent,
   assistantMessage,
   setGateStatus,
+  settleStreaming,
   userMessage
 } from "./conversation.js"
 
@@ -211,5 +212,40 @@ describe("message constructors", () => {
     expect(msg.role).toBe("user")
     expect(msg.streaming).toBe(false)
     expect(msg.parts).toStrictEqual([{ _tag: "Text", text: "hello" }])
+  })
+})
+
+describe("settleStreaming", () => {
+  const now = "2026-07-11T10:00:00.000Z"
+
+  it("clears a turn (and its thinking part) left streaming when the app closed", () => {
+    const stuck: Message = {
+      id: "a0",
+      role: "assistant",
+      streaming: true,
+      createdAt: now,
+      parts: [
+        { _tag: "Thinking", text: "reasoning", seconds: null, streaming: true },
+        { _tag: "Text", text: "I'll take a look" }
+      ]
+    }
+    const settled = settleStreaming(stuck)
+    expect(settled.streaming).toBe(false)
+    expect(settled.parts[0]).toMatchObject({ _tag: "Thinking", streaming: false })
+    // The partial content is preserved.
+    expect(settled.parts[1]).toStrictEqual({ _tag: "Text", text: "I'll take a look" })
+  })
+
+  it("returns a clean message unchanged (same reference)", () => {
+    const clean = userMessage("m0", "hello", now)
+    expect(settleStreaming(clean)).toBe(clean)
+    const doneAssistant: Message = {
+      id: "a1",
+      role: "assistant",
+      streaming: false,
+      createdAt: now,
+      parts: [{ _tag: "Text", text: "done" }]
+    }
+    expect(settleStreaming(doneAssistant)).toBe(doneAssistant)
   })
 })
