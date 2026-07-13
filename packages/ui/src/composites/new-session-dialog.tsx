@@ -80,7 +80,9 @@ function kebab(input: string): string {
  */
 function StarToggle({ starred, onToggle }: { starred: boolean; onToggle: () => void }) {
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="icon"
       type="button"
       aria-label={starred ? "Unstar repo" : "Star repo"}
       aria-pressed={starred}
@@ -94,12 +96,12 @@ function StarToggle({ starred, onToggle }: { starred: boolean; onToggle: () => v
         onToggle()
       }}
       className={cn(
-        "flex size-5 items-center justify-center rounded outline-none transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring",
-        starred ? "text-yellow" : "text-muted-foreground hover:text-text"
+        "size-5 rounded hover:bg-surface",
+        starred && "text-yellow hover:text-yellow"
       )}
     >
       <Star size={13} className={starred ? "fill-current" : undefined} />
-    </button>
+    </Button>
   )
 }
 

@@ -4,6 +4,7 @@ import { Archive, GitBranch, Gauge, Layers, Plus, Search, Settings, Star } from 
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
+import { Button } from "../components/button.js"
 import { StatusDot } from "../components/status-dot.js"
 import { SearchInput } from "../components/search-input.js"
 import { SegmentedControl } from "../components/segmented-control.js"
@@ -203,20 +204,20 @@ export function SessionSidebar({
                 {groupBy === "status" ? STATUS_LABEL[key as SessionStatus] : key}
               </span>
               {groupBy === "repo" && onToggleStar && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   type="button"
                   aria-label={starredRepoNames?.has(key) ? "Unstar repository" : "Star repository"}
                   aria-pressed={starredRepoNames?.has(key) ?? false}
                   onClick={() => onToggleStar(key)}
                   className={cn(
-                    "flex size-5 items-center justify-center rounded outline-none transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring",
-                    starredRepoNames?.has(key)
-                      ? "text-yellow"
-                      : "text-muted-foreground hover:text-text"
+                    "size-5 rounded hover:bg-surface",
+                    starredRepoNames?.has(key) && "text-yellow hover:text-yellow"
                   )}
                 >
                   <Star size={12} className={starredRepoNames?.has(key) ? "fill-current" : undefined} />
-                </button>
+                </Button>
               )}
               <Badge tone="count" size="xs">
                 {list.length}
