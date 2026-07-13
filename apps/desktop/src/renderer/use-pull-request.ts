@@ -17,6 +17,16 @@ const reviewPrompt = (kind: ReviewSubmitKind, body: string): string => {
   return `A reviewer ${verb} on this pull request:\n\n${body}\n\nPlease address this feedback.`
 }
 
+/**
+ * Instruction handed to the session's agent when the user clicks "Create pull
+ * request" — the agent (which owns the worktree) commits, pushes, then opens
+ * the PR, rather than the app shelling out to `gh` directly.
+ */
+const createPrPrompt = (base: string): string =>
+  `Commit any outstanding changes in this worktree with a clear message, push the branch, ` +
+  `then open a pull request against \`${base}\` using \`gh pr create\` (fill in a concise ` +
+  `title and description summarising the changes).`
+
 const prKey = (sessionId: string) => ["github", "pr", sessionId] as const
 
 export interface PullRequestState {
@@ -40,6 +50,7 @@ export function usePullRequest(
 ): PullRequestState {
   const qc = useQueryClient()
   const [routing, setRouting] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const cancelRef = useRef<(() => void) | null>(null)
   const { connected, autoDetect, onPrLinked } = opts
 
@@ -69,20 +80,34 @@ export function usePullRequest(
     [session.id]
   )
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      rpc.githubCreatePr({
-        sessionId: session.id,
-        title: session.title,
-        body: "",
-        base: session.baseBranch ?? "main",
-        draft: false
+  // "Create pull request" forwards an instruction to the session's agent to
+  // commit outstanding work and open the PR. The returned promise settles when
+  // the agent's run finishes, so the button reflects the agent's progress.
+  const createPr = useCallback(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        cancelRef.current?.()
+        setCreateError(null)
+        setRouting(true)
+        cancelRef.current = rpc.agentRun(
+          session.id,
+          createPrPrompt(session.baseBranch ?? "main"),
+          (event) => {
+            if (event._tag === "Failed") {
+              setRouting(false)
+              setCreateError(event.message || "The agent could not open the pull request.")
+              reject(new Error(event.message || "agent-failed"))
+            } else if (event._tag === "Done") {
+              setRouting(false)
+              // Re-detect + link the PR the agent just opened.
+              void qc.invalidateQueries({ queryKey: prKey(session.id) })
+              resolve()
+            }
+          }
+        )
       }),
-    onSuccess: (n) => {
-      onPrLinked?.(session.id, n)
-      void qc.invalidateQueries({ queryKey: prKey(session.id) })
-    }
-  })
+    [session.id, session.baseBranch, qc]
+  )
 
   const reviewMutation = useMutation({
     mutationFn: (input: { body: string; kind: ReviewSubmitKind }) =>
@@ -117,16 +142,12 @@ export function usePullRequest(
     if (pr?.url) void window.starbase.openExternal(pr.url)
   }, [pr])
 
-  const createError = createMutation.error
-    ? ((createMutation.error as { message?: string }).message ?? "Failed to create pull request")
-    : null
-
   return {
     pr,
-    busy: query.isPending || createMutation.isPending,
+    busy: query.isPending,
     createError,
     routing,
-    createPr: () => createMutation.mutateAsync().then(() => undefined),
+    createPr,
     submitReview,
     sendEntryToAgent,
     sentEntryIds,

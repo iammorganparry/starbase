@@ -46,6 +46,10 @@ export interface SessionConversationProps {
   onOpenSettings?: () => void
   /** Whether GitHub is connected (drives the sidebar cog's status dot). */
   ghConnected?: boolean
+  /** Repo names (sidebar group keys) that are starred — pinned to the top. */
+  starredRepoNames?: ReadonlySet<string>
+  /** Toggle a repo group's starred state from its sidebar header. */
+  onToggleStar?: (repoName: string) => void | Promise<void>
   /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
@@ -97,6 +101,8 @@ export function SessionConversation(props: SessionConversationProps) {
         onOpenUsage={props.onOpenUsage}
         onOpenSettings={props.onOpenSettings}
         ghConnected={props.ghConnected}
+        starredRepoNames={props.starredRepoNames}
+        onToggleStar={props.onToggleStar}
         version={props.version}
       />
 

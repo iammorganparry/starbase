@@ -78,6 +78,23 @@ describe("RPC handlers", () => {
     })
   })
 
+  describe("Config.setStarredRepos / setLastRepoPath", () => {
+    // Saving stars / last-repo must round-trip and never drop other sections.
+    it("persists starred repos and the last repo without dropping reposDir", async () => {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* ConfigService.setReposDir("/Users/me/repos")
+          yield* ConfigService.setStarredRepos(["/Users/me/repos/a", "/Users/me/repos/b"])
+          yield* ConfigService.setLastRepoPath("/Users/me/repos/b")
+          return yield* configGet()
+        }).pipe(Effect.provide(base))
+      )
+      expect(result?.reposDir).toBe("/Users/me/repos")
+      expect(result?.starredRepos).toEqual(["/Users/me/repos/a", "/Users/me/repos/b"])
+      expect(result?.lastRepoPath).toBe("/Users/me/repos/b")
+    })
+  })
+
   describe("Setup.chooseReposDir", () => {
     it("returns null and persists nothing when the dialog is cancelled", async () => {
       const result = await Effect.runPromise(

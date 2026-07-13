@@ -139,7 +139,17 @@ export const WorkspaceConfig = Schema.Struct({
   /** GitHub integration prefs; absent until configured (older configs lack it). */
   github: Schema.optional(GithubConfig),
   /** Git behaviour prefs; absent until configured (older configs lack it). */
-  git: Schema.optional(GitConfig)
+  git: Schema.optional(GitConfig),
+  /**
+   * Absolute paths of the repos the user has starred, so the New Session picker
+   * can surface them first. Absent on older configs (treated as an empty list).
+   */
+  starredRepos: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Absolute path of the repo used for the most recent session create, so the
+   * New Session dialog can preselect it. Absent until the first create.
+   */
+  lastRepoPath: Schema.optional(Schema.String)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 

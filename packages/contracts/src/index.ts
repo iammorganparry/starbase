@@ -265,6 +265,20 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: GitConfig
   }),
 
+  /** Persist the full set of starred repo paths (replaces the stored list). */
+  Rpc.make("Config.setStarredRepos", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { paths: Schema.Array(Schema.String) }
+  }),
+
+  /** Remember the repo used for the most recent session create (picker default). */
+  Rpc.make("Config.setLastRepoPath", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { path: Schema.String }
+  }),
+
   /**
    * The pull request linked to a session (its `prNumber`), assembled from `gh pr
    * view`. Null when the session has no worktree or no linked PR. Embeds CI

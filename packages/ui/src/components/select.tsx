@@ -55,22 +55,29 @@ SelectContent.displayName = SelectPrimitive.Content.displayName
 
 export const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
->(({ className, children, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
+    /** Optional trailing adornment (e.g. a star toggle); shifts the check left. */
+    trailing?: React.ReactNode
+  }
+>(({ className, children, trailing, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-pointer select-none items-center rounded-md py-1.5 pl-2.5 pr-7 text-[12.5px] text-text outline-none data-[highlighted]:bg-surface data-[state=checked]:text-blue data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex w-full cursor-pointer select-none items-center rounded-md py-1.5 pl-2.5 text-[12.5px] text-text outline-none data-[highlighted]:bg-surface data-[state=checked]:text-blue data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      trailing ? "pr-12" : "pr-7",
       className
     )}
     {...props}
   >
-    <span className="absolute right-2 flex items-center justify-center">
+    <span
+      className={cn("absolute flex items-center justify-center", trailing ? "right-7" : "right-2")}
+    >
       <SelectPrimitive.ItemIndicator>
         <Check size={13} />
       </SelectPrimitive.ItemIndicator>
     </span>
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    {trailing && <span className="absolute right-1.5 flex items-center">{trailing}</span>}
   </SelectPrimitive.Item>
 ))
 SelectItem.displayName = SelectPrimitive.Item.displayName

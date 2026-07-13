@@ -47,6 +47,8 @@ export function App() {
 
   const githubConfig = configQuery.data?.github ?? null
   const gitConfig = configQuery.data?.git ?? null
+  const starredRepos = configQuery.data?.starredRepos ?? []
+  const lastRepoPath = configQuery.data?.lastRepoPath ?? null
   const ghStatus = ghStatusQuery.data ?? GH_UNKNOWN
   const usage = usageQuery.data ?? null
 
@@ -62,13 +64,30 @@ export function App() {
       qc.setQueryData(["config"], saved)
     })
 
+  // Toggle a repo's starred state, persist the whole list, and update the cache.
+  const toggleStar = (repoPath: string) => {
+    const next = starredRepos.includes(repoPath)
+      ? starredRepos.filter((p) => p !== repoPath)
+      : [...starredRepos, repoPath]
+    return rpc.configSetStarredRepos(next).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  }
+  // Remember the repo a session was created from so the dialog can preselect it.
+  const rememberLastRepo = (repoPath: string) =>
+    rpc.configSetLastRepoPath(repoPath).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+
   const createSession = async (input: CreateSessionInput) => {
     const session = await rpc.sessionsCreate(input)
+    void rememberLastRepo(input.repoPath)
     send({ type: "SESSION_CREATED", session })
     return session
   }
   const createSessionFromPr = async (input: CreateSessionFromPrInput) => {
     const session = await rpc.sessionsCreateFromPr(input)
+    void rememberLastRepo(input.repoPath)
     send({ type: "SESSION_CREATED", session })
     return session
   }
@@ -176,6 +195,9 @@ export function App() {
       clis={clis}
       sessions={sessions}
       repos={repos}
+      starredRepos={starredRepos}
+      onToggleStar={toggleStar}
+      defaultRepoPath={lastRepoPath}
       ghStatus={ghStatus}
       liveStatus={liveStatus}
       usage={usage}

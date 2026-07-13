@@ -1,6 +1,6 @@
 import * as React from "react"
 import type { Session, SessionStatus } from "@starbase/core"
-import { Archive, GitBranch, Gauge, Layers, Plus, Search, Settings } from "lucide-react"
+import { Archive, GitBranch, Gauge, Layers, Plus, Search, Settings, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
@@ -41,6 +41,10 @@ export interface SessionSidebarProps {
   onOpenSettings?: () => void
   /** Whether GitHub is connected (green dot on the Settings cog). */
   ghConnected?: boolean
+  /** Repo names that are starred — their groups pin to the top (repo grouping). */
+  starredRepoNames?: ReadonlySet<string>
+  /** Toggle a repo group's starred state from its header star button. */
+  onToggleStar?: (repoName: string) => void | Promise<void>
   /** App version (from `__APP_VERSION__`), shown in the footer. */
   version?: string
 }
@@ -55,6 +59,8 @@ export function SessionSidebar({
   onOpenUsage,
   onOpenSettings,
   ghConnected = false,
+  starredRepoNames,
+  onToggleStar,
   version
 }: SessionSidebarProps) {
   const [filter, setFilter] = React.useState("")
@@ -93,10 +99,15 @@ export function SessionSidebar({
   // the active grouping; everything else is grouped by repo / status.
   const activeSessions = React.useMemo(() => filtered.filter((s) => !s.archived), [filtered])
   const archivedSessions = React.useMemo(() => filtered.filter((s) => s.archived), [filtered])
-  const groups = React.useMemo(
-    () => (groupBy === "status" ? groupByStatus(activeSessions, statusOf) : groupByRepo(activeSessions)),
-    [activeSessions, groupBy, statusOf]
-  )
+  const groups = React.useMemo(() => {
+    if (groupBy === "status") return groupByStatus(activeSessions, statusOf)
+    const byRepo = groupByRepo(activeSessions)
+    if (!starredRepoNames || starredRepoNames.size === 0) return byRepo
+    // Stable sort: starred repo groups float to the top, order otherwise kept.
+    return [...byRepo].sort(
+      (a, b) => Number(starredRepoNames.has(b[0])) - Number(starredRepoNames.has(a[0]))
+    )
+  }, [activeSessions, groupBy, statusOf, starredRepoNames])
 
   return (
     <div className="flex w-[266px] flex-none flex-col border-r border-hairline bg-panel">
@@ -191,6 +202,22 @@ export function SessionSidebar({
               >
                 {groupBy === "status" ? STATUS_LABEL[key as SessionStatus] : key}
               </span>
+              {groupBy === "repo" && onToggleStar && (
+                <button
+                  type="button"
+                  aria-label={starredRepoNames?.has(key) ? "Unstar repository" : "Star repository"}
+                  aria-pressed={starredRepoNames?.has(key) ?? false}
+                  onClick={() => onToggleStar(key)}
+                  className={cn(
+                    "flex size-5 items-center justify-center rounded outline-none transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring",
+                    starredRepoNames?.has(key)
+                      ? "text-yellow"
+                      : "text-muted-foreground hover:text-text"
+                  )}
+                >
+                  <Star size={12} className={starredRepoNames?.has(key) ? "fill-current" : undefined} />
+                </button>
+              )}
               <Badge tone="count" size="xs">
                 {list.length}
               </Badge>
