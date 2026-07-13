@@ -44,6 +44,11 @@ export interface SessionConversationProps {
   onOpenUsage?: () => void
   /** Open the Settings view (sidebar footer cog button). */
   onOpenSettings?: () => void
+  /**
+   * When set, the Settings view is open: it replaces the main pane (tabs +
+   * conversation) while the sidebar stays visible. `onOpenSettings` toggles it.
+   */
+  settingsView?: ReactNode
   /** Whether GitHub is connected (drives the sidebar cog's status dot). */
   ghConnected?: boolean
   /** Repo names (sidebar group keys) that are starred — pinned to the top. */
@@ -107,7 +112,9 @@ export function SessionConversation(props: SessionConversationProps) {
       />
 
       <div className="flex min-w-0 flex-1 flex-col bg-editor">
-        {props.showEmpty ? (
+        {props.settingsView ? (
+          props.settingsView
+        ) : props.showEmpty ? (
           <EmptyConversation
             clis={props.clis}
             version={props.version}

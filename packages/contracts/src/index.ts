@@ -16,6 +16,7 @@ import {
   PrMergeMethod,
   PrState,
   PrSummary,
+  ProviderConfig,
   PullRequest,
   QuestionAnswer,
   Repo,
@@ -278,6 +279,13 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: WorkspaceConfig,
     error: ConfigError,
     payload: { path: Schema.String }
+  }),
+
+  /** Persist one CLI's provider defaults (model, mode, reasoning, …). */
+  Rpc.make("Config.setProvider", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { cli: CliKind, provider: ProviderConfig }
   }),
 
   /**

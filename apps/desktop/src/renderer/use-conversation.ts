@@ -46,6 +46,8 @@ export interface Conversation {
   readonly queued: ReadonlyArray<QueuedMessage>
   /** Drop a queued message before it's sent (by index). */
   readonly unqueue: (index: number) => void
+  /** Interrupt the current turn and run a queued message now (steer mid-stream). */
+  readonly sendNow: (index: number) => void
   /** A pending AskUserQuestion group (the composer is replaced while set), or null. */
   readonly question: QuestionRequest | null
   readonly answerQuestion: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
@@ -102,6 +104,7 @@ export function useConversation(session: Session): Conversation {
     paused,
     queued,
     unqueue: (index) => send({ type: "UNQUEUE", index }),
+    sendNow: (index) => send({ type: "SEND_NOW", index }),
     question,
     plan,
     commentPlanStep: (planId, stepId, body) => send({ type: "COMMENT_PLAN_STEP", planId, stepId, body }),

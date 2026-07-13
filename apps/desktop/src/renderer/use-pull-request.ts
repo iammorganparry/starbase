@@ -1,13 +1,16 @@
 /**
  * Renderer hook backing the Pull Request tab. react-query owns the PR read
- * (`useQuery`) and the GitHub writes (`useMutation`, invalidating the read);
- * routing review feedback into the session's agent stays a streaming side-effect.
+ * (`useQuery`) and the GitHub writes (`useMutation`, invalidating the read).
+ * Anything handed to the agent — "Create pull request", routed review feedback —
+ * goes through the session's persistent conversation actor (a normal turn), so
+ * the work + any approval gates/questions surface in the Conversation tab.
  * Keeps `@starbase/ui`'s `PullRequestView` presentational.
  */
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { PullRequest, ReviewSubmitKind, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
+import { getConversationActor } from "./conversation-registry.js"
 import { markRouted, useRoutedEntries } from "./routed-store.js"
 
 /** Format a submitted review as an instruction fed to the session's agent. */
@@ -34,8 +37,6 @@ export interface PullRequestState {
   readonly busy: boolean
   /** The message from a failed `gh pr create`, or null. */
   readonly createError: string | null
-  /** A routed review is being worked on by the agent right now. */
-  readonly routing: boolean
   readonly createPr: () => Promise<void>
   /** Merge the linked PR (merge commit). */
   readonly mergePr: () => Promise<void>
@@ -55,9 +56,7 @@ export function usePullRequest(
   opts: { connected: boolean; autoDetect: boolean; onPrLinked?: (sessionId: string, prNumber: number) => void }
 ): PullRequestState {
   const qc = useQueryClient()
-  const [routing, setRouting] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
-  const cancelRef = useRef<(() => void) | null>(null)
   const { connected, autoDetect, onPrLinked } = opts
 
   const query = useQuery({
@@ -72,48 +71,26 @@ export function usePullRequest(
     }
   })
 
-  // Stop any in-flight routed run when the pane unmounts.
-  useEffect(() => () => cancelRef.current?.(), [])
-
+  // Route an instruction to the session's agent as a NORMAL conversation turn
+  // (via the persistent actor), so its work + any approval gates / questions are
+  // visible and answerable in the Conversation tab. A bare `rpc.agentRun` ran a
+  // hidden turn whose gates rendered nowhere — so `gh pr create` (a gated command)
+  // stalled it forever.
   const routeToAgent = useCallback(
     (text: string) => {
-      cancelRef.current?.()
-      setRouting(true)
-      cancelRef.current = rpc.agentRun(session.id, text, (event) => {
-        if (event._tag === "Done" || event._tag === "Failed") setRouting(false)
-      })
+      getConversationActor(session).send({ type: "SEND", text })
     },
-    [session.id]
+    [session]
   )
 
-  // "Create pull request" forwards an instruction to the session's agent to
-  // commit outstanding work and open the PR. The returned promise settles when
-  // the agent's run finishes, so the button reflects the agent's progress.
-  const createPr = useCallback(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        cancelRef.current?.()
-        setCreateError(null)
-        setRouting(true)
-        cancelRef.current = rpc.agentRun(
-          session.id,
-          createPrPrompt(session.baseBranch ?? "main"),
-          (event) => {
-            if (event._tag === "Failed") {
-              setRouting(false)
-              setCreateError(event.message || "The agent could not open the pull request.")
-              reject(new Error(event.message || "agent-failed"))
-            } else if (event._tag === "Done") {
-              setRouting(false)
-              // Re-detect + link the PR the agent just opened.
-              void qc.invalidateQueries({ queryKey: prKey(session.id) })
-              resolve()
-            }
-          }
-        )
-      }),
-    [session.id, session.baseBranch, qc]
-  )
+  // "Create pull request" hands the agent an instruction to commit outstanding
+  // work and open the PR. It dispatches the turn and resolves right away — the
+  // agent then works in the Conversation tab, and the PR read auto-detects +
+  // links the PR once it's opened.
+  const createPr = useCallback(async () => {
+    setCreateError(null)
+    routeToAgent(createPrPrompt(session.baseBranch ?? "main"))
+  }, [routeToAgent, session.baseBranch])
 
   const reviewMutation = useMutation({
     mutationFn: (input: { body: string; kind: ReviewSubmitKind }) =>
@@ -164,7 +141,6 @@ export function usePullRequest(
     pr,
     busy: query.isPending,
     createError,
-    routing,
     createPr,
     mergePr,
     merging: mergeMutation.isPending,

@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
+import type { CliInfo, GhStatus, ModelOption, ProvidersConfig } from "@starbase/core"
+import { SettingsView } from "./settings-view.js"
 import { ToolCall } from "./tool-call.js"
 import { ThoughtBlock } from "./thought-block.js"
 import { PhaseNode } from "./phase-node.js"
@@ -89,6 +91,55 @@ export const ComposerStory: Story = {
   render: () => (
     <div className="w-[456px]">
       <Composer />
+    </div>
+  )
+}
+
+const DEMO_CLIS: ReadonlyArray<CliInfo> = [
+  { kind: "claude", label: "Claude Code", binPath: "/usr/local/bin/claude", version: "1.4.2", available: true },
+  { kind: "codex", label: "Codex", binPath: "/usr/local/bin/codex", version: "0.9.0", available: true },
+  { kind: "cursor", label: "Cursor Agent", binPath: null, version: null, available: false }
+]
+
+const DEMO_PROVIDERS: ProvidersConfig = {
+  claude: { enabled: true, defaultMode: "plan", defaultModel: "sonnet", reasoningEffort: "think-hard" },
+  codex: { enabled: true, defaultMode: "accept-edits", defaultModel: "gpt-5-codex" }
+}
+
+const DEMO_GH: GhStatus = {
+  available: true,
+  authenticated: true,
+  login: "morganparry",
+  host: "github.com",
+  version: "2.55.0"
+}
+
+const DEMO_MODELS: Record<string, ReadonlyArray<ModelOption>> = {
+  claude: [
+    { id: "opus", label: "Opus 4.1" },
+    { id: "sonnet", label: "Sonnet 4.5" },
+    { id: "haiku", label: "Haiku 4.5" }
+  ],
+  codex: [{ id: "gpt-5-codex", label: "gpt-5-codex" }],
+  cursor: []
+}
+
+export const Settings: Story = {
+  name: "Settings · Providers (E10)",
+  render: () => (
+    <div className="flex h-[760px] w-[1180px] overflow-hidden rounded-lg border border-line bg-editor">
+      <SettingsView
+        clis={DEMO_CLIS}
+        providers={DEMO_PROVIDERS}
+        onSaveProvider={() => {}}
+        loadModels={async (cli) => DEMO_MODELS[cli] ?? []}
+        ghStatus={DEMO_GH}
+        github={{ enabled: true, autoCreatePr: false, autoDetectPr: true }}
+        git={{ shareCheckedOutBranches: true }}
+        onSaveGithub={() => {}}
+        onSaveGit={() => {}}
+        onClose={() => {}}
+      />
     </div>
   )
 }

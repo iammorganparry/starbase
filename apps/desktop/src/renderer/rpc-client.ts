@@ -22,6 +22,7 @@ import type {
   PrMergeMethod,
   PrState,
   PrSummary,
+  ProviderConfig,
   PullRequest,
   QuestionAnswer,
   Repo,
@@ -152,6 +153,8 @@ export const rpc = {
     run((c) => c.Config.setStarredRepos({ paths })),
   configSetLastRepoPath: (path: string): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setLastRepoPath({ path })),
+  configSetProvider: (cli: CliKind, provider: ProviderConfig): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setProvider({ cli, provider })),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
     run((c) => c.Github.pr({ sessionId })),
   githubPrState: (sessionId: string): Promise<PrState | null> =>

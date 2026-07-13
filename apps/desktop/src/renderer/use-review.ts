@@ -8,6 +8,7 @@ import { useCallback, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { PrFileChange, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
+import { getConversationActor } from "./conversation-registry.js"
 
 /** Which diff the Code Review is showing. */
 export type ReviewSource = "pr" | "local"
@@ -190,7 +191,15 @@ export function useReview(session: Session): ReviewState {
       if (current.length === 0) return
       const summary = current.map((d) => `- ${draftLabel(d)}: ${d.body}`).join("\n")
       if (mode === "send_to_agent") {
-        void rpc.agentRun(session.id, `Please address these code review comments:\n\n${summary}`, () => {})
+        // Route through the session's persistent conversation actor (a SEND
+        // event) — the SAME path the composer uses — so the turn is appended to
+        // the transcript and its response streams into the conversation pane.
+        // Calling `rpc.agentRun` directly (with a throwaway event callback) ran a
+        // parallel agent whose output never reached this conversation.
+        getConversationActor(session).send({
+          type: "SEND",
+          text: `Please address these code review comments:\n\n${summary}`
+        })
       } else {
         void rpc.githubComment(session.id, `**Code review**\n\n${summary}`, true).catch(() => {})
       }

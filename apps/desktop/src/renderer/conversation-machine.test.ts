@@ -105,6 +105,25 @@ describe("conversationMachine — queue while busy", () => {
     actor.stop()
   })
 
+  it("SEND_NOW interrupts the current turn and runs the picked message next (jumping the queue)", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SEND", text: "first" })
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.agentRunCalls).toHaveLength(1)
+
+    // Queue two; steer to the second one ("b") mid-run.
+    actor.send({ type: "SEND", text: "a" })
+    actor.send({ type: "SEND", text: "b" })
+    actor.send({ type: "SEND_NOW", index: 1 })
+
+    // The current turn is interrupted and "b" runs next, ahead of "a".
+    await waitFor(actor, () => h.agentRunCalls.length === 2, { timeout: 3000 })
+    expect(h.agentRunCalls[1]!.text).toBe("b")
+    expect(actor.getSnapshot().context.queued.map((q) => q.text)).toEqual(["a"])
+    actor.stop()
+  })
+
   it("STOP abandons any queued messages", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))

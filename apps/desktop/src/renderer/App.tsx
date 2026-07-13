@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef } from "react"
 import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
+  CliKind,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
   GitConfig,
   GithubConfig,
+  ProviderConfig,
   Session
 } from "@starbase/core"
 import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
@@ -26,6 +28,12 @@ const GH_UNKNOWN: GhStatus = {
   host: null,
   version: null
 }
+
+/** How often the archive sweep re-checks each linked PR's merged/closed state. */
+const ARCHIVE_POLL_MS = 60_000
+
+/** How long a fetched PR state stays fresh before the sweep will re-fetch it. */
+const PR_STATE_STALE_MS = 5 * 60_000
 
 /**
  * Thin view over `appMachine` (which drives the first-run/loading/session flow).
@@ -47,6 +55,7 @@ export function App() {
 
   const githubConfig = configQuery.data?.github ?? null
   const gitConfig = configQuery.data?.git ?? null
+  const providersConfig = configQuery.data?.providers ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
   const lastRepoPath = configQuery.data?.lastRepoPath ?? null
   const ghStatus = ghStatusQuery.data ?? GH_UNKNOWN
@@ -61,6 +70,10 @@ export function App() {
     })
   const saveGitConfig = (config: GitConfig) =>
     rpc.configSetGit(config).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  const saveProvider = (cli: CliKind, config: ProviderConfig) =>
+    rpc.configSetProvider(cli, config).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
 
@@ -137,7 +150,12 @@ export function App() {
       queryKey: ["pr-state", s.id, s.prNumber] as const,
       queryFn: () => rpc.githubPrState(s.id),
       enabled: connected,
-      staleTime: 5 * 60_000
+      staleTime: PR_STATE_STALE_MS,
+      // Poll so a PR merged/closed on GitHub archives its session live instead of
+      // only on a cold app relaunch (the query would otherwise never re-fetch).
+      refetchInterval: ARCHIVE_POLL_MS,
+      refetchIntervalInBackground: true,
+      refetchOnWindowFocus: true
     })),
     combine: (results) =>
       sweepTargets.flatMap((s, i) => {
@@ -206,6 +224,9 @@ export function App() {
       onSaveGithubConfig={saveGithubConfig}
       gitConfig={gitConfig}
       onSaveGitConfig={saveGitConfig}
+      providersConfig={providersConfig}
+      onSaveProvider={saveProvider}
+      loadModels={rpc.modelsList}
       onRecheckGh={recheckGh}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
