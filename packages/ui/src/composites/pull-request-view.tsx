@@ -87,6 +87,10 @@ export interface PullRequestViewProps {
   sentEntryIds?: ReadonlySet<string>
   onOpenOnGithub?: () => void
   onMerge?: () => void
+  /** A merge is in flight — disables the button and shows a spinner. */
+  merging?: boolean
+  /** A failed `gh pr merge`, shown beneath the merge button. */
+  mergeError?: string | null
 }
 
 /**
@@ -106,7 +110,9 @@ export function PullRequestView({
   onSendEntryToAgent,
   sentEntryIds,
   onOpenOnGithub,
-  onMerge
+  onMerge,
+  merging = false,
+  mergeError
 }: PullRequestViewProps) {
   // Loading — avoid flashing the "Create PR" empty state before the PR resolves.
   if (pr === null && busy) {
@@ -232,7 +238,13 @@ export function PullRequestView({
       </div>
 
       {/* Right rail */}
-      <PrSidePanel pr={pr} connected={connected} onMerge={onMerge} />
+      <PrSidePanel
+        pr={pr}
+        connected={connected}
+        onMerge={onMerge}
+        merging={merging}
+        mergeError={mergeError}
+      />
     </div>
   )
 }

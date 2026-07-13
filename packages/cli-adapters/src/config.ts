@@ -50,6 +50,8 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             createdAt,
             ...(existing?.github ? { github: existing.github } : {}),
             ...(existing?.git ? { git: existing.git } : {}),
+            ...(existing?.starredRepos ? { starredRepos: existing.starredRepos } : {}),
+            ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...patch
           }
           return yield* persist(config)
@@ -60,6 +62,11 @@ export class ConfigService extends Effect.Service<ConfigService>()(
       const setGithub = (github: GithubConfig) => patch({ github })
 
       const setGit = (git: GitConfig) => patch({ git })
+
+      const setStarredRepos = (starredRepos: ReadonlyArray<string>) =>
+        patch({ starredRepos })
+
+      const setLastRepoPath = (lastRepoPath: string) => patch({ lastRepoPath })
 
       /** Encode + write the config to disk, mapping every failure to `ConfigError`. */
       const persist = (config: WorkspaceConfig): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
@@ -78,7 +85,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           return config
         })
 
-      return { get, setReposDir, setGithub, setGit }
+      return { get, setReposDir, setGithub, setGit, setStarredRepos, setLastRepoPath }
     }
   }
 ) {}

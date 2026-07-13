@@ -22,6 +22,8 @@ const SEARCH_DEBOUNCE_MS = 250
  */
 export interface NewSessionDeps {
   repos: ReadonlyArray<Repo>
+  /** Preselect this repo (by path) on open; falls back to the first repo. */
+  defaultRepoPath?: string | null
   availableClis: ReadonlyArray<CliInfo>
   loadBranches: (repoPath: string) => Promise<ReadonlyArray<string>>
   loadPrs?: (
@@ -120,7 +122,11 @@ export const newSessionMachine = setup({
     /** Reset the form to first-open defaults, seeded from live deps. */
     seed: assign(({ context }) => {
       const deps = context.getDeps()
-      const first = deps.repos[0]
+      // Preselect the previously-used repo when it's still present, else the first.
+      const preferred = deps.defaultRepoPath
+        ? deps.repos.find((r) => r.path === deps.defaultRepoPath)
+        : undefined
+      const first = preferred ?? deps.repos[0]
       return {
         mode: "blank" as NewSessionMode,
         repoPath: first?.path ?? "",

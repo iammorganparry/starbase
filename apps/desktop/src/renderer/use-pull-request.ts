@@ -17,6 +17,16 @@ const reviewPrompt = (kind: ReviewSubmitKind, body: string): string => {
   return `A reviewer ${verb} on this pull request:\n\n${body}\n\nPlease address this feedback.`
 }
 
+/**
+ * Instruction handed to the session's agent when the user clicks "Create pull
+ * request" — the agent (which owns the worktree) commits, pushes, then opens
+ * the PR, rather than the app shelling out to `gh` directly.
+ */
+const createPrPrompt = (base: string): string =>
+  `Commit any outstanding changes in this worktree with a clear message, push the branch, ` +
+  `then open a pull request against \`${base}\` using \`gh pr create\` (fill in a concise ` +
+  `title and description summarising the changes).`
+
 const prKey = (sessionId: string) => ["github", "pr", sessionId] as const
 
 export interface PullRequestState {
@@ -27,6 +37,12 @@ export interface PullRequestState {
   /** A routed review is being worked on by the agent right now. */
   readonly routing: boolean
   readonly createPr: () => Promise<void>
+  /** Merge the linked PR (merge commit). */
+  readonly mergePr: () => Promise<void>
+  /** A merge is in flight. */
+  readonly merging: boolean
+  /** The message from a failed `gh pr merge`, or null. */
+  readonly mergeError: string | null
   readonly submitReview: (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => Promise<void>
   readonly sendEntryToAgent: (entryId: string) => Promise<void>
   /** Timeline entry ids already routed to the agent (their action stays "Sent"). */
@@ -40,6 +56,7 @@ export function usePullRequest(
 ): PullRequestState {
   const qc = useQueryClient()
   const [routing, setRouting] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const cancelRef = useRef<(() => void) | null>(null)
   const { connected, autoDetect, onPrLinked } = opts
 
@@ -69,26 +86,52 @@ export function usePullRequest(
     [session.id]
   )
 
-  const createMutation = useMutation({
-    mutationFn: () =>
-      rpc.githubCreatePr({
-        sessionId: session.id,
-        title: session.title,
-        body: "",
-        base: session.baseBranch ?? "main",
-        draft: false
+  // "Create pull request" forwards an instruction to the session's agent to
+  // commit outstanding work and open the PR. The returned promise settles when
+  // the agent's run finishes, so the button reflects the agent's progress.
+  const createPr = useCallback(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        cancelRef.current?.()
+        setCreateError(null)
+        setRouting(true)
+        cancelRef.current = rpc.agentRun(
+          session.id,
+          createPrPrompt(session.baseBranch ?? "main"),
+          (event) => {
+            if (event._tag === "Failed") {
+              setRouting(false)
+              setCreateError(event.message || "The agent could not open the pull request.")
+              reject(new Error(event.message || "agent-failed"))
+            } else if (event._tag === "Done") {
+              setRouting(false)
+              // Re-detect + link the PR the agent just opened.
+              void qc.invalidateQueries({ queryKey: prKey(session.id) })
+              resolve()
+            }
+          }
+        )
       }),
-    onSuccess: (n) => {
-      onPrLinked?.(session.id, n)
-      void qc.invalidateQueries({ queryKey: prKey(session.id) })
-    }
-  })
+    [session.id, session.baseBranch, qc]
+  )
 
   const reviewMutation = useMutation({
     mutationFn: (input: { body: string; kind: ReviewSubmitKind }) =>
       rpc.githubReview(session.id, input.kind, input.body),
     onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
   })
+
+  // "Merge pull request" merges the linked PR via `gh pr merge`. On success the
+  // PR read is invalidated so the header flips to "Merged" (and the archive
+  // sweep, which polls the PR state, retires the session).
+  const mergeMutation = useMutation({
+    mutationFn: () => rpc.githubMerge(session.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
+  })
+  const mergePr = useCallback(
+    () => mergeMutation.mutateAsync().then(() => undefined),
+    [mergeMutation]
+  )
 
   const submitReview = useCallback(
     async (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => {
@@ -117,16 +160,17 @@ export function usePullRequest(
     if (pr?.url) void window.starbase.openExternal(pr.url)
   }, [pr])
 
-  const createError = createMutation.error
-    ? ((createMutation.error as { message?: string }).message ?? "Failed to create pull request")
-    : null
-
   return {
     pr,
-    busy: query.isPending || createMutation.isPending,
+    busy: query.isPending,
     createError,
     routing,
-    createPr: () => createMutation.mutateAsync().then(() => undefined),
+    createPr,
+    mergePr,
+    merging: mergeMutation.isPending,
+    mergeError: mergeMutation.error
+      ? ((mergeMutation.error as { message?: string }).message ?? "Failed to merge pull request")
+      : null,
     submitReview,
     sendEntryToAgent,
     sentEntryIds,

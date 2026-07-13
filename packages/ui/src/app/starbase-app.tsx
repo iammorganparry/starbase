@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import type {
   CliInfo,
   CreateSessionFromPrInput,
@@ -32,6 +32,12 @@ export interface StarbaseAppProps {
   sessions: ReadonlyArray<Session>
   /** Repos discovered under the workspace, for the New Session picker. */
   repos?: ReadonlyArray<Repo>
+  /** Absolute paths of starred repos — surfaced first in the picker + sidebar. */
+  starredRepos?: ReadonlyArray<string>
+  /** Toggle a repo's starred state (by absolute path); persists upstream. */
+  onToggleStar?: (repoPath: string) => void | Promise<void>
+  /** Preselect this repo (by path) when the New Session dialog opens. */
+  defaultRepoPath?: string | null
   /** GitHub CLI status for the harnesses strip. */
   ghStatus?: GhStatus
   /** Live per-session agent status (thinking / needs-input) while running. */
@@ -97,6 +103,9 @@ export function StarbaseApp({
   clis,
   sessions,
   repos = [],
+  starredRepos = [],
+  onToggleStar,
+  defaultRepoPath,
   ghStatus,
   liveStatus,
   usage,
@@ -146,6 +155,20 @@ export function StarbaseApp({
   }, [onRecheckGh])
 
   const ghConnected = Boolean(ghStatus?.available && ghStatus?.authenticated)
+
+  // The sidebar groups sessions by repo *name* (Session.repo === Repo.name), so
+  // translate the path-keyed stars into the names those groups pin on.
+  const starredRepoNames = useMemo(() => {
+    const paths = new Set(starredRepos)
+    return new Set(repos.filter((r) => paths.has(r.path)).map((r) => r.name))
+  }, [repos, starredRepos])
+  const toggleStarByName = useCallback(
+    (repoName: string) => {
+      const repo = repos.find((r) => r.name === repoName)
+      if (repo) return onToggleStar?.(repo.path)
+    },
+    [repos, onToggleStar]
+  )
 
   const active = sessions.find((s) => s.id === selected) ?? null
   // Key the pane by session id so each session drives a fresh conversation
@@ -210,6 +233,8 @@ export function StarbaseApp({
         onOpenUsage={onLoadUsage ? openUsage : undefined}
         onOpenSettings={onSaveGithubConfig ? () => setSettingsOpen(true) : undefined}
         ghConnected={ghConnected}
+        starredRepoNames={starredRepoNames}
+        onToggleStar={onToggleStar ? toggleStarByName : undefined}
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
         renderCode={renderCode}
@@ -220,6 +245,9 @@ export function StarbaseApp({
           open={newOpen}
           onClose={() => setNewOpen(false)}
           repos={repos}
+          starredRepos={starredRepos}
+          onToggleStar={onToggleStar}
+          defaultRepoPath={defaultRepoPath}
           clis={clis}
           loadBranches={loadBranches}
           onCreate={handleCreate}

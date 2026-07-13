@@ -329,4 +329,27 @@ describe("GhService pull-request writes", () => {
     }))
     expect(failureOf(review)?._tag).toBe("GhError")
   })
+
+  it("prMerge passes an explicit strategy flag (merge commit by default)", async () => {
+    const calls: Array<ReadonlyArray<string>> = []
+    const capture: FakeCommandHandler = (cmd, args) => {
+      if (cmd === "gh") calls.push(args)
+      return { stdout: "" }
+    }
+
+    await providePr(GhService.prMerge("/wt", 482), capture)
+    expect(calls[0]).toEqual(["pr", "merge", "482", "--merge"])
+
+    calls.length = 0
+    await providePr(GhService.prMerge("/wt", 482, "squash"), capture)
+    expect(calls[0]).toEqual(["pr", "merge", "482", "--squash"])
+  })
+
+  it("prMerge fails with GhError on a non-zero exit", async () => {
+    const merge = await providePr(GhService.prMerge("/wt", 482), () => ({
+      exitCode: 1,
+      stderr: "gh: not mergeable"
+    }))
+    expect(failureOf(merge)?._tag).toBe("GhError")
+  })
 })

@@ -19,6 +19,7 @@ import type {
   ModelOption,
   PermissionMode,
   PrFileChange,
+  PrMergeMethod,
   PrState,
   PrSummary,
   PullRequest,
@@ -147,6 +148,10 @@ export const rpc = {
     run((c) => c.Config.setGithub(github)),
   configSetGit: (git: GitConfig): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setGit(git)),
+  configSetStarredRepos: (paths: ReadonlyArray<string>): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setStarredRepos({ paths })),
+  configSetLastRepoPath: (path: string): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setLastRepoPath({ path })),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
     run((c) => c.Github.pr({ sessionId })),
   githubPrState: (sessionId: string): Promise<PrState | null> =>
@@ -173,6 +178,8 @@ export const rpc = {
     run((c) => c.Github.comment({ sessionId, body, toGithub })),
   githubReview: (sessionId: string, kind: ReviewSubmitKind, body: string): Promise<void> =>
     run((c) => c.Github.review({ sessionId, kind, body })),
+  githubMerge: (sessionId: string, method?: PrMergeMethod): Promise<void> =>
+    run((c) => c.Github.merge({ sessionId, method })),
 
   /**
    * Subscribe to a prompt's normalized event stream. Forks the RPC stream on the

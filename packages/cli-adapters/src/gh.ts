@@ -4,6 +4,7 @@ import type {
   PrCheckStatus,
   PrFileChange,
   PrLabel,
+  PrMergeMethod,
   PrReviewer,
   PrReviewKind,
   PrState,
@@ -527,7 +528,20 @@ export class GhService extends Effect.Service<GhService>()(
           String(number),
           REVIEW_FLAG[kind],
           ...(body.length > 0 ? ["--body", body] : [])
-        ]).pipe(Effect.asVoid)
+        ]).pipe(Effect.asVoid),
+
+      /**
+       * Merge PR `number` using `method` (defaults to a merge commit). `gh`
+       * requires an explicit strategy flag, so we always pass one; surfaces
+       * `GhError` when the merge is rejected (branch protection, conflicts, a
+       * strategy the repo disallows, …).
+       */
+      prMerge: (
+        cwd: string,
+        number: number,
+        method: PrMergeMethod = "merge"
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["pr", "merge", String(number), `--${method}`]).pipe(Effect.asVoid)
     })
   }
 ) {}

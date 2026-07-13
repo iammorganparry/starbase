@@ -179,7 +179,7 @@ export function ConversationView({
         )}
         {/* Slim bar with a labelled Changes toggle — only when there are changes. */}
         {!archived && hasChanges && (
-          <div className="flex flex-none items-center justify-end border-b border-hairline px-[30px] py-2">
+          <div className="flex h-[42px] flex-none items-center justify-end border-b border-hairline px-[30px]">
             <button
               type="button"
               onClick={() => setShowChanges((v) => !v)}
