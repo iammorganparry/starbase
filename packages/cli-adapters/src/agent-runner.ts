@@ -23,9 +23,13 @@ import { Deferred, Effect, Mailbox, Ref, Stream } from "effect"
 import { AppPaths } from "./app-paths.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
 import type { PermissionDecision, PermissionRequest, SessionSpec } from "./adapter.js"
+import { readDefaultMode } from "./default-mode.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
 import { TranscriptStore } from "./transcripts.js"
+
+/** Tools that write to disk — a successful one advances the matching plan step. */
+const EDIT_TOOLS = new Set(["Write", "Edit", "Update", "MultiEdit", "NotebookEdit"])
 
 /** A gate awaiting the operator; the `Deferred` unblocks the paused agent. */
 interface PendingGate {
@@ -156,6 +160,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     // sessionId → the exec mode to restore when a plan is approved (captured on
     // the switch into "plan").
     const priorModes = yield* Ref.make(new Map<string, PermissionMode>())
+    // sessionId → the user's default exec mode (read from their claude/codex
+    // config at run start). Used as the restore fallback when there's no prior
+    // exec mode to fall back to — so approving a plan lands in the mode they
+    // normally run in, not a hardcoded guess.
+    const execDefaults = yield* Ref.make(new Map<string, PermissionMode>())
     // sessionId → live handles onto the current run, for the out-of-band plan RPCs.
     const active = yield* Ref.make(new Map<string, ActiveRun>())
     // Monotonic id source — deterministic (no Date.now/random) for stable tests.
@@ -175,7 +184,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               Effect.map((s) => s.mode),
               Effect.orElseSucceed(() => undefined)
             ))
-          const prior: PermissionMode = current && current !== "plan" ? current : "accept-edits"
+          const configDefault = (yield* Ref.get(execDefaults)).get(sessionId) ?? "accept-edits"
+          const prior: PermissionMode = current && current !== "plan" ? current : configDefault
           yield* Ref.update(priorModes, (m) => new Map(m).set(sessionId, prior))
         }
         yield* Ref.update(modes, (m) => new Map(m).set(sessionId, mode))
@@ -259,7 +269,12 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
       Effect.gen(function* () {
         const run = (yield* Ref.get(active)).get(sessionId)
         if (run !== undefined) yield* run.applyPlan(planId, (p) => ({ ...p, status: "approved" }))
-        const mode = (yield* Ref.get(priorModes)).get(sessionId) ?? "accept-edits"
+        // Restore what they had before planning; else the mode they normally run
+        // in (from their CLI config); else a safe exec default.
+        const mode =
+          (yield* Ref.get(priorModes)).get(sessionId) ??
+          (yield* Ref.get(execDefaults)).get(sessionId) ??
+          "accept-edits"
         // Restore the exec mode live (canUseTool re-reads it) and persist it.
         yield* setMode(sessionId, mode)
         yield* resolvePlan(sessionId, planId, PlanDecision.Approve({ mode }))
@@ -307,6 +322,12 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             ...(session?.allowlist ?? [])
           ])
           const cli = session?.cli ?? "claude"
+          // Cache the user's configured default exec mode so approving a plan can
+          // restore it (AppPaths.root is ~/starbase, so its parent is $HOME).
+          const appPaths = yield* AppPaths
+          const pathSvc = yield* Path.Path
+          const execDefault = yield* readDefaultMode(cli, pathSvc.dirname(appPaths.root))
+          yield* Ref.update(execDefaults, (m) => new Map(m).set(sessionId, execDefault))
           // Resolve the harness binary; null → the dispatcher uses the scripted
           // fallback (also the path when the CLI isn't installed).
           const binPath =
@@ -349,6 +370,60 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
 
           const out = yield* Mailbox.make<StreamEvent>()
 
+          // toolUseId → the file an edit tool is writing, remembered at ToolStart so
+          // its ToolEnd can mark the matching plan step done (see markPlanProgress).
+          const editTargets = yield* Ref.make(new Map<string, string>())
+
+          // Read the current plan from the live accumulator (for the out-of-band RPCs).
+          const readPlan = (planId: string): Effect.Effect<Plan | null> =>
+            Effect.map(Ref.get(acc), (m) => findPlan(m, planId))
+
+          // Replace a plan part in place: update the accumulator + persisted
+          // transcript, and push a `PlanUpdated` so an attached renderer syncs.
+          const applyPlan = (planId: string, f: (plan: Plan) => Plan): Effect.Effect<void> =>
+            Effect.gen(function* () {
+              const cur = yield* Ref.get(acc)
+              const plan = findPlan(cur, planId)
+              if (plan === null) return
+              const nextPlan = f(plan)
+              const next: Message = {
+                ...cur,
+                parts: cur.parts.map((p) =>
+                  p._tag === "Plan" && p.plan.id === planId ? { _tag: "Plan", plan: nextPlan } : p
+                )
+              }
+              yield* Ref.set(acc, next)
+              yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
+              yield* out.offer({ _tag: "PlanUpdated", plan: nextPlan })
+            }).pipe(Effect.provide(env), Effect.asVoid)
+
+          // When an edit lands during execution of an approved plan, mark the plan
+          // step whose proposed files include the edited path as "done" — tying live
+          // progress back to the plan. Path matching is suffix-based so an absolute
+          // worktree path matches a step's repo-relative file.
+          const markPlanProgress = (toolId: string): Effect.Effect<void> =>
+            Effect.gen(function* () {
+              const target = (yield* Ref.get(editTargets)).get(toolId)
+              if (target === undefined) return
+              const cur = yield* Ref.get(acc)
+              const executing = cur.parts.find((p) => p._tag === "Plan" && p.plan.status === "approved")
+              if (executing === undefined || executing._tag !== "Plan") return
+              const t = target.replace(/\\/g, "/")
+              const step = executing.plan.steps.find(
+                (s) =>
+                  s.status !== "done" &&
+                  s.files.some((f) => {
+                    const fp = f.path.replace(/\\/g, "/")
+                    return t === fp || t.endsWith(`/${fp}`) || fp.endsWith(t) || t.endsWith(fp)
+                  })
+              )
+              if (step === undefined) return
+              yield* applyPlan(executing.plan.id, (pl) => ({
+                ...pl,
+                steps: pl.steps.map((s) => (s.id === step.id ? { ...s, status: "done" as const } : s))
+              }))
+            })
+
           // Fold each event into the assistant message + persist, then surface it.
           // Runs on the single producer fiber, so transcript order is preserved.
           const emit = (event: StreamEvent): Effect.Effect<void> =>
@@ -361,7 +436,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               if (event._tag === "Started" && event.model) {
                 yield* SessionStore.setModel(sessionId, event.model).pipe(Effect.ignore)
               }
+              // Remember an edit's target path so its ToolEnd can tie back to a step.
+              if (event._tag === "ToolStart" && EDIT_TOOLS.has(event.name) && event.target) {
+                yield* Ref.update(editTargets, (m) => new Map(m).set(event.id, event.target!))
+              }
               yield* out.offer(event)
+              // After the tool card lands, reconcile plan progress off a successful edit.
+              if (event._tag === "ToolEnd" && event.status === "success") {
+                yield* markPlanProgress(event.id)
+              }
             }).pipe(Effect.provide(env), Effect.asVoid)
 
           const canUseTool = (req: PermissionRequest): Effect.Effect<PermissionDecision> =>
@@ -410,29 +493,6 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               )
               return answers
             })
-
-          // Read the current plan from the live accumulator (for the out-of-band RPCs).
-          const readPlan = (planId: string): Effect.Effect<Plan | null> =>
-            Effect.map(Ref.get(acc), (m) => findPlan(m, planId))
-
-          // Replace a plan part in place: update the accumulator + persisted
-          // transcript, and push a `PlanUpdated` so an attached renderer syncs.
-          const applyPlan = (planId: string, f: (plan: Plan) => Plan): Effect.Effect<void> =>
-            Effect.gen(function* () {
-              const cur = yield* Ref.get(acc)
-              const plan = findPlan(cur, planId)
-              if (plan === null) return
-              const nextPlan = f(plan)
-              const next: Message = {
-                ...cur,
-                parts: cur.parts.map((p) =>
-                  p._tag === "Plan" && p.plan.id === planId ? { _tag: "Plan", plan: nextPlan } : p
-                )
-              }
-              yield* Ref.set(acc, next)
-              yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
-              yield* out.offer({ _tag: "PlanUpdated", plan: nextPlan })
-            }).pipe(Effect.provide(env), Effect.asVoid)
 
           const proposePlan = (plan: Plan): Effect.Effect<PlanDecision> =>
             Effect.gen(function* () {

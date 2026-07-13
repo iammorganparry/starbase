@@ -208,6 +208,9 @@ export function App() {
       renderReview={(session, ctx) => (
         <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
       )}
+      renderCode={(session, ctx) => (
+        <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
+      )}
       version={__APP_VERSION__}
     />
   )

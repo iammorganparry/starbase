@@ -1,4 +1,5 @@
 import {
+  FileDiff,
   GitCompareArrows,
   GitPullRequest,
   type LucideIcon,
@@ -10,10 +11,11 @@ import { cn } from "../lib/cn.js"
 import { Pill } from "../components/pill.js"
 import { Badge } from "../components/badge.js"
 
-export type TabKey = "conversation" | "pr" | "review" | "plan" | "workflow"
+export type TabKey = "conversation" | "changes" | "pr" | "review" | "plan" | "workflow"
 
 const LABEL: Record<TabKey, string> = {
   conversation: "Conversation",
+  changes: "Changes",
   pr: "Pull Request",
   review: "Code Review",
   plan: "Plan Review",
@@ -22,6 +24,7 @@ const LABEL: Record<TabKey, string> = {
 
 const ICON: Record<TabKey, LucideIcon> = {
   conversation: MessagesSquare,
+  changes: FileDiff,
   pr: GitPullRequest,
   review: GitCompareArrows,
   plan: Waypoints,

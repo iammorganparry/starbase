@@ -1,5 +1,5 @@
 import type { Plan, PlanStep, PlanStepStatus } from "@starbase/core"
-import { GitBranch, MessageSquareText } from "lucide-react"
+import { Check, GitBranch, MessageSquareText } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
 
@@ -75,8 +75,24 @@ function Row({
           : "border border-transparent hover:bg-surface"
       )}
     >
-      <StatusDot tone={STATUS_TONE[step.status]} size={7} pulse={step.status === "revising"} glow={step.status === "current"} />
-      <span className="font-mono text-[10px] text-muted-foreground tabular-nums">{step.number}</span>
+      {step.status === "done" ? (
+        <Check className="size-3.5 flex-none text-green" strokeWidth={2.5} />
+      ) : (
+        <StatusDot
+          tone={STATUS_TONE[step.status]}
+          size={7}
+          pulse={step.status === "revising"}
+          glow={step.status === "current"}
+        />
+      )}
+      <span
+        className={cn(
+          "font-mono text-[10px] tabular-nums",
+          step.status === "done" ? "text-green/70" : "text-muted-foreground"
+        )}
+      >
+        {step.number}
+      </span>
       {branch && <GitBranch className="size-3.5 flex-none text-purple" />}
       <span
         className={cn(

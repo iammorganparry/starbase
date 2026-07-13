@@ -1,38 +1,48 @@
 import { cn } from "../lib/cn.js"
 
 /**
- * A compact inline diff snippet shown under an `Edit` tool card — the "peek" from
- * the design. Each line may be prefixed with a line number; a leading `+`/`-`
- * (after any number) tints it added/removed. Full diffs live in the Changes rail.
+ * A compact inline unified-diff hunk shown under an `Edit`/`Write` tool card —
+ * the "peek" from the design. Each line's FIRST character is the marker: `+`
+ * added, `-` removed, ` ` (space) context, `…` a truncation gutter; the rest is
+ * the code verbatim. Reading the marker positionally (not by sniffing the code)
+ * means a context line that itself starts with `+`/`-` is never mis-tinted.
  */
 export function DiffPeek({ preview, className }: { preview: string; className?: string }) {
   const lines = preview.replace(/\n+$/, "").split("\n")
   return (
     <div className={cn("bg-editor font-mono text-[11.5px] leading-[1.85]", className)}>
       {lines.map((raw, i) => {
-        const match = raw.match(/^\s*(\d+)?\s*([+-])?\s?(.*)$/)
-        const num = match?.[1] ?? ""
-        const sign = match?.[2] ?? ""
-        const code = match?.[3] ?? raw
-        const added = sign === "+"
-        const removed = sign === "-"
+        const marker = raw[0] ?? " "
+        const added = marker === "+"
+        const removed = marker === "-"
+        const gutter = marker === "…"
+        const known = added || removed || gutter || marker === " "
+        const code = known ? raw.slice(1) : raw
         return (
           <div
             key={i}
             className={cn(
-              "flex",
+              "flex px-3",
               added && "bg-green/[0.13]",
               removed && "bg-red/[0.13]"
             )}
           >
-            <span className="w-8 shrink-0 pr-[9px] text-right text-line-strong">{num}</span>
+            <span
+              className={cn(
+                "w-3 shrink-0 select-none text-line-strong",
+                added && "text-green",
+                removed && "text-red"
+              )}
+            >
+              {added ? "+" : removed ? "-" : ""}
+            </span>
             <span
               className={cn(
                 "whitespace-pre-wrap",
-                added ? "text-green" : removed ? "text-red" : "text-muted-foreground"
+                added ? "text-green" : removed ? "text-red" : gutter ? "text-line-strong italic" : "text-muted-foreground"
               )}
             >
-              {sign ? `${sign} ${code}` : code}
+              {gutter ? `⋯ ${code}` : code}
             </span>
           </div>
         )

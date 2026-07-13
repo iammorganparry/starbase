@@ -7,6 +7,7 @@ import { Callout } from "../components/callout.js"
 import { Pill } from "../components/pill.js"
 import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
 import { PlanFlow } from "../composites/plan-flow.js"
+import { PlanStepChanges } from "../composites/plan-step-changes.js"
 import { PlanStepDetail } from "../composites/plan-step-detail.js"
 import { PlanStepList } from "../composites/plan-step-list.js"
 
@@ -28,17 +29,21 @@ const branchCount = (plan: Plan): number => plan.steps.filter((s) => s.kind === 
  */
 export function PlanReview({
   plan,
+  patch = "",
   onApprove,
   onRevise,
   onComment
 }: {
   plan: Plan | null
+  /** The session worktree's live unified diff, sliced per-step into the changes rail. */
+  patch?: string
   onApprove?: () => void
   onRevise?: () => void
   onComment?: (stepId: string, body: string) => void
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const list = useResizableWidth({ storageKey: "sb.plan.list", initial: 280, min: 220, max: 420 })
+  const changes = useResizableWidth({ storageKey: "sb.plan.changes", initial: 380, min: 280, max: 560 })
 
   if (!plan) {
     return (
@@ -121,6 +126,19 @@ export function PlanReview({
             <PlanFlow plan={plan} selectedId={selectedId} onSelect={setSelectedId} />
           )}
         </div>
+
+        {/* Right rail — the selected step's ACTUAL file changes (from the worktree diff). */}
+        {selected && (
+          <>
+            <ResizeHandle aria-label="Resize changes" onResize={(dx) => changes.adjust(-dx)} />
+            <div
+              style={{ width: changes.width }}
+              className="flex min-h-0 flex-none flex-col overflow-hidden border-l border-hairline"
+            >
+              <PlanStepChanges step={selected} patch={patch} />
+            </div>
+          </>
+        )}
       </div>
 
       {readOnly && plan.status === "stale" && (

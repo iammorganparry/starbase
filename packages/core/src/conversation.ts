@@ -147,6 +147,18 @@ export type PlanStepKind = Schema.Schema.Type<typeof PlanStepKind>
 export const PlanStepStatus = Schema.Literal("proposed", "current", "revising", "done")
 export type PlanStepStatus = Schema.Schema.Type<typeof PlanStepStatus>
 
+/**
+ * An illustrative code sample for a step — the proposed service method, test, or
+ * type the agent intends to write, so the operator can scrutinise the *shape* of
+ * the change before approving. `lang` is a highlight hint (e.g. "ts"); `body` is
+ * the raw snippet.
+ */
+export const PlanStepCode = Schema.Struct({
+  lang: Schema.NullOr(Schema.String),
+  body: Schema.String
+})
+export type PlanStepCode = Schema.Schema.Type<typeof PlanStepCode>
+
 /** One node of the plan — an ordered step or a branch/arm. */
 export const PlanStep = Schema.Struct({
   id: Schema.String,
@@ -165,6 +177,12 @@ export const PlanStep = Schema.Struct({
   blocks: Schema.Array(Schema.String),
   files: Schema.Array(PlanFileChange),
   guards: Schema.Array(PlanGuard),
+  /**
+   * An illustrative code sample of the proposed change, or null. `optionalWith`
+   * (default null) so transcripts persisted before this field decode cleanly
+   * instead of blanking the whole conversation.
+   */
+  code: Schema.optionalWith(Schema.NullOr(PlanStepCode), { default: () => null }),
   diff: Schema.NullOr(DiffStat),
   status: PlanStepStatus,
   flagged: Schema.Boolean

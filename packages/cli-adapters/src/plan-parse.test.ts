@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseFlow, parsePlan, planModeInstructions } from "./plan-parse.js"
+import { parseFlow, parsePlan, parseStepCode, planModeInstructions } from "./plan-parse.js"
 
 /**
  * `parsePlan` turns the free-form plan text Claude emits via ExitPlanMode into a
@@ -137,11 +137,53 @@ describe("parseFlow", () => {
   })
 })
 
+describe("parseStepCode", () => {
+  const RAW = `\`\`\`plan
+summary: x
+02 Create TokenStore
+\`\`\`
+
+\`\`\`ts step 02
+export class TokenStore {}
+\`\`\`
+
+\`\`\`step 3
+const x = 1
+\`\`\``
+
+  it("links a fenced code block to its step by the `step NN` info string, capturing the language", () => {
+    const map = parseStepCode(RAW)
+    expect(map.get("02")).toStrictEqual({ lang: "ts", body: "export class TokenStore {}" })
+  })
+
+  it("normalizes the step number and treats a leading `step` token as no language", () => {
+    const map = parseStepCode(RAW)
+    expect(map.get("03")).toStrictEqual({ lang: null, body: "const x = 1" })
+  })
+
+  it("ignores plain code blocks with no step link (and the plan/flow blocks)", () => {
+    expect(parseStepCode("```ts\nconst a = 1\n```").size).toBe(0)
+  })
+
+  it("attaches the sample onto the matching PlanStep in parsePlan", () => {
+    const plan = parsePlan(RAW, "plan_1")
+    expect(plan.steps.find((s) => s.number === "02")?.code).toStrictEqual({
+      lang: "ts",
+      body: "export class TokenStore {}"
+    })
+  })
+})
+
 describe("planModeInstructions", () => {
   it("documents the plan + flow blocks and forbids execution", () => {
     expect(planModeInstructions).toContain("```plan")
     expect(planModeInstructions).toContain("```flow")
     expect(planModeInstructions).toMatch(/ExitPlanMode/)
     expect(planModeInstructions.toLowerCase()).toContain("do not edit")
+  })
+
+  it("documents the per-step code sample convention", () => {
+    expect(planModeInstructions).toMatch(/step <NN>/)
+    expect(planModeInstructions.toLowerCase()).toContain("code sample")
   })
 })

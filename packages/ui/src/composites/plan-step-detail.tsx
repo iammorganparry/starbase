@@ -14,6 +14,7 @@ import { cn } from "../lib/cn.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { DiffStat } from "../components/diff-stat.js"
+import { Markdown } from "../components/markdown.js"
 
 const CHANGE_TONE: Record<PlanFileChange["change"], "green" | "yellow" | "red"> = {
   A: "green",
@@ -151,6 +152,26 @@ export function PlanStepDetail({
                   <DiffStat added={f.added} removed={f.removed} />
                 </div>
               ))}
+            </div>
+          </Section>
+        )}
+
+        {step.code && (
+          <Section title="Proposed code">
+            <div className="overflow-hidden rounded-md border border-hairline bg-panel">
+              <div className="flex items-center justify-between border-b border-hairline px-3 py-1.5">
+                <span className="text-[10.5px] font-medium uppercase tracking-[0.4px] text-muted-foreground">
+                  Illustrative — the shape of the change
+                </span>
+                {step.code.lang && (
+                  <Badge tone="neutral" size="xs">
+                    {step.code.lang}
+                  </Badge>
+                )}
+              </div>
+              <div className="[&_pre]:!m-0 [&_pre]:!rounded-none [&_pre]:!border-0 overflow-x-auto text-[12px]">
+                <Markdown>{`\`\`\`${step.code.lang ?? ""}\n${step.code.body}\n\`\`\``}</Markdown>
+              </div>
             </div>
           </Section>
         )}

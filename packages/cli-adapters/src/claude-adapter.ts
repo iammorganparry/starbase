@@ -116,37 +116,96 @@ const toolTarget = (name: string, input: Record<string, unknown>): string | null
 
 const lineCount = (s: string): number => (s.length === 0 ? 0 : s.split("\n").length)
 
-const firstLine = (s: string, sign: "+" | "-"): string | null => {
-  const line = s.split("\n").find((l) => l.trim().length > 0)
-  return line ? `${sign} ${line.trim()}` : null
+// ── Diff-hunk preview ────────────────────────────────────────────────────────
+// The preview is a unified-diff hunk: each line's FIRST character is the marker
+// ("+" added, "-" removed, " " context, "…" a truncation gutter), the rest is the
+// code verbatim. Content-independent so a context line that happens to start with
+// "+"/"-" is never mis-tinted. `DiffPeek` renders it.
+
+/** Context lines kept either side of a change, so the edit reads in situ. */
+const HUNK_CONTEXT = 3
+/** Cap the changed region so a huge replace doesn't produce a wall of lines. */
+const HUNK_MAX_CHANGED = 40
+
+const mark = (sign: "+" | "-" | " ", line: string): string => `${sign}${line}`
+
+/** Truncate a run of changed lines, appending a "… N more" gutter when clipped. */
+const clip = (lines: ReadonlyArray<string>, sign: "+" | "-"): ReadonlyArray<string> => {
+  if (lines.length <= HUNK_MAX_CHANGED) return lines.map((l) => mark(sign, l))
+  const shown = lines.slice(0, HUNK_MAX_CHANGED).map((l) => mark(sign, l))
+  return [...shown, `…${lines.length - HUNK_MAX_CHANGED} more ${sign === "+" ? "added" : "removed"} line(s)`]
 }
 
-/** Derive a `DiffStat` + one-line preview from an edit tool's input. */
+/**
+ * Build a unified-diff hunk from an edit's `old_string`/`new_string` by trimming
+ * the common prefix/suffix (the surrounding lines Claude includes to disambiguate
+ * the edit) down to `HUNK_CONTEXT` lines of context around the actual change.
+ * Returns null when there is no line-level change to show.
+ */
+const unifiedHunk = (oldS: string, newS: string): string | null => {
+  const o = oldS.length === 0 ? [] : oldS.split("\n")
+  const n = newS.length === 0 ? [] : newS.split("\n")
+  let p = 0
+  while (p < o.length && p < n.length && o[p] === n[p]) p++
+  let s = 0
+  while (s < o.length - p && s < n.length - p && o[o.length - 1 - s] === n[n.length - 1 - s]) s++
+  const removed = o.slice(p, o.length - s)
+  const added = n.slice(p, n.length - s)
+  if (removed.length === 0 && added.length === 0) return null
+
+  const preFrom = Math.max(0, p - HUNK_CONTEXT)
+  const postTo = Math.min(o.length, o.length - s + HUNK_CONTEXT)
+  const out: Array<string> = []
+  if (preFrom > 0) out.push("…")
+  for (const c of o.slice(preFrom, p)) out.push(mark(" ", c))
+  out.push(...clip(removed, "-"))
+  out.push(...clip(added, "+"))
+  for (const c of o.slice(o.length - s, postTo)) out.push(mark(" ", c))
+  if (postTo < o.length) out.push("…")
+  return out.join("\n")
+}
+
+/** First N lines of new file content as an added-only hunk (for Write). */
+const addedHunk = (content: string): string | null => {
+  if (content.length === 0) return null
+  const lines = content.split("\n")
+  const shown = lines.slice(0, HUNK_MAX_CHANGED).map((l) => mark("+", l))
+  if (lines.length > HUNK_MAX_CHANGED) shown.push(`…${lines.length - HUNK_MAX_CHANGED} more line(s)`)
+  return shown.join("\n")
+}
+
+/** Derive a `DiffStat` + a multi-line diff-hunk preview from an edit tool's input. */
 export const editStats = (
   name: string,
   input: Record<string, unknown>
 ): { diff: DiffStat | null; preview: string | null } => {
   if (name === "Write") {
     const content = strOf(input.content) ?? ""
-    return { diff: { added: lineCount(content), removed: 0 }, preview: firstLine(content, "+") }
+    return { diff: { added: lineCount(content), removed: 0 }, preview: addedHunk(content) }
   }
   if (name === "Edit" || name === "Update" || name === "NotebookEdit") {
     const oldS = strOf(input.old_string) ?? ""
     const newS = strOf(input.new_string) ?? ""
     return {
       diff: { added: lineCount(newS), removed: lineCount(oldS) },
-      preview: firstLine(newS, "+") ?? firstLine(oldS, "-")
+      preview: unifiedHunk(oldS, newS)
     }
   }
   if (name === "MultiEdit") {
     const edits = Array.isArray(input.edits) ? (input.edits as Array<Record<string, unknown>>) : []
     let added = 0
     let removed = 0
+    const hunks: Array<string> = []
     for (const e of edits) {
-      added += lineCount(strOf(e.new_string) ?? "")
-      removed += lineCount(strOf(e.old_string) ?? "")
+      const oldS = strOf(e.old_string) ?? ""
+      const newS = strOf(e.new_string) ?? ""
+      added += lineCount(newS)
+      removed += lineCount(oldS)
+      const h = unifiedHunk(oldS, newS)
+      if (h !== null) hunks.push(h)
     }
-    return { diff: { added, removed }, preview: null }
+    // Separate each edit's hunk with a blank context line so they read as distinct.
+    return { diff: { added, removed }, preview: hunks.length > 0 ? hunks.join("\n \n") : null }
   }
   return { diff: null, preview: null }
 }

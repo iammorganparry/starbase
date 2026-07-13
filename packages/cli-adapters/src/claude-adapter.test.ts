@@ -48,10 +48,20 @@ describe("toPermissionRequest", () => {
 })
 
 describe("editStats", () => {
-  it("counts added/removed lines and previews the first added line for an Edit", () => {
+  it("counts added/removed lines and builds a unified hunk (context + added) for an Edit", () => {
     const { diff, preview } = editStats("Edit", { old_string: "a", new_string: "a\nb\nc" })
     expect(diff).toStrictEqual({ added: 3, removed: 1 })
-    expect(preview).toBe("+ a")
+    // "a" is the shared context line; "b"/"c" are the added lines. Each line's
+    // first char is the marker (" " context, "+" added).
+    expect(preview).toBe(" a\n+b\n+c")
+  })
+
+  it("shows removed and added lines around a real edit, with surrounding context", () => {
+    const { preview } = editStats("Edit", {
+      old_string: "import x\nconst a = 1\nexport a",
+      new_string: "import x\nconst a = 2\nexport a"
+    })
+    expect(preview).toBe(" import x\n-const a = 1\n+const a = 2\n export a")
   })
 
   it("treats a Write as all-added", () => {
@@ -118,7 +128,7 @@ describe("streamEventsFor", () => {
       tools
     )
     expect(events).toStrictEqual([
-      { _tag: "ToolEnd", id: "tu_1", status: "success", meta: null, diff: { added: 2, removed: 1 }, preview: "+ a" }
+      { _tag: "ToolEnd", id: "tu_1", status: "success", meta: null, diff: { added: 2, removed: 1 }, preview: " a\n+b" }
     ])
   })
 

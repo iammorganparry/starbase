@@ -68,6 +68,7 @@ export function ConversationPane({
     return (
       <PlanReview
         plan={convo.plan}
+        patch={convo.patch}
         onApprove={() => planId && convo.approvePlan(planId)}
         onRevise={() => planId && convo.revisePlan(planId)}
         onComment={(stepId, body) => planId && convo.commentPlanStep(planId, stepId, body)}

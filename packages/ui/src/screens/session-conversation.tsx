@@ -50,6 +50,8 @@ export interface SessionConversationProps {
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Changes tab — the Code Review view over the local worktree diff. */
+  renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** App version, shown in the sidebar footer. */
   version?: string
 }
@@ -66,7 +68,9 @@ const visibleTabs = (
   const tabs: TabKey[] = ["conversation"]
   if (active && planSessions?.has(active.id)) tabs.push("plan")
   if (active?.prNumber != null) tabs.push("pr", "review")
-  else if (active?.worktreePath) tabs.push("pr")
+  // No PR yet: the local worktree diff gets its own Changes tab (Code Review
+  // covers local diffs only once a PR exists).
+  else if (active?.worktreePath) tabs.push("pr", "changes")
   return tabs
 }
 
@@ -149,6 +153,8 @@ export function SessionConversation(props: SessionConversationProps) {
                   (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
                     <StubScreen tab="review" />
                   ))
+                ) : activeTab === "changes" && active ? (
+                  (props.renderCode?.(active, { onConnectGithub: connectGithub }) ?? <StubScreen tab="changes" />)
                 ) : (
                   <StubScreen tab={activeTab} />
                 )}

@@ -288,6 +288,28 @@ describe("AgentRunner plan mode", () => {
     expect(plan.steps.find((s) => s.id === "s_4a")?.flagged).toBe(true)
   })
 
+  it("marks a plan step done when an executed edit touches one of its files", async () => {
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      yield* runner.setMode(SESSION, "plan")
+      yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+        Stream.tap((ev) => (ev._tag === "PlanProposed" ? runner.approvePlan(SESSION, ev.plan.id) : Effect.void)),
+        Stream.runDrain
+      )
+      return yield* TranscriptStore.list(SESSION)
+    })
+    const transcript = await Effect.runPromise(program.pipe(Effect.provide(base())))
+    const plan = planParts(transcript)[0]!.plan
+    const statusOf = (id: string) => plan.steps.find((s) => s.id === id)?.status
+    // The scripted approval writes token-store.ts (02), session.ts (03) and
+    // session.test.ts (05) — each ties back to its step.
+    expect(statusOf("s_02")).toBe("done")
+    expect(statusOf("s_03")).toBe("done")
+    expect(statusOf("s_05")).toBe("done")
+    // A step whose files were never edited stays proposed.
+    expect(statusOf("s_06")).toBe("proposed")
+  })
+
   it("restores the exec mode on approval so edits then run without a plan gate", async () => {
     seedSession("accept-edits")
     const mode = await Effect.runPromise(

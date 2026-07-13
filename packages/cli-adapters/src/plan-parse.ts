@@ -7,7 +7,8 @@ import type {
   PlanGuard,
   PlanNode,
   PlanNodeKind,
-  PlanStep
+  PlanStep,
+  PlanStepCode
 } from "@starbase/core"
 
 /**
@@ -67,7 +68,22 @@ ALSO include a fenced \`\`\`flow block that maps the DECISIONS and how logic flo
   n3 -> n5
   n4 -> n5
 
-Node syntax: \`<kind> <id> "<label>"\` where kind is start|decision|action|io|terminal|note; optionally add \`file <path>\` (a detail line) and \`step <NN>\` (links the node to that plan step). Edge syntax: \`<from> -> <to>\` with an optional \`: <condition>\` label (put the yes/no or condition on the edges LEAVING a decision node).`
+Node syntax: \`<kind> <id> "<label>"\` where kind is start|decision|action|io|terminal|note; optionally add \`file <path>\` (a detail line) and \`step <NN>\` (links the node to that plan step). Edge syntax: \`<from> -> <to>\` with an optional \`: <condition>\` label (put the yes/no or condition on the edges LEAVING a decision node).
+
+FINALLY, for the steps where it aids review — new service methods, key types, and the tests that cover them — include a short illustrative code sample so the operator can scrutinise the SHAPE of the change (signatures, error handling, test cases) before approving. Emit it as a normal fenced code block whose info string names the step: put \`step <NN>\` after the language. One block per step; keep it to the essential lines (a method signature + body sketch, or a test's arrange/act/assert), not the whole file:
+
+  \`\`\`ts step 02
+  export class TokenStore extends Effect.Service<TokenStore>()("TokenStore", {
+    effect: Effect.gen(function* () {
+      return {
+        get: (id: string) => Effect.succeed(/* … */),
+        refresh: (session: Session) => Effect.gen(function* () { /* … */ })
+      }
+    })
+  }) {}
+  \`\`\`
+
+The language is the highlight hint (ts, tsx, py, go, …); \`step <NN>\` (or \`step=<NN>\`) links the sample to that plan step.`
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -142,6 +158,7 @@ const emptyStep = (number: string, title: string): MutableStep => {
     blocks: [],
     files: [],
     guards: [],
+    code: null,
     diff: null,
     status: "proposed",
     flagged: false
@@ -273,12 +290,36 @@ export const parseFlow = (raw: string): PlanGraph | null => {
 }
 
 /**
+ * Scan every fenced code block whose info string links it to a step (e.g.
+ * ` ```ts step 02 `) into a map of normalized step number → `PlanStepCode`. The
+ * ` ```plan `/` ```flow ` blocks are skipped (their info strings carry no `step`).
+ */
+export const parseStepCode = (raw: string): Map<string, PlanStepCode> => {
+  const out = new Map<string, PlanStepCode>()
+  const re = /```([^\n]*)\n([\s\S]*?)```/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw)) !== null) {
+    const info = (m[1] ?? "").trim()
+    const stepMatch = /\bstep\s*=?\s*(\d+[a-z]?)\b/i.exec(info)
+    if (!stepMatch) continue
+    const num = normNum(stepMatch[1]!)
+    if (out.has(num)) continue // first sample per step wins
+    const first = info.split(/\s+/)[0] ?? ""
+    const lang = first.length > 0 && first.toLowerCase() !== "step" && !/^step=/i.test(first) ? first : null
+    const body = (m[2] ?? "").replace(/\s+$/, "")
+    if (body.length > 0) out.set(num, { lang, body })
+  }
+  return out
+}
+
+/**
  * Parse a raw `ExitPlanMode` plan into a structured `Plan`. Falls back to a
  * single step wrapping the markdown when there's no parseable ` ```plan ` block.
  */
 export const parsePlan = (raw: string, id: string): Plan => {
   const block = fenced(raw, "plan")
   const graph = parseFlow(raw)
+  const code = parseStepCode(raw)
   const parsed = block ? parseBlock(block) : { summary: "", steps: [] as PlanStep[] }
 
   if (parsed.steps.length === 0) {
@@ -304,6 +345,7 @@ export const parsePlan = (raw: string, id: string): Plan => {
           blocks: [],
           files: [],
           guards: [],
+          code: null,
           diff: null,
           status: "proposed",
           flagged: false
@@ -319,7 +361,8 @@ export const parsePlan = (raw: string, id: string): Plan => {
     id,
     summary: parsed.summary || parsed.steps[0]!.title,
     graph,
-    steps: parsed.steps,
+    // Attach any per-step code sample keyed by the step's normalized number.
+    steps: parsed.steps.map((s) => (code.has(s.number) ? { ...s, code: code.get(s.number)! } : s)),
     comments: [],
     status: "proposed",
     raw

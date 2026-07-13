@@ -54,6 +54,8 @@ export interface StarbaseAppProps {
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Changes tab — the Code Review view over the local worktree diff. */
+  renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   activeSessionId?: string | null
   patch?: string
   /**
@@ -106,6 +108,7 @@ export function StarbaseApp({
   onRecheckGh,
   renderPullRequest,
   renderReview,
+  renderCode,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -209,6 +212,7 @@ export function StarbaseApp({
         ghConnected={ghConnected}
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
+        renderCode={renderCode}
         version={version}
       />
       {onCreateSession && (

@@ -408,6 +408,7 @@ describe("Plan flow", () => {
     blocks: [],
     files: [],
     guards: [],
+    code: null,
     diff: null,
     status: "proposed",
     flagged: false,
@@ -463,6 +464,19 @@ describe("Plan flow", () => {
 
   it("rejects an invalid plan status literal", () => {
     expect(Either.isLeft(decode(ContentPart, { _tag: "Plan", plan: plan({ status: "bogus" as never }) }))).toBe(true)
+  })
+
+  it("decodes a plan step that predates the `code` field (defaults it to null)", () => {
+    // A transcript persisted before per-step code samples: the step has no `code`
+    // key. It MUST still decode (else the whole transcript blanks) — `code` → null.
+    const legacyStep = { ...step() } as Record<string, unknown>
+    delete legacyStep.code
+    const legacyPlan = { ...plan({ steps: [legacyStep as never] }) }
+    const decoded = decode(ContentPart, { _tag: "Plan", plan: legacyPlan })
+    expect(Either.isRight(decoded)).toBe(true)
+    if (Either.isRight(decoded) && decoded.right._tag === "Plan") {
+      expect(decoded.right.plan.steps[0]!.code).toBeNull()
+    }
   })
 
   it("PlanProposed appends a plan part; PlanUpdated replaces it by id", () => {

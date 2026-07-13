@@ -35,7 +35,14 @@ function Working() {
   )
 }
 
+/** Lines of a diff hunk shown before the "Show all" affordance kicks in. */
+const HUNK_PREVIEW_LINES = 12
+
 function ToolCardView({ tool }: { tool: ToolCallModel }) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = tool.preview ? tool.preview.replace(/\n+$/, "").split("\n") : []
+  const clipped = lines.length > HUNK_PREVIEW_LINES && !expanded
+  const shown = clipped ? lines.slice(0, HUNK_PREVIEW_LINES).join("\n") : tool.preview
   return (
     <ToolCall
       status={tool.status}
@@ -45,7 +52,21 @@ function ToolCardView({ tool }: { tool: ToolCallModel }) {
       meta={toolMeta(tool)}
       className={WIDTH}
     >
-      {tool.preview && <DiffPeek preview={tool.preview} />}
+      {tool.preview && shown && (
+        <div>
+          <DiffPeek preview={shown} />
+          {lines.length > HUNK_PREVIEW_LINES && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="flex w-full items-center gap-1 bg-editor px-3 py-1 text-[11px] text-line-strong transition-colors hover:text-muted-foreground active:scale-[0.99]"
+            >
+              {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              {expanded ? "Hide" : `Show all ${lines.length} lines`}
+            </button>
+          )}
+        </div>
+      )}
     </ToolCall>
   )
 }

@@ -278,6 +278,34 @@ test("Plan mode: propose a plan, review a step, and approve to start execution",
   // Approve the plan from the header → the plan flips read-only and execution starts.
   await window.getByRole("button", { name: /Approve plan & start/ }).click()
   await expect(window.getByText(/execution started/i)).toBeVisible({ timeout: 15_000 })
+
+  // Drilling into a step shows its proposed code sample AND a per-step Changes
+  // rail (the actual worktree diff for that step's files) on the right.
+  await window.getByText("Create TokenStore module").first().click()
+  await expect(window.getByText("Proposed code")).toBeVisible()
+  await expect(window.getByText("Changes in this step")).toBeVisible()
+})
+
+test("a worktree session without a PR shows a Changes tab with the Code Review view", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    seed: ({ repoPath }) => {
+      writeFileSync(join(repoPath, "README.md"), "# e2e repo\nan uncommitted edit\n")
+    }
+  })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // No PR yet → the local worktree diff gets its own top-level Changes tab, which
+  // is the Code Review view scoped to the uncommitted (local) source.
+  const changesTab = window.getByText("Changes", { exact: true }).first()
+  await expect(changesTab).toBeVisible()
+  await changesTab.click()
+  await expect(window.getByText("Changed files")).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByText("an uncommitted edit")).toBeVisible({ timeout: 20_000 })
 })
 
 test("a linked PR shows the sidebar badge and the Pull Request / Code Review tabs", async ({
