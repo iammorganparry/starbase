@@ -90,10 +90,24 @@ function StarToggle({ starred, onToggle }: { starred: boolean; onToggle: () => v
         e.preventDefault()
         e.stopPropagation()
       }}
+      // Radix `Select.Item` commits its selection on pointer *up*, so stopping
+      // pointerdown + click alone still lets the tap select the repo and close
+      // the dropdown — swallow pointerup (and keyboard activation) too.
+      onPointerUp={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+      }}
       onClick={(e) => {
         e.preventDefault()
         e.stopPropagation()
         onToggle()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          e.stopPropagation()
+          onToggle()
+        }
       }}
       className={cn(
         "size-5 rounded hover:bg-surface",

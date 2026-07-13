@@ -52,7 +52,7 @@ export function PlanStepChanges({
   const hasChanges = sub.trim().length > 0
 
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-col bg-panel", className)}>
+    <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-panel", className)}>
       <div className="flex flex-none items-center gap-2 border-b border-hairline px-3 py-2.5">
         <FileDiff className="size-3.5 text-muted-foreground" />
         <span className="text-[11px] font-semibold uppercase tracking-[0.4px] text-muted-foreground">

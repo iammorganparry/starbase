@@ -1,12 +1,16 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import type {
   CliInfo,
+  CliKind,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
   GitConfig,
   GithubConfig,
+  ModelOption,
   PrSummary,
+  ProviderConfig,
+  ProvidersConfig,
   Repo,
   Session,
   SessionStatus,
@@ -15,7 +19,7 @@ import type {
 import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
-import { SettingsDialog } from "../composites/settings-dialog.js"
+import { SettingsView } from "../composites/settings-view.js"
 import { SessionConversation } from "../screens/session-conversation.js"
 import { SEED_PATCH } from "../seed.js"
 
@@ -54,8 +58,14 @@ export interface StarbaseAppProps {
   gitConfig?: GitConfig | null
   /** Persist git preferences (the "share checked-out branches" lever). */
   onSaveGitConfig?: (config: GitConfig) => Promise<void> | void
-  /** Re-run `gh auth status` (the settings modal "Recheck" button); may be async. */
+  /** Re-run `gh auth status` (the settings "Recheck" button); may be async. */
   onRecheckGh?: () => Promise<void> | void
+  /** Persisted per-CLI provider defaults (Settings · Providers view). */
+  providersConfig?: ProvidersConfig | null
+  /** Persist one CLI's provider defaults; presence wires the Settings gear. */
+  onSaveProvider?: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
+  /** Load the selectable models for a CLI (Settings · Providers). */
+  loadModels?: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
   /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
@@ -115,6 +125,9 @@ export function StarbaseApp({
   gitConfig,
   onSaveGitConfig,
   onRecheckGh,
+  providersConfig,
+  onSaveProvider,
+  loadModels,
   renderPullRequest,
   renderReview,
   renderCode,
@@ -231,7 +244,25 @@ export function StarbaseApp({
         liveStatus={liveStatus}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         onOpenUsage={onLoadUsage ? openUsage : undefined}
-        onOpenSettings={onSaveGithubConfig ? () => setSettingsOpen(true) : undefined}
+        onOpenSettings={onSaveProvider ? () => setSettingsOpen(true) : undefined}
+        settingsView={
+          settingsOpen && onSaveProvider ? (
+            <SettingsView
+              clis={clis}
+              providers={providersConfig}
+              onSaveProvider={onSaveProvider}
+              loadModels={loadModels ?? (async () => [])}
+              ghStatus={ghStatus ?? GH_UNAVAILABLE}
+              github={githubConfig}
+              git={gitConfig}
+              rechecking={ghRechecking}
+              onRecheck={onRecheckGh ? handleRecheckGh : undefined}
+              onSaveGithub={onSaveGithubConfig}
+              onSaveGit={onSaveGitConfig}
+              onClose={() => setSettingsOpen(false)}
+            />
+          ) : undefined
+        }
         ghConnected={ghConnected}
         starredRepoNames={starredRepoNames}
         onToggleStar={onToggleStar ? toggleStarByName : undefined}
@@ -261,19 +292,6 @@ export function StarbaseApp({
           usage={usage}
           loading={usageLoading}
           onClose={() => setUsageOpen(false)}
-        />
-      )}
-      {onSaveGithubConfig && (
-        <SettingsDialog
-          open={settingsOpen}
-          ghStatus={ghStatus ?? GH_UNAVAILABLE}
-          github={githubConfig}
-          git={gitConfig}
-          rechecking={ghRechecking}
-          onRecheck={onRecheckGh ? handleRecheckGh : undefined}
-          onSaveGithub={onSaveGithubConfig}
-          onSaveGit={onSaveGitConfig}
-          onClose={() => setSettingsOpen(false)}
         />
       )}
     </AppShell>

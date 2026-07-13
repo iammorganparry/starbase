@@ -26,7 +26,12 @@ import {
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
 import { GhError, GitError } from "@starbase/core"
-import type { CreateSessionFromPrInput, PrMergeMethod, ReviewSubmitKind } from "@starbase/core"
+import type {
+  CreateSessionFromPrInput,
+  CreateSessionInput,
+  PrMergeMethod,
+  ReviewSubmitKind
+} from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -102,6 +107,22 @@ export const createSessionFromPr = (input: CreateSessionFromPrInput) =>
     const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
     const allowSharedCheckout = config?.git?.shareCheckedOutBranches ?? true
     return yield* SessionStore.createFromPr(input, { allowSharedCheckout })
+  })
+
+/**
+ * `Sessions.create` handler. Seeds the new session's permission mode + model
+ * from the chosen CLI's configured provider defaults (Settings · Providers), so
+ * a session opens in the mode/model the user picked. Absent config → the store
+ * omits them and the harness applies its own defaults. Exported for tests.
+ */
+export const createSession = (input: CreateSessionInput) =>
+  Effect.gen(function* () {
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const provider = config?.providers?.[input.cli]
+    return yield* SessionStore.create(input, {
+      defaultMode: provider?.defaultMode,
+      defaultModel: provider?.defaultModel
+    })
   })
 
 /**
@@ -286,7 +307,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Workspace.revertLines": (input) => workspaceRevertLines(input),
   "Sessions.list": () => SessionStore.list(),
   "Sessions.get": ({ id }) => SessionStore.get(id),
-  "Sessions.create": (input) => SessionStore.create(input),
+  "Sessions.create": (input) => createSession(input),
   "Sessions.createFromPr": (input) => createSessionFromPr(input),
   "Sessions.archive": ({ sessionId, reason }) => archiveSession(sessionId, reason),
   "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
@@ -321,6 +342,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setGit": (git) => ConfigService.setGit(git),
   "Config.setStarredRepos": ({ paths }) => ConfigService.setStarredRepos(paths),
   "Config.setLastRepoPath": ({ path }) => ConfigService.setLastRepoPath(path),
+  "Config.setProvider": ({ cli, provider }) => ConfigService.setProvider(cli, provider),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
   "Github.prState": ({ sessionId }) => githubPrState(sessionId),
   "Github.listPrs": ({ repoPath, mine, search }) => GhService.listPrs(repoPath, { mine, search }),

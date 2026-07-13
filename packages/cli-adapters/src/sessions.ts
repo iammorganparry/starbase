@@ -78,7 +78,9 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         })
 
       const create = (
-        input: CreateSessionInput
+        input: CreateSessionInput,
+        /** Provider defaults (from config) to stamp onto the new session. */
+        options: { defaultMode?: PermissionMode; defaultModel?: string } = {}
       ): Effect.Effect<
         Session,
         GitError,
@@ -111,7 +113,11 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
-            baseBranch: input.baseBranch
+            baseBranch: input.baseBranch,
+            // Seed the session's permission mode / model from the provider's
+            // configured defaults (omitted → the harness falls back on its own).
+            ...(options.defaultMode ? { mode: options.defaultMode } : {}),
+            ...(options.defaultModel ? { model: options.defaultModel } : {})
           }
           const existing = yield* readAll()
           yield* writeAll([session, ...existing])

@@ -63,6 +63,30 @@ describe("SessionStore", () => {
     expect(s.diff).toStrictEqual({ added: 0, removed: 0 })
   })
 
+  it("stamps the provider's default mode + model when supplied (else leaves them unset)", async () => {
+    const withDefaults = await runExit(
+      SessionStore.create(input(), { defaultMode: "plan", defaultModel: "opus" }).pipe(
+        Effect.provide(services)
+      ),
+      temp.layer
+    )
+    expect(withDefaults._tag).toBe("Success")
+    if (withDefaults._tag === "Success") {
+      expect(withDefaults.value.mode).toBe("plan")
+      expect(withDefaults.value.model).toBe("opus")
+    }
+
+    const noDefaults = await runExit(
+      SessionStore.create(input({ title: "No Defaults" })).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(noDefaults._tag).toBe("Success")
+    if (noDefaults._tag === "Success") {
+      expect(noDefaults.value.mode).toBeUndefined()
+      expect(noDefaults.value.model).toBeUndefined()
+    }
+  })
+
   it("falls back to the 'session' slug when the title has no alphanumerics", async () => {
     const exit = await runExit(
       SessionStore.create(input({ title: "!!!" })).pipe(Effect.provide(services)),

@@ -1,4 +1,4 @@
-import type { GitConfig, GithubConfig } from "@starbase/core"
+import type { CliKind, GitConfig, GithubConfig, ProviderConfig } from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
@@ -52,6 +52,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.git ? { git: existing.git } : {}),
             ...(existing?.starredRepos ? { starredRepos: existing.starredRepos } : {}),
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
+            ...(existing?.providers ? { providers: existing.providers } : {}),
             ...patch
           }
           return yield* persist(config)
@@ -67,6 +68,15 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         patch({ starredRepos })
 
       const setLastRepoPath = (lastRepoPath: string) => patch({ lastRepoPath })
+
+      /** Upsert one CLI's provider defaults, preserving the other providers. */
+      const setProvider = (cli: CliKind, provider: ProviderConfig) =>
+        Effect.gen(function* () {
+          const existing = yield* get()
+          return yield* patch({
+            providers: { ...(existing?.providers ?? {}), [cli]: provider }
+          })
+        })
 
       /** Encode + write the config to disk, mapping every failure to `ConfigError`. */
       const persist = (config: WorkspaceConfig): Effect.Effect<WorkspaceConfig, ConfigError, ConfigEnv> =>
@@ -85,7 +95,15 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           return config
         })
 
-      return { get, setReposDir, setGithub, setGit, setStarredRepos, setLastRepoPath }
+      return {
+        get,
+        setReposDir,
+        setGithub,
+        setGit,
+        setStarredRepos,
+        setLastRepoPath,
+        setProvider
+      }
     }
   }
 ) {}

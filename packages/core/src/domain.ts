@@ -128,6 +128,50 @@ export const GitConfig = Schema.Struct({
 export type GitConfig = Schema.Schema.Type<typeof GitConfig>
 
 /**
+ * Extended-thinking / reasoning budget for a harness, mapped from the design's
+ * "thinking budget" segments. Harness-specific in meaning; persisted per provider.
+ */
+export const ReasoningEffort = Schema.Literal("off", "think", "think-hard", "ultrathink")
+export type ReasoningEffort = Schema.Schema.Type<typeof ReasoningEffort>
+
+/** Tone / verbosity preset for a harness's replies (Claude "output style"). */
+export const OutputStyle = Schema.Literal("default", "explanatory", "concise")
+export type OutputStyle = Schema.Schema.Type<typeof OutputStyle>
+
+/**
+ * Per-CLI provider defaults a new session inherits — the "Settings · Providers"
+ * levers (design E10). Keyed by `CliKind` inside `WorkspaceConfig.providers`.
+ * Only `defaultMode`/`defaultModel` are consumed at session creation today; the
+ * remaining levers are persisted and surfaced in the settings view for future
+ * adapter wiring.
+ */
+export const ProviderConfig = Schema.Struct({
+  /** Whether this provider is offered when starting a session. */
+  enabled: Schema.Boolean,
+  /** Permission mode new sessions start in (maps to the harness `--permission-mode`). */
+  defaultMode: PermissionMode,
+  /** Default harness model id for new sessions; absent = the harness default. */
+  defaultModel: Schema.optional(Schema.String),
+  /** Small/fast model for summaries & side tasks; absent = the harness default. */
+  backgroundModel: Schema.optional(Schema.String),
+  /** Extended-thinking budget; absent = the harness default. */
+  reasoningEffort: Schema.optional(ReasoningEffort),
+  /** Reply tone/verbosity preset; absent = the harness default. */
+  outputStyle: Schema.optional(OutputStyle)
+})
+export type ProviderConfig = Schema.Schema.Type<typeof ProviderConfig>
+
+/**
+ * Per-CLI provider defaults, keyed by `CliKind`. Partial — a config only carries
+ * entries for the CLIs the user has actually customised (a literal-key record
+ * would otherwise require every CLI to be present).
+ */
+export const ProvidersConfig = Schema.partial(
+  Schema.Record({ key: CliKind, value: ProviderConfig })
+)
+export type ProvidersConfig = Schema.Schema.Type<typeof ProvidersConfig>
+
+/**
  * Persisted app configuration, stored at `~/starbase/config.json`. `reposDir` is
  * null until the user completes first-run setup by choosing a repos directory.
  */
@@ -149,7 +193,13 @@ export const WorkspaceConfig = Schema.Struct({
    * Absolute path of the repo used for the most recent session create, so the
    * New Session dialog can preselect it. Absent until the first create.
    */
-  lastRepoPath: Schema.optional(Schema.String)
+  lastRepoPath: Schema.optional(Schema.String),
+  /**
+   * Per-CLI provider defaults (model, mode, reasoning, …) from the Settings ·
+   * Providers view. Absent on older configs (each provider falls back to the
+   * harness defaults).
+   */
+  providers: Schema.optional(ProvidersConfig)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 

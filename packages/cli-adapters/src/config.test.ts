@@ -113,4 +113,61 @@ describe("ConfigService", () => {
       expect(exit.value?.reposDir).toBe("/repos/a")
     }
   })
+
+  it("setProvider upserts one CLI's defaults and preserves the other providers + sections", async () => {
+    const github = { enabled: true, autoCreatePr: false, autoDetectPr: true }
+    const claude = { enabled: true, defaultMode: "plan", defaultModel: "opus" } as const
+    const codex = { enabled: false, defaultMode: "accept-edits" } as const
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setReposDir("/repos/a")
+        yield* ConfigService.setGithub(github)
+        yield* ConfigService.setProvider("claude", claude)
+        // Upserting codex must keep claude; a later setGithub must keep both.
+        yield* ConfigService.setProvider("codex", codex)
+        yield* ConfigService.setGithub({ ...github, autoCreatePr: true })
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.providers?.claude).toStrictEqual(claude)
+      expect(exit.value?.providers?.codex).toStrictEqual(codex)
+      expect(exit.value?.github?.autoCreatePr).toBe(true)
+      expect(exit.value?.reposDir).toBe("/repos/a")
+    }
+  })
+
+  it("setProvider replaces an existing provider entry in place", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setProvider("claude", { enabled: true, defaultMode: "ask" })
+        yield* ConfigService.setProvider("claude", {
+          enabled: true,
+          defaultMode: "auto",
+          defaultModel: "sonnet"
+        })
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.providers?.claude).toStrictEqual({
+        enabled: true,
+        defaultMode: "auto",
+        defaultModel: "sonnet"
+      })
+    }
+  })
+
+  it("decodes a config written without a providers field (backward compatible)", async () => {
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(`${temp.root}/config.json`, JSON.stringify({ reposDir: "/x", createdAt: "2026-01-01" }))
+    const exit = await provided(ConfigService.get())
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.reposDir).toBe("/x")
+      expect(exit.value?.providers).toBeUndefined()
+    }
+  })
 })

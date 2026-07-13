@@ -12,7 +12,7 @@ import type {
 } from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
-import { ImageIcon, Lock, PanelRight, RotateCcw, X } from "lucide-react"
+import { ImageIcon, Lock, PanelRight, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
@@ -47,6 +47,11 @@ export interface ConversationViewProps {
   queued?: ReadonlyArray<{ text: string; images: ReadonlyArray<Attachment> }>
   /** Drop a queued message before it's sent (by its index in `queued`). */
   onUnqueue?: (index: number) => void
+  /**
+   * Interrupt the current turn and run a queued message now (by index) — lets the
+   * operator steer mid-stream instead of waiting for the turn to finish.
+   */
+  onSendNow?: (index: number) => void
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onSetMode?: (mode: PermissionMode) => void
   /** A pending AskUserQuestion — replaces the composer with the question card. */
@@ -104,6 +109,7 @@ export function ConversationView({
   busy = false,
   queued = [],
   onUnqueue,
+  onSendNow,
   onDecideGate,
   onSetMode,
   question,
@@ -287,6 +293,17 @@ export function ConversationView({
                           <ImageIcon size={11} />
                           {item.images.length}
                         </span>
+                      )}
+                      {onSendNow && busy && (
+                        <button
+                          type="button"
+                          onClick={() => onSendNow(i)}
+                          title="Send now — interrupts the current turn to steer the agent"
+                          className="flex flex-none items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-blue outline-none transition-colors hover:bg-blue/10 hover:text-blue focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <Zap size={11} />
+                          Send now
+                        </button>
                       )}
                       {onUnqueue && (
                         <button

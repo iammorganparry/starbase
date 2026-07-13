@@ -64,6 +64,7 @@ export interface QueuedMessage {
 type ConversationEvent =
   | { type: "SEND"; text: string; images?: ReadonlyArray<Attachment> }
   | { type: "UNQUEUE"; index: number }
+  | { type: "SEND_NOW"; index: number }
   | { type: "STREAM_EVENT"; event: StreamEvent }
   | { type: "PATCH_UPDATED"; patch: string }
   | { type: "DECIDE_GATE"; gateId: string; decision: GateDecision }
@@ -177,6 +178,16 @@ export const conversationMachine = setup({
     removeQueued: assign(({ context, event }) => {
       if (event.type !== "UNQUEUE") return {}
       return { queued: context.queued.filter((_, i) => i !== event.index) }
+    }),
+    // "Send now": jump a queued message to the head so it runs as the very next
+    // turn. Paired with `callStop` in `running`, this interrupts the current turn
+    // to steer the agent immediately; the remaining queue keeps its order behind it.
+    promoteQueued: assign(({ context, event }) => {
+      if (event.type !== "SEND_NOW") return {}
+      const picked = context.queued[event.index]
+      if (picked === undefined) return {}
+      const rest = context.queued.filter((_, i) => i !== event.index)
+      return { queued: [picked, ...rest] }
     }),
     clearQueue: assign(() => ({ queued: [] })),
     // Pop the head of the queue into a fresh turn — the same shape `appendTurns`
@@ -335,6 +346,10 @@ export const conversationMachine = setup({
         // Sent mid-run: queue it (processed once this turn + its diff refresh settle).
         SEND: { actions: "enqueue" },
         UNQUEUE: { actions: "removeQueued" },
+        // "Send now": interrupt the current turn and run the picked message next,
+        // so the operator can steer mid-stream. Promote it to the head, stop the
+        // run, and let refreshingDiff dequeue it (the rest of the queue follows).
+        SEND_NOW: { target: "refreshingDiff", actions: ["promoteQueued", "callStop"] },
         DECIDE_GATE: { actions: "optimisticGate" },
         ANSWER_QUESTION: { actions: "optimisticAnswer" },
         COMMENT_PLAN_STEP: { actions: "optimisticPlanComment" },
@@ -371,6 +386,9 @@ export const conversationMachine = setup({
         // Still accept queued sends while the diff refreshes (a brief window).
         SEND: { actions: "enqueue" },
         UNQUEUE: { actions: "removeQueued" },
+        // The turn already ended — just jump the picked message to the head so the
+        // pending dequeue (on refresh settle) runs it next.
+        SEND_NOW: { actions: "promoteQueued" },
         // A late live diff read may still resolve here — apply it (the authoritative
         // refresh's onDone runs last, so it wins).
         PATCH_UPDATED: { actions: "applyLivePatch" },

@@ -80,6 +80,7 @@ export function ConversationPane({
       busy={convo.busy}
       queued={convo.queued}
       onUnqueue={convo.unqueue}
+      onSendNow={convo.sendNow}
       model={convo.model}
       models={convo.models}
       onSetModel={convo.setModel}
