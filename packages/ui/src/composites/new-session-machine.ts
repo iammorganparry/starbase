@@ -71,9 +71,13 @@ export type NewSessionEvent =
 const repoFor = (ctx: NewSessionContext): Repo | undefined =>
   ctx.getDeps().repos.find((r) => r.path === ctx.repoPath)
 
-/** Preferred default base branch for a repo (current → default → first → none). */
+/**
+ * Preferred default base branch for a repo (default → current → first → none).
+ * Prefers the default branch (main) so new sessions start from up-to-date main
+ * rather than whatever branch happens to be checked out; the user can override.
+ */
 const defaultBase = (repo: Repo | undefined, branches: ReadonlyArray<string>): string =>
-  repo?.currentBranch ?? repo?.defaultBranch ?? branches[0] ?? ""
+  repo?.defaultBranch ?? repo?.currentBranch ?? branches[0] ?? ""
 
 const errorText = (cause: unknown, fallback: string): string =>
   cause instanceof Error ? cause.message : fallback

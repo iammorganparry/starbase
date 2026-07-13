@@ -367,12 +367,17 @@ test("the sidebar Settings cog opens the settings view with the GitHub section",
 
   await window.getByRole("button", { name: "Settings" }).click()
 
-  // The Settings view opens with its title, the GitHub section, and the toggles
-  // (the exact gh connection line depends on the runner, so we don't assert it).
-  const dialog = window.getByRole("dialog")
-  await expect(dialog.getByText("Settings", { exact: true })).toBeVisible()
-  await expect(dialog.getByText("GitHub", { exact: true })).toBeVisible()
-  await expect(dialog.getByText("Enable pull-request features")).toBeVisible()
+  // The inline Settings view opens (nav + sections), defaulting to Providers —
+  // the "Close settings" control and the Providers blurb prove it mounted.
+  await expect(window.getByRole("button", { name: "Close settings" })).toBeVisible()
+  await expect(
+    window.getByText("Set the defaults each agent CLI starts a new session with.")
+  ).toBeVisible()
+
+  // Switch to the GitHub section → its section + pull-request toggle render (the
+  // exact gh connection line depends on the runner, so we don't assert it).
+  await window.getByRole("button", { name: /GitHub/ }).click()
+  await expect(window.getByText("Enable pull-request features")).toBeVisible()
 })
 
 test("an orphaned pending gate settles on load (its dead buttons disappear)", async ({

@@ -105,6 +105,47 @@ export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): stri
   return dir
 }
 
+/**
+ * A real working repo cloned from a fresh **bare `origin`**, so
+ * `refs/remotes/origin/<branch>` exists (unlike `initGitRepo`, whose `remote`
+ * option only sets a URL with nothing fetchable). Returns the bare origin path;
+ * advance it with `advanceOrigin` to simulate commits the clone hasn't fetched.
+ */
+export const initGitRepoWithOrigin = (
+  dir: string,
+  options: Pick<InitGitRepoOptions, "initialBranch" | "nodeModules"> = {}
+): { origin: string } => {
+  const branch = options.initialBranch ?? "main"
+  const origin = `${dir}-origin.git`
+  mkdirSync(origin, { recursive: true })
+  git(origin, ["init", "--bare", "-b", branch])
+  initGitRepo(dir, { initialBranch: branch, nodeModules: options.nodeModules })
+  git(dir, ["remote", "add", "origin", origin])
+  git(dir, ["push", "-u", "origin", branch])
+  return { origin }
+}
+
+/**
+ * Push a new commit onto `origin`'s `branch` via a throwaway clone, WITHOUT
+ * touching any existing working clone — so a repo created by `initGitRepoWithOrigin`
+ * has a stale local `origin/<branch>` until it fetches. Returns the commit subject.
+ */
+export const advanceOrigin = (origin: string, message: string, branch = "main"): string => {
+  const { dir, cleanup } = mkTemp("starbase-origin-push-")
+  try {
+    const work = join(dir, "clone")
+    git(dir, ["clone", origin, work])
+    git(work, ["config", "user.email", "test@starbase.dev"])
+    git(work, ["config", "user.name", "Starbase Test"])
+    git(work, ["config", "commit.gpgsign", "false"])
+    git(work, ["commit", "--allow-empty", "-m", message, "--no-gpg-sign"])
+    git(work, ["push", "origin", `HEAD:${branch}`])
+    return message
+  } finally {
+    cleanup()
+  }
+}
+
 // ── Fake CommandExecutor ─────────────────────────────────────────────────────
 
 export interface FakeCommandResult {

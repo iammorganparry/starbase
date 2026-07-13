@@ -109,6 +109,33 @@ export class GitService extends Effect.Service<GitService>()(
           }
         })
 
+      /**
+       * Best-effort refresh of `baseBranch` from origin so a new worktree forks
+       * from the up-to-date remote tip rather than a stale local ref. MUST NOT
+       * fail creation: offline, no `origin`, or a local-only base branch all fold
+       * to a no-op (the caller then forks from the local ref). Single-branch,
+       * `--no-tags` to keep the cost bounded on large repos.
+       */
+      const fetchBase = (
+        repoPath: string,
+        baseBranch: string
+      ): Effect.Effect<void, never, CommandExecutor.CommandExecutor> =>
+        runGit(repoPath, ["fetch", "--no-tags", "origin", baseBranch]).pipe(Effect.ignore)
+
+      /**
+       * The start-point to fork the session branch from: the fresh
+       * remote-tracking `origin/<baseBranch>` when it exists, else the local
+       * `baseBranch`. `gitLine` folds a missing ref (rev-parse exits non-zero) to
+       * null, so a local-only base or a repo without `origin` falls back cleanly.
+       */
+      const resolveStartPoint = (
+        repoPath: string,
+        baseBranch: string
+      ): Effect.Effect<string, never, CommandExecutor.CommandExecutor> =>
+        gitLine(repoPath, "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${baseBranch}`).pipe(
+          Effect.map((sha) => (sha ? `origin/${baseBranch}` : baseBranch))
+        )
+
       /** Fork an isolated worktree on a fresh `starbase/<slug>` branch. */
       const createWorktree = (
         input: CreateWorktreeInput
@@ -117,15 +144,20 @@ export class GitService extends Effect.Service<GitService>()(
           const branch = `starbase/${input.slug}`
           const worktreePath = yield* resolveWorktreePath(input)
           yield* reclaimStaleWorktree(input.repoPath, worktreePath)
+          // Freshen the base from origin, then fork off the remote tip when we have
+          // one — so a session always starts from an up-to-date base (e.g. main).
+          yield* fetchBase(input.repoPath, input.baseBranch)
+          const startPoint = yield* resolveStartPoint(input.repoPath, input.baseBranch)
           yield* runGit(input.repoPath, [
             "worktree",
             "add",
             "-b",
             branch,
             worktreePath,
-            input.baseBranch
+            startPoint
           ])
           yield* linkNodeModules(input.repoPath, worktreePath)
+          // Report the logical base the user picked, not the start-point ref.
           return { path: worktreePath, branch, baseBranch: input.baseBranch, repoPath: input.repoPath }
         })
 

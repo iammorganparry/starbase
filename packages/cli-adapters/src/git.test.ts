@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { GitService } from "./git.js"
-import { initGitRepo, mkTemp, runExit, withTempRoot } from "./test-support.js"
+import { advanceOrigin, initGitRepo, initGitRepoWithOrigin, mkTemp, runExit, withTempRoot } from "./test-support.js"
 
 /**
  * GitService.createWorktree runs real `git worktree add`. We assert the real
@@ -88,6 +88,59 @@ describe("GitService.createWorktree", () => {
     expect(existsSync(worktreePath)).toBe(false)
     const list = execFileSync("git", ["worktree", "list"], { cwd: repoPath, encoding: "utf-8" })
     expect(list).not.toContain(worktreePath)
+  })
+
+  it("forks off the fresh remote tip — a session picks up commits the local clone hadn't fetched", async () => {
+    // A real clone with a bare origin, then push a commit to origin the clone
+    // hasn't seen. createWorktree must fetch + fork off origin/main, not stale local.
+    const repoPath = join(repos.dir, "fresh")
+    const { origin } = initGitRepoWithOrigin(repoPath)
+    advanceOrigin(origin, "remote-only-commit")
+
+    const exit = await create(repoPath, "fresh")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    // The worktree contains the origin-only commit …
+    const worktreeLog = execFileSync("git", ["log", "--format=%s"], {
+      cwd: exit.value.path,
+      encoding: "utf-8"
+    })
+    expect(worktreeLog).toContain("remote-only-commit")
+    // … which the clone's local `main` still hasn't (we forked off origin/main).
+    const localLog = execFileSync("git", ["log", "main", "--format=%s"], {
+      cwd: repoPath,
+      encoding: "utf-8"
+    })
+    expect(localLog).not.toContain("remote-only-commit")
+  })
+
+  it("still creates the worktree when origin is unreachable (fetch is best-effort)", async () => {
+    // A URL-only remote: `git fetch origin main` will fail, but creation must not.
+    const repoPath = initGitRepo(join(repos.dir, "offline"), {
+      remote: "https://example.invalid/nope.git"
+    })
+    const exit = await create(repoPath, "offline")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(existsSync(exit.value.path)).toBe(true)
+    expect(exit.value.branch).toBe("starbase/fix-auth")
+  })
+
+  it("forks off a local-only base branch when there is no matching remote ref", async () => {
+    // `feature-x` is a purely local branch: no `origin/feature-x`, so the fetch is
+    // a no-op and we fall back to forking off the local branch.
+    const repoPath = initGitRepo(join(repos.dir, "localbase"), { branches: ["feature-x"] })
+    const exit = await runExit(
+      GitService.createWorktree({ repoPath, repoName: "localbase", slug: "off-x", baseBranch: "feature-x" }).pipe(
+        Effect.provide(GitService.Default)
+      ),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(existsSync(exit.value.path)).toBe(true)
+    expect(exit.value.baseBranch).toBe("feature-x")
   })
 
   it("createDetachedWorktree reclaims a leftover worktree at the same path (retry-safe)", async () => {
