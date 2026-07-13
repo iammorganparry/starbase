@@ -188,9 +188,29 @@ export class StarbaseRpcs extends RpcGroup.make(
     }
   }),
 
-  /** Change a session's HITL permission mode (ask / accept-edits / auto). */
+  /** Change a session's HITL permission mode (ask / accept-edits / auto / plan). */
   Rpc.make("Agent.setMode", {
     payload: { sessionId: Schema.String, mode: PermissionMode }
+  }),
+
+  /** Comment on a plan step (plan mode) — accumulates on the plan, doesn't resume. */
+  Rpc.make("Agent.commentPlanStep", {
+    payload: {
+      sessionId: Schema.String,
+      planId: Schema.String,
+      stepId: Schema.String,
+      body: Schema.String
+    }
+  }),
+
+  /** Route the plan's open comments back to the agent as a revision, resuming planning. */
+  Rpc.make("Agent.revisePlan", {
+    payload: { sessionId: Schema.String, planId: Schema.String }
+  }),
+
+  /** Approve a plan — restore the exec mode and start execution. */
+  Rpc.make("Agent.approvePlan", {
+    payload: { sessionId: Schema.String, planId: Schema.String }
   }),
 
   /** Change a session's harness model (used on the next turn). */

@@ -54,14 +54,23 @@ export interface StarbaseAppProps {
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Changes tab — the Code Review view over the local worktree diff. */
+  renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   activeSessionId?: string | null
   patch?: string
   /**
    * Render the live conversation for the active session. Called with the active
-   * session and mounted keyed by its id, so each session drives a fresh
-   * conversation machine. Absent in stories → the seeded fallback renders.
+   * session, the `view` to show (transcript or Plan Review — both driven by the
+   * same machine), and a ctx to open the Plan Review tab. Mounted keyed by
+   * session id. Absent in stories → the seeded fallback renders.
    */
-  renderConversation?: (session: Session) => ReactNode
+  renderConversation?: (
+    session: Session,
+    view: "conversation" | "plan",
+    ctx: { onOpenPlanReview: () => void }
+  ) => ReactNode
+  /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
+  planSessions?: ReadonlySet<string>
   /** Load branch names for a repo (New Session base picker). */
   loadBranches?: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Create a session (forks a real worktree) and return it. */
@@ -99,9 +108,11 @@ export function StarbaseApp({
   onRecheckGh,
   renderPullRequest,
   renderReview,
+  renderCode,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
+  planSessions,
   loadBranches = noBranches,
   onCreateSession,
   loadPrs,
@@ -138,13 +149,16 @@ export function StarbaseApp({
 
   const active = sessions.find((s) => s.id === selected) ?? null
   // Key the pane by session id so each session drives a fresh conversation
-  // machine (the deterministic per-session reset — no session-sync effect).
-  const conversationPane =
-    active && renderConversation ? (
-      <div key={active.id} className="flex min-w-0 flex-1">
-        {renderConversation(active)}
-      </div>
-    ) : undefined
+  // machine (the deterministic per-session reset — no session-sync effect). The
+  // same pane serves both the Conversation and Plan tabs (see SessionConversation).
+  const renderConversationPane =
+    active && renderConversation
+      ? (view: "conversation" | "plan", ctx: { onOpenPlanReview: () => void }) => (
+          <div key={active.id} className="flex min-h-0 min-w-0 flex-1">
+            {renderConversation(active, view, ctx)}
+          </div>
+        )
+      : undefined
   // In the real app (renderConversation wired) with nothing selected, show the
   // empty state rather than the Storybook-only seeded demo transcript.
   const showEmpty = Boolean(renderConversation) && active === null
@@ -187,7 +201,8 @@ export function StarbaseApp({
         clis={clis}
         activeSessionId={selected}
         onSelectSession={setSelected}
-        conversationPane={conversationPane}
+        renderConversationPane={renderConversationPane}
+        planSessions={planSessions}
         showEmpty={showEmpty}
         patch={patch}
         liveStatus={liveStatus}
@@ -197,6 +212,7 @@ export function StarbaseApp({
         ghConnected={ghConnected}
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
+        renderCode={renderCode}
         version={version}
       />
       {onCreateSession && (

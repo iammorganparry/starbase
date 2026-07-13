@@ -1,10 +1,11 @@
-import { GitMerge, Hammer, ScanSearch, GitPullRequest } from "lucide-react"
+import { FileDiff, GitMerge, Hammer, ScanSearch, GitPullRequest } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import type { TabKey } from "../app/tab-bar.js"
 
 const META: Partial<Record<TabKey, { title: string; blurb: string; icon: LucideIcon }>> = {
   pr: { title: "Pull Request", blurb: "CI status, review timeline and the agent feedback loop.", icon: GitPullRequest },
   review: { title: "Code Review", blurb: "Select lines, comment, and route changes back to the agent.", icon: ScanSearch },
+  changes: { title: "Changes", blurb: "The session worktree's local uncommitted diff.", icon: FileDiff },
   plan: { title: "Plan Review", blurb: "Visualise the plan, step through flow control, annotate and gate steps.", icon: GitMerge },
   workflow: {
     title: "Workflow",

@@ -45,6 +45,10 @@ export interface ConversationViewProps {
   /** A pending AskUserQuestion — replaces the composer with the question card. */
   question?: QuestionRequest | null
   onAnswerQuestion?: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
+  /** Approve a proposed plan inline (from a transcript plan card). */
+  onApprovePlan?: (planId: string) => void
+  /** Open the full Plan Review view (from a transcript plan card). */
+  onOpenPlanReview?: () => void
   /** Revert / comment interactions for the Changes rail (worktree diff). */
   changeActions?: DiffActions
   /**
@@ -94,6 +98,8 @@ export function ConversationView({
   onSetMode,
   question,
   onAnswerQuestion,
+  onApprovePlan,
+  onOpenPlanReview,
   changeActions,
   archived
 }: ConversationViewProps) {
@@ -175,7 +181,10 @@ export function ConversationView({
         <div
           ref={scrollRef}
           className={cn(
-            "flex-1 overflow-auto px-[30px] py-[26px]",
+            // `both-edges` reserves the scrollbar gutter symmetrically so the
+            // centered content stays on the window's centre axis — matching the
+            // composer below (which has no scrollbar) exactly.
+            "flex-1 overflow-auto px-[30px] py-[26px] [scrollbar-gutter:stable_both-edges]",
             archived && "opacity-60"
           )}
         >
@@ -190,9 +199,15 @@ export function ConversationView({
                   className="absolute left-0 top-0 w-full"
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
-                  {/* pb gives the inter-turn gap (absolute layout drops flex gap). */}
-                  <div className="pb-6">
-                    <MessageTurn message={m} cli={cli} onDecideGate={onDecideGate} />
+                  {/* Centered content column (same width as the composer below). */}
+                  <div className="mx-auto w-full max-w-[760px] pb-6">
+                    <MessageTurn
+                      message={m}
+                      cli={cli}
+                      onDecideGate={onDecideGate}
+                      onApprovePlan={onApprovePlan}
+                      onOpenPlanReview={onOpenPlanReview}
+                    />
                   </div>
                 </div>
               )
@@ -200,7 +215,9 @@ export function ConversationView({
           </div>
         </div>
 
-        <div className="flex-none px-[22px] pb-[18px] pt-[11px]">
+        {/* Same gutter + centered max-width as the transcript column above. */}
+        <div className="flex-none px-[30px] pb-[18px] pt-[11px]">
+          <div className="mx-auto w-full max-w-[760px]">
           {archived ? (
             <div className="flex items-center gap-2.5 rounded-xl border border-line bg-sunken px-[14px] py-3 text-[12.5px] text-muted-foreground">
               <Lock size={14} className="flex-none text-dim" />
@@ -237,9 +254,11 @@ export function ConversationView({
               onSetModel={onSetModel}
               mode={mode}
               onSetMode={onSetMode}
+              allowPlan={cli === "claude"}
               onSend={onSend}
             />
           )}
+          </div>
         </div>
       </div>
 

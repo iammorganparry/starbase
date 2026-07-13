@@ -13,16 +13,19 @@ import type {
   Message,
   ModelOption,
   PermissionMode,
+  PlanComment,
   QuestionAnswer,
   Session,
   Skill,
   StreamEvent
 } from "@starbase/core"
 import {
+  addPlanComment,
   applyStreamEvent,
   assistantMessage,
   defaultModel,
   setGateStatus,
+  setPlanStatus,
   setQuestionAnswers,
   settleLoaded,
   userMessage
@@ -51,6 +54,9 @@ type ConversationEvent =
   | { type: "ANSWER_QUESTION"; requestId: string; answers: ReadonlyArray<QuestionAnswer> }
   | { type: "SET_MODE"; mode: PermissionMode }
   | { type: "SET_MODEL"; model: string }
+  | { type: "COMMENT_PLAN_STEP"; planId: string; stepId: string; body: string }
+  | { type: "REVISE_PLAN"; planId: string }
+  | { type: "APPROVE_PLAN"; planId: string }
   | { type: "REFRESH_DIFF" }
   | { type: "STOP" }
 
@@ -159,6 +165,31 @@ export const conversationMachine = setup({
       void rpc.agentSetMode(context.session.id, event.mode)
       return { mode: event.mode }
     }),
+    // Plan mode (optimistic + fire-and-forget, like the gate/question actions).
+    // The runner echoes a `PlanUpdated` so the authoritative state reconciles.
+    optimisticPlanComment: assign(({ context, event }) => {
+      if (event.type !== "COMMENT_PLAN_STEP") return {}
+      void rpc.agentCommentPlanStep(context.session.id, event.planId, event.stepId, event.body)
+      const comment: PlanComment = {
+        id: `pc_local_${stamp()}`,
+        stepId: event.stepId,
+        body: event.body,
+        author: "user",
+        createdAt: new Date().toISOString(),
+        routed: false
+      }
+      return { messages: context.messages.map((m) => addPlanComment(m, event.planId, comment)) }
+    }),
+    optimisticPlanRevise: assign(({ context, event }) => {
+      if (event.type !== "REVISE_PLAN") return {}
+      void rpc.agentRevisePlan(context.session.id, event.planId)
+      return { messages: context.messages.map((m) => setPlanStatus(m, event.planId, "revising")) }
+    }),
+    optimisticPlanApprove: assign(({ context, event }) => {
+      if (event.type !== "APPROVE_PLAN") return {}
+      void rpc.agentApprovePlan(context.session.id, event.planId)
+      return { messages: context.messages.map((m) => setPlanStatus(m, event.planId, "approved")) }
+    }),
     persistModel: assign(({ context, event }) => {
       if (event.type !== "SET_MODEL") return {}
       void rpc.agentSetModel(context.session.id, event.model)
@@ -221,6 +252,9 @@ export const conversationMachine = setup({
         ],
         DECIDE_GATE: { actions: "optimisticGate" },
         ANSWER_QUESTION: { actions: "optimisticAnswer" },
+        COMMENT_PLAN_STEP: { actions: "optimisticPlanComment" },
+        REVISE_PLAN: { actions: "optimisticPlanRevise" },
+        APPROVE_PLAN: { actions: "optimisticPlanApprove" },
         SET_MODE: { actions: "persistMode" },
         SET_MODEL: { actions: "persistModel" },
         STOP: { target: "refreshingDiff", actions: "callStop" }

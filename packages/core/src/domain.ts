@@ -48,9 +48,11 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
  * Human-in-the-loop permission mode for a session:
  * - `ask` — pause for approval before every edit and command,
  * - `accept-edits` — auto-apply file edits, still pause for shell commands,
- * - `auto` — auto-apply edits and run allowlisted commands without prompting.
+ * - `auto` — auto-apply edits and run allowlisted commands without prompting,
+ * - `plan` — read-only planning: the agent designs a plan for review and cannot
+ *   edit or run commands until the operator approves it (Claude harness only).
  */
-export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto")
+export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan")
 export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 
 /** A single agent session shown in the sidebar and opened in the main pane. */

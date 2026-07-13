@@ -102,6 +102,149 @@ export const QuestionRequest = Schema.Struct({
 })
 export type QuestionRequest = Schema.Schema.Type<typeof QuestionRequest>
 
+// ── Plan (interactive, structured — plan mode) ───────────────────────────────
+
+/** A file the plan proposes to touch, with change kind + line delta. */
+export const PlanFileChange = Schema.Struct({
+  path: Schema.String,
+  /** Added / Modified / Deleted. */
+  change: Schema.Literal("A", "M", "D"),
+  added: Schema.Number,
+  removed: Schema.Number
+})
+export type PlanFileChange = Schema.Schema.Type<typeof PlanFileChange>
+
+/** Review state of an acceptance criterion (drives the ✓/!/○ checklist). */
+export const PlanGuardStatus = Schema.Literal("ok", "warn", "open", "under-review")
+export type PlanGuardStatus = Schema.Schema.Type<typeof PlanGuardStatus>
+
+/** An acceptance criterion / guard on a step. */
+export const PlanGuard = Schema.Struct({
+  text: Schema.String,
+  status: PlanGuardStatus
+})
+export type PlanGuard = Schema.Schema.Type<typeof PlanGuard>
+
+/** Who wrote a step comment — the human scrutinising, or the agent replying. */
+export const PlanCommentAuthor = Schema.Literal("user", "agent")
+export type PlanCommentAuthor = Schema.Schema.Type<typeof PlanCommentAuthor>
+
+/** A comment threaded on a plan step. `routed` flips true once sent to the agent. */
+export const PlanComment = Schema.Struct({
+  id: Schema.String,
+  stepId: Schema.String,
+  body: Schema.String,
+  author: PlanCommentAuthor,
+  createdAt: Schema.String,
+  routed: Schema.Boolean
+})
+export type PlanComment = Schema.Schema.Type<typeof PlanComment>
+
+/** A branch parent fans out to arms; a plain step is `step`. */
+export const PlanStepKind = Schema.Literal("step", "branch", "branch-arm")
+export type PlanStepKind = Schema.Schema.Type<typeof PlanStepKind>
+
+export const PlanStepStatus = Schema.Literal("proposed", "current", "revising", "done")
+export type PlanStepStatus = Schema.Schema.Type<typeof PlanStepStatus>
+
+/**
+ * An illustrative code sample for a step — the proposed service method, test, or
+ * type the agent intends to write, so the operator can scrutinise the *shape* of
+ * the change before approving. `lang` is a highlight hint (e.g. "ts"); `body` is
+ * the raw snippet.
+ */
+export const PlanStepCode = Schema.Struct({
+  lang: Schema.NullOr(Schema.String),
+  body: Schema.String
+})
+export type PlanStepCode = Schema.Schema.Type<typeof PlanStepCode>
+
+/** One node of the plan — an ordered step or a branch/arm. */
+export const PlanStep = Schema.Struct({
+  id: Schema.String,
+  /** Display ordinal, e.g. "01", "04", "4a". */
+  number: Schema.String,
+  title: Schema.String,
+  intent: Schema.String,
+  /** Numbered "how" — one entry per line in the step spec. */
+  approach: Schema.Array(Schema.String),
+  kind: PlanStepKind,
+  /** The branch question when `kind === "branch"` (e.g. "token expired"), else null. */
+  condition: Schema.NullOr(Schema.String),
+  /** The branch step this arm hangs off, when `kind === "branch-arm"`, else null. */
+  parentId: Schema.NullOr(Schema.String),
+  dependsOn: Schema.Array(Schema.String),
+  blocks: Schema.Array(Schema.String),
+  files: Schema.Array(PlanFileChange),
+  guards: Schema.Array(PlanGuard),
+  /**
+   * An illustrative code sample of the proposed change, or null. `optionalWith`
+   * (default null) so transcripts persisted before this field decode cleanly
+   * instead of blanking the whole conversation.
+   */
+  code: Schema.optionalWith(Schema.NullOr(PlanStepCode), { default: () => null }),
+  diff: Schema.NullOr(DiffStat),
+  status: PlanStepStatus,
+  flagged: Schema.Boolean
+})
+export type PlanStep = Schema.Schema.Type<typeof PlanStep>
+
+export const PlanStatus = Schema.Literal("proposed", "revising", "approved", "rejected", "stale")
+export type PlanStatus = Schema.Schema.Type<typeof PlanStatus>
+
+// ── Decision graph (how the logic/decisions flow — rendered on a react-flow canvas) ──
+
+/**
+ * A node in the plan's decision graph. `decision` nodes branch (their out-edges
+ * carry the conditions); `action`/`io`/`terminal`/`start` are the flow between.
+ */
+export const PlanNodeKind = Schema.Literal("start", "decision", "action", "io", "terminal", "note")
+export type PlanNodeKind = Schema.Schema.Type<typeof PlanNodeKind>
+
+export const PlanNode = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  kind: PlanNodeKind,
+  /** Secondary line (a file, a call, a note), or null. */
+  detail: Schema.NullOr(Schema.String),
+  /** Links this node to a plan step, so clicking it opens that step's spec. */
+  stepId: Schema.NullOr(Schema.String)
+})
+export type PlanNode = Schema.Schema.Type<typeof PlanNode>
+
+export const PlanEdge = Schema.Struct({
+  id: Schema.String,
+  from: Schema.String,
+  to: Schema.String,
+  /** The condition / choice this edge represents (e.g. "yes", "token expired"), or null. */
+  label: Schema.NullOr(Schema.String)
+})
+export type PlanEdge = Schema.Schema.Type<typeof PlanEdge>
+
+/** The agent's map of how the decisions + logic flow through the change. */
+export const PlanGraph = Schema.Struct({
+  nodes: Schema.Array(PlanNode),
+  edges: Schema.Array(PlanEdge)
+})
+export type PlanGraph = Schema.Schema.Type<typeof PlanGraph>
+
+/**
+ * A structured plan the agent proposed (via ExitPlanMode) and the operator can
+ * scrutinise, comment on, route back for revision, and finally approve to start
+ * execution. `raw` preserves the original markdown for fallback rendering.
+ */
+export const Plan = Schema.Struct({
+  id: Schema.String,
+  summary: Schema.String,
+  /** The decision/logic flow graph (rendered on the react-flow canvas), or null. */
+  graph: Schema.NullOr(PlanGraph),
+  steps: Schema.Array(PlanStep),
+  comments: Schema.Array(PlanComment),
+  status: PlanStatus,
+  raw: Schema.String
+})
+export type Plan = Schema.Schema.Type<typeof Plan>
+
 // ── Content parts (ordered, interleaved) ─────────────────────────────────────
 
 export const TextPart = Schema.TaggedStruct("Text", { text: Schema.String })
@@ -131,8 +274,19 @@ export const QuestionPart = Schema.TaggedStruct("Question", {
 })
 export type QuestionPart = Schema.Schema.Type<typeof QuestionPart>
 
-/** One ordered piece of a turn — text, thinking, a tool card, a gate, or a question. */
-export const ContentPart = Schema.Union(TextPart, ThinkingPart, ToolPart, GatePart, QuestionPart)
+/** A structured plan proposed by the agent, awaiting scrutiny / approval. */
+export const PlanPart = Schema.TaggedStruct("Plan", { plan: Plan })
+export type PlanPart = Schema.Schema.Type<typeof PlanPart>
+
+/** One ordered piece of a turn — text, thinking, a tool card, a gate, a question, or a plan. */
+export const ContentPart = Schema.Union(
+  TextPart,
+  ThinkingPart,
+  ToolPart,
+  GatePart,
+  QuestionPart,
+  PlanPart
+)
 export type ContentPart = Schema.Schema.Type<typeof ContentPart>
 
 /** One turn in the transcript: an ordered list of content parts. */
@@ -184,6 +338,10 @@ export const StreamEvent = Schema.Union(
   }),
   Schema.TaggedStruct("GateRequested", { gate: ApprovalGate }),
   Schema.TaggedStruct("QuestionRequested", { request: QuestionRequest }),
+  /** The agent proposed a plan (ExitPlanMode) — appends a new interactive Plan part. */
+  Schema.TaggedStruct("PlanProposed", { plan: Plan }),
+  /** A runner-authoritative update to an existing plan (comment/routed/status sync). */
+  Schema.TaggedStruct("PlanUpdated", { plan: Plan }),
   Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )
@@ -241,7 +399,8 @@ export const settleLoaded = (msg: Message): Message => {
   const orphaned = base.parts.some(
     (p) =>
       (p._tag === "Gate" && p.gate.status === "pending") ||
-      (p._tag === "Question" && p.answers === null)
+      (p._tag === "Question" && p.answers === null) ||
+      (p._tag === "Plan" && (p.plan.status === "proposed" || p.plan.status === "revising"))
   )
   if (!orphaned) return base
   return {
@@ -252,6 +411,9 @@ export const settleLoaded = (msg: Message): Message => {
       }
       if (p._tag === "Question" && p.answers === null) {
         return { ...p, answers: [] as ReadonlyArray<QuestionAnswer> }
+      }
+      if (p._tag === "Plan" && (p.plan.status === "proposed" || p.plan.status === "revising")) {
+        return { ...p, plan: { ...p.plan, status: "stale" as const } }
       }
       return p
     })
@@ -328,6 +490,18 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       return { ...msg, parts: [...parts, part] }
     }),
 
+    Match.tag("PlanProposed", (e) => {
+      const part: PlanPart = { _tag: "Plan", plan: e.plan }
+      return { ...msg, parts: [...parts, part] }
+    }),
+
+    Match.tag("PlanUpdated", (e) => ({
+      ...msg,
+      parts: parts.map((p): ContentPart =>
+        p._tag === "Plan" && p.plan.id === e.plan.id ? { _tag: "Plan", plan: e.plan } : p
+      )
+    })),
+
     Match.tag("Done", () => ({ ...msg, streaming: false })),
 
     Match.tag("Failed", (e) => {
@@ -366,6 +540,67 @@ export const pendingQuestion = (
   for (let i = messages.length - 1; i >= 0; i--) {
     for (const part of messages[i]!.parts) {
       if (part._tag === "Question" && part.answers === null) return part.request
+    }
+  }
+  return null
+}
+
+const mapPlan = (msg: Message, planId: string, f: (plan: Plan) => Plan): Message => ({
+  ...msg,
+  parts: msg.parts.map((p): ContentPart =>
+    p._tag === "Plan" && p.plan.id === planId ? { _tag: "Plan", plan: f(p.plan) } : p
+  )
+})
+
+/** Set a plan part's overall status (proposed → revising → approved/rejected/stale). */
+export const setPlanStatus = (msg: Message, planId: string, status: PlanStatus): Message =>
+  mapPlan(msg, planId, (plan) => ({ ...plan, status }))
+
+/** Set one step's status within a plan (e.g. the step under revision). */
+export const setPlanStepStatus = (
+  msg: Message,
+  planId: string,
+  stepId: string,
+  status: PlanStepStatus
+): Message =>
+  mapPlan(msg, planId, (plan) => ({
+    ...plan,
+    steps: plan.steps.map((s) => (s.id === stepId ? { ...s, status } : s))
+  }))
+
+/** Append a comment to a plan and flag its target step. */
+export const addPlanComment = (msg: Message, planId: string, comment: PlanComment): Message =>
+  mapPlan(msg, planId, (plan) => ({
+    ...plan,
+    comments: [...plan.comments, comment],
+    steps: plan.steps.map((s) => (s.id === comment.stepId ? { ...s, flagged: true } : s))
+  }))
+
+/** The latest still-open plan (proposed or revising) across a transcript, or null. */
+export const pendingPlan = (messages: ReadonlyArray<Message>): Plan | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]!.parts
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const part = parts[j]!
+      if (part._tag === "Plan" && (part.plan.status === "proposed" || part.plan.status === "revising")) {
+        return part.plan
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * The latest plan of ANY status across a transcript, or null. Drives the Plan
+ * Review view, which keeps showing an approved/stale plan read-only (unlike
+ * `pendingPlan`, which is only the currently-actionable one).
+ */
+export const latestPlan = (messages: ReadonlyArray<Message>): Plan | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]!.parts
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const part = parts[j]!
+      if (part._tag === "Plan") return part.plan
     }
   }
   return null

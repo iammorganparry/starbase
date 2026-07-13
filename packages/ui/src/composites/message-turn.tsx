@@ -1,13 +1,25 @@
+import { type ReactNode, useState } from "react"
 import type { CliKind, ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
+import { ChevronDown, ChevronRight } from "lucide-react"
+import { cn } from "../lib/cn.js"
 import { Eyebrow } from "../components/eyebrow.js"
 import { DiffPeek } from "../components/diff-peek.js"
 import { Markdown } from "../components/markdown.js"
 import { PROVIDER_COLOR, PROVIDER_LABEL, ProviderIcon } from "../components/provider-icon.js"
 import { ApprovalGate } from "./approval-gate.js"
+import { PlanCard } from "./plan-card.js"
+import { QuestionSummary } from "./question-summary.js"
 import { ThoughtBlock } from "./thought-block.js"
 import { ToolCall } from "./tool-call.js"
 
-const WIDTH = "max-w-[640px]"
+// Parts fill the transcript's centered content column (width is owned by
+// ConversationView), so nothing here caps its own width.
+const WIDTH = "w-full"
+
+/** A run of this many consecutive tool calls (no text between) collapses to the latest. */
+const COLLAPSE_MIN = 3
+
+type ToolPart = Extract<ContentPart, { _tag: "Tool" }>
 
 const toolMeta = (tool: ToolCallModel): string | undefined =>
   tool.meta ?? (tool.diff ? `+${tool.diff.added} −${tool.diff.removed}` : undefined)
@@ -23,14 +35,82 @@ function Working() {
   )
 }
 
+/** Lines of a diff hunk shown before the "Show all" affordance kicks in. */
+const HUNK_PREVIEW_LINES = 12
+
+function ToolCardView({ tool }: { tool: ToolCallModel }) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = tool.preview ? tool.preview.replace(/\n+$/, "").split("\n") : []
+  const clipped = lines.length > HUNK_PREVIEW_LINES && !expanded
+  const shown = clipped ? lines.slice(0, HUNK_PREVIEW_LINES).join("\n") : tool.preview
+  return (
+    <ToolCall
+      status={tool.status}
+      name={tool.name}
+      target={tool.target ?? undefined}
+      filePath={tool.target}
+      meta={toolMeta(tool)}
+      className={WIDTH}
+    >
+      {tool.preview && shown && (
+        <div>
+          <DiffPeek preview={shown} />
+          {lines.length > HUNK_PREVIEW_LINES && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="flex w-full items-center gap-1 bg-editor px-3 py-1 text-[11px] text-line-strong transition-colors hover:text-muted-foreground active:scale-[0.99]"
+            >
+              {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              {expanded ? "Hide" : `Show all ${lines.length} lines`}
+            </button>
+          )}
+        </div>
+      )}
+    </ToolCall>
+  )
+}
+
+/**
+ * A run of consecutive tool calls, collapsed to the latest one with a "+ N more"
+ * toggle above it — so a storm of Reads/greps doesn't drown the conversation.
+ */
+function ToolGroup({ tools }: { tools: ReadonlyArray<ToolCallModel> }) {
+  const [expanded, setExpanded] = useState(false)
+  const hidden = tools.length - 1
+  return (
+    <div className={cn("flex flex-col gap-3", WIDTH)}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 self-start rounded-md border border-line px-2.5 py-1 font-mono text-[10.5px] text-muted-foreground transition-colors hover:bg-surface hover:text-text active:scale-[0.98]"
+      >
+        {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+        {expanded
+          ? `Hide ${hidden} earlier ${hidden === 1 ? "call" : "calls"}`
+          : `+ ${hidden} more tool ${hidden === 1 ? "call" : "calls"}`}
+      </button>
+      {expanded ? (
+        tools.map((tool, i) => <ToolCardView key={i} tool={tool} />)
+      ) : (
+        <ToolCardView tool={tools[tools.length - 1]!} />
+      )}
+    </div>
+  )
+}
+
 function PartView({
   part,
   markdown,
-  onDecideGate
+  onDecideGate,
+  onApprovePlan,
+  onOpenPlanReview
 }: {
   part: ContentPart
   markdown: boolean
   onDecideGate?: (gateId: string, decision: GateDecision) => void
+  onApprovePlan?: (planId: string) => void
+  onOpenPlanReview?: () => void
 }) {
   switch (part._tag) {
     case "Text":
@@ -43,28 +123,12 @@ function PartView({
       )
     case "Thinking":
       return (
-        <ThoughtBlock
-          seconds={part.seconds}
-          streaming={part.streaming}
-          defaultOpen
-          className={WIDTH}
-        >
+        <ThoughtBlock seconds={part.seconds} streaming={part.streaming} defaultOpen className={WIDTH}>
           {part.text}
         </ThoughtBlock>
       )
     case "Tool":
-      return (
-        <ToolCall
-          status={part.tool.status}
-          name={part.tool.name}
-          target={part.tool.target ?? undefined}
-          filePath={part.tool.target}
-          meta={toolMeta(part.tool)}
-          className={WIDTH}
-        >
-          {part.tool.preview && <DiffPeek preview={part.tool.preview} />}
-        </ToolCall>
-      )
+      return <ToolCardView tool={part.tool} />
     case "Gate":
       return (
         <ApprovalGate
@@ -78,19 +142,78 @@ function PartView({
           className={WIDTH}
         />
       )
+    case "Question":
+      // Pending questions dock in the composer (as the QuestionCard); once
+      // answered, show a compact record of the picks here so the choice persists.
+      return part.answers === null ? null : (
+        <QuestionSummary request={part.request} answers={part.answers} className={WIDTH} />
+      )
+    case "Plan":
+      return (
+        <PlanCard
+          plan={part.plan}
+          onApprove={() => onApprovePlan?.(part.plan.id)}
+          onOpenReview={onOpenPlanReview}
+        />
+      )
   }
+}
+
+/**
+ * Render a turn's parts, collapsing runs of ≥ `COLLAPSE_MIN` consecutive tool
+ * calls (with no text between) into a single `ToolGroup`. Anything else renders
+ * in program order.
+ */
+function renderParts(
+  parts: ReadonlyArray<ContentPart>,
+  markdown: boolean,
+  handlers: {
+    onDecideGate?: (gateId: string, decision: GateDecision) => void
+    onApprovePlan?: (planId: string) => void
+    onOpenPlanReview?: () => void
+  }
+): ReactNode[] {
+  const out: ReactNode[] = []
+  let run: ToolPart[] = []
+  let runStart = 0
+  const flush = () => {
+    if (run.length === 0) return
+    if (run.length >= COLLAPSE_MIN) {
+      out.push(<ToolGroup key={`g${runStart}`} tools={run.map((p) => p.tool)} />)
+    } else {
+      run.forEach((p, k) => out.push(<ToolCardView key={`${runStart}-${k}`} tool={p.tool} />))
+    }
+    run = []
+  }
+  parts.forEach((part, i) => {
+    if (part._tag === "Tool") {
+      if (run.length === 0) runStart = i
+      run.push(part)
+      return
+    }
+    flush()
+    out.push(<PartView key={i} part={part} markdown={markdown} {...handlers} />)
+  })
+  flush()
+  return out
 }
 
 /** One transcript turn: a You / provider eyebrow followed by its ordered parts. */
 export function MessageTurn({
   message,
   cli = "claude",
-  onDecideGate
+  onDecideGate,
+  onApprovePlan,
+  onOpenPlanReview
 }: {
   message: Message
   /** The harness that produced assistant turns — sets the eyebrow logo + name. */
   cli?: CliKind
   onDecideGate?: (gateId: string, decision: GateDecision) => void
+  /** Approve a proposed plan inline (from the transcript's plan card). */
+  onApprovePlan?: (planId: string) => void
+  /** Open the full Plan Review view from the inline plan card. */
+  onOpenPlanReview?: () => void
 }) {
   const isAssistant = message.role === "assistant"
   return (
@@ -103,9 +226,7 @@ export function MessageTurn({
       ) : (
         <Eyebrow>You</Eyebrow>
       )}
-      {message.parts.map((part, i) => (
-        <PartView key={i} part={part} markdown={isAssistant} onDecideGate={onDecideGate} />
-      ))}
+      {renderParts(message.parts, isAssistant, { onDecideGate, onApprovePlan, onOpenPlanReview })}
       {/* Signal the agent is still working (before/while content streams in). */}
       {isAssistant && message.streaming && <Working />}
     </div>

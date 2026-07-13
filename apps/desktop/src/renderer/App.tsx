@@ -15,6 +15,7 @@ import { ConversationPane } from "./conversation-pane.js"
 import { PullRequestPane } from "./pull-request-pane.js"
 import { ReviewPane } from "./review-pane.js"
 import { useSessionStatuses } from "./session-status.js"
+import { usePlanSessions } from "./plan-presence.js"
 import { rpc } from "./rpc-client.js"
 
 const GH_UNKNOWN: GhStatus = {
@@ -35,6 +36,7 @@ export function App() {
   const [state, send] = useMachine(appMachine)
   const { clis, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
+  const planSessions = usePlanSessions()
   const qc = useQueryClient()
 
   // Renderer-side rpc reads, via react-query.
@@ -183,8 +185,15 @@ export function App() {
       onCreateSession={createSession}
       loadPrs={connected ? rpc.githubListPrs : undefined}
       onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
-      renderConversation={(session: Session) => (
-        <ConversationPane session={session} onRestore={restoreSession} onDelete={deleteSession} />
+      planSessions={planSessions}
+      renderConversation={(session: Session, view, ctx) => (
+        <ConversationPane
+          session={session}
+          view={view}
+          onOpenPlanReview={ctx.onOpenPlanReview}
+          onRestore={restoreSession}
+          onDelete={deleteSession}
+        />
       )}
       renderPullRequest={(session, ctx) => (
         <PullRequestPane
@@ -197,6 +206,9 @@ export function App() {
         />
       )}
       renderReview={(session, ctx) => (
+        <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
+      )}
+      renderCode={(session, ctx) => (
         <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
       )}
       version={__APP_VERSION__}
