@@ -19,6 +19,7 @@ import type {
   ModelOption,
   PermissionMode,
   PrFileChange,
+  PrMergeMethod,
   PrState,
   PrSummary,
   PullRequest,
@@ -177,6 +178,8 @@ export const rpc = {
     run((c) => c.Github.comment({ sessionId, body, toGithub })),
   githubReview: (sessionId: string, kind: ReviewSubmitKind, body: string): Promise<void> =>
     run((c) => c.Github.review({ sessionId, kind, body })),
+  githubMerge: (sessionId: string, method?: PrMergeMethod): Promise<void> =>
+    run((c) => c.Github.merge({ sessionId, method })),
 
   /**
    * Subscribe to a prompt's normalized event stream. Forks the RPC stream on the

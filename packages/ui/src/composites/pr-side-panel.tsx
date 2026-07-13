@@ -5,6 +5,7 @@ import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { Eyebrow } from "../components/eyebrow.js"
+import { Spinner } from "../components/loading.js"
 import { PrCheckRow } from "./pr-check-row.js"
 
 /** Reviewer state → Badge tone + label. */
@@ -40,14 +41,20 @@ function ReviewerRow({ reviewer }: { reviewer: PrReviewer }) {
 export function PrSidePanel({
   pr,
   connected,
-  onMerge
+  onMerge,
+  merging = false,
+  mergeError
 }: {
   pr: PullRequest
   connected: boolean
   onMerge?: () => void
+  merging?: boolean
+  mergeError?: string | null
 }) {
   const failing = pr.checks.filter((c) => c.status === "fail").length
   const blocked = pr.mergeBlockers.length > 0
+  const merged = pr.state === "merged"
+  const closed = pr.state === "closed"
 
   return (
     <div className="flex w-[352px] flex-none flex-col overflow-auto border-l border-hairline bg-panel">
@@ -78,7 +85,11 @@ export function PrSidePanel({
 
       {/* Merge box */}
       <div className="p-4">
-        {blocked ? (
+        {merged ? (
+          <Callout tone="purple">This pull request has been merged.</Callout>
+        ) : closed ? (
+          <Callout tone="red">This pull request is closed.</Callout>
+        ) : blocked ? (
           <div className="overflow-hidden rounded-lg border border-red/30">
             <div className="flex items-center gap-[9px] border-b border-hairline bg-red/[0.06] px-[13px] py-[10px]">
               <span className="flex size-5 flex-none items-center justify-center rounded-full bg-red/20 text-[12px] text-red">
@@ -104,12 +115,18 @@ export function PrSidePanel({
           <div className="flex flex-col gap-3">
             <Callout tone="green">This branch has no conflicts and can be merged.</Callout>
             <Button
-              className="w-full justify-center"
-              disabled={!connected}
+              className="w-full justify-center gap-2"
+              disabled={!connected || merging || !onMerge}
               onClick={onMerge}
             >
-              Merge pull request
+              {merging && <Spinner size={13} />}
+              {merging ? "Merging…" : "Merge pull request"}
             </Button>
+            {mergeError && (
+              <Callout tone="red" className="items-start">
+                {mergeError}
+              </Callout>
+            )}
           </div>
         )}
       </div>

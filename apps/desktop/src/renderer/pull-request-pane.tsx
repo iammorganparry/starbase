@@ -23,8 +23,19 @@ export function PullRequestPane({
   onConnectGithub: () => void
   onPrLinked: (sessionId: string, prNumber: number) => void
 }) {
-  const { pr, busy, createError, createPr, submitReview, sendEntryToAgent, sentEntryIds, openOnGithub } =
-    usePullRequest(session, { connected, autoDetect, onPrLinked })
+  const {
+    pr,
+    busy,
+    createError,
+    createPr,
+    mergePr,
+    merging,
+    mergeError,
+    submitReview,
+    sendEntryToAgent,
+    sentEntryIds,
+    openOnGithub
+  } = usePullRequest(session, { connected, autoDetect, onPrLinked })
 
   return (
     <PullRequestView
@@ -35,6 +46,9 @@ export function PullRequestPane({
       createError={createError}
       sessionTitle={session.title}
       onCreatePr={createPr}
+      onMerge={mergePr}
+      merging={merging}
+      mergeError={mergeError}
       onConnectGithub={onConnectGithub}
       onSubmitReview={submitReview}
       onSendEntryToAgent={sendEntryToAgent}

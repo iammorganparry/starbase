@@ -221,6 +221,10 @@ export type PrReviewKind = Schema.Schema.Type<typeof PrReviewKind>
 export const ReviewSubmitKind = Schema.Literal("comment", "approve", "request-changes")
 export type ReviewSubmitKind = Schema.Schema.Type<typeof ReviewSubmitKind>
 
+/** The strategy `gh pr merge` uses when merging a pull request. */
+export const PrMergeMethod = Schema.Literal("merge", "squash", "rebase")
+export type PrMergeMethod = Schema.Schema.Type<typeof PrMergeMethod>
+
 /** A GitHub account reference (author / reviewer). */
 export const GithubUser = Schema.Struct({
   login: Schema.String,

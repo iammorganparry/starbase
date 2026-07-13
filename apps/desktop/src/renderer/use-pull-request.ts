@@ -37,6 +37,12 @@ export interface PullRequestState {
   /** A routed review is being worked on by the agent right now. */
   readonly routing: boolean
   readonly createPr: () => Promise<void>
+  /** Merge the linked PR (merge commit). */
+  readonly mergePr: () => Promise<void>
+  /** A merge is in flight. */
+  readonly merging: boolean
+  /** The message from a failed `gh pr merge`, or null. */
+  readonly mergeError: string | null
   readonly submitReview: (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => Promise<void>
   readonly sendEntryToAgent: (entryId: string) => Promise<void>
   /** Timeline entry ids already routed to the agent (their action stays "Sent"). */
@@ -115,6 +121,18 @@ export function usePullRequest(
     onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
   })
 
+  // "Merge pull request" merges the linked PR via `gh pr merge`. On success the
+  // PR read is invalidated so the header flips to "Merged" (and the archive
+  // sweep, which polls the PR state, retires the session).
+  const mergeMutation = useMutation({
+    mutationFn: () => rpc.githubMerge(session.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
+  })
+  const mergePr = useCallback(
+    () => mergeMutation.mutateAsync().then(() => undefined),
+    [mergeMutation]
+  )
+
   const submitReview = useCallback(
     async (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => {
       if (input.routeToAgent && input.body.trim().length > 0) {
@@ -148,6 +166,11 @@ export function usePullRequest(
     createError,
     routing,
     createPr,
+    mergePr,
+    merging: mergeMutation.isPending,
+    mergeError: mergeMutation.error
+      ? ((mergeMutation.error as { message?: string }).message ?? "Failed to merge pull request")
+      : null,
     submitReview,
     sendEntryToAgent,
     sentEntryIds,

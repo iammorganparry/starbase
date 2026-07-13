@@ -8,7 +8,8 @@ const callout = cva("flex items-center gap-[9px] rounded-xl border px-[11px] py-
       yellow: "border-yellow/30 bg-yellow/[0.06]",
       green: "border-green/30 bg-green/[0.05]",
       blue: "border-blue/30 bg-blue/[0.06]",
-      red: "border-red/30 bg-red/[0.06]"
+      red: "border-red/30 bg-red/[0.06]",
+      purple: "border-purple/30 bg-purple/[0.06]"
     }
   },
   defaultVariants: { tone: "yellow" }
@@ -18,14 +19,16 @@ const iconColor: Record<string, string> = {
   yellow: "text-yellow",
   green: "text-green",
   blue: "text-blue",
-  red: "text-red"
+  red: "text-red",
+  purple: "text-purple"
 }
 
 const defaultGlyph: Record<string, string> = {
   yellow: "!",
   green: "✓",
   blue: "✦",
-  red: "✗"
+  red: "✗",
+  purple: "✓"
 }
 
 export interface CalloutProps extends VariantProps<typeof callout> {

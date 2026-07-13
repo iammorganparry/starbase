@@ -26,7 +26,7 @@ import {
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
 import { GhError, GitError } from "@starbase/core"
-import type { CreateSessionFromPrInput, ReviewSubmitKind } from "@starbase/core"
+import type { CreateSessionFromPrInput, PrMergeMethod, ReviewSubmitKind } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -259,6 +259,16 @@ export const githubReview = (input: {
     yield* GhService.prReview(session.worktreePath, session.prNumber, input.kind, input.body)
   })
 
+/** `Github.merge` handler — merge the session's linked PR (merge commit by default). */
+export const githubMerge = (input: { sessionId: string; method?: PrMergeMethod }) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to merge" }))
+    }
+    yield* GhService.prMerge(session.worktreePath, session.prNumber, input.method)
+  })
+
 /**
  * Handlers for every procedure in the group. Each one delegates straight to an
  * Effect service, so the group remains the sole contract. `Discovery.list`
@@ -319,7 +329,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
-  "Github.review": (input) => githubReview(input)
+  "Github.review": (input) => githubReview(input),
+  "Github.merge": (input) => githubMerge(input)
 })
 
 /**
