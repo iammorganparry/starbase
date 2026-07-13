@@ -57,9 +57,15 @@ describe("SessionStore", () => {
     if (exit._tag !== "Success") return
     const s = exit.value
     expect(s.status).toBe("idle")
-    expect(s.branch).toBe("starbase/fix-login-bug")
+    // The slug folds in a unique stamp so auto-named sessions never collide.
+    expect(s.branch).toMatch(/^starbase\/fix-login-bug-[a-z0-9]+$/)
     expect(s.baseBranch).toBe("main")
-    expect(s.worktreePath).toBe(join(temp.root, "worktrees", "trigify-app", "fix-login-bug"))
+    expect(s.worktreePath).toMatch(
+      new RegExp(`${join(temp.root, "worktrees", "trigify-app")}/fix-login-bug-[a-z0-9]+$`)
+    )
+    // An explicit title is pinned (the agent won't auto-overwrite it).
+    expect(s.autoTitle).toBe(false)
+    expect(s.title).toBe("Fix Login Bug!")
     expect(s.diff).toStrictEqual({ added: 0, removed: 0 })
   })
 
@@ -93,7 +99,64 @@ describe("SessionStore", () => {
       temp.layer
     )
     expect(exit._tag).toBe("Success")
-    if (exit._tag === "Success") expect(exit.value.branch).toBe("starbase/session")
+    if (exit._tag === "Success") expect(exit.value.branch).toMatch(/^starbase\/session-[a-z0-9]+$/)
+  })
+
+  it("auto-names a session with no title (Untitled + autoTitle true + untitled-session slug)", async () => {
+    const exit = await runExit(
+      SessionStore.create(input({ title: undefined })).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value.title).toBe("Untitled session")
+    expect(exit.value.autoTitle).toBe(true)
+    expect(exit.value.branch).toMatch(/^starbase\/untitled-session-[a-z0-9]+$/)
+  })
+
+  it("gives two blank sessions DISTINCT branches (no starbase/session collision)", async () => {
+    const created = await runExit(
+      Effect.gen(function* () {
+        const a = yield* SessionStore.create(input({ title: undefined }))
+        const b = yield* SessionStore.create(input({ title: undefined }))
+        return [a, b] as const
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(created._tag).toBe("Success")
+    if (created._tag !== "Success") return
+    const [a, b] = created.value
+    expect(a.branch).not.toBe(b.branch)
+    expect(a.id).not.toBe(b.id)
+    expect(a.worktreePath).not.toBe(b.worktreePath)
+  })
+
+  it("setTitle changes only the title; renameTitle also pins it — branch/id/worktree stay put", async () => {
+    const result = await runExit(
+      Effect.gen(function* () {
+        const s = yield* SessionStore.create(input({ title: undefined }))
+        yield* SessionStore.setTitle(s.id, "Rate limit the API")
+        const afterAuto = yield* SessionStore.get(s.id)
+        yield* SessionStore.renameTitle(s.id, "My pinned name")
+        const afterRename = yield* SessionStore.get(s.id)
+        return { s, afterAuto, afterRename }
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(result._tag).toBe("Success")
+    if (result._tag !== "Success") return
+    const { s, afterAuto, afterRename } = result.value
+    // setTitle updated the title but nothing structural.
+    expect(afterAuto.title).toBe("Rate limit the API")
+    expect(afterAuto.autoTitle).toBe(true)
+    expect(afterAuto.branch).toBe(s.branch)
+    expect(afterAuto.id).toBe(s.id)
+    expect(afterAuto.worktreePath).toBe(s.worktreePath)
+    expect(afterAuto.baseBranch).toBe(s.baseBranch)
+    // renameTitle pinned it.
+    expect(afterRename.title).toBe("My pinned name")
+    expect(afterRename.autoTitle).toBe(false)
+    expect(afterRename.branch).toBe(s.branch)
   })
 
   it("prepends new sessions and persists them across a fresh read", async () => {

@@ -12,6 +12,8 @@ export interface SessionConversationProps {
   clis: ReadonlyArray<CliInfo>
   activeSessionId: string | null
   onSelectSession: (id: string) => void
+  /** Manually rename a session (double-click its sidebar title). */
+  onRenameSession?: (id: string, title: string) => void
   /**
    * The live conversation pane (the renderer's session-keyed
    * `ConversationView`). Falls back to a static seeded transcript when absent
@@ -101,6 +103,7 @@ export function SessionConversation(props: SessionConversationProps) {
         sessions={props.sessions}
         activeSessionId={props.activeSessionId}
         onSelect={props.onSelectSession}
+        onRename={props.onRenameSession}
         liveStatus={props.liveStatus}
         onNewSession={props.onNewSession}
         onOpenUsage={props.onOpenUsage}

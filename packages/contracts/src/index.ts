@@ -144,6 +144,20 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String }
   }),
 
+  /** Regenerate an auto-titled session's title from its transcript; returns it. */
+  Rpc.make("Sessions.retitle", {
+    success: Session,
+    error: GitError,
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** Manually rename a session — pins the title (stops auto-retitling). */
+  Rpc.make("Sessions.rename", {
+    success: Session,
+    error: GitError,
+    payload: { sessionId: Schema.String, title: Schema.String }
+  }),
+
   /** Permanently delete a session and remove its worktree. Irreversible. */
   Rpc.make("Sessions.delete", {
     error: GitError,

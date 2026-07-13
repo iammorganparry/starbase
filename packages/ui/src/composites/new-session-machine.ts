@@ -101,9 +101,8 @@ export const newSessionMachine = setup({
     canSubmit: ({ context }) =>
       context.repoPath !== "" &&
       context.cli !== "" &&
-      (context.mode === "pr"
-        ? context.selectedPr !== null
-        : context.title.trim() !== "" && context.base !== "")
+      // Blank mode no longer requires a title — the agent auto-names the session.
+      (context.mode === "pr" ? context.selectedPr !== null : context.base !== "")
   },
   actors: {
     loadBranches: fromPromise(
@@ -208,10 +207,12 @@ export const newSessionMachine = setup({
                   })
                 }
                 if (context.cli === "") return Promise.reject(new Error("Select a harness."))
+                const title = context.title.trim()
                 return deps.onCreate({
                   repoPath: repo.path,
                   repoName: repo.name,
-                  title: context.title.trim(),
+                  // Omit when blank → the session is auto-named (title is optional).
+                  ...(title ? { title } : {}),
                   cli: context.cli,
                   baseBranch: context.base
                 })

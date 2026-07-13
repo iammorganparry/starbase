@@ -21,7 +21,6 @@ import {
   DialogTitle
 } from "../components/dialog.js"
 import { Eyebrow } from "../components/eyebrow.js"
-import { Input } from "../components/input.js"
 import {
   Select,
   SelectContent,
@@ -63,14 +62,6 @@ export interface NewSessionDialogProps {
   loadPrs?: (repoPath: string, opts: { mine: boolean; search: string }) => Promise<ReadonlyArray<PrSummary>>
   /** Submit a "from PR" session (checks out the PR's head branch upstream). */
   onCreateFromPr?: (input: CreateSessionFromPrInput) => Promise<void>
-}
-
-/** Lowercase, collapse non-alphanumeric runs to single dashes, trim dashes. */
-function kebab(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
 }
 
 /**
@@ -174,7 +165,6 @@ export function NewSessionDialog({
   const {
     mode,
     repoPath,
-    title,
     cli,
     base,
     branches,
@@ -194,8 +184,6 @@ export function NewSessionDialog({
   React.useEffect(() => {
     if (open) send({ type: "OPEN" })
   }, [open, send])
-
-  const slug = title.trim() ? `starbase/${kebab(title)}` : ""
 
   const renderRepoItem = (r: Repo) => (
     <SelectItem
@@ -272,19 +260,7 @@ export function NewSessionDialog({
               </Select>
             </div>
 
-            {/* Title (blank mode only — a from-PR session's title is the PR title) */}
-            {mode === "blank" && (
-              <div className="flex flex-col gap-1.5">
-                <Eyebrow>Title</Eyebrow>
-                <Input
-                  value={title}
-                  onChange={(e) => send({ type: "SET_TITLE", title: e.target.value })}
-                  placeholder="Refactor auth refresh"
-                  autoFocus
-                />
-                <span className="font-mono text-[10.5px] text-dim">{slug || "starbase/…"}</span>
-              </div>
-            )}
+            {/* No title field — the agent auto-names each session from the work. */}
 
             {/* Harness */}
             <div className="flex flex-col gap-1.5">
