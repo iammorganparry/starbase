@@ -1,6 +1,6 @@
 import type { DiffStat, PermissionMode, Question, QuestionAnswer, StreamEvent } from "@starbase/core"
 import { CliExecError } from "@starbase/core"
-import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
+import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { parsePlan, planModeInstructions } from "./plan-parse.js"
@@ -210,6 +210,35 @@ export const editStats = (
   return { diff: null, preview: null }
 }
 
+/**
+ * Build the SDK `query` prompt for a turn. With no attachments it's the plain
+ * text string (unchanged behaviour). With images it becomes the SDK's
+ * streaming-input form: a single user message whose content interleaves the text
+ * with base64 image blocks — the shape the harness reads images from. Pure +
+ * exported so the interleaving is unit-tested without the live SDK.
+ */
+export const buildPromptInput = (
+  spec: SessionSpec,
+  resumeId: string | undefined
+): string | AsyncIterable<SDKUserMessage> => {
+  if (spec.images.length === 0) return spec.prompt
+  const content = [
+    ...(spec.prompt.length > 0 ? [{ type: "text", text: spec.prompt }] : []),
+    ...spec.images.map((img) => ({
+      type: "image",
+      source: { type: "base64" as const, media_type: img.mediaType, data: img.data }
+    }))
+  ]
+  return (async function* () {
+    yield {
+      type: "user",
+      message: { role: "user", content },
+      parent_tool_use_id: null,
+      session_id: resumeId ?? ""
+    } as SDKUserMessage
+  })()
+}
+
 const contentBlocks = (message: unknown): ReadonlyArray<Record<string, unknown>> => {
   const content = (message as { content?: unknown } | null)?.content
   return Array.isArray(content) ? (content as Array<Record<string, unknown>>) : []
@@ -394,8 +423,10 @@ export const runClaude = (
             : { behavior: "deny", message: "Denied by the operator." }
         }
 
+        // With attached images this switches to the SDK's streaming-input form
+        // (text + base64 image blocks); without images it stays the string prompt.
         const iterator = query({
-          prompt: spec.prompt,
+          prompt: buildPromptInput(spec, resume.get(sessionId)),
           options: {
             cwd: spec.cwd || undefined,
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,

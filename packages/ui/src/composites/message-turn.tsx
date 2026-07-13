@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react"
 import type { CliKind, ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { AttachmentThumb } from "../components/attachment-thumb.js"
 import { Eyebrow } from "../components/eyebrow.js"
 import { DiffPeek } from "../components/diff-peek.js"
 import { Markdown } from "../components/markdown.js"
@@ -20,6 +21,10 @@ const WIDTH = "w-full"
 const COLLAPSE_MIN = 3
 
 type ToolPart = Extract<ContentPart, { _tag: "Tool" }>
+type ImagePart = Extract<ContentPart, { _tag: "Image" }>
+
+/** An attached image on a user turn — a read-only transcript thumbnail. */
+const IMAGE_THUMB = "h-[80px] w-[132px]"
 
 const toolMeta = (tool: ToolCallModel): string | undefined =>
   tool.meta ?? (tool.diff ? `+${tool.diff.added} −${tool.diff.removed}` : undefined)
@@ -121,6 +126,10 @@ function PartView({
           {part.text}
         </p>
       )
+    case "Image":
+      // Images are normally grouped into a row (see renderParts); this covers a
+      // lone image part rendered directly.
+      return <AttachmentThumb attachment={part.attachment} className={IMAGE_THUMB} />
     case "Thinking":
       return (
         <ThoughtBlock seconds={part.seconds} streaming={part.streaming} defaultOpen className={WIDTH}>
@@ -185,16 +194,39 @@ function renderParts(
     }
     run = []
   }
+  // Consecutive attached images render as a single wrapping thumbnail row.
+  let imgs: ImagePart[] = []
+  let imgStart = 0
+  const flushImgs = () => {
+    if (imgs.length === 0) return
+    out.push(
+      <div key={`i${imgStart}`} className={cn("flex flex-wrap gap-2", WIDTH)}>
+        {imgs.map((p, k) => (
+          <AttachmentThumb key={`${imgStart}-${k}`} attachment={p.attachment} className={IMAGE_THUMB} />
+        ))}
+      </div>
+    )
+    imgs = []
+  }
   parts.forEach((part, i) => {
     if (part._tag === "Tool") {
+      flushImgs()
       if (run.length === 0) runStart = i
       run.push(part)
       return
     }
+    if (part._tag === "Image") {
+      flush()
+      if (imgs.length === 0) imgStart = i
+      imgs.push(part)
+      return
+    }
     flush()
+    flushImgs()
     out.push(<PartView key={i} part={part} markdown={markdown} {...handlers} />)
   })
   flush()
+  flushImgs()
   return out
 }
 

@@ -103,6 +103,34 @@ describe("AgentRunner HITL gating", () => {
   })
 })
 
+describe("AgentRunner image attachments", () => {
+  it("persists attached images on the user turn alongside the text", async () => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      makeScriptedCliAdapter(0),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    const image = { id: "img1", name: "login.png", mediaType: "image/png", data: "aGVsbG8=" }
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      yield* runner.setMode(SESSION, "auto")
+      yield* runner.prompt(SESSION, "look at this", [image]).pipe(Stream.runDrain)
+      return yield* TranscriptStore.list(SESSION)
+    })
+    const transcript = await Effect.runPromise(program.pipe(Effect.provide(base)))
+
+    const user = transcript[0]!
+    expect(user.role).toBe("user")
+    // The image is persisted as an Image part, before the text part.
+    const imagePart = user.parts.find((p) => p._tag === "Image")
+    expect(imagePart && imagePart._tag === "Image" && imagePart.attachment).toStrictEqual(image)
+    expect(user.parts.some((p) => p._tag === "Text" && p.text === "look at this")).toBe(true)
+  })
+})
+
 describe("AgentRunner AskUserQuestion", () => {
   it("emits QuestionRequested, resumes on answer, and records it in the transcript", async () => {
     const base = Layer.mergeAll(

@@ -1,13 +1,18 @@
 /**
  * Thin view over `conversationMachine` — the deterministic conversation flow
  * lives in the chart (loading / awaitingInput / running), so this hook only maps
- * the current snapshot to props and events to sends. Mount it keyed by session id
- * (`<ConversationPane key={session.id} …/>`) so each session gets a fresh chart
- * with no session-sync `useEffect`. Keeps `@starbase/ui` purely presentational.
+ * the current snapshot to props and events to sends.
+ *
+ * The actor itself is NOT owned by this hook: it lives in `conversation-registry`
+ * so it outlives the pane (mounted keyed by the active session). Switching
+ * sessions therefore detaches the view without stopping the run — the background
+ * agent keeps working. Attaching to an existing actor also means switching back
+ * shows its up-to-date state with no reload.
  */
 import { useMemo } from "react"
-import { useMachine } from "@xstate/react"
+import { useSelector } from "@xstate/react"
 import type {
+  Attachment,
   GateDecision,
   Message,
   ModelOption,
@@ -20,7 +25,8 @@ import type {
   Skill
 } from "@starbase/core"
 import { latestPlan, pendingPlan, pendingQuestion } from "@starbase/core"
-import { conversationMachine } from "./conversation-machine.js"
+import type { QueuedMessage } from "./conversation-machine.js"
+import { getConversationActor } from "./conversation-registry.js"
 
 export interface Conversation {
   readonly messages: ReadonlyArray<Message>
@@ -36,6 +42,10 @@ export interface Conversation {
   readonly busy: boolean
   /** The agent is paused awaiting a HITL decision. */
   readonly paused: boolean
+  /** Messages queued while the agent was busy (sent FIFO once it frees up). */
+  readonly queued: ReadonlyArray<QueuedMessage>
+  /** Drop a queued message before it's sent (by index). */
+  readonly unqueue: (index: number) => void
   /** A pending AskUserQuestion group (the composer is replaced while set), or null. */
   readonly question: QuestionRequest | null
   readonly answerQuestion: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
@@ -46,7 +56,7 @@ export interface Conversation {
   readonly approvePlan: (planId: string) => void
   /** Live status for the sidebar/tab bar, or null when idle (use persisted). */
   readonly status: SessionStatus | null
-  readonly sendPrompt: (text: string) => void
+  readonly sendPrompt: (text: string, images?: ReadonlyArray<Attachment>) => void
   readonly decideGate: (gateId: string, decision: GateDecision) => void
   readonly setMode: (mode: PermissionMode) => void
   readonly setModel: (model: string) => void
@@ -56,8 +66,10 @@ export interface Conversation {
 }
 
 export function useConversation(session: Session): Conversation {
-  const [state, send] = useMachine(conversationMachine, { input: { session } })
-  const { messages, mode, skills, files, model, models, patch } = state.context
+  const actor = useMemo(() => getConversationActor(session), [session.id])
+  const state = useSelector(actor, (s) => s)
+  const send = actor.send
+  const { messages, mode, skills, files, model, models, patch, queued } = state.context
 
   const paused = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -72,7 +84,9 @@ export function useConversation(session: Session): Conversation {
   // drives the actionable "needs-input" status.
   const plan = useMemo(() => latestPlan(messages), [messages])
   const openPlan = useMemo(() => pendingPlan(messages), [messages])
-  const busy = state.matches("running")
+  // Busy through the diff refresh too, so the composer keeps queueing across the
+  // brief gap between a turn ending and the next queued turn starting.
+  const busy = state.matches("running") || state.matches("refreshingDiff")
   const status: SessionStatus | null =
     paused || question || openPlan ? "needs-input" : busy ? "thinking" : null
 
@@ -86,13 +100,15 @@ export function useConversation(session: Session): Conversation {
     patch,
     busy,
     paused,
+    queued,
+    unqueue: (index) => send({ type: "UNQUEUE", index }),
     question,
     plan,
     commentPlanStep: (planId, stepId, body) => send({ type: "COMMENT_PLAN_STEP", planId, stepId, body }),
     revisePlan: (planId) => send({ type: "REVISE_PLAN", planId }),
     approvePlan: (planId) => send({ type: "APPROVE_PLAN", planId }),
     status,
-    sendPrompt: (text) => send({ type: "SEND", text }),
+    sendPrompt: (text, images) => send({ type: "SEND", text, images }),
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
     answerQuestion: (requestId, answers) => send({ type: "ANSWER_QUESTION", requestId, answers }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),

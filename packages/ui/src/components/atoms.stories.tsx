@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
+import type { Attachment } from "@starbase/core"
 import { StatusDot } from "./status-dot.js"
 import { Badge } from "./badge.js"
 import { Pill } from "./pill.js"
@@ -6,10 +7,21 @@ import { Toggle } from "./toggle.js"
 import { Spinner, Skeleton } from "./loading.js"
 import { Avatar } from "./avatar.js"
 import { Kbd } from "./kbd.js"
+import { AttachmentThumb } from "./attachment-thumb.js"
 
 const meta: Meta = { title: "Atoms/Overview" }
 export default meta
 type Story = StoryObj
+
+/** A tiny inline PNG so the attachment stories render without external assets. */
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+const sampleImage = (name: string): Attachment => ({
+  id: name,
+  name,
+  mediaType: "image/png",
+  data: PNG
+})
 
 export const StatusDots: Story = {
   render: () => (
@@ -53,6 +65,18 @@ export const Toggles: Story = {
     <div className="flex items-center gap-4">
       <Toggle defaultChecked />
       <Toggle />
+    </div>
+  )
+}
+
+export const AttachmentThumbs: Story = {
+  name: "Attachment thumbnails",
+  render: () => (
+    <div className="flex items-end gap-4 bg-editor p-4">
+      {/* Composer tile: 58px square, removable. */}
+      <AttachmentThumb attachment={sampleImage("login.png")} onRemove={() => {}} className="size-[58px]" />
+      {/* Transcript thumbnail: wider, read-only (no remove). */}
+      <AttachmentThumb attachment={sampleImage("screenshot-2026.png")} className="h-[80px] w-[132px]" />
     </div>
   )
 }

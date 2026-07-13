@@ -1,5 +1,6 @@
 import {
   ArchiveReason,
+  Attachment,
   CliInfo,
   CliKind,
   CreateSessionFromPrInput,
@@ -167,7 +168,12 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Agent.run", {
     success: StreamEvent,
     stream: true,
-    payload: { sessionId: Schema.String, text: Schema.String }
+    payload: {
+      sessionId: Schema.String,
+      text: Schema.String,
+      /** Images the operator attached as context (optional; omitted → none). */
+      images: Schema.optional(Schema.Array(Attachment))
+    }
   }),
 
   /** Resolve a pending HITL approval gate (allow / deny / always). */

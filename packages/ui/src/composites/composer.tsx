@@ -1,12 +1,35 @@
-import { useMemo, useRef, useState } from "react"
-import type { ModelOption, PermissionMode, Skill } from "@starbase/core"
+import { useLayoutEffect, useMemo, useRef, useState } from "react"
+import type { Attachment, ModelOption, PermissionMode, Skill } from "@starbase/core"
+import { ImagePlus, Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { AttachmentThumb } from "../components/attachment-thumb.js"
 import { Button } from "../components/button.js"
 import { ChipMenu, type ChipOption } from "../components/chip-menu.js"
 import { CodeChip } from "../components/code-chip.js"
 import { Pill } from "../components/pill.js"
 import { CommandMenu } from "./command-menu.js"
 import { MentionMenu } from "./mention-menu.js"
+
+/** Cap the number of attached images so the prompt payload stays sane. */
+const MAX_ATTACHMENTS = 8
+
+/** Read an image `File` into a base64 `Attachment` (null if it isn't an image). */
+const readAttachment = (file: File, id: string): Promise<Attachment | null> =>
+  new Promise((resolve) => {
+    if (!file.type.startsWith("image/")) {
+      resolve(null)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : ""
+      const comma = result.indexOf(",")
+      const data = comma >= 0 ? result.slice(comma + 1) : ""
+      resolve(data ? { id, name: file.name || "pasted-image.png", mediaType: file.type, data } : null)
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
 
 const MODE_OPTIONS: ReadonlyArray<ChipOption<PermissionMode>> = [
   { value: "ask", label: "ask" },
@@ -46,12 +69,13 @@ export function Composer({
   onSetMode,
   allowPlan = false,
   paused = false,
+  busy = false,
   placeholder = "Message Claude…",
   className
 }: {
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
-  onSend?: (text: string) => void
+  onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
   /** Current harness model id (shown in the model chip). */
   model?: string
   /** Models the harness supports (the model chip's menu). */
@@ -63,6 +87,11 @@ export function Composer({
   /** Offer the Plan mode option (Claude sessions only). */
   allowPlan?: boolean
   paused?: boolean
+  /**
+   * The agent is producing a turn — sends are queued (processed once it's free)
+   * rather than blocked, so the composer stays live and the button reads "Queue".
+   */
+  busy?: boolean
   placeholder?: string
   className?: string
 }) {
@@ -70,7 +99,32 @@ export function Composer({
   const [value, setValue] = useState("")
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [attachments, setAttachments] = useState<ReadonlyArray<Attachment>>([])
+  const [dragging, setDragging] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const attachIdRef = useRef(0)
+
+  // Read dropped/pasted/picked image files into base64 attachments (capped).
+  const addFiles = async (files: ReadonlyArray<File>) => {
+    const read = await Promise.all(
+      files.map((f) => readAttachment(f, `att_${(attachIdRef.current += 1)}`))
+    )
+    const next = read.filter((a): a is Attachment => a !== null)
+    if (next.length > 0) setAttachments((prev) => [...prev, ...next].slice(0, MAX_ATTACHMENTS))
+  }
+
+  const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id))
+
+  // Auto-grow the textarea to fit its content (a multiline prompt expands the
+  // composer instead of scrolling internally), capped by the CSS `max-h` — past
+  // which it scrolls. Runs after each value change (including the reset on send).
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${el.scrollHeight}px`
+  }, [value])
 
   const skillMatches = useMemo(
     () =>
@@ -108,10 +162,19 @@ export function Composer({
 
   const send = () => {
     const text = value.trim()
-    if (text.length === 0 || paused) return
-    onSend?.(text)
+    if ((text.length === 0 && attachments.length === 0) || paused) return
+    onSend?.(text, attachments)
     setValue("")
+    setAttachments([])
     setMenu(null)
+  }
+
+  // Pasting an image (e.g. a screenshot) attaches it instead of dropping a blob.
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"))
+    if (files.length === 0) return
+    e.preventDefault()
+    void addFiles(files)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -167,9 +230,24 @@ export function Composer({
       )}
 
       <div
+        onDragOver={(e) => {
+          if (paused) return
+          e.preventDefault()
+          setDragging(true)
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          setDragging(false)
+          if (paused) return
+          const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"))
+          if (files.length === 0) return
+          e.preventDefault()
+          void addFiles(files)
+        }}
         className={cn(
-          "flex flex-col gap-[11px] rounded-xl border border-line bg-sunken px-[13px] py-2.5",
-          paused && "opacity-70"
+          "flex flex-col gap-[11px] rounded-xl border border-line bg-sunken px-[13px] py-2.5 transition-colors",
+          paused && "opacity-70",
+          dragging && "border-cyan/60 bg-cyan/5"
         )}
       >
         {mentions.length > 0 && (
@@ -183,17 +261,67 @@ export function Composer({
             ))}
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((a) => (
+              <AttachmentThumb
+                key={a.id}
+                attachment={a}
+                onRemove={() => removeAttachment(a.id)}
+                className="size-[58px]"
+              />
+            ))}
+            {attachments.length < MAX_ATTACHMENTS && (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach image"
+                className="flex size-[58px] flex-none flex-col items-center justify-center gap-0.5 rounded-md border border-dashed border-line text-dim outline-none transition-colors hover:border-line-strong hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Plus size={15} />
+                <span className="text-[8.5px]">Add</span>
+              </button>
+            )}
+          </div>
+        )}
         <textarea
           ref={ref}
           value={value}
           rows={1}
           disabled={paused}
-          placeholder={paused ? "Reply, or answer the prompt above…" : placeholder}
+          placeholder={
+            paused
+              ? "Reply, or answer the prompt above…"
+              : busy
+                ? "Queue a message while the agent works…"
+                : placeholder
+          }
           onChange={(e) => sync(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={onKeyDown}
-          className="max-h-40 min-h-[22px] w-full resize-none bg-transparent text-[14px] leading-[1.5] text-text-body outline-none placeholder:text-dim"
+          onPaste={onPaste}
+          className="max-h-64 min-h-[22px] w-full resize-none overflow-y-auto bg-transparent text-[14px] leading-[1.5] text-text-body outline-none placeholder:text-dim"
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            void addFiles(Array.from(e.target.files ?? []))
+            e.target.value = ""
+          }}
         />
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={paused}
+            title="Attach an image"
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ImagePlus size={14} />
+          </button>
           <ChipMenu
             value={model ?? models[0]?.id ?? ""}
             options={models.map((m) => ({ value: m.id, label: m.label }))}
@@ -201,7 +329,7 @@ export function Composer({
             disabled={models.length === 0}
           />
           <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} />
-          <span className="font-mono text-[11px] text-line-strong">/ · @</span>
+          <span className="font-mono text-[11px] text-line-strong">/ · @ · paste image</span>
           <div className="flex-1" />
           {paused ? (
             <Pill tone="yellow" dot>
@@ -209,7 +337,7 @@ export function Composer({
             </Pill>
           ) : (
             <Button variant="primary" size="sm" onClick={send}>
-              Send ↵
+              {busy ? "Queue ↵" : "Send ↵"}
             </Button>
           )}
         </div>

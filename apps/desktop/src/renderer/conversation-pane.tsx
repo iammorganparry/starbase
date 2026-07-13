@@ -5,13 +5,11 @@
  * lives here — above the Conversation ↔ Plan Review view switch — so switching to
  * the Plan tab does NOT unmount the agent stream (which would abort a parked plan).
  */
-import { useEffect, useMemo } from "react"
+import { useMemo } from "react"
 import type { DiffActions } from "@starbase/ui"
 import type { Session } from "@starbase/core"
 import { ConversationView, PlanReview } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
-import { setPlanPresent } from "./plan-presence.js"
-import { setSessionStatus } from "./session-status.js"
 import { useConversation } from "./use-conversation.js"
 
 export function ConversationPane({
@@ -33,15 +31,9 @@ export function ConversationPane({
 }) {
   const convo = useConversation(session)
 
-  // Publish the live agent status so the sidebar/tab bar reflect it.
-  useEffect(() => setSessionStatus(session.id, convo.status), [session.id, convo.status])
-  useEffect(() => () => setSessionStatus(session.id, null), [session.id])
-
-  // The Plan Review tab appears only once a plan actually exists (like the PR tab
-  // waits for a PR) — being in plan mode alone doesn't warrant it.
-  const hasPlanTab = convo.plan !== null
-  useEffect(() => setPlanPresent(session.id, hasPlanTab), [session.id, hasPlanTab])
-  useEffect(() => () => setPlanPresent(session.id, false), [session.id])
+  // Live agent status + Plan-tab presence are published by the conversation
+  // registry (from the actor's own subscription), so they stay correct even
+  // while this pane is unmounted for a background session. Nothing to do here.
 
   const planId = convo.plan?.id ?? null
 
@@ -85,6 +77,9 @@ export function ConversationPane({
       files={convo.files}
       patch={convo.patch}
       paused={convo.paused}
+      busy={convo.busy}
+      queued={convo.queued}
+      onUnqueue={convo.unqueue}
       model={convo.model}
       models={convo.models}
       onSetModel={convo.setModel}

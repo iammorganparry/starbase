@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
+import type { Attachment, Message } from "@starbase/core"
 import { SEED_CONVERSATION } from "../seed.js"
 import { CodeChip } from "../components/code-chip.js"
 import { DiffPeek } from "../components/diff-peek.js"
@@ -12,6 +13,24 @@ import { ToolCall } from "./tool-call.js"
 const meta: Meta = { title: "Conversation/Overview" }
 export default meta
 type Story = StoryObj
+
+/** A tiny inline PNG so the attachment stories render without external assets. */
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+const img = (name: string): Attachment => ({ id: name, name, mediaType: "image/png", data: PNG })
+
+/** A user turn that attached two screenshots as context, plus a line of text. */
+const USER_TURN_WITH_IMAGES: Message = {
+  id: "u_img",
+  role: "user",
+  streaming: false,
+  createdAt: "2026-07-13T10:00:00.000Z",
+  parts: [
+    { _tag: "Image", attachment: img("login-500.png") },
+    { _tag: "Image", attachment: img("stacktrace.png") },
+    { _tag: "Text", text: "Here's the failing screen and the stack trace — the token refresh 500s." }
+  ]
+}
 
 export const Transcript: Story = {
   render: () => (
@@ -89,6 +108,35 @@ export const ComposerWithMenus: Story = {
           { id: "opus", label: "opus" },
           { id: "sonnet", label: "sonnet" }
         ]}
+      />
+    </div>
+  )
+}
+
+/**
+ * A user turn that attached images as context — the thumbnails render as a row
+ * above the text (the transcript side of image attachments).
+ */
+export const MessageWithImages: Story = {
+  render: () => (
+    <div className="w-[640px] bg-editor p-6">
+      <MessageTurn message={USER_TURN_WITH_IMAGES} />
+    </div>
+  )
+}
+
+/**
+ * The composer while the agent is busy: sends are queued rather than blocked, so
+ * the button reads "Queue" and the hint invites attaching an image.
+ */
+export const ComposerBusy: Story = {
+  render: () => (
+    <div className="w-[560px] bg-editor p-6">
+      <Composer
+        busy
+        mode="accept-edits"
+        model="sonnet"
+        models={[{ id: "sonnet", label: "sonnet" }]}
       />
     </div>
   )

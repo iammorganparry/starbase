@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import type {
+  Attachment,
   CliKind,
   GateDecision,
   Message,
@@ -11,7 +12,7 @@ import type {
 } from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
-import { Lock, PanelRight, RotateCcw } from "lucide-react"
+import { ImageIcon, Lock, PanelRight, RotateCcw, X } from "lucide-react"
 import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
@@ -39,7 +40,13 @@ export interface ConversationViewProps {
   model?: string
   models?: ReadonlyArray<ModelOption>
   onSetModel?: (model: string) => void
-  onSend?: (text: string) => void
+  onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
+  /** The agent is producing a turn — the composer queues messages instead of blocking. */
+  busy?: boolean
+  /** Messages the operator queued while the agent was busy (sent FIFO once it's free). */
+  queued?: ReadonlyArray<{ text: string; images: ReadonlyArray<Attachment> }>
+  /** Drop a queued message before it's sent (by its index in `queued`). */
+  onUnqueue?: (index: number) => void
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onSetMode?: (mode: PermissionMode) => void
   /** A pending AskUserQuestion — replaces the composer with the question card. */
@@ -94,6 +101,9 @@ export function ConversationView({
   models = [],
   onSetModel,
   onSend,
+  busy = false,
+  queued = [],
+  onUnqueue,
   onDecideGate,
   onSetMode,
   question,
@@ -104,7 +114,9 @@ export function ConversationView({
   archived
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const prevCount = useRef(messages.length)
+  // Sticky-bottom: follow the newest content while the operator is parked at the
+  // bottom, but never yank them down once they've scrolled up to read.
+  const stick = useRef(true)
   const [showChanges, setShowChanges] = useState(true)
 
   // Shift+Tab cycles the HITL mode (works while typing in the composer).
@@ -120,11 +132,6 @@ export function ConversationView({
 
   const counts = diffCounts(patch)
   const hasChanges = counts.added + counts.removed > 0
-  // Reserve "room to fill" (as virtualizer paddingEnd) only while the latest
-  // turn streams, so a newly-sent turn can pin to the top and grow downward
-  // without leaving dead space once it completes.
-  const streaming = messages[messages.length - 1]?.streaming ?? false
-  const room = streaming ? Math.round((scrollRef.current?.clientHeight ?? 700) * 0.42) : 0
 
   // Virtualize the transcript so large sessions stay fast. Heights are dynamic
   // (markdown, tool cards, diffs) so we measure each turn as it renders/grows.
@@ -137,19 +144,26 @@ export function ConversationView({
     // the measurement cache and stack rows. The transcript is append-only, so
     // the index is stable per message.
     getItemKey: (i) => `${messages[i]!.id}-${i}`,
-    paddingEnd: room,
     overscan: 6
   })
 
-  // Pin each newly-appended turn to the top of the viewport (autoscroll-to-top).
-  // Only on a genuinely new turn — streaming growth of the current turn doesn't
-  // re-pin, so the view stays put while it fills.
+  // Standard chat scroll: keep the newest content in view while stuck to the
+  // bottom, so the transcript grows downward and never leaves trailing dead
+  // space. `messages` is a fresh array on every stream delta, so this re-pins as
+  // the current turn fills — but only while the operator hasn't scrolled up.
   useLayoutEffect(() => {
-    if (messages.length > prevCount.current) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: "start" })
+    if (stick.current && messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: "end" })
     }
-    prevCount.current = messages.length
-  }, [messages.length, virtualizer])
+  }, [messages, virtualizer])
+
+  // Track whether we're parked at the bottom (within a small threshold), so
+  // scrolling up to read pauses the auto-follow and scrolling back resumes it.
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }, [])
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -163,23 +177,32 @@ export function ConversationView({
             onDelete={archived.onDelete}
           />
         )}
-        {/* Slim bar just for the Changes toggle — only when there are changes. */}
+        {/* Slim bar with a labelled Changes toggle — only when there are changes. */}
         {!archived && hasChanges && (
           <div className="flex flex-none items-center justify-end border-b border-hairline px-[30px] py-2">
             <button
               type="button"
               onClick={() => setShowChanges((v) => !v)}
-              title={showChanges ? "Hide changes" : "Show changes"}
+              title={showChanges ? "Hide the changes panel" : "Show the changes panel"}
               aria-pressed={showChanges}
-              className="flex size-7 items-center justify-center rounded-md border border-line outline-none transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring"
+              className={cn(
+                "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                showChanges
+                  ? "border-blue/40 bg-blue/10 text-blue"
+                  : "border-line text-muted-foreground hover:bg-surface hover:text-text-bright"
+              )}
             >
-              <PanelRight size={15} className={cn(showChanges ? "text-blue" : "text-dim")} />
+              <PanelRight size={14} />
+              <span>Changes</span>
+              <span className="font-mono text-[10.5px] text-green">+{counts.added}</span>
+              <span className="font-mono text-[10.5px] text-red">−{counts.removed}</span>
             </button>
           </div>
         )}
 
         <div
           ref={scrollRef}
+          onScroll={onScroll}
           className={cn(
             // `both-edges` reserves the scrollbar gutter symmetrically so the
             // centered content stays on the window's centre axis — matching the
@@ -245,18 +268,54 @@ export function ConversationView({
               onSubmit={(answers) => onAnswerQuestion?.(question.id, answers)}
             />
           ) : (
-            <Composer
-              skills={skills}
-              files={files}
-              paused={paused}
-              model={model}
-              models={models}
-              onSetModel={onSetModel}
-              mode={mode}
-              onSetMode={onSetMode}
-              allowPlan={cli === "claude"}
-              onSend={onSend}
-            />
+            <>
+              {queued.length > 0 && (
+                <div className="mb-2 flex flex-col gap-1.5">
+                  {queued.map((item, i) => (
+                    <div
+                      key={`${i}-${item.text.slice(0, 24)}`}
+                      className="flex items-center gap-2 rounded-lg border border-line bg-sunken/60 px-3 py-1.5 text-[12.5px] text-muted-foreground"
+                    >
+                      <span className="flex-none font-mono text-[10px] uppercase tracking-wide text-dim">
+                        Queued
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-text-body">
+                        {item.text || <span className="text-dim">(image only)</span>}
+                      </span>
+                      {item.images.length > 0 && (
+                        <span className="flex flex-none items-center gap-1 font-mono text-[10.5px] text-cyan">
+                          <ImageIcon size={11} />
+                          {item.images.length}
+                        </span>
+                      )}
+                      {onUnqueue && (
+                        <button
+                          type="button"
+                          onClick={() => onUnqueue(i)}
+                          title="Remove from queue"
+                          className="flex size-5 flex-none items-center justify-center rounded text-dim outline-none transition-colors hover:bg-surface hover:text-text-bright focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Composer
+                skills={skills}
+                files={files}
+                paused={paused}
+                busy={busy}
+                model={model}
+                models={models}
+                onSetModel={onSetModel}
+                mode={mode}
+                onSetMode={onSetMode}
+                allowPlan={cli === "claude"}
+                onSend={onSend}
+              />
+            </>
           )}
           </div>
         </div>

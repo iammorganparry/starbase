@@ -16,6 +16,7 @@ import { PullRequestPane } from "./pull-request-pane.js"
 import { ReviewPane } from "./review-pane.js"
 import { useSessionStatuses } from "./session-status.js"
 import { usePlanSessions } from "./plan-presence.js"
+import { disposeConversationActor } from "./conversation-registry.js"
 import { rpc } from "./rpc-client.js"
 
 const GH_UNKNOWN: GhStatus = {
@@ -80,6 +81,9 @@ export function App() {
   }
   const deleteSession = async (sessionId: string) => {
     await rpc.sessionsDelete(sessionId)
+    // Stop the persistent conversation actor for a deleted session (it's kept
+    // running across session switches, so it won't be torn down by unmount).
+    disposeConversationActor(sessionId)
     send({ type: "SESSION_DELETED", sessionId })
   }
 
