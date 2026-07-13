@@ -9,7 +9,8 @@ import type {
   GitConfig,
   GithubConfig,
   ProviderConfig,
-  Session
+  Session,
+  SessionStatus
 } from "@starbase/core"
 import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
@@ -19,6 +20,7 @@ import { ReviewPane } from "./review-pane.js"
 import { useSessionStatuses } from "./session-status.js"
 import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
+import { completedSessionIds } from "./pr-refresh.js"
 import { rpc } from "./rpc-client.js"
 
 const GH_UNKNOWN: GhStatus = {
@@ -136,6 +138,29 @@ export function App() {
       })
     }
   }, [autoDetect, sessions, send])
+
+  // When a session's live run COMPLETES (its live status goes present → absent),
+  // re-check GitHub for it: the agent may have opened AND merged its own PR in that
+  // run. The once-per-session detectedRef guard above can't catch a mid-run PR, and
+  // the 60s archive poll would take up to a minute — so on completion we re-detect
+  // the PR link (prForWorktree finds merged PRs too) and invalidate the cached
+  // pr-state so the archive sweep re-checks immediately.
+  const prevLiveRef = useRef<Record<string, SessionStatus>>({})
+  useEffect(() => {
+    const prev = prevLiveRef.current
+    prevLiveRef.current = liveStatus
+    if (!autoDetect) return
+    for (const id of completedSessionIds(prev, liveStatus, sessions)) {
+      void rpc.githubDetectPr(id).then((n) => {
+        if (n != null) {
+          detectedRef.current.add(id) // keep the once-per-session guard in sync
+          send({ type: "SESSION_PR_LINKED", sessionId: id, prNumber: n })
+        }
+      })
+      // Partial key (id only) — matches regardless of the linked PR number.
+      void qc.invalidateQueries({ queryKey: ["pr-state", id] })
+    }
+  }, [liveStatus, sessions, autoDetect, send, qc])
 
   // Archive sweep: once a linked PR is merged or closed, auto-archive the session
   // so it drops into the sidebar's "Archived" group (read-only, kept). react-query
