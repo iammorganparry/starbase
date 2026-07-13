@@ -91,6 +91,8 @@ export interface StarbaseAppProps {
   loadBranches?: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Create a session (forks a real worktree) and return it. */
   onCreateSession?: (input: CreateSessionInput) => Promise<Session>
+  /** Manually rename a session (double-click its sidebar title) — pins the name. */
+  onRenameSession?: (id: string, title: string) => void
   /**
    * List open PRs for a repo (the New Session "From PR" picker). Presence wires
    * the `Blank | From PR` toggle; absent (e.g. GitHub not connected) hides it.
@@ -137,6 +139,7 @@ export function StarbaseApp({
   planSessions,
   loadBranches = noBranches,
   onCreateSession,
+  onRenameSession,
   loadPrs,
   onCreateSessionFromPr,
   version
@@ -237,6 +240,7 @@ export function StarbaseApp({
         clis={clis}
         activeSessionId={selected}
         onSelectSession={setSelected}
+        onRenameSession={onRenameSession}
         renderConversationPane={renderConversationPane}
         planSessions={planSessions}
         showEmpty={showEmpty}

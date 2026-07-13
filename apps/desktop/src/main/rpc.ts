@@ -15,9 +15,11 @@
 import {
   AgentRunner,
   ConfigService,
+  claudeTitleGenerator,
   DiscoveryService,
   GhService,
   ModelsService,
+  retitleSession,
   SessionStore,
   SkillsService,
   TranscriptStore,
@@ -197,6 +199,17 @@ export const restoreSession = (sessionId: string) =>
     )
   )
 
+/** `Sessions.rename` handler — pin a manual title and return the updated record. */
+export const renameSession = (sessionId: string, title: string) =>
+  Effect.gen(function* () {
+    yield* SessionStore.renameTitle(sessionId, title)
+    return yield* SessionStore.get(sessionId)
+  }).pipe(
+    Effect.catchTag("SessionNotFoundError", () =>
+      Effect.fail(new GitError({ message: "Session not found" }))
+    )
+  )
+
 /** `Github.files` handler — the PR's changed files (empty without a linked PR). */
 export const githubFiles = (sessionId: string) =>
   Effect.gen(function* () {
@@ -311,6 +324,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.createFromPr": (input) => createSessionFromPr(input),
   "Sessions.archive": ({ sessionId, reason }) => archiveSession(sessionId, reason),
   "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
+  "Sessions.retitle": ({ sessionId }) => retitleSession(sessionId, claudeTitleGenerator),
+  "Sessions.rename": ({ sessionId, title }) => renameSession(sessionId, title),
   "Sessions.delete": ({ sessionId }) => SessionStore.remove(sessionId),
   "Sessions.transcript": ({ id }) => TranscriptStore.list(id),
   "Sessions.diff": ({ id }) => sessionDiff(id),

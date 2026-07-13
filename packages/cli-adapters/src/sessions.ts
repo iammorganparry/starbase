@@ -4,7 +4,7 @@ import type {
   PermissionMode,
   Session
 } from "@starbase/core"
-import { GhError, GitError, SessionNotFoundError } from "@starbase/core"
+import { GhError, GitError, SessionNotFoundError, UNTITLED_SESSION } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
@@ -91,20 +91,27 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         | AppPaths
       > =>
         Effect.gen(function* () {
-          const slug = kebab(input.title)
+          const now = yield* Effect.sync(() => new Date().toISOString())
+          const stamp = yield* Effect.sync(() => Date.now().toString(36))
+          // Title is optional now: blank → the agent auto-names it (provisional
+          // "Untitled session"); an explicit title is pinned (autoTitle false).
+          const explicit = input.title?.trim() ?? ""
+          const title = explicit || UNTITLED_SESSION
+          // Fold the stamp into the slug so the branch/worktree are unique even for
+          // (identical) auto-named sessions — the title is no longer a unique key.
+          const slug = `${kebab(title)}-${stamp}`
           const worktree = yield* GitService.createWorktree({
             repoPath: input.repoPath,
             repoName: input.repoName,
             slug,
             baseBranch: input.baseBranch
           })
-          const now = yield* Effect.sync(() => new Date().toISOString())
-          const stamp = yield* Effect.sync(() => Date.now().toString(36))
           const session: Session = {
-            id: `s_${slug}_${stamp}`,
+            id: `s_${slug}`,
             repo: input.repoName,
             branch: worktree.branch,
-            title: input.title,
+            title,
+            autoTitle: explicit.length === 0,
             status: "idle",
             cli: input.cli,
             diff: { added: 0, removed: 0 },
@@ -218,6 +225,13 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Persist the session's harness model. */
       const setModel = (id: string, model: string) => update(id, (s) => ({ ...s, model }))
 
+      /** Persist an auto-generated title (leaves `autoTitle` untouched). */
+      const setTitle = (id: string, title: string) => update(id, (s) => ({ ...s, title }))
+
+      /** Manual rename — pins the title so the agent stops auto-retitling it. */
+      const renameTitle = (id: string, title: string) =>
+        update(id, (s) => ({ ...s, title, autoTitle: false }))
+
       /** Add a command to the session's "always allow" list (deduped). */
       const addAllowlist = (id: string, label: string) =>
         update(id, (s) => ({
@@ -278,6 +292,8 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         createFromPr,
         setMode,
         setModel,
+        setTitle,
+        renameTitle,
         addAllowlist,
         setPrNumber,
         archive,

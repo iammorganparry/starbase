@@ -1,3 +1,4 @@
+import { useState } from "react"
 import type { Session, SessionStatus } from "@starbase/core"
 import { GitMerge } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -14,6 +15,7 @@ export function SessionRow({
   status: statusOverride,
   active = false,
   onSelect,
+  onRename,
   className
 }: {
   session: Session
@@ -21,9 +23,19 @@ export function SessionRow({
   status?: SessionStatus
   active?: boolean
   onSelect?: (id: string) => void
+  /** Manual rename (double-click the title) — pins the auto-generated name. */
+  onRename?: (id: string, title: string) => void
   className?: string
 }) {
   const status = statusOverride ?? session.status
+  const [draft, setDraft] = useState<string | null>(null)
+
+  const commit = () => {
+    if (draft === null) return
+    const next = draft.trim()
+    if (next.length > 0 && next !== session.title) onRename?.(session.id, next)
+    setDraft(null)
+  }
 
   // Archived variant (A2 in the design): purple git-merge mark, muted title, a
   // Merged/Closed pill, and how long ago it was archived. Read-only — no status.
@@ -77,14 +89,34 @@ export function SessionRow({
     >
       <div className="flex items-center gap-2">
         <StatusDot status={status} />
-        <span
-          className={cn(
-            "flex-1 truncate text-[13px]",
-            active ? "font-semibold text-text-bright" : "font-medium text-text"
-          )}
-        >
-          {session.title}
-        </span>
+        {draft !== null ? (
+          <input
+            value={draft}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit()
+              else if (e.key === "Escape") setDraft(null)
+            }}
+            onBlur={commit}
+            className="flex-1 rounded border border-blue/50 bg-editor px-1 py-px text-[13px] text-text-bright outline-none"
+          />
+        ) : (
+          <span
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              if (onRename) setDraft(session.title)
+            }}
+            title={onRename ? "Double-click to rename" : undefined}
+            className={cn(
+              "flex-1 truncate text-[13px]",
+              active ? "font-semibold text-text-bright" : "font-medium text-text"
+            )}
+          >
+            {session.title}
+          </span>
+        )}
         {/* The harness in use, so it's visible at a glance in the list. */}
         <ProviderIcon cli={session.cli} size={13} />
       </div>

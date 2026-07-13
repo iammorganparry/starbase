@@ -113,6 +113,9 @@ export function App() {
     const session = await rpc.sessionsRestore(sessionId)
     send({ type: "SESSION_UPDATED", session })
   }
+  const renameSession = (sessionId: string, title: string) => {
+    void rpc.sessionsRename(sessionId, title).then((session) => send({ type: "SESSION_UPDATED", session }))
+  }
   const deleteSession = async (sessionId: string) => {
     await rpc.sessionsDelete(sessionId)
     // Stop the persistent conversation actor for a deleted session (it's kept
@@ -140,17 +143,30 @@ export function App() {
   }, [autoDetect, sessions, send])
 
   // When a session's live run COMPLETES (its live status goes present → absent),
-  // re-check GitHub for it: the agent may have opened AND merged its own PR in that
-  // run. The once-per-session detectedRef guard above can't catch a mid-run PR, and
-  // the 60s archive poll would take up to a minute — so on completion we re-detect
-  // the PR link (prForWorktree finds merged PRs too) and invalidate the cached
-  // pr-state so the archive sweep re-checks immediately.
+  // do two independent things:
+  //  1. Auto-retitle it (the agent may have started/shifted the work this turn) —
+  //     runs regardless of GitHub; the RPC folds to a heuristic if there's no LLM.
+  //  2. Re-check GitHub (the agent may have opened AND merged its own PR this run):
+  //     the once-per-session detectedRef guard can't catch a mid-run PR, and the
+  //     60s poll would lag — so re-detect the link + invalidate the cached pr-state.
   const prevLiveRef = useRef<Record<string, SessionStatus>>({})
   useEffect(() => {
     const prev = prevLiveRef.current
     prevLiveRef.current = liveStatus
+    const completed = completedSessionIds(prev, liveStatus, sessions)
+    for (const id of completed) {
+      // Only auto-named sessions retitle; skip pinned/legacy ones (autoTitle not
+      // explicitly true) to avoid a needless RPC. The handler guards too.
+      if (sessions.find((s) => s.id === id)?.autoTitle !== true) continue
+      // SESSION_UPDATED replaces the whole record; it re-reads the store at the end
+      // so it converges with a concurrent SESSION_PR_LINKED regardless of order.
+      void rpc
+        .sessionsRetitle(id)
+        .then((session) => send({ type: "SESSION_UPDATED", session }))
+        .catch(() => {})
+    }
     if (!autoDetect) return
-    for (const id of completedSessionIds(prev, liveStatus, sessions)) {
+    for (const id of completed) {
       void rpc.githubDetectPr(id).then((n) => {
         if (n != null) {
           detectedRef.current.add(id) // keep the once-per-session guard in sync
@@ -255,6 +271,7 @@ export function App() {
       onRecheckGh={recheckGh}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
+      onRenameSession={renameSession}
       loadPrs={connected ? rpc.githubListPrs : undefined}
       onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
       planSessions={planSessions}

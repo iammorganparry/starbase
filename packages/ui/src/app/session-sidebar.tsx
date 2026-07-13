@@ -32,6 +32,8 @@ export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
   activeSessionId: string | null
   onSelect: (id: string) => void
+  /** Manually rename a session (double-click its title) — pins the auto-name. */
+  onRename?: (id: string, title: string) => void
   /** Live per-session agent status, overriding the persisted status. */
   liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
@@ -55,6 +57,7 @@ export function SessionSidebar({
   sessions,
   activeSessionId,
   onSelect,
+  onRename,
   liveStatus,
   onNewSession,
   onOpenUsage,
@@ -231,6 +234,7 @@ export function SessionSidebar({
                   status={liveStatus?.[s.id]}
                   active={s.id === activeSessionId}
                   onSelect={onSelect}
+                  onRename={onRename}
                 />
               ))}
             </div>

@@ -1,5 +1,6 @@
 export * from "./domain.js"
 export * from "./conversation.js"
+export * from "./session-title.js"
 export * from "./models.js"
 export * from "./usage.js"
 export * from "./errors.js"

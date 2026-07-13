@@ -83,6 +83,12 @@ export const Session = Schema.Struct({
   /** The harness model id for this session; defaults to the harness default. */
   model: Schema.optional(Schema.String),
   /**
+   * True only for sessions the agent auto-names (refreshed each turn). A manual
+   * rename — or a title typed at creation — pins the name (false). Absent is
+   * treated as pinned, so legacy/user-named sessions are never auto-overwritten.
+   */
+  autoTitle: Schema.optional(Schema.Boolean),
+  /**
    * Whether the session is archived — set automatically once its linked PR is
    * merged or closed. Archived sessions are read-only (collapsed into the
    * "Archived" sidebar group) but never deleted; the user restores or deletes them.
@@ -405,8 +411,12 @@ export const CreateSessionInput = Schema.Struct({
   repoPath: Schema.String,
   /** The repo's folder name, used for grouping + the worktree directory. */
   repoName: Schema.String,
-  /** Human title for the session (also the source of the branch/worktree slug). */
-  title: Schema.String,
+  /**
+   * Optional session title. When omitted/blank the session is auto-named by the
+   * agent (and the branch slug falls back to "untitled-session-<stamp>"); when
+   * provided it seeds the title (pinned) and a readable branch slug.
+   */
+  title: Schema.optional(Schema.String),
   /** Which CLI will drive the session. */
   cli: CliKind,
   /** The branch to fork the worktree from. */

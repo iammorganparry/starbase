@@ -22,38 +22,37 @@ test("creating a session forks a real worktree and persists it", async ({ launch
   const noHarness = await window.getByText("No harness available").count()
   test.skip(noHarness > 0, "no coding CLI installed on this host")
 
-  await window.getByPlaceholder("Refactor auth refresh").fill("Fix login")
-
-  // Repo, harness and base branch all default from discovery — Create should
-  // enable without any manual selection. (Regression guard: the base-branch
-  // default used to be cleared by a spurious Radix Select change.)
+  // There is no title field anymore — the agent auto-names the session. Repo,
+  // harness and base branch all default from discovery, so Create is enabled with
+  // no manual input. (Regression guard: the base-branch default used to be cleared
+  // by a spurious Radix Select change.)
   const create = window.getByRole("button", { name: "Create" })
   await expect(create).toBeEnabled()
   await create.click()
 
-  // The new session appears in the sidebar (dialog closed).
-  await expect(window.getByText("Fix login")).toBeVisible()
+  // The new session appears in the sidebar as "Untitled session" (until the agent
+  // names it after the first turn).
+  await expect(window.getByText("Untitled session")).toBeVisible()
 
-  // Real outcome: the worktree exists on disk under the throwaway ~/starbase.
-  const worktreePath = join(home, "starbase", "worktrees", "widget", "fix-login")
-  expect(existsSync(worktreePath)).toBe(true)
+  // Real outcome: the session was persisted with an auto title + a unique,
+  // stamp-suffixed branch/worktree.
+  const persisted = JSON.parse(readFileSync(join(home, "starbase", "sessions.json"), "utf-8"))
+  expect(persisted).toHaveLength(1)
+  expect(persisted[0]).toMatchObject({
+    title: "Untitled session",
+    repo: "widget",
+    status: "idle",
+    autoTitle: true
+  })
+  expect(persisted[0].branch).toMatch(/^starbase\/untitled-session-[a-z0-9]+$/)
 
-  // Real outcome: the branch was created in the origin repo.
+  // Real outcome: that branch + worktree actually exist on disk.
+  expect(existsSync(persisted[0].worktreePath)).toBe(true)
   const branches = execFileSync("git", ["branch", "--format=%(refname:short)"], {
     cwd: repoPath,
     encoding: "utf-8"
   })
-  expect(branches).toContain("starbase/fix-login")
-
-  // Real outcome: the session was persisted to sessions.json.
-  const persisted = JSON.parse(readFileSync(join(home, "starbase", "sessions.json"), "utf-8"))
-  expect(persisted).toHaveLength(1)
-  expect(persisted[0]).toMatchObject({
-    title: "Fix login",
-    branch: "starbase/fix-login",
-    repo: "widget",
-    status: "idle"
-  })
+  expect(branches).toContain(persisted[0].branch)
 })
 
 /**
