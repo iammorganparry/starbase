@@ -1,5 +1,6 @@
 import type {
   ApprovalGate,
+  Attachment,
   GateDecision,
   Message,
   PermissionMode,
@@ -307,7 +308,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         )
       })
 
-    const prompt = (sessionId: string, text: string): Stream.Stream<StreamEvent, never, PromptEnv> =>
+    const prompt = (
+      sessionId: string,
+      text: string,
+      images: ReadonlyArray<Attachment> = []
+    ): Stream.Stream<StreamEvent, never, PromptEnv> =>
       Stream.unwrapScoped(
         Effect.gen(function* () {
           const adapter = yield* CliAdapter
@@ -339,6 +344,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             branch: session?.branch ?? "",
             cwd: session?.worktreePath ?? "",
             prompt: text,
+            images,
             binPath,
             mode,
             model: session?.model ?? defaultModel(cli)
@@ -363,7 +369,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             }, 0)
           yield* Ref.update(counter, (c) => Math.max(c, priorMax))
           const un = yield* nextId
-          yield* TranscriptStore.append(sessionId, userMessage(`u_${sessionId}_${un}`, text, now))
+          yield* TranscriptStore.append(sessionId, userMessage(`u_${sessionId}_${un}`, text, now, images))
           const an = yield* nextId
           const acc = yield* Ref.make(assistantMessage(`a_${sessionId}_${an}`, now))
           yield* TranscriptStore.append(sessionId, yield* Ref.get(acc))

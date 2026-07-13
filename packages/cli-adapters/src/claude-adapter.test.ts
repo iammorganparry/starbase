@@ -1,7 +1,9 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { describe, expect, it } from "vitest"
 import type { Question, QuestionAnswer } from "@starbase/core"
+import type { Attachment } from "@starbase/core"
 import {
+  buildPromptInput,
   editStats,
   formatQuestionAnswer,
   mapPermissionMode,
@@ -10,6 +12,7 @@ import {
   toPermissionRequest,
   type ToolMemo
 } from "./claude-adapter.js"
+import type { SessionSpec } from "./adapter.js"
 
 /**
  * The Claude adapter's live path needs a real `claude` login, so we test the
@@ -27,6 +30,53 @@ describe("mapPermissionMode", () => {
     expect(mapPermissionMode("auto")).toBe("bypassPermissions")
     expect(mapPermissionMode("accept-edits")).toBe("acceptEdits")
     expect(mapPermissionMode("ask")).toBe("default")
+  })
+})
+
+describe("buildPromptInput", () => {
+  const spec = (over: Partial<SessionSpec>): SessionSpec => ({
+    cli: "claude",
+    repo: "",
+    branch: "",
+    cwd: "",
+    prompt: "do the thing",
+    images: [],
+    binPath: null,
+    mode: "accept-edits",
+    model: null,
+    ...over
+  })
+  const image = (name: string): Attachment => ({ id: name, name, mediaType: "image/png", data: "aGk=" })
+
+  it("returns the plain string prompt when there are no attachments", () => {
+    expect(buildPromptInput(spec({}), undefined)).toBe("do the thing")
+  })
+
+  it("interleaves the text with base64 image blocks in a single user message", async () => {
+    const input = buildPromptInput(spec({ images: [image("a.png"), image("b.png")] }), "sess-42")
+    expect(typeof input).not.toBe("string")
+    const msgs: Array<Record<string, unknown>> = []
+    for await (const m of input as AsyncIterable<Record<string, unknown>>) msgs.push(m)
+    expect(msgs).toHaveLength(1)
+    const message = msgs[0]!
+    expect(message.type).toBe("user")
+    expect(message.session_id).toBe("sess-42")
+    const content = (message.message as { content: Array<Record<string, unknown>> }).content
+    expect(content[0]).toStrictEqual({ type: "text", text: "do the thing" })
+    expect(content[1]).toStrictEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aGk=" }
+    })
+    expect(content).toHaveLength(3) // text + 2 images
+  })
+
+  it("omits the text block for an image-only prompt", async () => {
+    const input = buildPromptInput(spec({ prompt: "", images: [image("a.png")] }), undefined)
+    const msgs: Array<Record<string, unknown>> = []
+    for await (const m of input as AsyncIterable<Record<string, unknown>>) msgs.push(m)
+    const content = (msgs[0]!.message as { content: Array<Record<string, unknown>> }).content
+    expect(content).toHaveLength(1)
+    expect(content[0]!.type).toBe("image")
   })
 })
 

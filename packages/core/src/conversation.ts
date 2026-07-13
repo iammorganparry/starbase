@@ -250,6 +250,24 @@ export type Plan = Schema.Schema.Type<typeof Plan>
 export const TextPart = Schema.TaggedStruct("Text", { text: Schema.String })
 export type TextPart = Schema.Schema.Type<typeof TextPart>
 
+/**
+ * An image the operator attached as context for a prompt. `data` is the raw
+ * bytes base64-encoded (no `data:` prefix) so it round-trips through JSON/RPC and
+ * can be handed straight to the harness; the UI renders it as a data URL.
+ */
+export const Attachment = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  /** MIME type, e.g. "image/png". */
+  mediaType: Schema.String,
+  data: Schema.String
+})
+export type Attachment = Schema.Schema.Type<typeof Attachment>
+
+/** An attached image, carried on the user's turn and shown as a thumbnail. */
+export const ImagePart = Schema.TaggedStruct("Image", { attachment: Attachment })
+export type ImagePart = Schema.Schema.Type<typeof ImagePart>
+
 export const ThinkingPart = Schema.TaggedStruct("Thinking", {
   text: Schema.String,
   /** Reasoning duration once finished, or null while streaming. */
@@ -278,9 +296,10 @@ export type QuestionPart = Schema.Schema.Type<typeof QuestionPart>
 export const PlanPart = Schema.TaggedStruct("Plan", { plan: Plan })
 export type PlanPart = Schema.Schema.Type<typeof PlanPart>
 
-/** One ordered piece of a turn — text, thinking, a tool card, a gate, a question, or a plan. */
+/** One ordered piece of a turn — text, an image, thinking, a tool card, a gate, a question, or a plan. */
 export const ContentPart = Schema.Union(
   TextPart,
+  ImagePart,
   ThinkingPart,
   ToolPart,
   GatePart,
@@ -349,11 +368,19 @@ export type StreamEvent = Schema.Schema.Type<typeof StreamEvent>
 
 // ── Constructors & fold ──────────────────────────────────────────────────────
 
-/** A fresh user turn (already complete). */
-export const userMessage = (id: string, text: string, createdAt: string): Message => ({
+/** A fresh user turn (already complete), optionally carrying attached images. */
+export const userMessage = (
+  id: string,
+  text: string,
+  createdAt: string,
+  images: ReadonlyArray<Attachment> = []
+): Message => ({
   id,
   role: "user",
-  parts: [{ _tag: "Text", text }],
+  parts: [
+    ...images.map((attachment) => ({ _tag: "Image" as const, attachment })),
+    ...(text.length > 0 ? [{ _tag: "Text" as const, text }] : [])
+  ],
   streaming: false,
   createdAt
 })

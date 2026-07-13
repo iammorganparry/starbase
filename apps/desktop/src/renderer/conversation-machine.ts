@@ -9,6 +9,7 @@
  * the transcript with the same `applyStreamEvent` the main process persists with.
  */
 import type {
+  Attachment,
   GateDecision,
   Message,
   ModelOption,
@@ -45,11 +46,26 @@ export interface ConversationContext {
   /** The worktree's current unified diff, for the Changes rail. */
   readonly patch: string
   readonly pendingText: string
+  /** Images attached to the turn currently running (sent to the harness). */
+  readonly pendingImages: ReadonlyArray<Attachment>
+  /**
+   * Messages the operator sent while the agent was busy — held FIFO and sent, one
+   * turn at a time, as soon as the current run (and its diff refresh) settles.
+   */
+  readonly queued: ReadonlyArray<QueuedMessage>
+}
+
+/** A prompt held in the queue while the agent is busy (text + any attachments). */
+export interface QueuedMessage {
+  readonly text: string
+  readonly images: ReadonlyArray<Attachment>
 }
 
 type ConversationEvent =
-  | { type: "SEND"; text: string }
+  | { type: "SEND"; text: string; images?: ReadonlyArray<Attachment> }
+  | { type: "UNQUEUE"; index: number }
   | { type: "STREAM_EVENT"; event: StreamEvent }
+  | { type: "PATCH_UPDATED"; patch: string }
   | { type: "DECIDE_GATE"; gateId: string; decision: GateDecision }
   | { type: "ANSWER_QUESTION"; requestId: string; answers: ReadonlyArray<QuestionAnswer> }
   | { type: "SET_MODE"; mode: PermissionMode }
@@ -93,14 +109,20 @@ const refreshDiff = fromPromise<string, { session: Session }>(({ input }) =>
 )
 
 /** Subscribe to the agent's event stream, forwarding each event into the machine. */
-const agentStream = fromCallback<ConversationEvent, { sessionId: string; text: string }>(
-  ({ sendBack, input }) => {
-    const cancel = rpc.agentRun(input.sessionId, input.text, (event) => {
+const agentStream = fromCallback<
+  ConversationEvent,
+  { sessionId: string; text: string; images: ReadonlyArray<Attachment> }
+>(({ sendBack, input }) => {
+  const cancel = rpc.agentRun(
+    input.sessionId,
+    input.text,
+    (event) => {
       sendBack({ type: "STREAM_EVENT", event })
-    })
-    return cancel
-  }
-)
+    },
+    input.images
+  )
+  return cancel
+})
 
 const patchLast = (
   messages: ReadonlyArray<Message>,
@@ -123,18 +145,54 @@ export const conversationMachine = setup({
   guards: {
     isTerminal: ({ event }) =>
       event.type === "STREAM_EVENT" &&
-      (event.event._tag === "Done" || event.event._tag === "Failed")
+      (event.event._tag === "Done" || event.event._tag === "Failed"),
+    hasQueued: ({ context }) => context.queued.length > 0
   },
   actions: {
     appendTurns: assign(({ context, event }) => {
       if (event.type !== "SEND") return {}
       const now = new Date().toISOString()
       const id = stamp()
+      const images = event.images ?? []
       return {
         pendingText: event.text,
+        pendingImages: images,
         messages: [
           ...context.messages,
-          userMessage(`u_local_${id}`, event.text, now),
+          userMessage(`u_local_${id}`, event.text, now, images),
+          assistantMessage(`a_local_${id}`, now)
+        ]
+      }
+    }),
+    // Hold a message sent mid-run; it's replayed as a fresh turn once the agent
+    // frees up (see `dequeueTurn`). A send with neither text nor images is ignored.
+    enqueue: assign(({ context, event }) => {
+      if (event.type !== "SEND") return {}
+      const text = event.text.trim()
+      const images = event.images ?? []
+      if (text.length === 0 && images.length === 0) return {}
+      return { queued: [...context.queued, { text, images }] }
+    }),
+    // Drop a still-pending queued message before it's sent.
+    removeQueued: assign(({ context, event }) => {
+      if (event.type !== "UNQUEUE") return {}
+      return { queued: context.queued.filter((_, i) => i !== event.index) }
+    }),
+    clearQueue: assign(() => ({ queued: [] })),
+    // Pop the head of the queue into a fresh turn — the same shape `appendTurns`
+    // produces for a live SEND, so `running` streams it exactly as a normal turn.
+    dequeueTurn: assign(({ context }) => {
+      const [next, ...rest] = context.queued
+      if (next === undefined) return {}
+      const now = new Date().toISOString()
+      const id = stamp()
+      return {
+        queued: rest,
+        pendingText: next.text,
+        pendingImages: next.images,
+        messages: [
+          ...context.messages,
+          userMessage(`u_local_${id}`, next.text, now, next.images),
           assistantMessage(`a_local_${id}`, now)
         ]
       }
@@ -147,6 +205,22 @@ export const conversationMachine = setup({
         ? { messages, model: event.event.model }
         : { messages }
     }),
+    // Realtime Changes rail: when a tool that touched files lands mid-run, re-read
+    // the worktree diff right away (fire-and-forget) so the rail reflects edits as
+    // they happen, not only after the whole turn settles. `ToolEnd.diff` is the
+    // harness's own signal that this tool changed files.
+    liveRefreshDiff: ({ context, event, self }) => {
+      if (event.type !== "STREAM_EVENT") return
+      const e = event.event
+      if (e._tag !== "ToolEnd" || e.status !== "success" || e.diff === null) return
+      void rpc
+        .sessionsDiff(context.session.id)
+        .then((patch) => self.send({ type: "PATCH_UPDATED", patch }))
+        .catch(() => {})
+    },
+    applyLivePatch: assign(({ event }) =>
+      event.type === "PATCH_UPDATED" ? { patch: event.patch } : {}
+    ),
     optimisticGate: assign(({ context, event }) => {
       if (event.type !== "DECIDE_GATE") return {}
       void rpc.agentDecideGate(context.session.id, event.gateId, event.decision)
@@ -211,7 +285,9 @@ export const conversationMachine = setup({
     model: input.session.model ?? defaultModel(input.session.cli),
     models: [],
     patch: "",
-    pendingText: ""
+    pendingText: "",
+    pendingImages: [],
+    queued: []
   }),
   states: {
     loading: {
@@ -243,13 +319,22 @@ export const conversationMachine = setup({
     running: {
       invoke: {
         src: "agentStream",
-        input: ({ context }) => ({ sessionId: context.session.id, text: context.pendingText })
+        input: ({ context }) => ({
+          sessionId: context.session.id,
+          text: context.pendingText,
+          images: context.pendingImages
+        })
       },
       on: {
         STREAM_EVENT: [
           { guard: "isTerminal", target: "refreshingDiff", actions: "foldEvent" },
-          { actions: "foldEvent" }
+          { actions: ["foldEvent", "liveRefreshDiff"] }
         ],
+        // A live diff read resolved — reflect it in the Changes rail.
+        PATCH_UPDATED: { actions: "applyLivePatch" },
+        // Sent mid-run: queue it (processed once this turn + its diff refresh settle).
+        SEND: { actions: "enqueue" },
+        UNQUEUE: { actions: "removeQueued" },
         DECIDE_GATE: { actions: "optimisticGate" },
         ANSWER_QUESTION: { actions: "optimisticAnswer" },
         COMMENT_PLAN_STEP: { actions: "optimisticPlanComment" },
@@ -257,7 +342,8 @@ export const conversationMachine = setup({
         APPROVE_PLAN: { actions: "optimisticPlanApprove" },
         SET_MODE: { actions: "persistMode" },
         SET_MODEL: { actions: "persistModel" },
-        STOP: { target: "refreshingDiff", actions: "callStop" }
+        // Stopping abandons the queue too — the operator asked the agent to halt.
+        STOP: { target: "refreshingDiff", actions: ["callStop", "clearQueue"] }
       }
     },
     // After a turn ends, re-read the worktree diff so the Changes rail reflects
@@ -266,10 +352,28 @@ export const conversationMachine = setup({
       invoke: {
         src: "refreshDiff",
         input: ({ context }) => ({ session: context.session }),
-        onDone: { target: "awaitingInput", actions: assign(({ event }) => ({ patch: event.output })) },
-        onError: { target: "awaitingInput" }
+        // A queued message starts its turn as soon as the diff settles; otherwise
+        // we return to idle. The diff is applied either way.
+        onDone: [
+          {
+            guard: "hasQueued",
+            target: "running",
+            actions: [assign(({ event }) => ({ patch: event.output })), "dequeueTurn"]
+          },
+          { target: "awaitingInput", actions: assign(({ event }) => ({ patch: event.output })) }
+        ],
+        onError: [
+          { guard: "hasQueued", target: "running", actions: "dequeueTurn" },
+          { target: "awaitingInput" }
+        ]
       },
       on: {
+        // Still accept queued sends while the diff refreshes (a brief window).
+        SEND: { actions: "enqueue" },
+        UNQUEUE: { actions: "removeQueued" },
+        // A late live diff read may still resolve here — apply it (the authoritative
+        // refresh's onDone runs last, so it wins).
+        PATCH_UPDATED: { actions: "applyLivePatch" },
         SET_MODE: { actions: "persistMode" },
         SET_MODEL: { actions: "persistModel" }
       }

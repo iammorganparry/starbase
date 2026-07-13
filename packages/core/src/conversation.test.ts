@@ -60,8 +60,23 @@ describe("ContentPart", () => {
     ).toBe(true)
   })
 
-  it("rejects an unknown part tag", () => {
+  it("decodes an Image part with an attachment", () => {
+    expect(
+      Either.isRight(
+        decode(ContentPart, {
+          _tag: "Image",
+          attachment: { id: "a1", name: "login.png", mediaType: "image/png", data: "aGVsbG8=" }
+        })
+      )
+    ).toBe(true)
+  })
+
+  it("rejects an Image part missing its attachment", () => {
     expect(Either.isLeft(decode(ContentPart, { _tag: "Image", url: "x" }))).toBe(true)
+  })
+
+  it("rejects an unknown part tag", () => {
+    expect(Either.isLeft(decode(ContentPart, { _tag: "Nope", text: "x" }))).toBe(true)
   })
 
   it("rejects an unknown tool status", () => {
@@ -216,11 +231,32 @@ describe("applyStreamEvent fold", () => {
 })
 
 describe("message constructors", () => {
+  const now = "2026-07-11T10:00:00.000Z"
+  const attachment = { id: "a1", name: "login.png", mediaType: "image/png", data: "aGVsbG8=" }
+
   it("userMessage carries a single text part and is not streaming", () => {
-    const msg = userMessage("m0", "hello", "2026-07-11T10:00:00.000Z")
+    const msg = userMessage("m0", "hello", now)
     expect(msg.role).toBe("user")
     expect(msg.streaming).toBe(false)
     expect(msg.parts).toStrictEqual([{ _tag: "Text", text: "hello" }])
+  })
+
+  it("userMessage prepends attached images before the text part", () => {
+    const msg = userMessage("m0", "see this", now, [attachment])
+    expect(msg.parts).toStrictEqual([
+      { _tag: "Image", attachment },
+      { _tag: "Text", text: "see this" }
+    ])
+  })
+
+  it("userMessage omits the text part when the prompt is image-only", () => {
+    const msg = userMessage("m0", "", now, [attachment])
+    expect(msg.parts).toStrictEqual([{ _tag: "Image", attachment }])
+  })
+
+  it("a user turn with an image round-trips through the Message schema", () => {
+    const msg = userMessage("m0", "here", now, [attachment])
+    expect(Schema.decodeUnknownSync(Message)(Schema.encodeSync(Message)(msg))).toStrictEqual(msg)
   })
 })
 

@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   CliKind,
   PermissionMode,
   Plan,
@@ -16,6 +17,8 @@ export interface SessionSpec {
   readonly branch: string
   readonly cwd: string
   readonly prompt: string
+  /** Images the operator attached as context for this turn (empty when none). */
+  readonly images: ReadonlyArray<Attachment>
   /** Resolved path to the harness binary, or null when it isn't installed. */
   readonly binPath: string | null
   /** The session's HITL permission mode (drives the harness's permission mode). */

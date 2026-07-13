@@ -285,8 +285,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.diff": ({ id }) => sessionDiff(id),
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
   // renderer subscribes to normalized events, harness-agnostic.
-  "Agent.run": ({ sessionId, text }) =>
-    Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.prompt(sessionId, text))),
+  "Agent.run": ({ sessionId, text, images }) =>
+    Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.prompt(sessionId, text, images ?? []))),
   "Agent.decideGate": ({ sessionId, gateId, decision }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.decideGate(sessionId, gateId, decision)),
   "Agent.answerQuestion": ({ sessionId, requestId, answers }) =>

@@ -6,6 +6,7 @@
  */
 import type {
   ArchiveReason,
+  Attachment,
   CliInfo,
   CliKind,
   CreateSessionFromPrInput,
@@ -181,14 +182,15 @@ export const rpc = {
   agentRun: (
     sessionId: string,
     text: string,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    images: ReadonlyArray<Attachment> = []
   ): (() => void) => {
     let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
     let cancelled = false
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        client.Agent.run({ sessionId, text }).pipe(
+        client.Agent.run({ sessionId, text, images }).pipe(
           Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
         )
       )
