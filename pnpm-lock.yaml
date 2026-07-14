@@ -47,18 +47,6 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.144.1
         version: 0.144.1
-      '@starbase/cli-adapters':
-        specifier: workspace:*
-        version: link:../../packages/cli-adapters
-      '@starbase/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@starbase/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@starbase/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       '@tanstack/react-query':
         specifier: ^5.101.2
         version: 5.101.2(react@19.2.7)
@@ -90,9 +78,21 @@ importers:
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
+      '@starbase/cli-adapters':
+        specifier: workspace:*
+        version: link:../../packages/cli-adapters
+      '@starbase/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@starbase/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@starbase/tsconfig':
         specifier: workspace:*
         version: link:../../packages/tsconfig
+      '@starbase/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@tailwindcss/vite':
         specifier: ^4.3.2
         version: 4.3.2(vite@7.3.6(@types/node@22.20.1)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.0))
