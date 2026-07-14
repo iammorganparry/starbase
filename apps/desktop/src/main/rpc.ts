@@ -14,6 +14,7 @@
  */
 import {
   AgentRunner,
+  AuthService,
   ConfigService,
   claudeTitleGenerator,
   DiscoveryService,
@@ -402,7 +403,14 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Terminal.kill": ({ terminalId }) =>
     Effect.flatMap(TerminalService, (t) => t.kill(terminalId)),
   "Terminal.list": ({ sessionId }) =>
-    Effect.flatMap(TerminalService, (t) => t.list(sessionId))
+    Effect.flatMap(TerminalService, (t) => t.list(sessionId)),
+
+  // Auth — the sign-in wall. Delegates to AuthService, which bridges the OS
+  // keychain (SecretStore) and the BetterAuth backend.
+  "Auth.getSession": () => AuthService.getSession(),
+  "Auth.startSignIn": ({ provider }) => AuthService.startSignIn(provider),
+  "Auth.sendMagicLink": ({ email }) => AuthService.sendMagicLink(email),
+  "Auth.signOut": () => AuthService.signOut()
 })
 
 /**

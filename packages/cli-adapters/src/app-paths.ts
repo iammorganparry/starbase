@@ -23,6 +23,12 @@ export interface AppPathsShape {
    * (read from disk) in a later turn or session on the same worktree.
    */
   readonly plansDir: string
+  /**
+   * `~/starbase/auth.enc` — the signed-in session token, encrypted with the OS
+   * credential vault (Electron `safeStorage`). Only ever ciphertext is written
+   * here; see `SecretStore`.
+   */
+  readonly authFile: string
 }
 
 export class AppPaths extends Context.Tag("@starbase/AppPaths")<AppPaths, AppPathsShape>() {}

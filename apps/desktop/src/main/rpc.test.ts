@@ -47,7 +47,8 @@ describe("RPC handlers", () => {
         sessionsFile: join(root, "sessions.json"),
         worktreesDir: join(root, "worktrees"),
         transcriptsDir: join(root, "transcripts"),
-        plansDir: join(root, ".starbase")
+        plansDir: join(root, ".starbase"),
+        authFile: join(root, "auth.enc")
       }),
       NodeContext.layer
     )

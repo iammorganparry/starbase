@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react"
-import type { CliInfo, DiffStat, Session, SessionStatus } from "@starbase/core"
+import type { CliInfo, DiffStat, Session, SessionStatus, User } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
@@ -52,10 +52,14 @@ export interface SessionConversationProps {
   liveDiff?: Record<string, DiffStat>
   /** Open the New Session dialog. */
   onNewSession?: () => void
-  /** Open the Usage & limits modal (sidebar footer button). */
+  /** The signed-in user, shown in the sidebar footer account menu. */
+  user?: User
+  /** Open the Usage & limits modal (from the sidebar account menu). */
   onOpenUsage?: () => void
-  /** Open the Settings view (sidebar footer cog button). */
+  /** Open the Settings view (from the sidebar account menu). */
   onOpenSettings?: () => void
+  /** Sign out (from the sidebar account menu). */
+  onSignOut?: () => void
   /**
    * When set, the Settings view is open: it replaces the main pane (tabs +
    * conversation) while the sidebar stays visible. `onOpenSettings` toggles it.
@@ -129,8 +133,10 @@ export function SessionConversation(props: SessionConversationProps) {
         onDelete={props.onDeleteSession}
         liveStatus={props.liveStatus}
         onNewSession={props.onNewSession}
+        user={props.user}
         onOpenUsage={props.onOpenUsage}
         onOpenSettings={props.onOpenSettings}
+        onSignOut={props.onSignOut}
         ghConnected={props.ghConnected}
         starredRepoNames={props.starredRepoNames}
         onToggleStar={props.onToggleStar}

@@ -14,6 +14,13 @@ interface StarbaseBridge {
   readonly on: (cb: (data: unknown) => void) => () => void
   /** Open an http(s) URL in the user's default browser. */
   readonly openExternal: (url: string) => Promise<void>
+  /**
+   * Subscribe to `starbase://` sign-in completions from the main process.
+   * Returns an unsubscribe fn.
+   */
+  readonly onAuthComplete: (
+    cb: (payload: { readonly ok: boolean; readonly error: string | null }) => void
+  ) => () => void
 }
 
 interface Window {

@@ -1,4 +1,5 @@
 export * from "./domain.js"
+export * from "./auth.js"
 export * from "./conversation.js"
 export * from "./session-title.js"
 export * from "./models.js"

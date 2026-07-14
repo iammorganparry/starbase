@@ -31,6 +31,9 @@ export * from "./components/chip-menu.js"
 export * from "./components/context-menu.js"
 export * from "./components/confirm-dialog.js"
 export * from "./components/provider-icon.js"
+export * from "./components/oauth-button.js"
+export * from "./components/auth-divider.js"
+export * from "./components/starfield.js"
 
 // Molecules / composites
 export * from "./composites/tool-call.js"
@@ -70,6 +73,9 @@ export * from "./composites/plan-card.js"
 export * from "./composites/plan-step-list.js"
 export * from "./composites/plan-flow.js"
 export * from "./composites/plan-step-detail.js"
+export * from "./composites/auth-card.js"
+export * from "./composites/magic-link-form.js"
+export * from "./composites/user-menu.js"
 
 // Diff engine (virtualized)
 export * from "./diff/parse.js"
@@ -96,6 +102,7 @@ export * from "./screens/component-library.js"
 export * from "./screens/stub-screen.js"
 export * from "./screens/setup-screen.js"
 export * from "./screens/loading-screen.js"
+export * from "./screens/login-screen.js"
 
 // Seed data
 export * from "./seed.js"

@@ -15,7 +15,8 @@ import type {
   Repo,
   Session,
   SessionStatus,
-  Usage
+  Usage,
+  User
 } from "@starbase/core"
 import type { DockSide } from "./terminal-panel.js"
 import { AppShell } from "./app-shell.js"
@@ -36,6 +37,10 @@ const GH_UNAVAILABLE: GhStatus = {
 export interface StarbaseAppProps {
   clis: ReadonlyArray<CliInfo>
   sessions: ReadonlyArray<Session>
+  /** The signed-in user, shown in the sidebar footer account menu. */
+  user?: User
+  /** Sign out of the app (from the account menu). */
+  onSignOut?: () => void
   /** Repos discovered under the workspace, for the New Session picker. */
   repos?: ReadonlyArray<Repo>
   /** Absolute paths of starred repos — surfaced first in the picker + sidebar. */
@@ -128,6 +133,8 @@ const noBranches = async (): Promise<ReadonlyArray<string>> => []
 export function StarbaseApp({
   clis,
   sessions,
+  user,
+  onSignOut,
   repos = [],
   starredRepos = [],
   onToggleStar,
@@ -271,6 +278,8 @@ export function StarbaseApp({
         liveStatus={liveStatus}
         liveDiff={liveDiff}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
+        user={user}
+        onSignOut={onSignOut}
         onOpenUsage={onLoadUsage ? openUsage : undefined}
         onOpenSettings={onSaveProvider ? () => setSettingsOpen(true) : undefined}
         settingsView={

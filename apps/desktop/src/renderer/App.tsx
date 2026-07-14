@@ -10,10 +10,12 @@ import type {
   GithubConfig,
   ProviderConfig,
   Session,
-  SessionStatus
+  SessionStatus,
+  User
 } from "@starbase/core"
-import { ConfirmDialog, LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
+import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
+import { authMachine } from "./auth-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
 import { PullRequestPane } from "./pull-request-pane.js"
 import { ReviewPane } from "./review-pane.js"
@@ -46,8 +48,12 @@ const PR_STATE_STALE_MS = 5 * 60_000
  * Everything else the shell needs is read through react-query — `gh` status,
  * the persisted config (GitHub prefs), and usage — so there are no ad-hoc
  * `useEffect` + `useState` fetches here; a mutation just updates the cache.
+ *
+ * Only mounted once signed in (see the `App` auth gate below), so none of its
+ * queries/effects run behind the sign-in wall. Receives the signed-in `user` and
+ * `onSignOut` to drive the sidebar account menu.
  */
-export function App() {
+function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void }) {
   const [state, send] = useMachine(appMachine)
   const { clis, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
@@ -286,6 +292,8 @@ export function App() {
     <StarbaseApp
       clis={clis}
       sessions={sessions}
+      user={user}
+      onSignOut={onSignOut}
       repos={repos}
       starredRepos={starredRepos}
       onToggleStar={toggleStar}
@@ -365,5 +373,55 @@ export function App() {
       }}
     />
     </>
+  )
+}
+
+/** Map the auth machine's signed-out substate to the LoginScreen's visual state. */
+function loginStateOf(matches: (value: object) => boolean): "default" | "loading" | "sent" | "error" {
+  if (matches({ signedOut: "sending" }) || matches({ signedOut: "oauthPending" })) return "loading"
+  if (matches({ signedOut: "magicLinkSent" })) return "sent"
+  if (matches({ signedOut: "error" })) return "error"
+  return "default"
+}
+
+/**
+ * The auth gate. Drives the dedicated `authMachine` and renders the sign-in wall
+ * until it reaches `signedIn`, at which point the real app (`AuthedApp`) mounts.
+ * The `starbase://` deep-link callback arrives from the main process via the
+ * preload bridge and re-validates the freshly-stored token.
+ */
+export function App() {
+  const [authState, authSend] = useMachine(authMachine)
+
+  useEffect(() => {
+    const unsubscribe = window.starbase.onAuthComplete((payload) => {
+      if (payload.ok) authSend({ type: "CALLBACK" })
+    })
+    return unsubscribe
+  }, [authSend])
+
+  if (authState.matches("checking") || authState.matches("signingOut")) {
+    return <LoadingScreen />
+  }
+
+  if (!authState.matches("signedIn")) {
+    return (
+      <LoginScreen
+        state={loginStateOf((value) => authState.matches(value as never))}
+        sentEmail={authState.context.sentEmail ?? undefined}
+        errorMessage={authState.context.error ?? undefined}
+        onGithub={() => authSend({ type: "OAUTH", provider: "github" })}
+        onGoogle={() => authSend({ type: "OAUTH", provider: "google" })}
+        onSendMagicLink={(email) => authSend({ type: "MAGIC_LINK", email })}
+        onReset={() => authSend({ type: "RESET" })}
+      />
+    )
+  }
+
+  return (
+    <AuthedApp
+      user={authState.context.session?.user}
+      onSignOut={() => authSend({ type: "SIGN_OUT" })}
+    />
   )
 }

@@ -123,6 +123,18 @@
   --animate-slide-in: sb-slide-in 0.3s ease;
   --animate-bar: sb-bar 1.3s ease-in-out infinite;
   --animate-check: sb-check 0.4s ease forwards;
+  /* Sign-in wall: twinkling starfield + breathing logo (see LoginScreen). */
+  --animate-twinkle: sb-twinkle 3s ease-in-out infinite;
+}
+
+@keyframes sb-twinkle {
+  0%,
+  100% {
+    opacity: 0.22;
+  }
+  50% {
+    opacity: 0.9;
+  }
 }
 
 @keyframes sb-breathe {

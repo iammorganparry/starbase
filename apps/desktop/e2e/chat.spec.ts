@@ -178,8 +178,9 @@ test("the sidebar Usage & limits button opens the usage modal", async ({ launchA
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
 
-  // The sidebar footer surfaces the usage entry point.
-  await window.getByRole("button", { name: /Usage & limits/ }).click()
+  // The sidebar footer account menu surfaces the usage entry point.
+  await window.getByRole("button", { name: "Account menu" }).click()
+  await window.getByRole("menuitem", { name: /Usage & limits/ }).click()
 
   // The modal opens with its title and "last updated" footer (provider rows
   // depend on which harnesses are installed on the runner, so we don't assert them).
@@ -389,7 +390,8 @@ test("the sidebar Settings cog opens the settings view with the GitHub section",
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
 
-  await window.getByRole("button", { name: "Settings" }).click()
+  await window.getByRole("button", { name: "Account menu" }).click()
+  await window.getByRole("menuitem", { name: "Settings" }).click()
 
   // The inline Settings view opens (nav + sections), defaulting to Providers —
   // the "Close settings" control and the Providers blurb prove it mounted.
