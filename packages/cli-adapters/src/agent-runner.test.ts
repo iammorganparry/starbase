@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { basename, join } from "node:path"
 import type { GateDecision, Message, PermissionMode, Session, StreamEvent } from "@starbase/core"
 import { Effect, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -9,6 +9,7 @@ import { AgentRunner } from "./agent-runner.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
 import { TranscriptStore } from "./transcripts.js"
+import { PlanStore } from "./plan-store.js"
 import { withTempRoot } from "./test-support.js"
 
 /**
@@ -33,6 +34,7 @@ const runPrompt = (mode: PermissionMode, decision: GateDecision) => {
     AgentRunner.Default,
     SessionStore.Default,
     TranscriptStore.Default,
+    PlanStore.Default,
     makeScriptedCliAdapter(0),
     DiscoveryService.Default,
     temp.layer
@@ -127,6 +129,7 @@ describe("AgentRunner sub-agents", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       subagentAdapter,
       DiscoveryService.Default,
       temp.layer
@@ -167,6 +170,7 @@ describe("AgentRunner image attachments", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
       temp.layer
@@ -195,6 +199,7 @@ describe("AgentRunner AskUserQuestion", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
       temp.layer
@@ -242,6 +247,7 @@ describe("AgentRunner ids", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
       temp.layer
@@ -275,6 +281,7 @@ describe("AgentRunner allowlist", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       makeScriptedCliAdapter(0),
     DiscoveryService.Default,
       temp.layer
@@ -310,6 +317,7 @@ describe("AgentRunner plan mode", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
       temp.layer
@@ -551,6 +559,7 @@ describe("AgentRunner model", () => {
       AgentRunner.Default,
       SessionStore.Default,
       TranscriptStore.Default,
+      PlanStore.Default,
       modelReportingAdapter,
       DiscoveryService.Default,
       temp.layer
@@ -564,5 +573,127 @@ describe("AgentRunner model", () => {
       }).pipe(Effect.provide(base))
     )
     expect(model).toBe("opus-live")
+  })
+})
+
+describe("AgentRunner plan library", () => {
+  const WT = "/tmp/starbase/worktrees/starbase/mysession"
+
+  /** Seed a session that owns a worktree (so the runner writes/points at plans). */
+  const seedSessionWithWorktree = (mode: PermissionMode) => {
+    const session: Session = {
+      id: SESSION,
+      repo: "acme/widget",
+      branch: "starbase/mysession",
+      title: "My session",
+      status: "idle",
+      cli: "claude",
+      diff: { added: 0, removed: 0 },
+      prNumber: null,
+      costUsd: 0,
+      tokens: 0,
+      updatedAt: "2026-07-11T10:00:00.000Z",
+      worktreePath: WT,
+      mode
+    }
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(join(temp.root, "sessions.json"), JSON.stringify([session]))
+  }
+
+  /** An adapter that records the prompt it was handed, then completes. */
+  const recordingAdapter = (out: { prompt: string | null }): Layer.Layer<CliAdapter> =>
+    Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: (_sessionId, spec, ctx) =>
+          Effect.gen(function* () {
+            out.prompt = spec.prompt
+            yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+          }) as ReturnType<CliAdapterShape["run"]>,
+        stop: () => Effect.void
+      })
+    )
+
+  it("writes a proposed plan into the session's plan library (~/starbase/.starbase/<worktree>/)", async () => {
+    seedSessionWithWorktree("plan")
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      PlanStore.Default,
+      makeScriptedCliAdapter(0),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "plan")
+        yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+          Stream.tap((ev) =>
+            ev._tag === "PlanProposed" ? runner.approvePlan(SESSION, ev.plan.id) : Effect.void
+          ),
+          Stream.runDrain
+        )
+      }).pipe(Effect.provide(base))
+    )
+    // scriptedPlan's summary "Refactor auth flow" → file "refactor-auth-flow.md",
+    // namespaced by the worktree basename, under the app's .starbase library.
+    const file = join(temp.root, ".starbase", basename(WT), "refactor-auth-flow.md")
+    expect(existsSync(file)).toBe(true)
+    expect(readFileSync(file, "utf8")).toContain("Refactor auth flow")
+  })
+
+  it("prepends the saved-plan pointer (with the file path) to the next run", async () => {
+    seedSessionWithWorktree("auto")
+    const captured: { prompt: string | null } = { prompt: null }
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      PlanStore.Default,
+      recordingAdapter(captured),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    // A saved plan already exists for this worktree.
+    const planFile = await Effect.runPromise(
+      PlanStore.write(WT, { ...scriptedPlan("s1", 1), summary: "Ship it", raw: "the full plan" }).pipe(
+        Effect.provide(Layer.merge(PlanStore.Default, temp.layer))
+      )
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.prompt(SESSION, "please implement the plan").pipe(Stream.runDrain)
+      }).pipe(Effect.provide(base))
+    )
+    expect(captured.prompt).toContain("<saved-plan>")
+    expect(captured.prompt).toContain(planFile) // the absolute path is handed over
+    // The user's actual text is preserved at the end (the note is only a prefix).
+    expect(captured.prompt?.endsWith("please implement the plan")).toBe(true)
+  })
+
+  it("does NOT prepend a pointer when the worktree has no saved plan", async () => {
+    seedSessionWithWorktree("auto")
+    const captured: { prompt: string | null } = { prompt: null }
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      PlanStore.Default,
+      recordingAdapter(captured),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.prompt(SESSION, "just do X").pipe(Stream.runDrain)
+      }).pipe(Effect.provide(base))
+    )
+    expect(captured.prompt).toBe("just do X")
   })
 })

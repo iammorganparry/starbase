@@ -37,7 +37,8 @@ const appPathsFor = (root: string): AppPathsShape => ({
   configFile: join(root, "config.json"),
   sessionsFile: join(root, "sessions.json"),
   worktreesDir: join(root, "worktrees"),
-  transcriptsDir: join(root, "transcripts")
+  transcriptsDir: join(root, "transcripts"),
+  plansDir: join(root, ".starbase")
 })
 
 /** Make a fresh OS temp dir; returns its path + a recursive cleanup. */

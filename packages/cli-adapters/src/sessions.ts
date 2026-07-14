@@ -151,7 +151,12 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         | AppPaths
       > =>
         Effect.gen(function* () {
-          const slug = kebab(input.pr.title)
+          // Key the slug on the PR number (unique per repo), not the title alone —
+          // otherwise two different PRs that happen to share a title would resolve
+          // to the same worktree path and the second would be refused. Including
+          // the number keeps the slug stable per PR (so re-opening the same PR is
+          // idempotent — see the guard below) while staying unique across PRs.
+          const slug = `${kebab(input.pr.title)}-${input.pr.number}`
           // Refuse if a live session already owns this worktree path — otherwise
           // the reclaim step below would delete its worktree. (A leftover dir
           // from a failed attempt is NOT a live session, so retries still work.)
