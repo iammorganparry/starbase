@@ -460,10 +460,15 @@ export const runClaude = (
             : { behavior: "deny", message: "Denied by the operator." }
         }
 
+        // Resume id: prefer the live in-memory id (this launch), else the id
+        // persisted on the session (survives an app restart), so "continue" always
+        // reloads the full conversation instead of starting the harness fresh.
+        const resumeId = resume.get(sessionId) ?? spec.resumeId ?? undefined
+
         // With attached images this switches to the SDK's streaming-input form
         // (text + base64 image blocks); without images it stays the string prompt.
         const iterator = query({
-          prompt: buildPromptInput(spec, resume.get(sessionId)),
+          prompt: buildPromptInput(spec, resumeId),
           options: {
             cwd: spec.cwd || undefined,
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
@@ -474,7 +479,7 @@ export const runClaude = (
             includePartialMessages: true,
             canUseTool,
             abortController: abort,
-            resume: resume.get(sessionId)
+            resume: resumeId
           }
         })
         planQuery = iterator

@@ -245,6 +245,9 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Persist the session's harness model. */
       const setModel = (id: string, model: string) => update(id, (s) => ({ ...s, model }))
 
+      /** Persist the harness session id so the conversation resumes after a restart. */
+      const setResumeId = (id: string, resumeId: string) => update(id, (s) => ({ ...s, resumeId }))
+
       /** Persist an auto-generated title (leaves `autoTitle` untouched). */
       const setTitle = (id: string, title: string) => update(id, (s) => ({ ...s, title }))
 
@@ -312,6 +315,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         createFromPr,
         setMode,
         setModel,
+        setResumeId,
         setTitle,
         renameTitle,
         addAllowlist,

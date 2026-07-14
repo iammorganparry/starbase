@@ -19,8 +19,14 @@ describe("mapCodexPolicy", () => {
 })
 
 describe("codexEventToStreamEvents", () => {
-  it("maps thread.started to Started", () => {
+  it("maps thread.started to Started carrying Codex's OWN thread id (persisted as the resume id)", () => {
     expect(codexEventToStreamEvents(ev({ type: "thread.started", thread_id: "t1" }), "s1")).toStrictEqual([
+      { _tag: "Started", sessionId: "t1" }
+    ])
+  })
+
+  it("falls back to the Starbase session key when thread.started has no thread id", () => {
+    expect(codexEventToStreamEvents(ev({ type: "thread.started" }), "s1")).toStrictEqual([
       { _tag: "Started", sessionId: "s1" }
     ])
   })

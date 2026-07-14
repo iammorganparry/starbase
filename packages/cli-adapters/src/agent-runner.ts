@@ -431,7 +431,10 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             images,
             binPath,
             mode,
-            model: session?.model ?? defaultModel(cli)
+            model: session?.model ?? defaultModel(cli),
+            // The persisted harness session id, so the adapter resumes the full
+            // conversation even after a restart cleared its in-memory resume map.
+            resumeId: session?.resumeId ?? null
           }
 
           // Capture the persistence services so `emit`/`run` handed to the
@@ -533,6 +536,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // reflects reality even when the session hadn't pinned one.
               if (event._tag === "Started" && event.model) {
                 yield* SessionStore.setModel(sessionId, event.model).pipe(Effect.ignore)
+              }
+              // Persist the harness session id (carried on Started) so the NEXT
+              // prompt resumes this conversation — even after an app restart wiped
+              // the adapter's in-memory resume map. `event.sessionId` is the
+              // harness's own id, not our `sessionId` (the Starbase session key).
+              if (event._tag === "Started" && event.sessionId.length > 0) {
+                yield* SessionStore.setResumeId(sessionId, event.sessionId).pipe(Effect.ignore)
               }
               // Remember an edit's target path so its ToolEnd can tie back to a step.
               if (event._tag === "ToolStart" && EDIT_TOOLS.has(event.name) && event.target) {

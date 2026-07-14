@@ -44,6 +44,7 @@ describe("buildPromptInput", () => {
     binPath: null,
     mode: "accept-edits",
     model: null,
+    resumeId: null,
     ...over
   })
   const image = (name: string): Attachment => ({ id: name, name, mediaType: "image/png", data: "aGk=" })
