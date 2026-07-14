@@ -6,9 +6,12 @@ import {
   Message,
   Skill,
   StreamEvent,
+  Subagent,
   addPlanComment,
   applyStreamEvent,
+  applySubagentEvent,
   assistantMessage,
+  isSubagentEvent,
   latestPlan,
   pendingPlan,
   pendingQuestion,
@@ -567,5 +570,87 @@ describe("Plan flow", () => {
       parts: [{ _tag: "Plan", plan: plan({ status: "approved" }) }]
     }
     expect(settleLoaded(done)).toBe(done)
+  })
+})
+
+describe("sub-agents", () => {
+  it("decodes the Subagent schema and the new StreamEvent variants", () => {
+    expect(
+      Either.isRight(
+        decode(Subagent, {
+          id: "t1",
+          name: "Explore",
+          description: "Map the tab bar",
+          status: "working",
+          message: assistantMessage("t1", "")
+        })
+      )
+    ).toBe(true)
+    // An unknown status literal is rejected.
+    expect(
+      Either.isRight(
+        decode(Subagent, {
+          id: "t1",
+          name: "Explore",
+          description: "d",
+          status: "paused",
+          message: assistantMessage("t1", "")
+        })
+      )
+    ).toBe(false)
+    expect(
+      Either.isRight(decode(StreamEvent, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "d" }))
+    ).toBe(true)
+    expect(Either.isRight(decode(StreamEvent, { _tag: "SubagentEnded", id: "t1", status: "done" }))).toBe(true)
+    // A content event may carry an optional agentId.
+    expect(Either.isRight(decode(StreamEvent, { _tag: "Assistant", text: "hi", agentId: "t1" }))).toBe(true)
+  })
+
+  it("isSubagentEvent flags lifecycle + agentId-tagged events, not main-turn events", () => {
+    expect(isSubagentEvent({ _tag: "SubagentStarted", id: "t1", name: "Explore", description: "d" })).toBe(true)
+    expect(isSubagentEvent({ _tag: "SubagentEnded", id: "t1", status: "done" })).toBe(true)
+    expect(isSubagentEvent({ _tag: "Assistant", text: "child", agentId: "t1" })).toBe(true)
+    // Same tag WITHOUT agentId belongs to the main turn.
+    expect(isSubagentEvent({ _tag: "Assistant", text: "main" })).toBe(false)
+    expect(isSubagentEvent({ _tag: "Done", costUsd: 0, tokens: 0 })).toBe(false)
+  })
+
+  it("SubagentStarted opens a working tab; agentId events accrue onto its own message", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "Map it" })
+    expect(subs).toHaveLength(1)
+    expect(subs[0]).toMatchObject({ id: "t1", name: "Explore", status: "working" })
+
+    subs = applySubagentEvent(subs, { _tag: "ToolStart", id: "r1", name: "Read", target: "a.ts", agentId: "t1" })
+    subs = applySubagentEvent(subs, { _tag: "Assistant", text: "found it", agentId: "t1" })
+    const parts = subs[0]?.message.parts ?? []
+    expect(parts.some((p) => p._tag === "Tool" && p.tool.name === "Read")).toBe(true)
+    expect(parts.some((p) => p._tag === "Text" && p.text === "found it")).toBe(true)
+  })
+
+  it("routes each child's output to its own tab and ignores unknown ids", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one" })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t2", name: "Explore", description: "two" })
+    subs = applySubagentEvent(subs, { _tag: "Assistant", text: "for t2", agentId: "t2" })
+    // An event for a sub-agent that never started is a no-op, not a crash.
+    const unchanged = applySubagentEvent(subs, { _tag: "Assistant", text: "ghost", agentId: "nope" })
+    expect(unchanged).toBe(subs)
+    expect(subs.find((s) => s.id === "t1")?.message.parts).toHaveLength(0)
+    expect(subs.find((s) => s.id === "t2")?.message.parts).toHaveLength(1)
+  })
+
+  it("SubagentEnded removes the tab (transcripts are live-only)", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one" })
+    subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "done" })
+    expect(subs).toHaveLength(0)
+  })
+
+  it("passes non-sub-agent events through untouched (callers can route unconditionally)", () => {
+    const subs: ReadonlyArray<Subagent> = [
+      { id: "t1", name: "Explore", description: "one", status: "working", message: assistantMessage("t1", "") }
+    ]
+    expect(applySubagentEvent(subs, { _tag: "Done", costUsd: 1, tokens: 2 })).toBe(subs)
   })
 })

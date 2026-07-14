@@ -76,6 +76,8 @@ export * from "./diff/diff-hunk.js"
 // App compositions
 export * from "./app/title-bar.js"
 export * from "./app/tab-bar.js"
+export * from "./app/agent-tab-bar.js"
+export * from "./app/subagent-view.js"
 export * from "./app/session-sidebar.js"
 export * from "./app/conversation-view.js"
 export * from "./app/diff-panel.js"

@@ -111,6 +111,8 @@ export const formatQuestionAnswer = (
 const toolTarget = (name: string, input: Record<string, unknown>): string | null => {
   if (name === "Bash") return strOf(input.command)
   if (name === "Grep" || name === "Glob") return strOf(input.pattern)
+  // A `Task` spawns a sub-agent — its target is the one-line task description.
+  if (name === "Task") return strOf(input.description)
   return strOf(input.file_path) ?? strOf(input.path) ?? strOf(input.notebook_path) ?? strOf(input.url)
 }
 
@@ -275,6 +277,12 @@ export const streamEventsFor = (
   msg: SDKMessage,
   tools: Map<string, ToolMemo>
 ): ReadonlyArray<StreamEvent> => {
+  // The SDK stamps a sub-agent's own messages with the spawning `Task` tool_use
+  // id. When set, this message's content belongs to that sub-agent's live tab,
+  // not the main turn — so we tag each emitted content event with it.
+  const agentId = strOf((msg as { parent_tool_use_id?: unknown }).parent_tool_use_id) || undefined
+  const forAgent = agentId ? { agentId } : {}
+
   switch (msg.type) {
     case "system": {
       if (msg.subtype !== "init") return []
@@ -291,7 +299,7 @@ export const streamEventsFor = (
       const event = (msg as { event?: { type?: string; delta?: Record<string, unknown> } }).event
       if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
         const text = strOf(event.delta.text)
-        return text ? [{ _tag: "Assistant", text }] : []
+        return text ? [{ _tag: "Assistant", text, ...forAgent }] : []
       }
       return []
     }
@@ -304,14 +312,28 @@ export const streamEventsFor = (
         const type = block.type
         if (type === "thinking") {
           const text = strOf(block.thinking)
-          if (text) out.push({ _tag: "Thinking", text, seconds: null, done: true })
+          if (text) out.push({ _tag: "Thinking", text, seconds: null, done: true, ...forAgent })
         } else if (type === "tool_use") {
           const id = String(block.id)
           const name = String(block.name)
           const input = (block.input ?? {}) as Record<string, unknown>
           tools.set(id, { name, input })
+          // A `Task` spawned by the MAIN agent opens a live, watch-only sub-agent
+          // tab keyed by this tool_use id (its children arrive stamped with it).
+          // Nested Tasks (spawned by a sub-agent, so `agentId` is set) stay as
+          // ordinary tool cards — one level of nesting for MVP.
+          if (name === "Task" && agentId === undefined) {
+            out.push({
+              _tag: "SubagentStarted",
+              id,
+              name: strOf(input.subagent_type) ?? "agent",
+              description: strOf(input.description) ?? ""
+            })
+          }
           if (SUPPRESSED_TOOLS.has(name)) continue
-          out.push({ _tag: "ToolStart", id, name, target: toolTarget(name, input) })
+          // The Task's own ToolStart is untagged (agentId undefined) so it anchors
+          // a summary card in the MAIN transcript alongside opening the tab.
+          out.push({ _tag: "ToolStart", id, name, target: toolTarget(name, input), ...forAgent })
         }
       }
       return out
@@ -323,6 +345,11 @@ export const streamEventsFor = (
         if (block.type !== "tool_result") continue
         const id = String(block.tool_use_id)
         const memo = tools.get(id)
+        // A top-level `Task` completing closes its sub-agent tab (tabs are
+        // live-only — the anchor card in the main turn keeps the summary).
+        if (memo?.name === "Task" && agentId === undefined) {
+          out.push({ _tag: "SubagentEnded", id, status: block.is_error === true ? "error" : "done" })
+        }
         if (memo && SUPPRESSED_TOOLS.has(memo.name)) continue
         const stats = memo && isEditTool(memo.name) ? editStats(memo.name, memo.input) : { diff: null, preview: null }
         out.push({
@@ -331,7 +358,8 @@ export const streamEventsFor = (
           status: block.is_error === true ? "error" : "success",
           meta: toolResultMeta(memo?.name, block.content),
           diff: stats.diff,
-          preview: stats.preview
+          preview: stats.preview,
+          ...forAgent
         })
       }
       return out

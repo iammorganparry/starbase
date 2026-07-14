@@ -15,6 +15,7 @@ import {
   applyStreamEvent,
   assistantMessage,
   defaultModel,
+  isSubagentEvent,
   setQuestionAnswers,
   userMessage
 } from "@starbase/core"
@@ -434,6 +435,14 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Runs on the single producer fiber, so transcript order is preserved.
           const emit = (event: StreamEvent): Effect.Effect<void> =>
             Effect.gen(function* () {
+              // Sub-agent events drive live-only tabs, not the persisted main turn.
+              // Surface them downstream (the renderer keeps per-sub-agent
+              // transcripts) but never fold them into the main assistant message —
+              // that would interleave unrelated agents' output into the transcript.
+              if (isSubagentEvent(event)) {
+                yield* out.offer(event)
+                return
+              }
               const next = applyStreamEvent(yield* Ref.get(acc), event)
               yield* Ref.set(acc, next)
               yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
