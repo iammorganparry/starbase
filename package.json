@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
