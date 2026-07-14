@@ -52,12 +52,16 @@ export const startFakeAuthServer = async (token = "e2e-token"): Promise<FakeAuth
       let body = ""
       req.on("data", (chunk) => (body += chunk))
       req.on("end", () => {
+        let email: unknown
         try {
-          const email = JSON.parse(body).email
-          if (typeof email === "string") sentEmails.push(email)
+          email = JSON.parse(body).email
         } catch {
           /* ignore malformed body */
         }
+        // Any address containing "fail" simulates a backend rejection so the
+        // LoginScreen error state can be asserted end-to-end.
+        if (typeof email === "string" && email.includes("fail")) return json(400, { error: "rejected" })
+        if (typeof email === "string") sentEmails.push(email)
         json(200, { status: true })
       })
       return

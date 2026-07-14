@@ -17,6 +17,7 @@
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "STARBASE_DB_TESTS=1 vitest run --config vitest.integration.config.ts",
     "clean": "rimraf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {

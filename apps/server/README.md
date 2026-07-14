@@ -102,6 +102,21 @@ See `.env.example`. Required in production:
 A social provider is only enabled when both its id + secret are set, so dev works
 with magic links alone.
 
+## Testing
+
+```bash
+pnpm --filter @starbase/server test              # unit — repositories vs a fake Database (CI-safe)
+pnpm --filter @starbase/server test:integration  # HTTP e2e vs real Postgres (needs docker compose up -d db + db:migrate)
+```
+
+`test:integration` drives the full auth flow through Hono's `app.request` against
+a real database: magic-link → session → bearer → `/api/me` → sign out. It's
+excluded from `pnpm test` (and CI), which has no Postgres.
+
+The desktop sign-in flow is covered by Playwright e2e in
+`apps/desktop/e2e/auth.spec.ts` (`pnpm --filter @starbase/desktop e2e`), against an
+offline fake auth backend.
+
 ## Deploying to Vercel
 
 Set the project root to `apps/server`. `vercel.json` rewrites all traffic to the
