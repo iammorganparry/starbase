@@ -44,7 +44,10 @@ test("creating a session forks a real worktree and persists it", async ({ launch
     status: "idle",
     autoTitle: true
   })
-  expect(persisted[0].branch).toMatch(/^starbase\/untitled-session-[a-z0-9]+$/)
+  // Untitled sessions get a friendly Docker-style "<adjective>-<name>" slug
+  // (e.g. "gentle-maxwell"), not "untitled-session-<stamp>".
+  expect(persisted[0].branch).toMatch(/^starbase\/[a-z]+-[a-z]+$/)
+  expect(persisted[0].branch).not.toContain("untitled")
 
   // Real outcome: that branch + worktree actually exist on disk.
   expect(existsSync(persisted[0].worktreePath)).toBe(true)
@@ -119,7 +122,8 @@ test("creating a session from a PR checks out its head branch and links the PR",
   await expect(window.getByText("⑂ #482")).toBeVisible()
 
   // Real outcome: the worktree is on the PR's head branch (not a starbase/ fork).
-  const worktreePath = join(home, "starbase", "worktrees", "widget", "fix-auth-refresh-race")
+  // The from-PR slug carries the PR number, so same-titled PRs never collide.
+  const worktreePath = join(home, "starbase", "worktrees", "widget", "fix-auth-refresh-race-482")
   expect(existsSync(worktreePath)).toBe(true)
   const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
     cwd: worktreePath,
