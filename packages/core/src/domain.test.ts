@@ -48,6 +48,26 @@ describe("WorkspaceConfig", () => {
     )
     expect(roundTripped).toStrictEqual(config)
   })
+
+  // autoBabysitPr is optional so pre-existing persisted github blocks (3 fields)
+  // keep decoding after the field was added. Both shapes must be accepted.
+  it("decodes a github config WITHOUT autoBabysitPr (back-compat)", () => {
+    const result = decode(WorkspaceConfig, {
+      reposDir: "/repos",
+      createdAt: "2026-07-11T10:00:00.000Z",
+      github: { enabled: true, autoCreatePr: false, autoDetectPr: true }
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
+
+  it("decodes a github config WITH autoBabysitPr", () => {
+    const result = decode(WorkspaceConfig, {
+      reposDir: "/repos",
+      createdAt: "2026-07-11T10:00:00.000Z",
+      github: { enabled: true, autoCreatePr: false, autoDetectPr: true, autoBabysitPr: false }
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
 })
 
 describe("Session", () => {

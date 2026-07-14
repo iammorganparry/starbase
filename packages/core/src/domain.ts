@@ -124,7 +124,14 @@ export const GithubConfig = Schema.Struct({
   /** Open a PR automatically once a session's branch has pushable commits. */
   autoCreatePr: Schema.Boolean,
   /** Auto-detect a PR already open on a session's branch and link it. */
-  autoDetectPr: Schema.Boolean
+  autoDetectPr: Schema.Boolean,
+  /**
+   * Once a session's PR is linked, auto-inject a "babysit" turn that drives it to
+   * green (monitors CI, addresses review feedback, pushes fixes) then pings the
+   * user to merge. Optional so existing persisted configs still decode; read as
+   * `?? true` at call sites (default-on).
+   */
+  autoBabysitPr: Schema.optional(Schema.Boolean)
 })
 export type GithubConfig = Schema.Schema.Type<typeof GithubConfig>
 

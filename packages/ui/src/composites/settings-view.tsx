@@ -535,7 +535,12 @@ function StubSection({ label }: { label: string }) {
 
 // ── GitHub section (migrated from the old settings modal) ────────────────────
 
-const DEFAULT_GITHUB: GithubConfig = { enabled: false, autoCreatePr: false, autoDetectPr: true }
+const DEFAULT_GITHUB: GithubConfig = {
+  enabled: false,
+  autoCreatePr: false,
+  autoDetectPr: true,
+  autoBabysitPr: true
+}
 const DEFAULT_GIT: GitConfig = { shareCheckedOutBranches: true }
 
 function ToggleRow({
@@ -660,6 +665,13 @@ function GithubSection({
             checked={draft.autoCreatePr}
             disabled={!draft.enabled}
             onChange={(autoCreatePr) => setGithub({ ...draft, autoCreatePr })}
+          />
+          <ToggleRow
+            label="Auto-babysit pull requests"
+            description="Once a PR is opened, automatically drive it to green: monitor CI, address review feedback, and push fixes, then ping you to merge."
+            checked={draft.autoBabysitPr ?? true}
+            disabled={!draft.enabled}
+            onChange={(autoBabysitPr) => setGithub({ ...draft, autoBabysitPr })}
           />
         </div>
 

@@ -13,6 +13,7 @@ import type {
   SessionStatus,
   User
 } from "@starbase/core"
+import { babysitPrompt } from "@starbase/core"
 import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { authMachine } from "./auth-machine.js"
@@ -24,7 +25,8 @@ import { useTerminalDock } from "./use-terminal-dock.js"
 import { useSessionStatuses } from "./session-status.js"
 import { useSessionDiffs } from "./diff-presence.js"
 import { usePlanSessions } from "./plan-presence.js"
-import { disposeConversationActor } from "./conversation-registry.js"
+import { disposeConversationActor, getConversationActor } from "./conversation-registry.js"
+import { markBabysat, shouldBabysit } from "./babysit-store.js"
 import { completedSessionIds } from "./pr-refresh.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
@@ -192,12 +194,33 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
         if (n != null) {
           detectedRef.current.add(id) // keep the once-per-session guard in sync
           send({ type: "SESSION_PR_LINKED", sessionId: id, prNumber: n })
+          // Auto-babysit: drive the just-opened PR to green, then post a CTA.
+          // One-shot per (session, PR) — the babysit turn is itself a run whose
+          // completion re-fires this detection, so `shouldBabysit` guards re-entry.
+          // Scoped to the on-completion path only (not the startup sweep) so a
+          // relaunch never re-babysits an old/merged PR.
+          const session = sessions.find((s) => s.id === id)
+          if (
+            session &&
+            shouldBabysit({
+              session,
+              prNumber: n,
+              autoBabysitPr: githubConfig?.autoBabysitPr ?? true,
+              connected
+            })
+          ) {
+            markBabysat(id, n)
+            getConversationActor(session).send({
+              type: "SEND",
+              text: babysitPrompt(n, session.baseBranch ?? "main")
+            })
+          }
         }
       })
       // Partial key (id only) — matches regardless of the linked PR number.
       void qc.invalidateQueries({ queryKey: ["pr-state", id] })
     }
-  }, [liveStatus, sessions, autoDetect, send, qc])
+  }, [liveStatus, sessions, autoDetect, send, qc, githubConfig, connected])
 
   // Retitle a session as soon as it has a PLAN — a run that plans then executes
   // stays "present" (thinking/needs-input) throughout, so the on-completion
