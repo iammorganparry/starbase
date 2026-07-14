@@ -29,7 +29,12 @@ export const Library: Story = {
 export const App: Story = {
   render: () => (
     <div className="h-screen w-full">
-      <StarbaseApp clis={clis} sessions={sessions} />
+      <StarbaseApp
+        clis={clis}
+        sessions={sessions}
+        user={{ id: "u1", name: "Morgan Parry", email: "morgan@trigify.io", image: null }}
+        onSignOut={noop}
+      />
     </div>
   )
 }

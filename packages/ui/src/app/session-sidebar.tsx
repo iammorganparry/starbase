@@ -1,6 +1,6 @@
 import * as React from "react"
-import type { Session, SessionStatus } from "@starbase/core"
-import { Archive, GitBranch, Gauge, Layers, Plus, Search, Settings, Star } from "lucide-react"
+import type { Session, SessionStatus, User } from "@starbase/core"
+import { Archive, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
@@ -9,6 +9,7 @@ import { StatusDot } from "../components/status-dot.js"
 import { SearchInput } from "../components/search-input.js"
 import { SegmentedControl } from "../components/segmented-control.js"
 import { SessionRow } from "../composites/session-row.js"
+import { UserMenu } from "../composites/user-menu.js"
 
 type GroupBy = "repo" | "status"
 
@@ -44,11 +45,15 @@ export interface SessionSidebarProps {
   liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
-  /** Open the Usage & limits modal (footer icon button). */
+  /** The signed-in user, shown in the footer account menu. */
+  user?: User
+  /** Open the Usage & limits modal (from the account menu). */
   onOpenUsage?: () => void
-  /** Open the Settings view (footer cog icon button). */
+  /** Open the Settings view (from the account menu). */
   onOpenSettings?: () => void
-  /** Whether GitHub is connected (green dot on the Settings cog). */
+  /** Sign out (from the account menu). */
+  onSignOut?: () => void
+  /** Whether GitHub is connected (green dot on the Settings item). */
   ghConnected?: boolean
   /** Repo names that are starred — their groups pin to the top (repo grouping). */
   starredRepoNames?: ReadonlySet<string>
@@ -69,8 +74,10 @@ export function SessionSidebar({
   onDelete,
   liveStatus,
   onNewSession,
+  user,
   onOpenUsage,
   onOpenSettings,
+  onSignOut,
   ghConnected = false,
   starredRepoNames,
   onToggleStar,
@@ -281,39 +288,25 @@ export function SessionSidebar({
         )}
       </div>
 
-      {/* Footer: icon actions + version */}
-      <div className="flex h-11 flex-none items-center gap-1 border-t border-hairline px-2">
-        {onOpenUsage && (
-          <button
-            type="button"
-            onClick={onOpenUsage}
-            title="Usage & limits"
-            aria-label="Usage & limits"
-            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,background-color,scale] duration-100 hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96]"
+      {/* Footer: account menu (name / email / avatar → Settings, Usage, Sign out). */}
+      <div className="flex-none border-t border-hairline p-1.5">
+        {user ? (
+          <UserMenu
+            user={user}
+            onOpenSettings={onOpenSettings}
+            onOpenUsage={onOpenUsage}
+            onSignOut={onSignOut}
+            ghConnected={ghConnected}
+            version={version}
+          />
+        ) : (
+          <span
+            className="flex h-9 items-center px-2 font-mono text-[11px] text-dim"
+            title={version ? "App version" : undefined}
           >
-            <Gauge size={15} />
-          </button>
+            {version ? `Starbase v${version}` : "Starbase"}
+          </span>
         )}
-        {onOpenSettings && (
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            title="Settings"
-            aria-label="Settings"
-            className="relative flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground outline-none transition-[color,background-color,scale] duration-100 hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96]"
-          >
-            <Settings size={15} />
-            {ghConnected && (
-              <span className="absolute right-[5px] top-[5px]">
-                <StatusDot tone="bg-green" size={6} glow />
-              </span>
-            )}
-          </button>
-        )}
-        <div className="flex-1" />
-        <span className="font-mono text-[11px] text-dim" title={version ? "App version" : undefined}>
-          {version ? `Starbase v${version}` : "Starbase"}
-        </span>
       </div>
     </div>
   )

@@ -99,3 +99,18 @@ test("a stored token boots straight past the wall", async ({ launchApp }) => {
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
   await expect(window.getByRole("heading", { name: "Sign in to Starbase" })).toHaveCount(0)
 })
+
+test("the account menu shows the user and signs out", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: [seeded] })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The footer account menu shows the signed-in user (from the fake backend).
+  const account = window.getByRole("button", { name: "Account menu" })
+  await expect(account.getByText("E2E User")).toBeVisible()
+  await expect(account.getByText("e2e@starbase.dev")).toBeVisible()
+
+  // Open it and sign out → back to the wall.
+  await account.click()
+  await window.getByRole("menuitem", { name: /sign out/i }).click()
+  await expect(window.getByRole("heading", { name: "Sign in to Starbase" })).toBeVisible()
+})

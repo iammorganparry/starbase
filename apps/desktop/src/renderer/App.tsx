@@ -10,7 +10,8 @@ import type {
   GithubConfig,
   ProviderConfig,
   Session,
-  SessionStatus
+  SessionStatus,
+  User
 } from "@starbase/core"
 import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
@@ -48,9 +49,10 @@ const PR_STATE_STALE_MS = 5 * 60_000
  * `useEffect` + `useState` fetches here; a mutation just updates the cache.
  *
  * Only mounted once signed in (see the `App` auth gate below), so none of its
- * queries/effects run behind the sign-in wall.
+ * queries/effects run behind the sign-in wall. Receives the signed-in `user` and
+ * `onSignOut` to drive the sidebar account menu.
  */
-function AuthedApp() {
+function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void }) {
   const [state, send] = useMachine(appMachine)
   const { clis, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
@@ -288,6 +290,8 @@ function AuthedApp() {
     <StarbaseApp
       clis={clis}
       sessions={sessions}
+      user={user}
+      onSignOut={onSignOut}
       repos={repos}
       starredRepos={starredRepos}
       onToggleStar={toggleStar}
@@ -411,5 +415,10 @@ export function App() {
     )
   }
 
-  return <AuthedApp />
+  return (
+    <AuthedApp
+      user={authState.context.session?.user}
+      onSignOut={() => authSend({ type: "SIGN_OUT" })}
+    />
+  )
 }

@@ -74,6 +74,7 @@ export * from "./composites/plan-flow.js"
 export * from "./composites/plan-step-detail.js"
 export * from "./composites/auth-card.js"
 export * from "./composites/magic-link-form.js"
+export * from "./composites/user-menu.js"
 
 // Diff engine (virtualized)
 export * from "./diff/parse.js"
