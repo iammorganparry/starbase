@@ -6,6 +6,7 @@
  */
 import { join } from "node:path"
 import { app, BrowserWindow, ipcMain, shell } from "electron"
+import { TerminalService } from "@starbase/cli-adapters"
 import { Effect } from "effect"
 import { runtime } from "./runtime.js"
 import { initAutoUpdater } from "./updater.js"
@@ -58,5 +59,10 @@ app.on("window-all-closed", () => {
 })
 
 app.on("before-quit", () => {
-  void runtime.dispose()
+  // PTY child processes live in their own session and are NOT reaped when the
+  // main process exits, so kill them explicitly (best-effort) before teardown.
+  void runtime
+    .runPromise(Effect.flatMap(TerminalService, (t) => t.killAll))
+    .catch(() => {})
+    .finally(() => void runtime.dispose())
 })

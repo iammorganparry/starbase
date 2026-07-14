@@ -30,6 +30,8 @@ import type {
   Session,
   Skill,
   StreamEvent,
+  TerminalChunk,
+  TerminalInfo,
   Usage,
   WorkspaceConfig
 } from "@starbase/core"
@@ -226,6 +228,53 @@ export const rpc = {
       fiber = runtime.runFork(
         client.Agent.resumePlan({ sessionId, planId }).pipe(
           Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
+        )
+      )
+    })
+    return () => {
+      cancelled = true
+      if (fiber) runtime.runFork(Fiber.interrupt(fiber))
+    }
+  },
+
+  // ── Terminal ─────────────────────────────────────────────────────────────
+  /** Spawn a PTY for a session (cwd defaults to its worktree) and return it. */
+  terminalCreate: (
+    sessionId: string,
+    cwd: string | undefined,
+    cols: number,
+    rows: number
+  ): Promise<TerminalInfo> => run((c) => c.Terminal.create({ sessionId, cwd, cols, rows })),
+  /** Send keystrokes / pasted text to a terminal (fire-and-forget). */
+  terminalWrite: (terminalId: string, data: string): Promise<void> =>
+    run((c) => c.Terminal.write({ terminalId, data })),
+  /** Resize a terminal's PTY (drives SIGWINCH). */
+  terminalResize: (terminalId: string, cols: number, rows: number): Promise<void> =>
+    run((c) => c.Terminal.resize({ terminalId, cols, rows })),
+  /** Kill a terminal's shell and drop it. */
+  terminalKill: (terminalId: string): Promise<void> =>
+    run((c) => c.Terminal.kill({ terminalId })),
+  /** List a session's live terminals (rebuild the tab strip on mount). */
+  terminalList: (sessionId: string): Promise<ReadonlyArray<TerminalInfo>> =>
+    run((c) => c.Terminal.list({ sessionId })),
+
+  /**
+   * Subscribe to a terminal's coalesced output. Mirrors `agentRun`: forks the
+   * RPC stream and pushes each `TerminalChunk` to `onChunk`; returns a canceller
+   * that detaches (interrupts the fiber) WITHOUT killing the PTY — used on
+   * unmount / dock-hide / session switch.
+   */
+  terminalAttach: (
+    terminalId: string,
+    onChunk: (chunk: TerminalChunk) => void
+  ): (() => void) => {
+    let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
+    let cancelled = false
+    void clientPromise.then((client) => {
+      if (cancelled) return
+      fiber = runtime.runFork(
+        client.Terminal.attach({ terminalId }).pipe(
+          Stream.runForEach((chunk) => Effect.sync(() => onChunk(chunk)))
         )
       )
     })

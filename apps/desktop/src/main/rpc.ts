@@ -22,6 +22,7 @@ import {
   retitleSession,
   SessionStore,
   SkillsService,
+  TerminalService,
   TranscriptStore,
   UsageService,
   WorkspaceService
@@ -304,6 +305,24 @@ export const githubMerge = (input: { sessionId: string; method?: PrMergeMethod }
   })
 
 /**
+ * `Terminal.create` handler. Resolves the terminal's working directory: an
+ * explicit `cwd` wins, else the session's worktree, else the main-process cwd
+ * (the service's own fallback). Keeping the resolution here means the renderer
+ * can stay oblivious to worktree paths. Exported for tests.
+ */
+export const createTerminal = (input: {
+  sessionId: string
+  cwd?: string
+  cols: number
+  rows: number
+}) =>
+  Effect.gen(function* () {
+    const cwd = input.cwd ?? (yield* resolveSession(input.sessionId))?.worktreePath ?? undefined
+    const terminals = yield* TerminalService
+    return yield* terminals.create({ sessionId: input.sessionId, cwd, cols: input.cols, rows: input.rows })
+  })
+
+/**
  * Handlers for every procedure in the group. Each one delegates straight to an
  * Effect service, so the group remains the sole contract. `Discovery.list`
  * pulls in a `CommandExecutor` requirement (via `DiscoveryService.list()`) that
@@ -369,7 +388,21 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),
-  "Github.merge": (input) => githubMerge(input)
+  "Github.merge": (input) => githubMerge(input),
+
+  // Terminal — PTY lifecycle is unary; the coalesced output path is a stream,
+  // unwrapped from the service like `Agent.run`.
+  "Terminal.create": (input) => createTerminal(input),
+  "Terminal.attach": ({ terminalId }) =>
+    Stream.unwrap(Effect.map(TerminalService, (t) => t.attach(terminalId))),
+  "Terminal.write": ({ terminalId, data }) =>
+    Effect.flatMap(TerminalService, (t) => t.write(terminalId, data)),
+  "Terminal.resize": ({ terminalId, cols, rows }) =>
+    Effect.flatMap(TerminalService, (t) => t.resize(terminalId, cols, rows)),
+  "Terminal.kill": ({ terminalId }) =>
+    Effect.flatMap(TerminalService, (t) => t.kill(terminalId)),
+  "Terminal.list": ({ sessionId }) =>
+    Effect.flatMap(TerminalService, (t) => t.list(sessionId))
 })
 
 /**

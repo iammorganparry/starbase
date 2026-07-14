@@ -17,6 +17,7 @@ import {
   PlanStore,
   SessionStore,
   SkillsService,
+  TerminalService,
   TranscriptStore,
   UsageService,
   WorkspaceService
@@ -36,6 +37,10 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(TranscriptStore.Default),
   Layer.provide(PlanStore.Default),
   Layer.provide(AgentRunner.Default),
+  // provideMerge (not provide): the RPC handlers consume TerminalService AND the
+  // runtime keeps it in context, so the `before-quit` kill-all can reach the very
+  // same instance to reap PTYs.
+  Layer.provideMerge(TerminalService.Default),
   Layer.provide(SkillsService.Default),
   Layer.provide(ModelsService.Default),
   Layer.provide(UsageService.Default),

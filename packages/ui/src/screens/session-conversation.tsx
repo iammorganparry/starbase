@@ -1,5 +1,7 @@
 import { type ReactNode, useState } from "react"
 import type { CliInfo, Session, SessionStatus } from "@starbase/core"
+import { cn } from "../lib/cn.js"
+import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
@@ -63,6 +65,14 @@ export interface SessionConversationProps {
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Changes tab — the Code Review view over the local worktree diff. */
   renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /**
+   * Render the per-session terminal dock (the desktop app's live TerminalDock).
+   * Docked to the main content column beside/below the tab body — never shown in
+   * the Settings or empty states. Absent in stories.
+   */
+  renderTerminalDock?: (session: Session) => ReactNode
+  /** Which edge the terminal dock attaches to — drives the content column's flow. */
+  terminalDockSide?: DockSide
   /** App version, shown in the sidebar footer. */
   version?: string
 }
@@ -96,6 +106,8 @@ export function SessionConversation(props: SessionConversationProps) {
   const connectGithub = props.onOpenSettings ?? (() => {})
   // The active session's live status (running agent) overrides its persisted one.
   const activeStatus = (active && props.liveStatus?.[active.id]) ?? active?.status
+  // The live terminal dock for the active session (desktop app only).
+  const dock = active && props.renderTerminalDock ? props.renderTerminalDock(active) : null
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -139,43 +151,53 @@ export function SessionConversation(props: SessionConversationProps) {
               }
             />
 
-            {/*
-              The Conversation + Plan tabs share ONE persistent pane (same
-              conversation machine), so switching to Plan Review never unmounts —
-              and thus never aborts — a parked plan run. The pane swaps its own
-              inner view; only the OTHER tabs (pr/review/stub) fully unmount on
-              switch (keyed by activeTab), since the virtualized transcript's
-              measurement cache corrupts if kept mounted-but-hidden.
-            */}
-            {activeTab === "conversation" || activeTab === "plan" ? (
-              props.renderConversationPane ? (
-                props.renderConversationPane(activeTab === "plan" ? "plan" : "conversation", {
-                  onOpenPlanReview: () => setTab("plan")
-                })
-              ) : (
-                <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
-                  {props.conversationPane ?? (
-                    <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
-                  )}
-                </div>
-              )
-            ) : (
-              <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
-                {activeTab === "pr" && active ? (
-                  (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
-                    <StubScreen tab="pr" />
-                  ))
-                ) : activeTab === "review" && active ? (
-                  (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
-                    <StubScreen tab="review" />
-                  ))
-                ) : activeTab === "changes" && active ? (
-                  (props.renderCode?.(active, { onConnectGithub: connectGithub }) ?? <StubScreen tab="changes" />)
+            <div
+              className={cn(
+                "flex min-h-0 min-w-0 flex-1",
+                dock && props.terminalDockSide === "right" ? "flex-row" : "flex-col"
+              )}
+            >
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {/*
+                  The Conversation + Plan tabs share ONE persistent pane (same
+                  conversation machine), so switching to Plan Review never unmounts —
+                  and thus never aborts — a parked plan run. The pane swaps its own
+                  inner view; only the OTHER tabs (pr/review/stub) fully unmount on
+                  switch (keyed by activeTab), since the virtualized transcript's
+                  measurement cache corrupts if kept mounted-but-hidden.
+                */}
+                {activeTab === "conversation" || activeTab === "plan" ? (
+                  props.renderConversationPane ? (
+                    props.renderConversationPane(activeTab === "plan" ? "plan" : "conversation", {
+                      onOpenPlanReview: () => setTab("plan")
+                    })
+                  ) : (
+                    <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
+                      {props.conversationPane ?? (
+                        <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
+                      )}
+                    </div>
+                  )
                 ) : (
-                  <StubScreen tab={activeTab} />
+                  <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
+                    {activeTab === "pr" && active ? (
+                      (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
+                        <StubScreen tab="pr" />
+                      ))
+                    ) : activeTab === "review" && active ? (
+                      (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
+                        <StubScreen tab="review" />
+                      ))
+                    ) : activeTab === "changes" && active ? (
+                      (props.renderCode?.(active, { onConnectGithub: connectGithub }) ?? <StubScreen tab="changes" />)
+                    ) : (
+                      <StubScreen tab={activeTab} />
+                    )}
+                  </div>
                 )}
               </div>
-            )}
+              {dock}
+            </div>
           </>
         )}
       </div>

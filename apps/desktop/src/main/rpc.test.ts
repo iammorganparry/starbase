@@ -7,6 +7,7 @@ import {
   GhService,
   SessionStore,
   SkillsService,
+  TerminalService,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { NodeContext } from "@effect/platform-node"
@@ -16,6 +17,7 @@ import { DialogService } from "./dialog.js"
 import {
   chooseReposDir,
   configGet,
+  createTerminal,
   githubDetectPr,
   githubPr,
   sessionDiff,
@@ -153,6 +155,32 @@ describe("RPC handlers", () => {
           )
         )
       ).resolves.toBeUndefined()
+    })
+  })
+
+  describe("Terminal.create", () => {
+    // The renderer stays oblivious to worktree paths: the handler resolves cwd
+    // (explicit cwd wins; otherwise the session's worktree; otherwise the
+    // process cwd). Uses a real PTY, always reclaimed via killAll.
+    const runCreate = (input: { sessionId: string; cwd?: string; cols: number; rows: number }) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const info = yield* createTerminal(input)
+          yield* Effect.flatMap(TerminalService, (t) => t.killAll) // reclaim the PTY
+          return info
+        }).pipe(Effect.provide(Layer.mergeAll(base, SessionStore.Default, TerminalService.Default)))
+      )
+
+    it("spawns in an explicit cwd when one is given", async () => {
+      const info = await runCreate({ sessionId: "s1", cwd: dir, cols: 80, rows: 24 })
+      expect(info.cwd).toBe(dir)
+      expect(info.status).toBe("running")
+      expect(info.sessionId).toBe("s1")
+    })
+
+    it("falls back to the process cwd for an unknown session with no cwd", async () => {
+      const info = await runCreate({ sessionId: "nope", cols: 80, rows: 24 })
+      expect(info.cwd).toBe(process.cwd())
     })
   })
 

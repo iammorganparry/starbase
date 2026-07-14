@@ -17,8 +17,16 @@ files:
   - out/**
   - package.json
 
-# No native modules in this app — never let electron-builder rebuild against the
-# pnpm workspace symlink tree.
+# The one native module — @homebridge/node-pty-prebuilt-multiarch — must live
+# OUTSIDE the asar so its `.node` binary can be dlopen'd at runtime (asar-packed
+# native addons can't be loaded). Unpack the whole package (it also spawns a
+# `conpty`/`winpty` helper on Windows that must be a real file on disk).
+asarUnpack:
+  - "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**"
+
+# node-pty-prebuilt-multiarch ships N-API prebuilt binaries (one ABI across Node
+# + Electron), so there is nothing to compile — never let electron-builder
+# rebuild against the pnpm workspace symlink tree.
 npmRebuild: false
 buildDependenciesFromSource: false
 

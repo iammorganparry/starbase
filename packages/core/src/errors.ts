@@ -86,3 +86,16 @@ export class GhError extends Schema.TaggedError<GhError>()(
     cause: Schema.optional(Schema.Unknown)
   }
 ) {}
+
+/**
+ * Raised when a PTY-backed terminal cannot be spawned (bad cwd, shell missing,
+ * fork failure). A `Schema.TaggedError` — it is the `Terminal.create` error
+ * channel. Write/resize/kill/attach never fail (they no-op on an unknown id).
+ */
+export class TerminalError extends Schema.TaggedError<TerminalError>()(
+  "TerminalError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}
