@@ -31,6 +31,7 @@ export function PlanReview({
   plan,
   patch = "",
   onApprove,
+  onResume,
   onRevise,
   onComment
 }: {
@@ -38,6 +39,8 @@ export function PlanReview({
   /** The session worktree's live unified diff, sliced per-step into the changes rail. */
   patch?: string
   onApprove?: () => void
+  /** Approve a STALE plan (its original run is gone, e.g. after a restart) — re-drives execution. */
+  onResume?: () => void
   onRevise?: () => void
   onComment?: (stepId: string, body: string) => void
 }) {
@@ -79,10 +82,20 @@ export function PlanReview({
         </span>
 
         <div className="ml-auto flex items-center gap-2">
-          {readOnly ? (
+          {plan.status === "stale" ? (
+            // The original planning run is gone (e.g. reopened app) — approving
+            // re-drives execution on a fresh run rather than resuming a dead one.
+            <>
+              <span className="text-[11px] text-muted-foreground">reopened — approve to resume</span>
+              <Button size="sm" onClick={onResume}>
+                <Play className="size-3.5" />
+                Approve &amp; implement
+              </Button>
+            </>
+          ) : readOnly ? (
             <span className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
               <Play className="size-3.5" />
-              {plan.status === "approved" ? "Execution started" : plan.status === "rejected" ? "Plan rejected" : "Plan is stale"}
+              {plan.status === "approved" ? "Execution started" : "Plan rejected"}
             </span>
           ) : (
             <>

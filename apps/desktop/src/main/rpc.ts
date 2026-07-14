@@ -345,6 +345,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(AgentRunner, (runner) => runner.revisePlan(sessionId, planId)),
   "Agent.approvePlan": ({ sessionId, planId }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.approvePlan(sessionId, planId)),
+  "Agent.resumePlan": ({ sessionId, planId }) =>
+    Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.resumePlan(sessionId, planId))),
   "Agent.setModel": ({ sessionId, model }) =>
     SessionStore.setModel(sessionId, model).pipe(Effect.ignore),
   "Agent.stop": ({ sessionId }) =>

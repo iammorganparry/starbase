@@ -213,5 +213,25 @@ export const rpc = {
       cancelled = true
       if (fiber) runtime.runFork(Fiber.interrupt(fiber))
     }
+  },
+  agentResumePlan: (
+    sessionId: string,
+    planId: string,
+    onEvent: (event: StreamEvent) => void
+  ): (() => void) => {
+    let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
+    let cancelled = false
+    void clientPromise.then((client) => {
+      if (cancelled) return
+      fiber = runtime.runFork(
+        client.Agent.resumePlan({ sessionId, planId }).pipe(
+          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
+        )
+      )
+    })
+    return () => {
+      cancelled = true
+      if (fiber) runtime.runFork(Fiber.interrupt(fiber))
+    }
   }
 }
