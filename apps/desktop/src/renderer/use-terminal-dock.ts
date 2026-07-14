@@ -12,9 +12,10 @@ const SIDE_KEY = "starbase.terminal.side"
 
 const readVisible = (): boolean => {
   try {
-    return localStorage.getItem(VISIBLE_KEY) === "true"
+    // Open by default: only hidden if the user has explicitly toggled it off.
+    return localStorage.getItem(VISIBLE_KEY) !== "false"
   } catch {
-    return false
+    return true
   }
 }
 
