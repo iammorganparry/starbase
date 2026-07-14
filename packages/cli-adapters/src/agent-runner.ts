@@ -289,11 +289,17 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
       Effect.gen(function* () {
         const run = (yield* Ref.get(active)).get(sessionId)
         if (run !== undefined) yield* run.applyPlan(planId, (p) => ({ ...p, status: "approved" }))
-        // Engage the mode they normally run in — their configured default (e.g.
-        // "auto") first; else what they had before planning; else a safe default.
+        // Engage the mode they were actually running this session in before
+        // planning (`priorModes`, e.g. "auto") — that's their real intent for this
+        // session. Fall back to their CLI-config default only when there's no prior
+        // (e.g. a session started directly in plan mode), then a safe default.
+        // NOTE: `priorModes` MUST win over `execDefaults` — the latter is derived
+        // from the harness config file and is "accept-edits" for anyone who hasn't
+        // set a config default, which would silently override the "auto" (or other
+        // mode) the operator picked in the composer, re-gating every command.
         const mode =
-          (yield* Ref.get(execDefaults)).get(sessionId) ??
           (yield* Ref.get(priorModes)).get(sessionId) ??
+          (yield* Ref.get(execDefaults)).get(sessionId) ??
           "accept-edits"
         // Restore the exec mode live (canUseTool re-reads it) and persist it.
         yield* setMode(sessionId, mode)
