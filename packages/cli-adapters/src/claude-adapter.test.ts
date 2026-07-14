@@ -202,6 +202,97 @@ describe("streamEventsFor", () => {
   })
 })
 
+describe("streamEventsFor — sub-agents", () => {
+  it("opens a sub-agent tab (SubagentStarted) plus a main-turn anchor card for a Task spawn", () => {
+    const tools = new Map<string, ToolMemo>()
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "task_1",
+              name: "Task",
+              input: { subagent_type: "Explore", description: "Map the tab bar" }
+            }
+          ]
+        }
+      }),
+      tools
+    )
+    expect(events).toStrictEqual([
+      { _tag: "SubagentStarted", id: "task_1", name: "Explore", description: "Map the tab bar" },
+      // The Task's own ToolStart is untagged so it anchors a card in the main turn.
+      { _tag: "ToolStart", id: "task_1", name: "Task", target: "Map the tab bar" }
+    ])
+    expect(tools.get("task_1")?.name).toBe("Task")
+  })
+
+  it("tags a sub-agent's own output with its agentId (parent_tool_use_id)", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        parent_tool_use_id: "task_1",
+        message: {
+          content: [
+            { type: "thinking", thinking: "reading files" },
+            { type: "tool_use", id: "read_1", name: "Read", input: { file_path: "a.ts" } }
+          ]
+        }
+      }),
+      new Map()
+    )
+    expect(events).toStrictEqual([
+      { _tag: "Thinking", text: "reading files", seconds: null, done: true, agentId: "task_1" },
+      { _tag: "ToolStart", id: "read_1", name: "Read", target: "a.ts", agentId: "task_1" }
+    ])
+  })
+
+  it("tags a sub-agent's streamed text with its agentId", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "stream_event",
+        parent_tool_use_id: "task_1",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "found it" } }
+      }),
+      new Map()
+    )
+    expect(events).toStrictEqual([{ _tag: "Assistant", text: "found it", agentId: "task_1" }])
+  })
+
+  it("closes the tab (SubagentEnded) when the top-level Task result returns", () => {
+    const tools = new Map<string, ToolMemo>([["task_1", { name: "Task", input: {} }]])
+    const events = streamEventsFor(
+      msg({
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "task_1", is_error: false, content: "done report" }] }
+      }),
+      tools
+    )
+    expect(events).toStrictEqual([
+      { _tag: "SubagentEnded", id: "task_1", status: "done" },
+      { _tag: "ToolEnd", id: "task_1", status: "success", meta: null, diff: null, preview: null }
+    ])
+  })
+
+  it("does NOT open a tab for a NESTED Task (spawned by a sub-agent), keeping it a plain tagged card", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        parent_tool_use_id: "task_1",
+        message: {
+          content: [{ type: "tool_use", id: "task_2", name: "Task", input: { subagent_type: "Explore", description: "nested" } }]
+        }
+      }),
+      new Map()
+    )
+    expect(events).toStrictEqual([
+      { _tag: "ToolStart", id: "task_2", name: "Task", target: "nested", agentId: "task_1" }
+    ])
+  })
+})
+
 describe("plan mode + AskUserQuestion (canUseTool path)", () => {
   it("maps our 'plan' mode onto the SDK's plan permission mode", () => {
     expect(mapPermissionMode("plan")).toBe("plan")

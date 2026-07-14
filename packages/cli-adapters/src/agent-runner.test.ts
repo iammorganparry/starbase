@@ -4,6 +4,7 @@ import type { GateDecision, Message, PermissionMode, Session, StreamEvent } from
 import { Effect, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
+import type { CliAdapterShape } from "./adapter.js"
 import { AgentRunner } from "./agent-runner.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -100,6 +101,63 @@ describe("AgentRunner HITL gating", () => {
     // The applied edit's tool card is persisted with its diff.
     const toolPart = assistant.parts.find((p) => p._tag === "Tool" && p.tool.id === "edit-1")
     expect(toolPart && toolPart._tag === "Tool" && toolPart.tool.diff).toStrictEqual({ added: 7, removed: 0 })
+  })
+})
+
+describe("AgentRunner sub-agents", () => {
+  // An adapter that emits a main line, then a sub-agent's whole lifecycle, then done.
+  const subagentAdapter: Layer.Layer<CliAdapter> = Layer.succeed(
+    CliAdapter,
+    CliAdapter.of({
+      run: (_sessionId, _spec, ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.emit({ _tag: "Assistant", text: "main output" })
+          yield* ctx.emit({ _tag: "SubagentStarted", id: "task_1", name: "Explore", description: "sub task" })
+          yield* ctx.emit({ _tag: "Assistant", text: "SUBTEXT", agentId: "task_1" })
+          yield* ctx.emit({ _tag: "ToolStart", id: "r1", name: "Read", target: "a.ts", agentId: "task_1" })
+          yield* ctx.emit({ _tag: "SubagentEnded", id: "task_1", status: "done" })
+          yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+        }) as ReturnType<CliAdapterShape["run"]>,
+      stop: () => Effect.void
+    })
+  )
+
+  const runSubagentPrompt = () => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      subagentAdapter,
+      DiscoveryService.Default,
+      temp.layer
+    )
+    const program = Effect.gen(function* () {
+      const runner = yield* AgentRunner
+      yield* runner.setMode(SESSION, "auto")
+      const events: Array<StreamEvent> = []
+      yield* runner.prompt(SESSION, "fan out").pipe(Stream.runForEach((ev) => Effect.sync(() => events.push(ev))))
+      const transcript = yield* TranscriptStore.list(SESSION)
+      return { events, transcript }
+    })
+    return Effect.runPromise(program.pipe(Effect.provide(base)))
+  }
+
+  it("surfaces sub-agent events downstream but keeps them out of the persisted main turn", async () => {
+    const { events, transcript } = await runSubagentPrompt()
+
+    // The renderer still receives the full sub-agent lifecycle.
+    expect(events.some((e) => e._tag === "SubagentStarted" && e.id === "task_1")).toBe(true)
+    expect(events.some((e) => e._tag === "SubagentEnded" && e.id === "task_1")).toBe(true)
+    expect(events.some((e) => e._tag === "Assistant" && e.agentId === "task_1")).toBe(true)
+
+    // But the persisted assistant turn contains ONLY the main output — no
+    // sub-agent text and no sub-agent tool card leaked in.
+    const assistant = transcript[1]!
+    expect(assistant.role).toBe("assistant")
+    const text = assistant.parts.filter((p) => p._tag === "Text").map((p) => (p as { text: string }).text).join("")
+    expect(text).toContain("main output")
+    expect(text).not.toContain("SUBTEXT")
+    expect(assistant.parts.some((p) => p._tag === "Tool" && p.tool.id === "r1")).toBe(false)
   })
 })
 

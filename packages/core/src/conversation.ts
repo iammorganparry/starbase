@@ -329,7 +329,40 @@ export const Skill = Schema.Struct({
 })
 export type Skill = Schema.Schema.Type<typeof Skill>
 
+// ── Sub-agents (harness `Task` spawns, surfaced as live watch-only tabs) ──────
+
+/** Lifecycle of a spawned sub-agent, mirrored by its tab's status dot. */
+export const SubagentStatus = Schema.Literal("working", "done", "error")
+export type SubagentStatus = Schema.Schema.Type<typeof SubagentStatus>
+
+/**
+ * A sub-agent spawned by the harness (Claude's `Task` tool). Its `id` is the
+ * spawning tool_use id — the same value the SDK stamps as `parent_tool_use_id`
+ * on the sub-agent's own messages, which is how its output is routed here. The
+ * sub-agent's activity accrues onto a single rolling assistant `message` via the
+ * ordinary `applyStreamEvent` fold. Sub-agents are live-only (never persisted):
+ * a tab exists only while the agent runs and is dropped when it finishes.
+ */
+export const Subagent = Schema.Struct({
+  id: Schema.String,
+  /** The sub-agent type, e.g. "Explore" / "general-purpose". */
+  name: Schema.String,
+  /** The short task description passed to the `Task` tool. */
+  description: Schema.String,
+  status: SubagentStatus,
+  message: Message
+})
+export type Subagent = Schema.Schema.Type<typeof Subagent>
+
 // ── Normalized stream events (the harness-agnostic seam) ──────────────────────
+
+/**
+ * When set, this content event belongs to a spawned sub-agent (the harness's
+ * `Task` tool), not the main turn — it routes into that sub-agent's own rolling
+ * transcript (see `applySubagentEvent`) instead of the main assistant message.
+ * The id is the spawning tool_use id (`parent_tool_use_id` on the SDK message).
+ */
+const AgentId = Schema.optional(Schema.String)
 
 export const StreamEvent = Schema.Union(
   Schema.TaggedStruct("Started", {
@@ -340,20 +373,23 @@ export const StreamEvent = Schema.Union(
   Schema.TaggedStruct("Thinking", {
     text: Schema.String,
     seconds: Schema.NullOr(Schema.Number),
-    done: Schema.Boolean
+    done: Schema.Boolean,
+    agentId: AgentId
   }),
-  Schema.TaggedStruct("Assistant", { text: Schema.String }),
+  Schema.TaggedStruct("Assistant", { text: Schema.String, agentId: AgentId }),
   Schema.TaggedStruct("ToolStart", {
     id: Schema.String,
     name: Schema.String,
-    target: Schema.NullOr(Schema.String)
+    target: Schema.NullOr(Schema.String),
+    agentId: AgentId
   }),
   Schema.TaggedStruct("ToolEnd", {
     id: Schema.String,
     status: ToolStatus,
     meta: Schema.NullOr(Schema.String),
     diff: Schema.NullOr(DiffStat),
-    preview: Schema.NullOr(Schema.String)
+    preview: Schema.NullOr(Schema.String),
+    agentId: AgentId
   }),
   Schema.TaggedStruct("GateRequested", { gate: ApprovalGate }),
   Schema.TaggedStruct("QuestionRequested", { request: QuestionRequest }),
@@ -361,6 +397,14 @@ export const StreamEvent = Schema.Union(
   Schema.TaggedStruct("PlanProposed", { plan: Plan }),
   /** A runner-authoritative update to an existing plan (comment/routed/status sync). */
   Schema.TaggedStruct("PlanUpdated", { plan: Plan }),
+  /** A harness sub-agent (`Task`) was spawned — opens a live, watch-only tab. */
+  Schema.TaggedStruct("SubagentStarted", {
+    id: Schema.String,
+    name: Schema.String,
+    description: Schema.String
+  }),
+  /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
+  Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
   Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )
@@ -536,8 +580,65 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       return { ...msg, streaming: false, parts: [...parts, part] }
     }),
 
+    // Sub-agent lifecycle events are conversation-level, not part of any single
+    // turn — callers route them via `applySubagentEvent`. Ignored here so the
+    // fold stays total even if one ever reaches the main message.
+    Match.tag("SubagentStarted", () => msg),
+    Match.tag("SubagentEnded", () => msg),
+
     Match.exhaustive
   )
+}
+
+/**
+ * True when a `StreamEvent` belongs to a spawned sub-agent rather than the main
+ * turn — either a sub-agent lifecycle event, or a content event tagged with an
+ * `agentId`. Callers use this to route such events into `applySubagentEvent`
+ * (and to keep them out of the persisted main transcript).
+ */
+export const isSubagentEvent = (event: StreamEvent): boolean =>
+  event._tag === "SubagentStarted" ||
+  event._tag === "SubagentEnded" ||
+  ("agentId" in event && event.agentId != null)
+
+/**
+ * Fold one sub-agent-scoped `StreamEvent` into the live sub-agent list, returning
+ * a new list. `SubagentStarted` opens a fresh watch-only tab; `SubagentEnded`
+ * removes it (transcripts are live-only); a content event tagged with `agentId`
+ * accrues onto the matching sub-agent's rolling message via `applyStreamEvent`.
+ * Events for an unknown id are ignored. Non-sub-agent events pass through
+ * unchanged, so callers can route unconditionally.
+ */
+export const applySubagentEvent = (
+  subagents: ReadonlyArray<Subagent>,
+  event: StreamEvent
+): ReadonlyArray<Subagent> => {
+  if (event._tag === "SubagentStarted") {
+    if (subagents.some((s) => s.id === event.id)) return subagents
+    return [
+      ...subagents,
+      {
+        id: event.id,
+        name: event.name,
+        description: event.description,
+        status: "working",
+        message: assistantMessage(event.id, "")
+      }
+    ]
+  }
+  if (event._tag === "SubagentEnded") {
+    return subagents.filter((s) => s.id !== event.id)
+  }
+  if ("agentId" in event && event.agentId != null) {
+    const agentId = event.agentId
+    // Unknown id (e.g. a nested sub-agent, unsupported in MVP) — leave the list
+    // untouched so the renderer doesn't re-render on an event it can't place.
+    if (!subagents.some((s) => s.id === agentId)) return subagents
+    return subagents.map((s) =>
+      s.id === agentId ? { ...s, message: applyStreamEvent(s.message, event) } : s
+    )
+  }
+  return subagents
 }
 
 /** Update a gate part's status in place (after the operator decides). */

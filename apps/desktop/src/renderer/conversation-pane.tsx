@@ -5,10 +5,10 @@
  * lives here — above the Conversation ↔ Plan Review view switch — so switching to
  * the Plan tab does NOT unmount the agent stream (which would abort a parked plan).
  */
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import type { DiffActions } from "@starbase/ui"
 import type { Session } from "@starbase/core"
-import { ConversationView, PlanReview } from "@starbase/ui"
+import { AgentTabBar, ConversationView, MAIN_AGENT, PlanReview, SubagentView } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
 import { useConversation } from "./use-conversation.js"
 
@@ -30,6 +30,14 @@ export function ConversationPane({
   onDelete?: (sessionId: string) => void
 }) {
   const convo = useConversation(session)
+
+  // Which sub-agent tab is selected ("main" = the parent conversation). Declared
+  // before the Plan Review early-return so hook order stays stable. We derive the
+  // effective selection so a finished (auto-removed) sub-agent falls back to Main
+  // without an effect — its tab and view disappear together.
+  const [selectedAgent, setSelectedAgent] = useState<string>(MAIN_AGENT)
+  const activeSubagent = convo.subagents.find((s) => s.id === selectedAgent) ?? null
+  const activeAgent = activeSubagent ? selectedAgent : MAIN_AGENT
 
   // Live agent status + Plan-tab presence are published by the conversation
   // registry (from the actor's own subscription), so they stay correct even
@@ -69,42 +77,65 @@ export function ConversationPane({
     )
   }
 
+  // Directly beneath the main tab bar, a secondary bar surfaces the turn's live
+  // sub-agents (only while some exist). Selecting one swaps the pane to its
+  // watch-only transcript; "Main" shows the conversation. The stream keeps running
+  // either way — the actor lives in the registry, not this pane, so swapping the
+  // view never aborts the run.
   return (
-    <ConversationView
-      messages={convo.messages}
-      mode={convo.mode}
-      cli={session.cli}
-      skills={convo.skills}
-      files={convo.files}
-      patch={convo.patch}
-      paused={convo.paused}
-      busy={convo.busy}
-      queued={convo.queued}
-      onUnqueue={convo.unqueue}
-      onSendNow={convo.sendNow}
-      model={convo.model}
-      models={convo.models}
-      onSetModel={convo.setModel}
-      onSend={convo.sendPrompt}
-      onDecideGate={convo.decideGate}
-      onSetMode={convo.setMode}
-      question={convo.question}
-      onAnswerQuestion={convo.answerQuestion}
-      onApprovePlan={(id) => convo.approvePlan(id)}
-      onResumePlan={(id) => convo.resumePlan(id)}
-      onOpenPlanReview={onOpenPlanReview}
-      changeActions={changeActions}
-      archived={
-        session.archived
-          ? {
-              reason: session.archiveReason ?? "merged",
-              prNumber: session.prNumber,
-              base: session.baseBranch,
-              onRestore: () => onRestore?.(session.id),
-              onDelete: () => onDelete?.(session.id)
-            }
-          : undefined
-      }
-    />
+    <div className="flex min-h-0 flex-1 flex-col">
+      {convo.subagents.length > 0 && (
+        <AgentTabBar
+          agents={convo.subagents.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            status: s.status
+          }))}
+          active={activeAgent}
+          onChange={setSelectedAgent}
+        />
+      )}
+      {activeSubagent ? (
+        <SubagentView subagent={activeSubagent} />
+      ) : (
+        <ConversationView
+          messages={convo.messages}
+          mode={convo.mode}
+          cli={session.cli}
+          skills={convo.skills}
+          files={convo.files}
+          patch={convo.patch}
+          paused={convo.paused}
+          busy={convo.busy}
+          queued={convo.queued}
+          onUnqueue={convo.unqueue}
+          onSendNow={convo.sendNow}
+          model={convo.model}
+          models={convo.models}
+          onSetModel={convo.setModel}
+          onSend={convo.sendPrompt}
+          onDecideGate={convo.decideGate}
+          onSetMode={convo.setMode}
+          question={convo.question}
+          onAnswerQuestion={convo.answerQuestion}
+          onApprovePlan={(id) => convo.approvePlan(id)}
+          onResumePlan={(id) => convo.resumePlan(id)}
+          onOpenPlanReview={onOpenPlanReview}
+          changeActions={changeActions}
+          archived={
+            session.archived
+              ? {
+                  reason: session.archiveReason ?? "merged",
+                  prNumber: session.prNumber,
+                  base: session.baseBranch,
+                  onRestore: () => onRestore?.(session.id),
+                  onDelete: () => onDelete?.(session.id)
+                }
+              : undefined
+          }
+        />
+      )}
+    </div>
   )
 }

@@ -18,13 +18,16 @@ import type {
   QuestionAnswer,
   Session,
   Skill,
-  StreamEvent
+  StreamEvent,
+  Subagent
 } from "@starbase/core"
 import {
   addPlanComment,
   applyStreamEvent,
+  applySubagentEvent,
   assistantMessage,
   defaultModel,
+  isSubagentEvent,
   setGateStatus,
   setPlanStatus,
   setQuestionAnswers,
@@ -53,6 +56,12 @@ export interface ConversationContext {
    * turn at a time, as soon as the current run (and its diff refresh) settles.
    */
   readonly queued: ReadonlyArray<QueuedMessage>
+  /**
+   * Live sub-agents (harness `Task` spawns) for the current turn — each a
+   * watch-only tab. Populated from `agentId`-tagged + `Subagent*` events, dropped
+   * when an agent finishes; never persisted (transcripts.json holds the main turn).
+   */
+  readonly subagents: ReadonlyArray<Subagent>
   /**
    * When set, the running turn is a stale-plan re-drive (`Agent.resumePlan`) for
    * this plan id rather than a normal `Agent.run`; cleared when the next normal
@@ -163,6 +172,8 @@ export const conversationMachine = setup({
       return {
         pendingText: event.text,
         pendingImages: images,
+        // A fresh turn starts with no sub-agents (any from a prior turn are gone).
+        subagents: [],
         resumePlanId: null,
         messages: [
           ...context.messages,
@@ -182,6 +193,8 @@ export const conversationMachine = setup({
         resumePlanId: event.planId,
         pendingText: "",
         pendingImages: [],
+        // A fresh run (the plan re-drive) starts with no sub-agents carried over.
+        subagents: [],
         messages: [
           ...context.messages.map((m) => setPlanStatus(m, event.planId, "approved")),
           userMessage(`u_local_${id}`, "Approved — implement the plan.", now),
@@ -225,6 +238,7 @@ export const conversationMachine = setup({
         queued: rest,
         pendingText: next.text,
         pendingImages: next.images,
+        subagents: [],
         resumePlanId: null,
         messages: [
           ...context.messages,
@@ -235,12 +249,19 @@ export const conversationMachine = setup({
     }),
     foldEvent: assign(({ context, event }) => {
       if (event.type !== "STREAM_EVENT") return {}
-      const messages = patchLast(context.messages, (last) => applyStreamEvent(last, event.event))
+      const e = event.event
+      // Sub-agent-scoped events drive the watch-only tabs, not the main turn.
+      if (isSubagentEvent(e)) {
+        return { subagents: applySubagentEvent(context.subagents, e) }
+      }
+      const messages = patchLast(context.messages, (last) => applyStreamEvent(last, e))
+      // A finished/failed turn has no live sub-agents — clear any that never
+      // reported completion (e.g. an interrupted run), so no tab lingers.
+      if (e._tag === "Done" || e._tag === "Failed") return { messages, subagents: [] }
       // The harness reports its actual model on init — reflect it in the chip.
-      return event.event._tag === "Started" && event.event.model
-        ? { messages, model: event.event.model }
-        : { messages }
+      return e._tag === "Started" && e.model ? { messages, model: e.model } : { messages }
     }),
+    clearSubagents: assign(() => ({ subagents: [] as ReadonlyArray<Subagent> })),
     // Realtime Changes rail: when a tool that touched files lands mid-run, re-read
     // the worktree diff right away (fire-and-forget) so the rail reflects edits as
     // they happen, not only after the whole turn settles. `ToolEnd.diff` is the
@@ -324,6 +345,7 @@ export const conversationMachine = setup({
     pendingText: "",
     pendingImages: [],
     queued: [],
+    subagents: [],
     resumePlanId: null
   }),
   states: {
@@ -387,7 +409,8 @@ export const conversationMachine = setup({
         SET_MODE: { actions: "persistMode" },
         SET_MODEL: { actions: "persistModel" },
         // Stopping abandons the queue too — the operator asked the agent to halt.
-        STOP: { target: "refreshingDiff", actions: ["callStop", "clearQueue"] }
+        // Live sub-agent tabs go with it (no completion events will arrive).
+        STOP: { target: "refreshingDiff", actions: ["callStop", "clearQueue", "clearSubagents"] }
       }
     },
     // After a turn ends, re-read the worktree diff so the Changes rail reflects

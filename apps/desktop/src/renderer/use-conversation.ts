@@ -22,7 +22,8 @@ import type {
   QuestionRequest,
   Session,
   SessionStatus,
-  Skill
+  Skill,
+  Subagent
 } from "@starbase/core"
 import { latestPlan, pendingPlan, pendingQuestion } from "@starbase/core"
 import type { QueuedMessage } from "./conversation-machine.js"
@@ -44,6 +45,8 @@ export interface Conversation {
   readonly paused: boolean
   /** Messages queued while the agent was busy (sent FIFO once it frees up). */
   readonly queued: ReadonlyArray<QueuedMessage>
+  /** Live sub-agents (harness `Task` spawns) for the current turn — watch-only tabs. */
+  readonly subagents: ReadonlyArray<Subagent>
   /** Drop a queued message before it's sent (by index). */
   readonly unqueue: (index: number) => void
   /** Interrupt the current turn and run a queued message now (steer mid-stream). */
@@ -72,7 +75,7 @@ export function useConversation(session: Session): Conversation {
   const actor = useMemo(() => getConversationActor(session), [session.id])
   const state = useSelector(actor, (s) => s)
   const send = actor.send
-  const { messages, mode, skills, files, model, models, patch, queued } = state.context
+  const { messages, mode, skills, files, model, models, patch, queued, subagents } = state.context
 
   const paused = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -104,6 +107,7 @@ export function useConversation(session: Session): Conversation {
     busy,
     paused,
     queued,
+    subagents,
     unqueue: (index) => send({ type: "UNQUEUE", index }),
     sendNow: (index) => send({ type: "SEND_NOW", index }),
     question,
