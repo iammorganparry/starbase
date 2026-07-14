@@ -4,10 +4,13 @@
  * function (`api/[[...route]].ts` via `@hono/vercel`). Keeping the app here (and
  * the runtimes thin) means the exact same routing runs in both places.
  */
+import { Effect, Option } from "effect"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { auth } from "./auth.js"
+import { UserRepository } from "./db/repositories/user-repository.js"
 import { env } from "./env.js"
+import { runtime } from "./runtime.js"
 
 export const app = new Hono()
 
@@ -15,7 +18,7 @@ export const app = new Hono()
 // dev renderer from localhost). Allow credentials so BetterAuth cookies/bearer
 // round-trip.
 app.use(
-  "/api/auth/*",
+  "/api/*",
   cors({
     origin: ["starbase://", "http://localhost:5173", "http://localhost:9100"],
     allowHeaders: ["Content-Type", "Authorization"],
@@ -29,6 +32,23 @@ app.get("/health", (c) => c.json({ status: "ok", service: "@starbase/server" }))
 
 /** BetterAuth owns everything under /api/auth/* (OAuth, magic link, session). */
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw))
+
+/**
+ * The signed-in user's profile. BetterAuth validates the bearer session; the user
+ * row is then loaded through `UserRepository` (via the Effect runtime) — the
+ * canonical shape for any DB-backed endpoint we add (billing, usage, …).
+ */
+app.get("/api/me", async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers }).catch(() => null)
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401)
+  const user = await runtime
+    .runPromise(UserRepository.findById(session.user.id).pipe(Effect.map(Option.getOrNull)))
+    .catch(() => null)
+  if (!user) return c.json({ error: "Not found" }, 404)
+  return c.json({
+    user: { id: user.id, email: user.email, name: user.name, image: user.image }
+  })
+})
 
 /**
  * Desktop bridge. OAuth and magic-link flows complete in the user's browser,

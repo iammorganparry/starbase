@@ -17,3 +17,7 @@ Introduce authentication and gate the desktop app behind a sign-in wall.
   dedicated `authMachine` that gates the whole app until signed in.
 - New sign-in UI: `LoginScreen` plus reusable `OAuthButton`, `AuthDivider`,
   `Starfield`, `MagicLinkForm`, and `AuthCard` components.
+- Server DB access is Effect-TS: a `Database` service + per-aggregate
+  Repositories (e.g. `UserRepository`), run via a `ManagedRuntime`. All
+  hand-written queries go through a repository (BetterAuth's adapter is the one
+  documented exception); `GET /api/me` is the first consumer.

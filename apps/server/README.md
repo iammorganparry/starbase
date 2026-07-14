@@ -45,7 +45,32 @@ cookie the desktop app can't read. The client sets `GET /desktop/callback` as it
 `starbase://auth/callback?token=<bearer>`, which the desktop stores in the OS
 keychain. From then on it calls the API with `Authorization: Bearer <token>`.
 
-## Database
+## Database access — Repositories via an Effect service
+
+All hand-written DB access goes through the Effect-TS stack, never inline in a
+route:
+
+```
+Hono route → runtime.runPromise(...) → Repository (Effect.Service) → Database.run → Drizzle
+```
+
+- `db/database.ts` — the `Database` Effect service. `Database.run(op, query)` is the
+  only sanctioned way to execute a Drizzle query; it tags failures as `DatabaseError`.
+- `db/repositories/*.ts` — one `Effect.Service` per aggregate (e.g. `UserRepository`),
+  depending on `Database`, exposing typed methods that return `Effect`s. Add a
+  repository, `provideMerge` its `.Default` in `runtime.ts`, and it's available to
+  every handler.
+- `runtime.ts` — a single `ManagedRuntime` wiring `Database` + the repositories.
+
+Example consumer: `GET /api/me` validates the bearer session (BetterAuth) then loads
+the user via `UserRepository.findById`.
+
+**The one exception** is BetterAuth's `drizzleAdapter`, which owns its own queries
+internally and is handed the raw Drizzle client directly in `auth.ts`. That's library
+machinery; everything we write uses a repository. Route/app code must not import
+`db/client.ts` directly.
+
+## Schema
 
 Drizzle schema (`src/db/schema.ts`) is BetterAuth's core tables: `user`,
 `session`, `account`, `verification`. Downstream paid-user tables (billing,
