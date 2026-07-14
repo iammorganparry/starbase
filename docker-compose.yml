@@ -1,0 +1,24 @@
+# Local dev Postgres for @starbase/server (auth backend).
+# `docker compose up -d db` then `pnpm --filter @starbase/server db:migrate`.
+# Port 5433 avoids clashing with any host Postgres on the default 5432.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: starbase-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: starbase
+    ports:
+      - "5433:5432"
+    volumes:
+      - starbase-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d starbase"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  starbase-db-data:

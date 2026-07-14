@@ -7,6 +7,8 @@
 import type {
   ArchiveReason,
   Attachment,
+  AuthProvider,
+  AuthSession,
   CliInfo,
   CliKind,
   CreateSessionFromPrInput,
@@ -257,6 +259,18 @@ export const rpc = {
   /** List a session's live terminals (rebuild the tab strip on mount). */
   terminalList: (sessionId: string): Promise<ReadonlyArray<TerminalInfo>> =>
     run((c) => c.Terminal.list({ sessionId })),
+
+  // ── Auth ─────────────────────────────────────────────────────────────────
+  /** The current authenticated session, or null when signed out. */
+  authGetSession: (): Promise<AuthSession | null> => run((c) => c.Auth.getSession()),
+  /** Begin OAuth sign-in — returns the URL to open in the system browser. */
+  authStartSignIn: (provider: AuthProvider): Promise<string> =>
+    run((c) => c.Auth.startSignIn({ provider })),
+  /** Request an email magic link. */
+  authSendMagicLink: (email: string): Promise<void> =>
+    run((c) => c.Auth.sendMagicLink({ email })),
+  /** Sign out — revoke on the server and clear the local token. */
+  authSignOut: (): Promise<void> => run((c) => c.Auth.signOut()),
 
   /**
    * Subscribe to a terminal's coalesced output. Mirrors `agentRun`: forks the

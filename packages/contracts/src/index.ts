@@ -1,6 +1,8 @@
 import {
   ArchiveReason,
   Attachment,
+  AuthProvider,
+  AuthSession,
   CliInfo,
   CliKind,
   CreateSessionFromPrInput,
@@ -30,6 +32,7 @@ import {
   WorkspaceConfig
 } from "@starbase/core"
 import {
+  AuthError,
   ConfigError,
   DiscoveryError,
   GhError,
@@ -458,5 +461,34 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Terminal.list", {
     success: Schema.Array(TerminalInfo),
     payload: { sessionId: Schema.String }
-  })
+  }),
+
+  // ── Auth ─────────────────────────────────────────────────────────────────────
+  // The desktop app is gated behind a BetterAuth sign-in wall. The bearer token
+  // lives in the OS keychain (main process); these procedures let the renderer
+  // read the session, kick off sign-in, and sign out.
+
+  /** The current authenticated session, or null when signed out. */
+  Rpc.make("Auth.getSession", {
+    success: Schema.NullOr(AuthSession)
+  }),
+
+  /**
+   * Begin an OAuth sign-in: returns the provider URL the renderer opens in the
+   * system browser. The flow completes via the `starbase://` deep link.
+   */
+  Rpc.make("Auth.startSignIn", {
+    success: Schema.String,
+    error: AuthError,
+    payload: { provider: AuthProvider }
+  }),
+
+  /** Request an email magic link (sent by the server; console-logged in dev). */
+  Rpc.make("Auth.sendMagicLink", {
+    error: AuthError,
+    payload: { email: Schema.String }
+  }),
+
+  /** Sign out — revoke on the server (best effort) and clear the local token. */
+  Rpc.make("Auth.signOut", {})
 ) {}

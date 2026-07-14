@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import type { CliInfo, Session } from "@starbase/core"
 import { ComponentLibrary } from "./component-library.js"
+import { LoginScreen } from "./login-screen.js"
 import { StarbaseApp } from "../app/starbase-app.js"
+
+const noop = () => {}
 
 const meta: Meta = { title: "Screens", parameters: { layout: "fullscreen" } }
 export default meta
@@ -27,6 +30,46 @@ export const App: Story = {
   render: () => (
     <div className="h-screen w-full">
       <StarbaseApp clis={clis} sessions={sessions} />
+    </div>
+  )
+}
+
+const loginProps = {
+  onGithub: noop,
+  onGoogle: noop,
+  onSendMagicLink: noop,
+  onReset: noop
+}
+
+/** The sign-in wall, one story per state (matches Login.dc.html). */
+export const Login: Story = {
+  render: () => (
+    <div className="h-screen w-full">
+      <LoginScreen state="default" {...loginProps} />
+    </div>
+  )
+}
+
+export const LoginLoading: Story = {
+  render: () => (
+    <div className="h-screen w-full">
+      <LoginScreen state="loading" {...loginProps} />
+    </div>
+  )
+}
+
+export const LoginSent: Story = {
+  render: () => (
+    <div className="h-screen w-full">
+      <LoginScreen state="sent" sentEmail="founder@example.com" {...loginProps} />
+    </div>
+  )
+}
+
+export const LoginError: Story = {
+  render: () => (
+    <div className="h-screen w-full">
+      <LoginScreen state="error" {...loginProps} />
     </div>
   )
 }

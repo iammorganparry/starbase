@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { test as base } from "@playwright/test"
 import type { ElectronApplication, Page } from "@playwright/test"
 import { _electron as electron } from "playwright"
+import { startFakeAuthServer, type FakeAuthServer } from "./fake-auth.js"
 import { MAIN_ENTRY } from "./global-setup.js"
 
 /** A seeded session written to sessions.json (valid `Session` shape). */
@@ -49,6 +50,12 @@ export interface LaunchOptions {
   /** Seed extra fixtures (e.g. project skills) after repo creation, before launch. */
   readonly seed?: (ctx: { reposDir: string; repoPath: string }) => void
   /**
+   * Whether to boot past the sign-in wall (default true). When true the fixture
+   * seeds a valid token so the app lands signed in; set false to assert the wall
+   * itself (auth.spec).
+   */
+  readonly signedIn?: boolean
+  /**
    * Install a deterministic fake `gh` on PATH so the GitHub flows run offline:
    * `gh` reports authenticated, `gh pr list` returns these PRs, and
    * `gh pr checkout <n>` checks out the matching head branch (pre-created in the
@@ -80,6 +87,13 @@ export interface LaunchedApp {
   readonly reposDir: string
   /** The seeded repo's path (when `withRepo`). */
   readonly repoPath: string
+  /** The offline fake auth backend this launch talks to. */
+  readonly authServer: FakeAuthServer
+  /**
+   * Drive a `starbase://` sign-in callback into the running app (the OS would
+   * normally do this after the browser flow). Emits the main-process `open-url`.
+   */
+  readonly completeDeepLinkSignIn: () => Promise<void>
 }
 
 const git = (cwd: string, args: ReadonlyArray<string>) =>
@@ -213,6 +227,16 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         pathPrefix = `${binDir}:`
       }
 
+      // Offline auth backend. Signed-in by default: seed the token file that the
+      // e2e plaintext SecretStore reads, so the app boots past the wall.
+      const authServer = await startFakeAuthServer()
+      cleanups.push(() => void authServer.close())
+      const signedIn = options.signedIn ?? true
+      if (signedIn) {
+        mkdirSync(starbaseDir, { recursive: true })
+        writeFileSync(join(starbaseDir, "auth.enc"), authServer.token)
+      }
+
       const app = await electron.launch({
         args: [MAIN_ENTRY],
         env: {
@@ -221,6 +245,10 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
           PATH: `${pathPrefix}${process.env.PATH ?? ""}`,
           STARBASE_HOME: home,
           ELECTRON_RENDERER_URL: "",
+          // Auth: talk to the offline fake backend, and store the token as a plain
+          // file (no OS keychain prompts under headless Playwright).
+          STARBASE_AUTH_URL: authServer.url,
+          STARBASE_SECRET_STORE: "memory",
           // Force the deterministic scripted agent so chat e2e never spawns a
           // real harness (no auth, no network, reproducible).
           STARBASE_SCRIPTED_AGENT: "1"
@@ -229,7 +257,17 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       apps.push(app)
       const window = await app.firstWindow()
       await window.waitForLoadState("domcontentloaded")
-      return { app, window, home, reposDir, repoPath }
+
+      const completeDeepLinkSignIn = async () => {
+        await app.evaluate(
+          ({ app: electronApp }, url) => {
+            electronApp.emit("open-url", { preventDefault() {} }, url)
+          },
+          `starbase://auth/callback?token=${authServer.token}`
+        )
+      }
+
+      return { app, window, home, reposDir, repoPath, authServer, completeDeepLinkSignIn }
     }
 
     await use(launch)
