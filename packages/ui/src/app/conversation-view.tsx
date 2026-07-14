@@ -23,8 +23,14 @@ import { ArchivedBanner } from "../composites/archived-banner.js"
 import { DiffPanel } from "./diff-panel.js"
 import type { DiffActions } from "../diff/diff-view.js"
 
-/** Shift+Tab cycles through the HITL modes, Claude-Code style. */
+/**
+ * Shift+Tab cycles through the HITL modes, Claude-Code style. Plan mode is
+ * Claude-only (the other harnesses are autonomous), so it's appended to the
+ * cycle only for Claude sessions — see `cycleFor`.
+ */
 const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
+const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
+  cli === "claude" ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
 
 export interface ConversationViewProps {
   messages: ReadonlyArray<Message>
@@ -128,15 +134,17 @@ export function ConversationView({
   const stick = useRef(true)
   const [showChanges, setShowChanges] = useState(true)
 
-  // Shift+Tab cycles the HITL mode (works while typing in the composer).
+  // Shift+Tab cycles the HITL mode (works while typing in the composer). Plan
+  // mode joins the cycle on Claude sessions only (matches the composer's gate).
+  const cycle = cycleFor(cli)
   useHotkeys(
     "shift+tab",
     () => {
-      const i = MODE_CYCLE.indexOf(mode)
-      onSetMode?.(MODE_CYCLE[(i + 1) % MODE_CYCLE.length]!)
+      const i = cycle.indexOf(mode)
+      onSetMode?.(cycle[(i + 1) % cycle.length]!)
     },
     { enableOnFormTags: true, preventDefault: true },
-    [mode, onSetMode]
+    [mode, onSetMode, cycle]
   )
 
   const counts = diffCounts(patch)

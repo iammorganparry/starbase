@@ -1,6 +1,6 @@
 import "@xyflow/react/dist/style.css"
 import { useMemo } from "react"
-import type { Plan, PlanGraph, PlanNode, PlanNodeKind } from "@starbase/core"
+import type { PlanGraph, PlanNode, PlanNodeKind } from "@starbase/core"
 import Dagre from "@dagrejs/dagre"
 import {
   Background,
@@ -103,24 +103,29 @@ const layout = (graph: PlanGraph, selectedStepId: string | null | undefined) => 
 }
 
 /**
- * The plan's DECISION flow on a navigable react-flow canvas — how the logic and
- * its branches move through the change (not a linear step list). Nodes link back
- * to plan steps; clicking one opens that step's spec. Pan / zoom / fit / minimap.
+ * A step's DECISION flow on a navigable react-flow canvas — how the logic and
+ * its branches move through that step's change (a state machine / user flow, not
+ * a linear action list). Nodes may link back to plan steps; clicking one calls
+ * `onSelect`. Pan / zoom / fit. In `embedded` mode (rendered inside a step's
+ * spec) the header + minimap are dropped to fit a compact panel.
  */
 export function PlanFlow({
-  plan,
+  graph,
   selectedId,
   onSelect,
+  embedded = false,
   className
 }: {
-  plan: Plan
+  /** The flow to render (a step's `graph`, or a legacy plan-level graph), or null. */
+  graph: PlanGraph | null
   /** The selected STEP id (highlights nodes linked to it). */
   selectedId?: string | null
   /** Called with a node's linked step id when clicked. */
   onSelect?: (stepId: string) => void
+  /** Compact variant for embedding in a step's spec (no header, no minimap). */
+  embedded?: boolean
   className?: string
 }) {
-  const graph = plan.graph
   const { nodes, edges } = useMemo(
     () => (graph ? layout(graph, selectedId) : { nodes: [], edges: [] }),
     [graph, selectedId]
@@ -138,8 +143,8 @@ export function PlanFlow({
       >
         <Waypoints className="size-8 text-line-strong" />
         <div className="max-w-xs text-[13px] leading-[1.5] text-muted-foreground">
-          The agent didn't map a decision flow for this plan. Route a comment asking it to sketch how
-          the logic branches, and it'll show up here.
+          This step has no decision flow. Route a comment asking the agent to sketch how its logic
+          branches, and it'll show up here.
         </div>
       </div>
     )
@@ -147,13 +152,15 @@ export function PlanFlow({
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-editor", className)}>
-      <div className="flex flex-none items-center gap-2.5 border-b border-hairline px-3.5 py-2">
-        <Waypoints className="size-3.5 text-muted-foreground" />
-        <span className="text-[12px] font-semibold text-text">Decision flow</span>
-        <span className="font-mono text-[10.5px] text-muted-foreground">
-          {graph.nodes.length} nodes · {decisions} {decisions === 1 ? "decision" : "decisions"}
-        </span>
-      </div>
+      {!embedded && (
+        <div className="flex flex-none items-center gap-2.5 border-b border-hairline px-3.5 py-2">
+          <Waypoints className="size-3.5 text-muted-foreground" />
+          <span className="text-[12px] font-semibold text-text">Decision flow</span>
+          <span className="font-mono text-[10.5px] text-muted-foreground">
+            {graph.nodes.length} nodes · {decisions} {decisions === 1 ? "decision" : "decisions"}
+          </span>
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         <ReactFlowProvider>
           <ReactFlow
@@ -175,7 +182,7 @@ export function PlanFlow({
           >
             <Background variant={BackgroundVariant.Dots} gap={18} size={1} className="!bg-editor" />
             <Controls showInteractive={false} />
-            <MiniMap pannable zoomable nodeStrokeWidth={2} className="!bg-panel" />
+            {!embedded && <MiniMap pannable zoomable nodeStrokeWidth={2} className="!bg-panel" />}
           </ReactFlow>
         </ReactFlowProvider>
       </div>

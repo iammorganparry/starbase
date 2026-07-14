@@ -1,12 +1,11 @@
 import { useState } from "react"
 import type { Plan, PlanStatus } from "@starbase/core"
-import { ClipboardList, GitBranch, Play, Send } from "lucide-react"
+import { ClipboardList, GitBranch, MousePointerClick, Play, Send } from "lucide-react"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { Pill } from "../components/pill.js"
 import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
-import { PlanFlow } from "../composites/plan-flow.js"
 import { PlanStepChanges } from "../composites/plan-step-changes.js"
 import { PlanStepDetail } from "../composites/plan-step-detail.js"
 import { PlanStepList } from "../composites/plan-step-list.js"
@@ -60,7 +59,12 @@ export function PlanReview({
     )
   }
 
-  const selected = plan.steps.find((s) => s.id === selectedId) ?? null
+  // Flows now live per-step. On entry (nothing explicitly selected) auto-open the
+  // first step that carries a flow, so a diagram is visible immediately; if no
+  // step has one, fall through to the pick-a-step prompt.
+  const firstFlowStepId = plan.steps.find((s) => s.graph != null)?.id ?? null
+  const effectiveId = selectedId ?? firstFlowStepId
+  const selected = plan.steps.find((s) => s.id === effectiveId) ?? null
   const statusPill = STATUS_PILL[plan.status]
   const openComments = plan.comments.filter((c) => !c.routed && c.author === "user").length
   const branches = branchCount(plan)
@@ -122,7 +126,7 @@ export function PlanReview({
           style={{ width: list.width }}
           className="flex min-h-0 flex-none flex-col overflow-auto border-r border-hairline bg-panel"
         >
-          <PlanStepList plan={plan} selectedId={selectedId} onSelect={setSelectedId} />
+          <PlanStepList plan={plan} selectedId={effectiveId} onSelect={setSelectedId} />
         </div>
         <ResizeHandle aria-label="Resize step list" onResize={list.adjust} />
 
@@ -131,12 +135,17 @@ export function PlanReview({
             <PlanStepDetail
               plan={plan}
               step={selected}
-              onBack={() => setSelectedId(null)}
               onSelect={setSelectedId}
               onComment={onComment}
             />
           ) : (
-            <PlanFlow plan={plan} selectedId={selectedId} onSelect={setSelectedId} />
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-editor text-center">
+              <MousePointerClick className="size-8 text-line-strong" />
+              <div className="max-w-xs text-[13px] leading-[1.5] text-muted-foreground">
+                Select a step to review its spec, proposed changes, and — where the logic branches —
+                its own control flow.
+              </div>
+            </div>
           )}
         </div>
 

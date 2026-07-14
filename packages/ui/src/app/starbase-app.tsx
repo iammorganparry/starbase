@@ -98,6 +98,12 @@ export interface StarbaseAppProps {
   onCreateSession?: (input: CreateSessionInput) => Promise<Session>
   /** Manually rename a session (double-click its sidebar title) — pins the name. */
   onRenameSession?: (id: string, title: string) => void
+  /** Archive an active session from the sidebar quick-actions (undoable). */
+  onArchiveSession?: (id: string) => void
+  /** Restore an archived session from the sidebar quick-actions. */
+  onRestoreSession?: (id: string) => void
+  /** Permanently delete a session from the sidebar quick-actions (confirms first). */
+  onDeleteSession?: (id: string) => void
   /**
    * List open PRs for a repo (the New Session "From PR" picker). Presence wires
    * the `Blank | From PR` toggle; absent (e.g. GitHub not connected) hides it.
@@ -147,6 +153,9 @@ export function StarbaseApp({
   loadBranches = noBranches,
   onCreateSession,
   onRenameSession,
+  onArchiveSession,
+  onRestoreSession,
+  onDeleteSession,
   loadPrs,
   onCreateSessionFromPr,
   version
@@ -248,6 +257,9 @@ export function StarbaseApp({
         activeSessionId={selected}
         onSelectSession={setSelected}
         onRenameSession={onRenameSession}
+        onArchiveSession={onArchiveSession}
+        onRestoreSession={onRestoreSession}
+        onDeleteSession={onDeleteSession}
         renderConversationPane={renderConversationPane}
         planSessions={planSessions}
         showEmpty={showEmpty}

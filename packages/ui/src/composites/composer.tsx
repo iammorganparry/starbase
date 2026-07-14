@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { Attachment, ModelOption, PermissionMode, Skill } from "@starbase/core"
 import { ImagePlus, Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { modeAccent } from "../tokens.js"
 import { AttachmentThumb } from "../components/attachment-thumb.js"
 import { Button } from "../components/button.js"
 import { ChipMenu, type ChipOption } from "../components/chip-menu.js"
@@ -96,6 +97,7 @@ export function Composer({
   className?: string
 }) {
   const modeOptions = allowPlan ? [...MODE_OPTIONS, PLAN_OPTION] : MODE_OPTIONS
+  const accent = modeAccent[mode]
   const [value, setValue] = useState("")
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -230,6 +232,9 @@ export function Composer({
       )}
 
       <div
+        // Reflects the active HITL mode so the per-mode theming is inspectable
+        // (and assertable in e2e) — the visual accent is derived from it.
+        data-mode={mode}
         onDragOver={(e) => {
           if (paused) return
           e.preventDefault()
@@ -245,9 +250,15 @@ export function Composer({
           void addFiles(files)
         }}
         className={cn(
-          "flex flex-col gap-[11px] rounded-xl border border-line bg-sunken px-[13px] py-2.5 transition-colors",
+          "flex flex-col gap-[11px] rounded-xl border bg-sunken px-[13px] py-2.5 transition-colors",
+          // "Nightlight": the active mode tints the composer border/background and
+          // casts an ambient glow, so the current HITL mode is legible at a glance.
+          accent.border,
+          accent.bg,
+          accent.glow,
           paused && "opacity-70",
-          dragging && "border-cyan/60 bg-cyan/5"
+          // A drag-over always wins visually (cyan), and drops the mode glow.
+          dragging && "border-cyan/60 bg-cyan/5 shadow-none"
         )}
       >
         {mentions.length > 0 && (
@@ -328,7 +339,7 @@ export function Composer({
             onSelect={onSetModel}
             disabled={models.length === 0}
           />
-          <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} />
+          <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} className={accent.chip} />
           <span className="font-mono text-[11px] text-line-strong">/ · @ · paste image</span>
           <div className="flex-1" />
           {paused ? (

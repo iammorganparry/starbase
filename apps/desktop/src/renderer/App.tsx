@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
@@ -12,7 +12,7 @@ import type {
   Session,
   SessionStatus
 } from "@starbase/core"
-import { LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
+import { ConfirmDialog, LoadingScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
 import { PullRequestPane } from "./pull-request-pane.js"
@@ -117,6 +117,15 @@ export function App() {
     const session = await rpc.sessionsRestore(sessionId)
     send({ type: "SESSION_UPDATED", session })
   }
+  // Manual archive from the sidebar quick-actions. The store only models a
+  // merged/closed reason, so a hand-archived session records "closed".
+  const archiveSession = async (sessionId: string) => {
+    const session = await rpc.sessionsArchive(sessionId, "closed")
+    send({ type: "SESSION_UPDATED", session })
+  }
+  // Delete is destructive (removes the worktree) — confirm first. Holds the
+  // session pending confirmation; the ConfirmDialog fires `deleteSession`.
+  const [pendingDelete, setPendingDelete] = useState<Session | null>(null)
   const renameSession = (sessionId: string, title: string) => {
     void rpc.sessionsRename(sessionId, title).then((session) => send({ type: "SESSION_UPDATED", session }))
   }
@@ -271,6 +280,7 @@ export function App() {
   }
 
   return (
+    <>
     <StarbaseApp
       clis={clis}
       sessions={sessions}
@@ -293,6 +303,9 @@ export function App() {
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}
       onRenameSession={renameSession}
+      onArchiveSession={archiveSession}
+      onRestoreSession={restoreSession}
+      onDeleteSession={(id) => setPendingDelete(sessions.find((s) => s.id === id) ?? null)}
       loadPrs={connected ? rpc.githubListPrs : undefined}
       onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
       planSessions={planSessions}
@@ -333,5 +346,21 @@ export function App() {
       )}
       version={__APP_VERSION__}
     />
+    <ConfirmDialog
+      open={pendingDelete !== null}
+      onOpenChange={(open) => !open && setPendingDelete(null)}
+      title="Delete session?"
+      description={
+        pendingDelete
+          ? `“${pendingDelete.title}” and its isolated worktree will be permanently removed. This can't be undone.`
+          : undefined
+      }
+      confirmLabel="Delete"
+      tone="danger"
+      onConfirm={() => {
+        if (pendingDelete) void deleteSession(pendingDelete.id)
+      }}
+    />
+    </>
   )
 }

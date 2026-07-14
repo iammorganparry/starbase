@@ -1,12 +1,14 @@
 import { useState } from "react"
+import type { ReactNode } from "react"
 import type { Session, SessionStatus } from "@starbase/core"
-import { GitMerge } from "lucide-react"
+import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { relativeTime } from "../lib/relative-time.js"
 import { StatusDot } from "../components/status-dot.js"
 import { Badge } from "../components/badge.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { ProviderIcon } from "../components/provider-icon.js"
+import { ContextMenu, type ContextMenuItem } from "../components/context-menu.js"
 import { statusLabel, statusTextClass } from "../tokens.js"
 
 /** A session row for the sidebar list. Active state gets the blue ring. */
@@ -16,6 +18,9 @@ export function SessionRow({
   active = false,
   onSelect,
   onRename,
+  onArchive,
+  onRestore,
+  onDelete,
   className
 }: {
   session: Session
@@ -25,10 +30,76 @@ export function SessionRow({
   onSelect?: (id: string) => void
   /** Manual rename (double-click the title) — pins the auto-generated name. */
   onRename?: (id: string, title: string) => void
+  /** Archive an active session (collapses into the Archived group; undoable). */
+  onArchive?: (id: string) => void
+  /** Restore an archived session back to active. */
+  onRestore?: (id: string) => void
+  /** Permanently delete a session (the caller confirms first). */
+  onDelete?: (id: string) => void
   className?: string
 }) {
   const status = statusOverride ?? session.status
   const [draft, setDraft] = useState<string | null>(null)
+
+  // Quick actions — archive/restore + delete — surfaced on hover and via a
+  // right-click context menu. The action set depends on whether it's archived.
+  const actions: ContextMenuItem[] = [
+    ...(session.archived
+      ? onRestore
+        ? [{ label: "Restore", icon: ArchiveRestore, onSelect: () => onRestore(session.id) }]
+        : []
+      : onArchive
+        ? [{ label: "Archive", icon: Archive, onSelect: () => onArchive(session.id) }]
+        : []),
+    ...(onDelete
+      ? [
+          {
+            label: "Delete",
+            icon: Trash2,
+            tone: "danger" as const,
+            separated: true,
+            onSelect: () => onDelete(session.id)
+          }
+        ]
+      : [])
+  ]
+
+  const hoverActions = actions.length > 0 && (
+    <div
+      className="absolute right-1.5 top-1.5 z-10 hidden items-center gap-0.5 rounded-md bg-panel/90 group-hover:flex"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Names include the title so icon-only buttons are unambiguous for screen
+          readers and never collide with the archived-session banner's controls. */}
+      {session.archived
+        ? onRestore && (
+            <RowAction
+              icon={ArchiveRestore}
+              label={`Restore ${session.title}`}
+              onClick={() => onRestore(session.id)}
+            />
+          )
+        : onArchive && (
+            <RowAction
+              icon={Archive}
+              label={`Archive ${session.title}`}
+              onClick={() => onArchive(session.id)}
+            />
+          )}
+      {onDelete && (
+        <RowAction
+          icon={Trash2}
+          label={`Delete ${session.title}`}
+          danger
+          onClick={() => onDelete(session.id)}
+        />
+      )}
+    </div>
+  )
+
+  // Wrap the row in a right-click menu only when there's at least one action.
+  const withMenu = (node: ReactNode) =>
+    actions.length > 0 ? <ContextMenu items={actions}>{node}</ContextMenu> : node
 
   const commit = () => {
     if (draft === null) return
@@ -41,15 +112,17 @@ export function SessionRow({
   // Merged/Closed pill, and how long ago it was archived. Read-only — no status.
   if (session.archived) {
     const closed = session.archiveReason === "closed"
-    return (
+    return withMenu(
       <div
+        data-testid={`session-row-${session.id}`}
         onClick={() => onSelect?.(session.id)}
         className={cn(
-          "flex cursor-pointer flex-col gap-[6px] rounded-lg border px-2.5 py-2 transition-colors",
+          "group relative flex cursor-pointer flex-col gap-[6px] rounded-lg border px-2.5 py-2 transition-colors",
           active ? "border-blue/[0.32] bg-surface" : "border-transparent hover:bg-surface/40",
           className
         )}
       >
+        {hoverActions}
         <div className="flex items-center gap-2">
           <GitMerge size={13} className={cn("flex-none", closed ? "text-red" : "text-purple")} />
           <span
@@ -75,11 +148,12 @@ export function SessionRow({
 
   const idle = status === "idle"
   const hasMeta = session.prNumber !== null || session.diff.added > 0 || session.diff.removed > 0
-  return (
+  return withMenu(
     <div
+      data-testid={`session-row-${session.id}`}
       onClick={() => onSelect?.(session.id)}
       className={cn(
-        "flex cursor-pointer flex-col gap-[7px] rounded-lg border px-2.5 py-2 transition-colors",
+        "group relative flex cursor-pointer flex-col gap-[7px] rounded-lg border px-2.5 py-2 transition-colors",
         active
           ? "border-blue/[0.32] bg-surface"
           : "border-transparent hover:bg-surface/40",
@@ -87,6 +161,7 @@ export function SessionRow({
         className
       )}
     >
+      {hoverActions}
       <div className="flex items-center gap-2">
         <StatusDot status={status} />
         {draft !== null ? (
@@ -136,5 +211,38 @@ export function SessionRow({
         </div>
       )}
     </div>
+  )
+}
+
+/** A compact icon button in a row's hover action bar. */
+function RowAction({
+  icon: Icon,
+  label,
+  danger = false,
+  onClick
+}: {
+  icon: LucideIcon
+  label: string
+  danger?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
+      className={cn(
+        "flex size-6 items-center justify-center rounded outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        danger
+          ? "text-muted-foreground hover:bg-red/10 hover:text-red"
+          : "text-muted-foreground hover:bg-surface hover:text-text-bright"
+      )}
+    >
+      <Icon size={13} />
+    </button>
   )
 }

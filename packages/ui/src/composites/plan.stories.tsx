@@ -13,7 +13,7 @@ import { PlanStepDetail } from "./plan-step-detail.js"
  * revision, and approve to flip the plan read-only.
  */
 
-const GRAPH: Plan["graph"] = {
+const GRAPH: NonNullable<Plan["steps"][number]["graph"]> = {
   nodes: [
     { id: "n0", label: "HTTP request", kind: "start", detail: null, stepId: null },
     { id: "n1", label: "authMiddleware", kind: "action", detail: "src/auth/session.ts", stepId: "s_03" },
@@ -37,7 +37,6 @@ const GRAPH: Plan["graph"] = {
 const basePlan = (over: Partial<Plan> = {}): Plan => ({
   id: "plan_seed",
   summary: "Refactor auth flow",
-  graph: GRAPH,
   status: "proposed",
   raw: "# Refactor auth flow\n\nMove session token handling into a dedicated `TokenStore`, add a guarded 401-retry refresh path, update the tests, and open a PR.",
   comments: [
@@ -48,7 +47,7 @@ const basePlan = (over: Partial<Plan> = {}): Plan => ({
     { id: "s_01", number: "01", title: "Audit session middleware", intent: "See how sessions read tokens today.", approach: ["Read session.ts", "Trace the token path"], kind: "step", condition: null, parentId: null, dependsOn: [], blocks: [], files: [{ path: "src/auth/memory-store.ts", change: "M", added: 0, removed: 0 }], guards: [], code: null, diff: null, status: "done", flagged: false },
     { id: "s_02", number: "02", title: "Create TokenStore module", intent: "A dedicated store for the token lifecycle.", approach: ["Add token-store.ts", "Expose get / set / refresh"], kind: "step", condition: null, parentId: null, dependsOn: ["01"], blocks: [], files: [{ path: "src/auth/token-store.ts", change: "A", added: 40, removed: 0 }], guards: [{ text: "Store is covered by unit tests", status: "ok" }], code: { lang: "ts", body: "export class TokenStore extends Effect.Service<TokenStore>()(\"TokenStore\", {\n  effect: Effect.gen(function* () {\n    const store = yield* KeyValueStore\n    return {\n      get: (id: string) => store.get(`token:${id}`),\n      refresh: (session: Session) =>\n        Effect.gen(function* () {\n          const next = yield* mintToken(session)\n          yield* store.set(`token:${session.id}`, next)\n          return next\n        })\n    }\n  })\n}) {}" }, diff: { added: 40, removed: 0 }, status: "done", flagged: false },
     { id: "s_03", number: "03", title: "Swap MemoryStore → TokenStore", intent: "Route the session through the new store.", approach: ["Replace the import", "Update the call sites"], kind: "step", condition: null, parentId: null, dependsOn: ["02"], blocks: [], files: [{ path: "src/auth/session.ts", change: "M", added: 8, removed: 3 }], guards: [], code: null, diff: { added: 8, removed: 3 }, status: "current", flagged: false },
-    { id: "s_04", number: "04", title: "Handle token refresh", intent: "Decide the refresh path on expiry.", approach: [], kind: "branch", condition: "token expired?", parentId: null, dependsOn: ["03"], blocks: ["05"], files: [], guards: [], code: null, diff: null, status: "proposed", flagged: false },
+    { id: "s_04", number: "04", title: "Handle token refresh", intent: "Decide the refresh path on expiry.", approach: [], kind: "branch", condition: "token expired?", parentId: null, dependsOn: ["03"], blocks: ["05"], files: [], guards: [], code: null, graph: GRAPH, diff: null, status: "proposed", flagged: false },
     { id: "s_4a", number: "4a", title: "refresh() + retry on 401", intent: "Mint a new token and replay the request once.", approach: ["Detect a 401 from the downstream call", "Call refresh(session) to mint a new token", "Persist the token and replay the request once", "On a second failure, surface the 401"], kind: "branch-arm", condition: null, parentId: "s_04", dependsOn: ["03"], blocks: ["05"], files: [{ path: "src/auth/refresh.ts", change: "M", added: 18, removed: 0 }, { path: "src/auth/retry.ts", change: "A", added: 15, removed: 0 }], guards: [{ text: "New token written before the replay", status: "ok" }, { text: "Refresh fires at most once per request", status: "ok" }, { text: "No refresh loop on repeated 401", status: "warn" }, { text: "Concurrent requests share a single refresh", status: "open" }], code: null, diff: { added: 42, removed: 1 }, status: "revising", flagged: true },
     { id: "s_4b", number: "4b", title: "Proceed with request", intent: "Token still valid — carry on.", approach: [], kind: "branch-arm", condition: null, parentId: "s_04", dependsOn: [], blocks: [], files: [], guards: [], code: null, diff: null, status: "proposed", flagged: false },
     { id: "s_05", number: "05", title: "Update auth tests", intent: "Cover the new store + refresh path.", approach: ["Add token-store tests", "Add a 401-retry test"], kind: "step", condition: null, parentId: null, dependsOn: ["04"], blocks: [], files: [{ path: "src/auth/session.test.ts", change: "M", added: 24, removed: 2 }], guards: [], code: null, diff: { added: 24, removed: 2 }, status: "proposed", flagged: false },
@@ -160,7 +159,7 @@ export const CardRevising: Story = {
 export const StepSpec: Story = {
   render: () => (
     <div className="flex h-[640px] w-[760px] bg-editor">
-      <PlanStepDetail plan={basePlan()} step={basePlan().steps[4]!} onBack={() => {}} onSelect={() => {}} onComment={() => {}} />
+      <PlanStepDetail plan={basePlan()} step={basePlan().steps[3]!} onSelect={() => {}} onComment={() => {}} />
     </div>
   )
 }
