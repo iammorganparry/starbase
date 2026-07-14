@@ -68,6 +68,10 @@ export interface ConversationContext {
    * turn starts.
    */
   readonly resumePlanId: string | null
+  /** Cumulative tokens for the current turn (live analytics), 0 between turns. */
+  readonly tokens: number
+  /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
+  readonly runStartedAt: number | null
 }
 
 /** A prompt held in the queue while the agent is busy (text + any attachments). */
@@ -175,6 +179,9 @@ export const conversationMachine = setup({
         // A fresh turn starts with no sub-agents (any from a prior turn are gone).
         subagents: [],
         resumePlanId: null,
+        // Reset the live analytics for the new run.
+        tokens: 0,
+        runStartedAt: Date.now(),
         messages: [
           ...context.messages,
           userMessage(`u_local_${id}`, event.text, now, images),
@@ -195,6 +202,8 @@ export const conversationMachine = setup({
         pendingImages: [],
         // A fresh run (the plan re-drive) starts with no sub-agents carried over.
         subagents: [],
+        tokens: 0,
+        runStartedAt: Date.now(),
         messages: [
           ...context.messages.map((m) => setPlanStatus(m, event.planId, "approved")),
           userMessage(`u_local_${id}`, "Approved — implement the plan.", now),
@@ -240,6 +249,8 @@ export const conversationMachine = setup({
         pendingImages: next.images,
         subagents: [],
         resumePlanId: null,
+        tokens: 0,
+        runStartedAt: Date.now(),
         messages: [
           ...context.messages,
           userMessage(`u_local_${id}`, next.text, now, next.images),
@@ -254,10 +265,18 @@ export const conversationMachine = setup({
       if (isSubagentEvent(e)) {
         return { subagents: applySubagentEvent(context.subagents, e) }
       }
+      // Live analytics: token count grows monotonically as usage arrives.
+      if (e._tag === "Usage") {
+        return { tokens: Math.max(context.tokens, e.tokens) }
+      }
       const messages = patchLast(context.messages, (last) => applyStreamEvent(last, e))
       // A finished/failed turn has no live sub-agents — clear any that never
-      // reported completion (e.g. an interrupted run), so no tab lingers.
-      if (e._tag === "Done" || e._tag === "Failed") return { messages, subagents: [] }
+      // reported completion (e.g. an interrupted run), so no tab lingers. Stamp
+      // the authoritative final token count and stop the elapsed timer.
+      if (e._tag === "Done") {
+        return { messages, subagents: [], tokens: Math.max(context.tokens, e.tokens), runStartedAt: null }
+      }
+      if (e._tag === "Failed") return { messages, subagents: [], runStartedAt: null }
       // The harness reports its actual model on init — reflect it in the chip.
       return e._tag === "Started" && e.model ? { messages, model: e.model } : { messages }
     }),
@@ -346,7 +365,9 @@ export const conversationMachine = setup({
     pendingImages: [],
     queued: [],
     subagents: [],
-    resumePlanId: null
+    resumePlanId: null,
+    tokens: 0,
+    runStartedAt: null
   }),
   states: {
     loading: {

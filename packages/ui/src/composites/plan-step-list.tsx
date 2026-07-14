@@ -105,6 +105,11 @@ function Row({
       {step.condition && (
         <span className="flex-none font-mono text-[9.5px] text-muted-foreground">{step.condition}</span>
       )}
+      {step.changed && (
+        <span className="flex-none rounded-sm bg-green/15 px-1 font-mono text-[9px] uppercase tracking-wide text-green">
+          updated
+        </span>
+      )}
       {comments > 0 && (
         <span className="flex flex-none items-center gap-1 font-mono text-[9.5px] text-yellow">
           <MessageSquareText className="size-3" />

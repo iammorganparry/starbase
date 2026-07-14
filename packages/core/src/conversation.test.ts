@@ -9,6 +9,7 @@ import {
   Subagent,
   addPlanComment,
   applyStreamEvent,
+  markChangedSteps,
   applySubagentEvent,
   assistantMessage,
   isSubagentEvent,
@@ -470,6 +471,38 @@ describe("Plan flow", () => {
     status: "proposed",
     raw: "# Refactor auth flow",
     ...over
+  })
+
+  it("markChangedSteps flags changed + new steps of a revision, leaving unchanged ones alone", () => {
+    const prior = plan({
+      steps: [step({ number: "01", title: "Audit" }), step({ id: "s2", number: "02", title: "TokenStore" })]
+    })
+    const revised = plan({
+      id: "plan_2",
+      steps: [
+        step({ number: "01", title: "Audit" }), // identical → unchanged
+        step({ id: "s2", number: "02", title: "TokenStore", intent: "now with a test fake" }), // content changed
+        step({ id: "s3", number: "03", title: "Add tests" }) // new step
+      ]
+    })
+    expect(markChangedSteps(prior, revised).steps.map((s) => s.changed)).toStrictEqual([false, true, true])
+  })
+
+  it("a PlanProposed after a prior plan in the same turn marks the revision's changed steps", () => {
+    const first = plan({ id: "plan_1", steps: [step({ number: "01", title: "A" })] })
+    const revised = plan({ id: "plan_2", steps: [step({ number: "01", title: "A (revised)" })] })
+    const msg = [first, revised].reduce(
+      (m, p) => applyStreamEvent(m, { _tag: "PlanProposed", plan: p }),
+      assistantMessage("a0", now)
+    )
+    const planParts = msg.parts.filter((p) => p._tag === "Plan")
+    expect(planParts).toHaveLength(2)
+    // The first plan (no prior) is untouched; the revision marks its changed step.
+    const firstPlan = planParts[0]
+    const revisedPlan = planParts[1]
+    if (firstPlan?._tag !== "Plan" || revisedPlan?._tag !== "Plan") throw new Error("expected plan parts")
+    expect(firstPlan.plan.steps[0]?.changed).toBeUndefined()
+    expect(revisedPlan.plan.steps[0]?.changed).toBe(true)
   })
 
   it("decodes a full Plan content part (branch, files, guards, comments)", () => {

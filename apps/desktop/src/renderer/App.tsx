@@ -20,6 +20,7 @@ import { ReviewPane } from "./review-pane.js"
 import { TerminalDockView } from "./terminal-dock-view.js"
 import { useTerminalDock } from "./use-terminal-dock.js"
 import { useSessionStatuses } from "./session-status.js"
+import { useSessionDiffs } from "./diff-presence.js"
 import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
 import { completedSessionIds } from "./pr-refresh.js"
@@ -50,6 +51,7 @@ export function App() {
   const [state, send] = useMachine(appMachine)
   const { clis, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
+  const liveDiff = useSessionDiffs()
   const planSessions = usePlanSessions()
   const termDock = useTerminalDock()
   const qc = useQueryClient()
@@ -290,6 +292,7 @@ export function App() {
       defaultRepoPath={lastRepoPath}
       ghStatus={ghStatus}
       liveStatus={liveStatus}
+      liveDiff={liveDiff}
       usage={usage}
       onLoadUsage={loadUsage}
       githubConfig={githubConfig}

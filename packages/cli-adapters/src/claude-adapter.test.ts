@@ -167,6 +167,29 @@ describe("streamEventsFor", () => {
     expect(tools.get("tu_1")?.name).toBe("Edit")
   })
 
+  it("emits a live Usage event from the assistant message's cumulative token usage", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "hi" }], usage: { input_tokens: 1200, output_tokens: 340 } }
+      }),
+      new Map()
+    )
+    expect(events).toStrictEqual([{ _tag: "Usage", tokens: 1540 }])
+  })
+
+  it("does not emit Usage for a sub-agent's assistant message (only the main run drives the readout)", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        parent_tool_use_id: "task_1",
+        message: { content: [{ type: "text", text: "child" }], usage: { input_tokens: 50, output_tokens: 10 } }
+      }),
+      new Map()
+    )
+    expect(events.some((e) => e._tag === "Usage")).toBe(false)
+  })
+
   it("completes a tool_use with a diff peek from the remembered edit input", () => {
     const tools = new Map<string, ToolMemo>([
       ["tu_1", { name: "Edit", input: { old_string: "a", new_string: "a\nb" } }]
