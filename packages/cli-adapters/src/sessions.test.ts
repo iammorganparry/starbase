@@ -102,7 +102,7 @@ describe("SessionStore", () => {
     if (exit._tag === "Success") expect(exit.value.branch).toMatch(/^starbase\/session-[a-z0-9]+$/)
   })
 
-  it("auto-names a session with no title (Untitled + autoTitle true + untitled-session slug)", async () => {
+  it("auto-names a session with no title (Untitled + autoTitle true + friendly Docker-style slug)", async () => {
     const exit = await runExit(
       SessionStore.create(input({ title: undefined })).pipe(Effect.provide(services)),
       temp.layer
@@ -111,7 +111,9 @@ describe("SessionStore", () => {
     if (exit._tag !== "Success") return
     expect(exit.value.title).toBe("Untitled session")
     expect(exit.value.autoTitle).toBe(true)
-    expect(exit.value.branch).toMatch(/^starbase\/untitled-session-[a-z0-9]+$/)
+    // A friendly "<adjective>-<name>" worktree/branch, not "untitled-session-<id>".
+    expect(exit.value.branch).toMatch(/^starbase\/[a-z]+-[a-z]+$/)
+    expect(exit.value.branch).not.toContain("untitled")
   })
 
   it("gives two blank sessions DISTINCT branches (no starbase/session collision)", async () => {

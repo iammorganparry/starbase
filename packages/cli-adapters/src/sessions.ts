@@ -10,6 +10,7 @@ import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect, Schema } from "effect"
 import { AppPaths } from "./app-paths.js"
+import { freeCreativeName } from "./creative-name.js"
 import { GhService } from "./gh.js"
 import { GitService } from "./git.js"
 
@@ -97,9 +98,23 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           // "Untitled session"); an explicit title is pinned (autoTitle false).
           const explicit = input.title?.trim() ?? ""
           const title = explicit || UNTITLED_SESSION
-          // Fold the stamp into the slug so the branch/worktree are unique even for
-          // (identical) auto-named sessions — the title is no longer a unique key.
-          const slug = `${kebab(title)}-${stamp}`
+          const existing = yield* readAll()
+          // A titled session slugs from its title (+ a stamp so identical titles
+          // never collide). An UNTITLED session gets a Docker-style friendly name
+          // (e.g. "hopeful-einstein") instead of "untitled-session-<stamp>" — read
+          // nicer as a branch/worktree, and picked to be unique within this repo.
+          let slug: string
+          if (explicit.length > 0) {
+            slug = `${kebab(explicit)}-${stamp}`
+          } else {
+            const usedSlugs = new Set(
+              existing
+                .filter((s) => s.repo === input.repoName && s.worktreePath)
+                .map((s) => s.worktreePath!.split("/").pop()!)
+            )
+            const seed = yield* Effect.sync(() => Date.now())
+            slug = freeCreativeName(usedSlugs, seed, `${kebab(title)}-${stamp}`)
+          }
           const worktree = yield* GitService.createWorktree({
             repoPath: input.repoPath,
             repoName: input.repoName,
@@ -126,7 +141,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             ...(options.defaultMode ? { mode: options.defaultMode } : {}),
             ...(options.defaultModel ? { model: options.defaultModel } : {})
           }
-          const existing = yield* readAll()
+          // `existing` was read above (for the friendly-name collision check).
           yield* writeAll([session, ...existing])
           return session
         })

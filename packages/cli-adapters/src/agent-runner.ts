@@ -36,18 +36,28 @@ import { PlanStore } from "./plan-store.js"
 const EDIT_TOOLS = new Set(["Write", "Edit", "Update", "MultiEdit", "NotebookEdit"])
 
 /**
- * A concise pointer prepended to a run when the session's worktree has saved
- * plan(s). The plan files live in the app's plan library — OUTSIDE the worktree —
- * so an agent scanning its cwd can't find them; this hands it the absolute paths.
- * Phrased so the agent only acts on it when the turn is actually about the plan.
+ * A concise context note prepended to a run when the session's worktree has saved
+ * plan(s). It does two jobs: (1) anchor the agent to its worktree, and (2) hand it
+ * the plan file path(s).
+ *
+ * (1) matters because the plan library lives OUTSIDE the worktree
+ * (`~/starbase/.starbase/…`): without being told its working directory, an agent
+ * that reads the plan file can mistake the plan's parent for the project root and
+ * `cd` out of its worktree (even into the origin checkout) — corrupting the wrong
+ * tree. So we state the worktree path explicitly and forbid treating the plan's
+ * location as the repo. Phrased so the agent only acts on the plan when the turn
+ * is actually about it.
  */
-const planPointerNote = (planFiles: ReadonlyArray<string>): string =>
+const planPointerNote = (worktreePath: string, planFiles: ReadonlyArray<string>): string =>
   [
-    "<saved-plan>",
-    "This session has saved plan(s) on disk (outside the worktree):",
+    "<session-context>",
+    `Working directory (this session's git worktree — the project root): ${worktreePath}`,
+    "Do ALL work here: every file read/edit and shell command runs in this directory. Do NOT `cd` out of it, and never treat any other directory as the project — in particular, the plan file below lives OUTSIDE the project, so its parent directory is NOT the repo.",
+    "",
+    "Saved plan for this session (a read-only reference document, not part of the project):",
     ...planFiles.map((f) => `  - ${f}`),
-    "If this message asks you to implement, continue, or pick up the plan, read the relevant file first — it holds the full plan. Otherwise ignore this note.",
-    "</saved-plan>"
+    "If this message asks you to implement, continue, or pick up the plan, read that file to recall the full plan, then do the work in the working directory above. Otherwise ignore this note.",
+    "</session-context>"
   ].join("\n")
 
 /** A gate awaiting the operator; the `Deferred` unblocks the paused agent. */
@@ -417,7 +427,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             repo: session?.repo ?? "",
             branch: session?.branch ?? "",
             cwd: worktreePath,
-            prompt: savedPlans.length > 0 ? `${planPointerNote(savedPlans)}\n\n${text}` : text,
+            prompt: savedPlans.length > 0 ? `${planPointerNote(worktreePath, savedPlans)}\n\n${text}` : text,
             images,
             binPath,
             mode,

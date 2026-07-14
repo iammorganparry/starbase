@@ -692,8 +692,11 @@ describe("AgentRunner plan library", () => {
         yield* runner.prompt(SESSION, "please implement the plan").pipe(Stream.runDrain)
       }).pipe(Effect.provide(base))
     )
-    expect(captured.prompt).toContain("<saved-plan>")
-    expect(captured.prompt).toContain(planFile) // the absolute path is handed over
+    expect(captured.prompt).toContain("<session-context>")
+    expect(captured.prompt).toContain(planFile) // the absolute plan path is handed over
+    // Anchors the agent to its worktree so it doesn't chase the plan file's
+    // (out-of-tree) location and cd out of the project.
+    expect(captured.prompt).toContain(WT)
     // The user's actual text is preserved at the end (the note is only a prefix).
     expect(captured.prompt?.endsWith("please implement the plan")).toBe(true)
   })
