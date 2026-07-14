@@ -3,7 +3,7 @@ import { join } from "node:path"
 import type { GateDecision, Message, PermissionMode, Session, StreamEvent } from "@starbase/core"
 import { Effect, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { CliAdapter, makeScriptedCliAdapter } from "./adapter.js"
+import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape } from "./adapter.js"
 import { AgentRunner } from "./agent-runner.js"
 import { DiscoveryService } from "./discovery.js"
@@ -414,6 +414,52 @@ describe("AgentRunner plan mode", () => {
       }).pipe(Effect.provide(base()))
     )
     expect(mode).toBe("accept-edits")
+  })
+
+  it("re-drives execution for a stale plan (no live run): switches out of plan mode and runs", async () => {
+    seedSession("plan")
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        // Seed a transcript holding the (now orphaned) plan, as after a restart.
+        const plan = scriptedPlan(SESSION, 1)
+        const msg: Message = {
+          id: "a_seed",
+          role: "assistant",
+          parts: [{ _tag: "Plan", plan }],
+          streaming: false,
+          createdAt: "2026-07-13T00:00:00.000Z"
+        }
+        yield* TranscriptStore.append(SESSION, msg)
+        const events: Array<StreamEvent> = []
+        yield* runner.resumePlan(SESSION, plan.id).pipe(
+          Stream.tap((ev) =>
+            ev._tag === "GateRequested" ? runner.decideGate(SESSION, ev.gate.id, "allow") : Effect.void
+          ),
+          Stream.runForEach((ev) => Effect.sync(() => events.push(ev)))
+        )
+        const mode = (yield* SessionStore.get(SESSION)).mode
+        return { events, mode }
+      }).pipe(Effect.provide(base()))
+    )
+    // A fresh run streamed to completion — proving the session left plan mode (else
+    // the scripted adapter would re-enter the plan branch and park forever).
+    expect(result.events.some((e) => e._tag === "Started")).toBe(true)
+    expect(result.events.some((e) => e._tag === "Done")).toBe(true)
+    expect(result.mode).not.toBe("plan")
+  })
+
+  it("resumePlan streams nothing for an unknown plan id", async () => {
+    seedSession("plan")
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        const out: Array<StreamEvent> = []
+        yield* runner.resumePlan(SESSION, "nope").pipe(Stream.runForEach((ev) => Effect.sync(() => out.push(ev))))
+        return out
+      }).pipe(Effect.provide(base()))
+    )
+    expect(events).toHaveLength(0)
   })
 
   it("routes an open comment as a revision, then executes the revised plan", async () => {

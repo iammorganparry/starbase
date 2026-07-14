@@ -13,6 +13,7 @@ import {
   assistantMessage,
   isSubagentEvent,
   latestPlan,
+  resumePlanPrompt,
   pendingPlan,
   pendingQuestion,
   setGateStatus,
@@ -536,6 +537,17 @@ describe("Plan flow", () => {
     // latestPlan keeps the plan visible after approval (the Plan Review tab).
     expect(latestPlan([approved])?.id).toBe("plan_1")
     expect(latestPlan([approved])?.status).toBe("approved")
+  })
+
+  it("resumePlanPrompt embeds the plan and instructs implementation (for a post-restart re-drive)", () => {
+    const p = plan()
+    const prompt = resumePlanPrompt(p)
+    expect(prompt).toContain(p.summary)
+    expect(prompt).toMatch(/implement it now/i)
+    expect(prompt.toLowerCase()).toContain("do not re-plan")
+    // Includes the step titles so the resumed (memory-less) harness has the plan.
+    expect(prompt).toContain(p.steps[0]!.title)
+    if (p.raw) expect(prompt).toContain(p.raw)
   })
 
   it("addPlanComment appends the comment and flags its step", () => {

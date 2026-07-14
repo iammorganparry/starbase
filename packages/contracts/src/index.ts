@@ -235,6 +235,17 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String, planId: Schema.String }
   }),
 
+  /**
+   * Approve a plan whose original run is gone (stale, e.g. after a restart):
+   * re-drive execution as a fresh run (restore the exec mode + prompt with the
+   * plan embedded) and stream its events, like `Agent.run`.
+   */
+  Rpc.make("Agent.resumePlan", {
+    success: StreamEvent,
+    stream: true,
+    payload: { sessionId: Schema.String, planId: Schema.String }
+  }),
+
   /** Change a session's harness model (used on the next turn). */
   Rpc.make("Agent.setModel", {
     payload: { sessionId: Schema.String, model: Schema.String }

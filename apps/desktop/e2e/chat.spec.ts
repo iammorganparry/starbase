@@ -429,6 +429,77 @@ test("an orphaned pending gate settles on load (its dead buttons disappear)", as
   await expect(window.getByRole("button", { name: "Deny" })).toHaveCount(0)
 })
 
+test("a stale plan (reopened app) can be approved to re-drive execution", async ({ launchApp }) => {
+  // A transcript persisted with a still-proposed plan — as after quitting the app
+  // mid-plan. The live run that held the approval is gone, so on load the plan
+  // settles to "stale" and must be re-approved via a fresh run.
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    transcripts: {
+      s_seeded: [
+        {
+          id: "a_plan",
+          role: "assistant",
+          streaming: false,
+          createdAt: "2026-07-11T00:00:00.000Z",
+          parts: [
+            { _tag: "Text", text: "Here's my plan." },
+            {
+              _tag: "Plan",
+              plan: {
+                id: "plan_s_seeded_1",
+                summary: "Refactor the auth flow",
+                graph: null,
+                steps: [
+                  {
+                    id: "s_01",
+                    number: "01",
+                    title: "Add a TokenStore",
+                    intent: "Centralise token handling",
+                    approach: [],
+                    kind: "step",
+                    condition: null,
+                    parentId: null,
+                    dependsOn: [],
+                    blocks: [],
+                    files: [],
+                    guards: [],
+                    code: null,
+                    diff: null,
+                    status: "proposed",
+                    flagged: false
+                  }
+                ],
+                comments: [],
+                status: "proposed",
+                raw: "# Refactor the auth flow"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  })
+
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  // The seeded session auto-selects; a plan present → the Plan Review tab shows.
+  await window.getByText("Plan Review").first().click()
+  await expect(window.getByText("Refactor the auth flow").first()).toBeVisible()
+
+  // On load the orphaned plan is "stale" → not the normal Approve, but a distinct
+  // re-drive affordance.
+  await expect(window.getByText(/reopened — approve to resume/i)).toBeVisible()
+  await window.getByRole("button", { name: /Approve & implement/ }).click()
+
+  // Approving re-drives a fresh run: the plan flips out of stale (Execution
+  // started) and the resume turn lands in the conversation.
+  await expect(window.getByText(/Execution started/i)).toBeVisible({ timeout: 15_000 })
+  await window.getByText("Conversation").first().click()
+  await expect(window.getByText("Approved — implement the plan.")).toBeVisible({ timeout: 15_000 })
+})
+
 test("an archived session shows in the Archived group, read-only, and restores", async ({
   launchApp
 }) => {

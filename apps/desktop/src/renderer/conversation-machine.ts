@@ -62,6 +62,12 @@ export interface ConversationContext {
    * when an agent finishes; never persisted (transcripts.json holds the main turn).
    */
   readonly subagents: ReadonlyArray<Subagent>
+  /**
+   * When set, the running turn is a stale-plan re-drive (`Agent.resumePlan`) for
+   * this plan id rather than a normal `Agent.run`; cleared when the next normal
+   * turn starts.
+   */
+  readonly resumePlanId: string | null
 }
 
 /** A prompt held in the queue while the agent is busy (text + any attachments). */
@@ -83,6 +89,7 @@ type ConversationEvent =
   | { type: "COMMENT_PLAN_STEP"; planId: string; stepId: string; body: string }
   | { type: "REVISE_PLAN"; planId: string }
   | { type: "APPROVE_PLAN"; planId: string }
+  | { type: "RESUME_PLAN"; planId: string }
   | { type: "REFRESH_DIFF" }
   | { type: "STOP" }
 
@@ -121,16 +128,14 @@ const refreshDiff = fromPromise<string, { session: Session }>(({ input }) =>
 /** Subscribe to the agent's event stream, forwarding each event into the machine. */
 const agentStream = fromCallback<
   ConversationEvent,
-  { sessionId: string; text: string; images: ReadonlyArray<Attachment> }
+  { sessionId: string; text: string; images: ReadonlyArray<Attachment>; resumePlanId: string | null }
 >(({ sendBack, input }) => {
-  const cancel = rpc.agentRun(
-    input.sessionId,
-    input.text,
-    (event) => {
-      sendBack({ type: "STREAM_EVENT", event })
-    },
-    input.images
-  )
+  const onEvent = (event: StreamEvent) => sendBack({ type: "STREAM_EVENT", event })
+  // A stale-plan approval re-drives execution via `resumePlan` (which restores the
+  // exec mode and prompts with the plan embedded); a normal turn uses `run`.
+  const cancel = input.resumePlanId
+    ? rpc.agentResumePlan(input.sessionId, input.resumePlanId, onEvent)
+    : rpc.agentRun(input.sessionId, input.text, onEvent, input.images)
   return cancel
 })
 
@@ -169,9 +174,30 @@ export const conversationMachine = setup({
         pendingImages: images,
         // A fresh turn starts with no sub-agents (any from a prior turn are gone).
         subagents: [],
+        resumePlanId: null,
         messages: [
           ...context.messages,
           userMessage(`u_local_${id}`, event.text, now, images),
+          assistantMessage(`a_local_${id}`, now)
+        ]
+      }
+    }),
+    // Start a stale-plan re-drive: mark the plan approved, append a human-readable
+    // turn, and flag the run so `agentStream` calls `resumePlan` (which restores
+    // the exec mode + prompts the agent with the plan embedded).
+    startResumePlan: assign(({ context, event }) => {
+      if (event.type !== "RESUME_PLAN") return {}
+      const now = new Date().toISOString()
+      const id = stamp()
+      return {
+        resumePlanId: event.planId,
+        pendingText: "",
+        pendingImages: [],
+        // A fresh run (the plan re-drive) starts with no sub-agents carried over.
+        subagents: [],
+        messages: [
+          ...context.messages.map((m) => setPlanStatus(m, event.planId, "approved")),
+          userMessage(`u_local_${id}`, "Approved — implement the plan.", now),
           assistantMessage(`a_local_${id}`, now)
         ]
       }
@@ -213,6 +239,7 @@ export const conversationMachine = setup({
         pendingText: next.text,
         pendingImages: next.images,
         subagents: [],
+        resumePlanId: null,
         messages: [
           ...context.messages,
           userMessage(`u_local_${id}`, next.text, now, next.images),
@@ -318,7 +345,8 @@ export const conversationMachine = setup({
     pendingText: "",
     pendingImages: [],
     queued: [],
-    subagents: []
+    subagents: [],
+    resumePlanId: null
   }),
   states: {
     loading: {
@@ -341,6 +369,8 @@ export const conversationMachine = setup({
     awaitingInput: {
       on: {
         SEND: { target: "running", actions: "appendTurns" },
+        // Approve a stale plan (its original run is gone) → re-drive execution.
+        RESUME_PLAN: { target: "running", actions: "startResumePlan" },
         SET_MODE: { actions: "persistMode" },
         SET_MODEL: { actions: "persistModel" },
         // Re-read the worktree diff on demand (e.g. after a revert from the rail).
@@ -353,7 +383,8 @@ export const conversationMachine = setup({
         input: ({ context }) => ({
           sessionId: context.session.id,
           text: context.pendingText,
-          images: context.pendingImages
+          images: context.pendingImages,
+          resumePlanId: context.resumePlanId
         })
       },
       on: {

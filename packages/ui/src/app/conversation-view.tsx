@@ -59,6 +59,8 @@ export interface ConversationViewProps {
   onAnswerQuestion?: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
   /** Approve a proposed plan inline (from a transcript plan card). */
   onApprovePlan?: (planId: string) => void
+  /** Approve a stale plan inline (re-drives execution after a restart). */
+  onResumePlan?: (planId: string) => void
   /** Open the full Plan Review view (from a transcript plan card). */
   onOpenPlanReview?: () => void
   /** Revert / comment interactions for the Changes rail (worktree diff). */
@@ -115,6 +117,7 @@ export function ConversationView({
   question,
   onAnswerQuestion,
   onApprovePlan,
+  onResumePlan,
   onOpenPlanReview,
   changeActions,
   archived
@@ -235,6 +238,7 @@ export function ConversationView({
                       cli={cli}
                       onDecideGate={onDecideGate}
                       onApprovePlan={onApprovePlan}
+                      onResumePlan={onResumePlan}
                       onOpenPlanReview={onOpenPlanReview}
                     />
                   </div>

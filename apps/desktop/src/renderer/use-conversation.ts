@@ -59,6 +59,7 @@ export interface Conversation {
   readonly commentPlanStep: (planId: string, stepId: string, body: string) => void
   readonly revisePlan: (planId: string) => void
   readonly approvePlan: (planId: string) => void
+  readonly resumePlan: (planId: string) => void
   /** Live status for the sidebar/tab bar, or null when idle (use persisted). */
   readonly status: SessionStatus | null
   readonly sendPrompt: (text: string, images?: ReadonlyArray<Attachment>) => void
@@ -114,6 +115,7 @@ export function useConversation(session: Session): Conversation {
     commentPlanStep: (planId, stepId, body) => send({ type: "COMMENT_PLAN_STEP", planId, stepId, body }),
     revisePlan: (planId) => send({ type: "REVISE_PLAN", planId }),
     approvePlan: (planId) => send({ type: "APPROVE_PLAN", planId }),
+    resumePlan: (planId) => send({ type: "RESUME_PLAN", planId }),
     status,
     sendPrompt: (text, images) => send({ type: "SEND", text, images }),
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),

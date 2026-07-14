@@ -17,17 +17,21 @@ const branchCount = (plan: Plan): number => plan.steps.filter((s) => s.kind === 
 export function PlanCard({
   plan,
   onApprove,
+  onResume,
   onOpenReview,
   className
 }: {
   plan: Plan
   onApprove?: () => void
+  /** Approve a STALE plan (its original run is gone) — re-drives execution. */
+  onResume?: () => void
   /** Open the full Plan Review view (step drill-in, comments, revise). */
   onOpenReview?: () => void
   className?: string
 }) {
   const branches = branchCount(plan)
   const pending = plan.status === "proposed" || plan.status === "revising"
+  const stale = plan.status === "stale"
   const topSteps = plan.steps.filter((s) => s.kind !== "branch-arm")
 
   return (
@@ -78,6 +82,11 @@ export function PlanCard({
         {pending && (
           <Button size="sm" onClick={onApprove}>
             Approve plan &amp; start
+          </Button>
+        )}
+        {stale && onResume && (
+          <Button size="sm" onClick={onResume}>
+            Approve &amp; implement
           </Button>
         )}
       </div>

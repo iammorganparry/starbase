@@ -70,6 +70,7 @@ export function ConversationPane({
         plan={convo.plan}
         patch={convo.patch}
         onApprove={() => planId && convo.approvePlan(planId)}
+        onResume={() => planId && convo.resumePlan(planId)}
         onRevise={() => planId && convo.revisePlan(planId)}
         onComment={(stepId, body) => planId && convo.commentPlanStep(planId, stepId, body)}
       />
@@ -119,6 +120,7 @@ export function ConversationPane({
           question={convo.question}
           onAnswerQuestion={convo.answerQuestion}
           onApprovePlan={(id) => convo.approvePlan(id)}
+          onResumePlan={(id) => convo.resumePlan(id)}
           onOpenPlanReview={onOpenPlanReview}
           changeActions={changeActions}
           archived={
