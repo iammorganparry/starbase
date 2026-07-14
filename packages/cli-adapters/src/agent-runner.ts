@@ -30,9 +30,25 @@ import { readDefaultMode } from "./default-mode.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
 import { TranscriptStore } from "./transcripts.js"
+import { PlanStore } from "./plan-store.js"
 
 /** Tools that write to disk — a successful one advances the matching plan step. */
 const EDIT_TOOLS = new Set(["Write", "Edit", "Update", "MultiEdit", "NotebookEdit"])
+
+/**
+ * A concise pointer prepended to a run when the session's worktree has saved
+ * plan(s). The plan files live in the app's plan library — OUTSIDE the worktree —
+ * so an agent scanning its cwd can't find them; this hands it the absolute paths.
+ * Phrased so the agent only acts on it when the turn is actually about the plan.
+ */
+const planPointerNote = (planFiles: ReadonlyArray<string>): string =>
+  [
+    "<saved-plan>",
+    "This session has saved plan(s) on disk (outside the worktree):",
+    ...planFiles.map((f) => `  - ${f}`),
+    "If this message asks you to implement, continue, or pick up the plan, read the relevant file first — it holds the full plan. Otherwise ignore this note.",
+    "</saved-plan>"
+  ].join("\n")
 
 /** A gate awaiting the operator; the `Deferred` unblocks the paused agent. */
 interface PendingGate {
@@ -135,6 +151,7 @@ type PromptEnv =
   | CliAdapter
   | SessionStore
   | TranscriptStore
+  | PlanStore
   | DiscoveryService
   | CommandExecutor.CommandExecutor
   | FileSystem.FileSystem
@@ -378,12 +395,23 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           const binPath =
             (yield* DiscoveryService.list().pipe(Effect.orElseSucceed(() => [])))
               .find((c) => c.kind === cli)?.binPath ?? null
+          // The agent always runs in the session's isolated worktree. (Every
+          // session has one; the fallback keeps the type total and, since the
+          // adapter maps "" → the process cwd, an empty value is never silently
+          // "correct" — it would fail loudly on a missing worktree.)
+          const worktreePath = session?.worktreePath ?? ""
+          // Saved plans for this worktree, so a "implement/continue the plan" turn
+          // can be pointed at the plan file on disk (best-effort — never blocks).
+          const savedPlans =
+            worktreePath.length > 0
+              ? yield* PlanStore.list(worktreePath).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
+              : []
           const spec: SessionSpec = {
             cli,
             repo: session?.repo ?? "",
             branch: session?.branch ?? "",
-            cwd: session?.worktreePath ?? "",
-            prompt: text,
+            cwd: worktreePath,
+            prompt: savedPlans.length > 0 ? `${planPointerNote(savedPlans)}\n\n${text}` : text,
             images,
             binPath,
             mode,
@@ -393,7 +421,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Capture the persistence services so `emit`/`run` handed to the
           // adapter have no residual requirements (R = never).
           const env = yield* Effect.context<
-            TranscriptStore | SessionStore | FileSystem.FileSystem | Path.Path | AppPaths
+            TranscriptStore | SessionStore | PlanStore | FileSystem.FileSystem | Path.Path | AppPaths
           >()
 
           const now = yield* Effect.sync(() => new Date().toISOString())
@@ -553,6 +581,12 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               const deferred = yield* Deferred.make<PlanDecision>()
               yield* Ref.update(plans, (m) => new Map(m).set(plan.id, { sessionId, deferred }))
               yield* emit({ _tag: "PlanProposed", plan })
+              // Persist the plan to the session's plan library so a later turn or
+              // session can pick it back up — the next run points the agent at it.
+              // Best-effort: a write failure never blocks plan review.
+              if (worktreePath.length > 0) {
+                yield* PlanStore.write(worktreePath, plan).pipe(Effect.provide(env), Effect.ignore)
+              }
               const decision = yield* Deferred.await(deferred)
               yield* Ref.update(plans, (m) => {
                 const nextMap = new Map(m)

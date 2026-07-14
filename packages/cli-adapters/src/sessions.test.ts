@@ -278,7 +278,8 @@ describe("SessionStore", () => {
     expect(s.branch).toBe("chore/bump") // the live branch after `gh pr checkout`
     expect(s.baseBranch).toBe("main")
     expect(s.title).toBe("Fix Auth Refresh")
-    expect(s.worktreePath).toBe(join(temp.root, "worktrees", "trigify-app", "fix-auth-refresh"))
+    // The slug carries the PR number so same-titled PRs never collide.
+    expect(s.worktreePath).toBe(join(temp.root, "worktrees", "trigify-app", "fix-auth-refresh-482"))
 
     // Sequence: detached worktree → gh pr checkout → resolve the head branch.
     const detach = calls.findIndex((c) => c.includes("worktree add --detach"))
@@ -294,6 +295,27 @@ describe("SessionStore", () => {
       temp.layer
     )
     expect(reread._tag === "Success" && reread.value.prNumber).toBe(482)
+  })
+
+  it("createFromPr gives same-titled PRs DISTINCT worktrees (slug carries the PR number)", async () => {
+    const env = Layer.mergeAll(temp.layer, fakeCommandExecutor(prExecutor("chore/bump", [])))
+    // Two different PRs that happen to share a title.
+    const first = await runExit(
+      SessionStore.createFromPr(prInput({ number: 101, title: "Update deps" })).pipe(Effect.provide(prServices)),
+      env
+    )
+    const second = await runExit(
+      SessionStore.createFromPr(prInput({ number: 202, title: "Update deps" })).pipe(Effect.provide(prServices)),
+      env
+    )
+    expect(first._tag).toBe("Success")
+    expect(second._tag).toBe("Success")
+    if (first._tag !== "Success" || second._tag !== "Success") return
+    // Distinct worktree paths + ids — the second PR is NOT refused as a duplicate.
+    expect(first.value.worktreePath).toBe(join(temp.root, "worktrees", "trigify-app", "update-deps-101"))
+    expect(second.value.worktreePath).toBe(join(temp.root, "worktrees", "trigify-app", "update-deps-202"))
+    expect(first.value.worktreePath).not.toBe(second.value.worktreePath)
+    expect(first.value.id).not.toBe(second.value.id)
   })
 
   it("createFromPr falls back to the PR head ref when HEAD is detached", async () => {

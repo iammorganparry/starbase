@@ -17,6 +17,12 @@ export interface AppPathsShape {
   readonly worktreesDir: string
   /** `~/starbase/transcripts` — parent of every session's persisted transcript. */
   readonly transcriptsDir: string
+  /**
+   * `~/starbase/.starbase` — the plan library. Each session's plans live under
+   * `<plansDir>/<worktree-slug>/<plan-name>.md`, so a plan can be picked back up
+   * (read from disk) in a later turn or session on the same worktree.
+   */
+  readonly plansDir: string
 }
 
 export class AppPaths extends Context.Tag("@starbase/AppPaths")<AppPaths, AppPathsShape>() {}
