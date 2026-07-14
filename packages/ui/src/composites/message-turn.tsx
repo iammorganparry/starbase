@@ -109,12 +109,14 @@ function PartView({
   markdown,
   onDecideGate,
   onApprovePlan,
+  onResumePlan,
   onOpenPlanReview
 }: {
   part: ContentPart
   markdown: boolean
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onApprovePlan?: (planId: string) => void
+  onResumePlan?: (planId: string) => void
   onOpenPlanReview?: () => void
 }) {
   switch (part._tag) {
@@ -162,6 +164,7 @@ function PartView({
         <PlanCard
           plan={part.plan}
           onApprove={() => onApprovePlan?.(part.plan.id)}
+          onResume={() => onResumePlan?.(part.plan.id)}
           onOpenReview={onOpenPlanReview}
         />
       )
@@ -179,6 +182,7 @@ function renderParts(
   handlers: {
     onDecideGate?: (gateId: string, decision: GateDecision) => void
     onApprovePlan?: (planId: string) => void
+    onResumePlan?: (planId: string) => void
     onOpenPlanReview?: () => void
   }
 ): ReactNode[] {
@@ -236,6 +240,7 @@ export function MessageTurn({
   cli = "claude",
   onDecideGate,
   onApprovePlan,
+  onResumePlan,
   onOpenPlanReview
 }: {
   message: Message
@@ -244,6 +249,8 @@ export function MessageTurn({
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   /** Approve a proposed plan inline (from the transcript's plan card). */
   onApprovePlan?: (planId: string) => void
+  /** Approve a stale plan inline (re-drives execution after a restart). */
+  onResumePlan?: (planId: string) => void
   /** Open the full Plan Review view from the inline plan card. */
   onOpenPlanReview?: () => void
 }) {
@@ -258,7 +265,7 @@ export function MessageTurn({
       ) : (
         <Eyebrow>You</Eyebrow>
       )}
-      {renderParts(message.parts, isAssistant, { onDecideGate, onApprovePlan, onOpenPlanReview })}
+      {renderParts(message.parts, isAssistant, { onDecideGate, onApprovePlan, onResumePlan, onOpenPlanReview })}
       {/* Signal the agent is still working (before/while content streams in). */}
       {isAssistant && message.streaming && <Working />}
     </div>

@@ -632,3 +632,24 @@ export const latestPlan = (messages: ReadonlyArray<Message>): Plan | null => {
   }
   return null
 }
+
+/**
+ * The prompt that re-drives an approved plan as a fresh execution turn. Used when
+ * approving a plan whose original run is gone (e.g. after an app restart): the
+ * resumed harness has no memory of the planning conversation, so the plan is
+ * embedded here in full. Deterministic given the plan.
+ */
+export const resumePlanPrompt = (plan: Plan): string => {
+  const steps = plan.steps
+    .filter((s) => s.kind !== "branch-arm")
+    .map((s) => `${s.number}. ${s.title}${s.intent ? ` — ${s.intent}` : ""}`)
+    .join("\n")
+  return [
+    "The plan below was approved. Implement it now — make the actual code changes and run what's needed.",
+    "Do NOT re-plan or ask to enter plan mode again; proceed with the implementation.",
+    "",
+    `Plan: ${plan.summary}`,
+    ...(steps ? ["", "Steps:", steps] : []),
+    ...(plan.raw ? ["", "Full plan:", plan.raw] : [])
+  ].join("\n")
+}

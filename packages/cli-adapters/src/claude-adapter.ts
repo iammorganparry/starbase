@@ -393,7 +393,16 @@ export const runClaude = (
             const plan = parsePlan(strOf(input.plan) ?? "", `plan_${sessionId}_${planCount}`)
             const decision = await runP(ctx.proposePlan(plan))
             if (decision._tag === "Approve") {
-              await planQuery?.setPermissionMode(mapPermissionMode(decision.mode))
+              // Exit plan mode via "default" — always settable mid-run (unlike
+              // "bypassPermissions", which the SDK rejects). Our own canUseTool
+              // (below) then enforces the session's restored HITL mode, so an
+              // "auto" approval still runs ungated. Best-effort: never let a
+              // permission-mode hiccup block the approval.
+              try {
+                await planQuery?.setPermissionMode("default")
+              } catch {
+                /* ignore — the tool is still allowed and canUseTool governs gating */
+              }
               return { behavior: "allow", updatedInput: input }
             }
             return {
