@@ -9,6 +9,7 @@ import {
   Subagent,
   addPlanComment,
   applyStreamEvent,
+  babysitPrompt,
   markChangedSteps,
   applySubagentEvent,
   assistantMessage,
@@ -581,6 +582,24 @@ describe("Plan flow", () => {
     // Includes the step titles so the resumed (memory-less) harness has the plan.
     expect(prompt).toContain(p.steps[0]!.title)
     if (p.raw) expect(prompt).toContain(p.raw)
+  })
+
+  it("babysitPrompt embeds the PR number + base and locks the loop contract", () => {
+    const prompt = babysitPrompt(123, "develop")
+    // PR number and base branch are threaded into the instructions + gh commands.
+    expect(prompt).toContain("#123")
+    expect(prompt).toContain("gh pr checks 123")
+    expect(prompt).toContain("develop")
+    // Core loop verbs from the babysit-pr skill.
+    expect(prompt).toContain("gh pr checks 123 --watch")
+    expect(prompt.toLowerCase()).toContain("root cause")
+    expect(prompt.toLowerCase()).toContain("triage")
+    expect(prompt.toLowerCase()).toContain("mergeable")
+    // Must NOT auto-merge; must end with a call-to-action to the user.
+    expect(prompt.toLowerCase()).toContain("do not merge")
+    expect(prompt).toMatch(/ready to merge/i)
+    // Deterministic given the inputs.
+    expect(babysitPrompt(123, "develop")).toBe(prompt)
   })
 
   it("addPlanComment appends the comment and flags its step", () => {

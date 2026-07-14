@@ -818,3 +818,57 @@ export const resumePlanPrompt = (plan: Plan): string => {
     ...(plan.raw ? ["", "Full plan:", plan.raw] : [])
   ].join("\n")
 }
+
+/**
+ * The prompt that auto-drives ("babysits") a freshly-opened pull request to green.
+ * Injected as a normal turn the moment the app links a PR to a session, so the
+ * agent shepherds the PR to mergeable without the user hand-routing each piece of
+ * CI/review feedback. Distilled from the user's `babysit-pr` skill because the
+ * in-session SDK agent isn't given `settingSources` and so can't load the skill
+ * itself — the loop lives inline here. Harness-agnostic (pure `gh`/`git`).
+ *
+ * It deliberately does NOT merge: once the PR is green + mergeable it stops and
+ * ends with a clear call-to-action so the user merges from the Pull Request tab.
+ * Deterministic given (prNumber, base).
+ */
+export const babysitPrompt = (prNumber: number, base: string): string =>
+  [
+    `Take ownership of pull request #${prNumber} (opened against \`${base}\`) and shepherd it`,
+    "all the way to \"all CI checks green + all review feedback resolved + mergeable\", running",
+    "autonomously and only surfacing to me what genuinely needs a human decision.",
+    "",
+    `First, run \`gh pr view ${prNumber} --json state,mergeable,mergeStateStatus\`. If the PR is`,
+    "already merged or closed, stop immediately and say so — do nothing else.",
+    "",
+    "Operating principles:",
+    "- Fix root causes, never the scoreboard. Make code/tests genuinely correct; never edit a",
+    "  test to pass, weaken an assertion, or rerun-until-green to mask a real failure.",
+    "- Triage before fixing. For every red check, decide PR-caused vs unrelated (pre-existing /",
+    "  flaky / infra) BEFORE editing anything, and flag the unrelated ones to me instead of",
+    "  silently fixing or hiding them.",
+    "- Question feedback, then act. Reviewer suggestions aren't automatically right — Address /",
+    "  Decline / Clarify each, concisely, with reasons. Follow this repo's conventions (CLAUDE.md).",
+    "",
+    "The loop — repeat until the exit criteria are met:",
+    `1. Snapshot: \`gh pr checks ${prNumber}\` and \`gh pr view ${prNumber} --json`,
+    "   number,title,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,reviews,comments\`.",
+    "2. Build one worklist across all failing checks and open review threads, each tagged",
+    "   PR-caused or unrelated. Reproduce failures locally; the decisive test for \"unrelated\" is",
+    `   whether it also fails on \`origin/${base}\`.`,
+    "3. Fix the PR-caused items with minimal, root-cause edits. Run the repo's local verify gate",
+    "   (typecheck + lint + the relevant tests) before pushing.",
+    "4. `git push` once per pass (this re-triggers CI). Post `✅ Addressed in <sha>` on the threads",
+    "   you addressed and resolve them; leave Declined/Clarify threads open with your reasoning.",
+    `5. Wait for CI to settle with \`gh pr checks ${prNumber} --watch\`, then go back to step 1.`,
+    "",
+    "Exit criteria — all of:",
+    "- Every gating CI check is green (infra/deploy checks green or explicitly flagged as unrelated).",
+    "- Every review thread is resolved or has a posted Decline/Clarify reasoning; no open",
+    "  CHANGES_REQUESTED.",
+    "- The PR reports `mergeable`.",
+    "",
+    "IMPORTANT: do NOT merge the PR yourself. Once it is green and mergeable, STOP and end your",
+    `reply with a clear call-to-action: \"✅ PR #${prNumber} is green and ready to merge — merge it`,
+    "from the Pull Request tab whenever you're happy.\" If something is still blocked and needs my",
+    "decision, stop and say exactly what's blocking and why."
+  ].join("\n")
