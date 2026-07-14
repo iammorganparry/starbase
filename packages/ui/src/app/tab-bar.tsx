@@ -43,6 +43,7 @@ export function TabBar({
   active,
   onChange,
   prNumber = null,
+  changes = null,
   status
 }: {
   tabs: ReadonlyArray<TabKey>
@@ -50,6 +51,8 @@ export function TabBar({
   onChange: (key: TabKey) => void
   /** Linked PR number for the active session (badges the Pull Request tab). */
   prNumber?: number | null
+  /** Live worktree diff totals, shown as `+N −N` on the Changes tab. */
+  changes?: { added: number; removed: number } | null
   status?: { label: string; tone: "yellow" | "blue" | "green" }
 }) {
   return (
@@ -84,6 +87,12 @@ export function TabBar({
                 <Badge tone="count" size="xs">
                   #{prNumber}
                 </Badge>
+              )}
+              {key === "changes" && changes && changes.added + changes.removed > 0 && (
+                <span className="flex items-center gap-1 font-mono text-[10.5px] tabular-nums">
+                  <span className="text-green">+{changes.added}</span>
+                  <span className="text-red">−{changes.removed}</span>
+                </span>
               )}
             </button>
           )

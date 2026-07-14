@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useLayoutEffect, useRef } from "react"
 import type {
   Attachment,
   CliKind,
@@ -12,7 +12,7 @@ import type {
 } from "@starbase/core"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
-import { ImageIcon, Lock, PanelRight, RotateCcw, X, Zap } from "lucide-react"
+import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
@@ -20,8 +20,6 @@ import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { ArchivedBanner } from "../composites/archived-banner.js"
-import { DiffPanel } from "./diff-panel.js"
-import type { DiffActions } from "../diff/diff-view.js"
 
 /**
  * Shift+Tab cycles through the HITL modes, Claude-Code style. Plan mode is
@@ -39,8 +37,6 @@ export interface ConversationViewProps {
   cli?: CliKind
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
-  /** The worktree's unified diff, shown in the Changes rail. */
-  patch?: string
   paused?: boolean
   /** Current harness model id + the models it supports (composer model chip). */
   model?: string
@@ -69,8 +65,6 @@ export interface ConversationViewProps {
   onResumePlan?: (planId: string) => void
   /** Open the full Plan Review view (from a transcript plan card). */
   onOpenPlanReview?: () => void
-  /** Revert / comment interactions for the Changes rail (worktree diff). */
-  changeActions?: DiffActions
   /**
    * When set, the session is archived (its PR merged/closed): a banner is shown,
    * the transcript dims to read-only, and the composer is replaced by a locked bar.
@@ -85,16 +79,6 @@ export interface ConversationViewProps {
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
-const diffCounts = (patch: string): { added: number; removed: number } => {
-  let added = 0
-  let removed = 0
-  for (const line of patch.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) added++
-    else if (line.startsWith("-") && !line.startsWith("---")) removed++
-  }
-  return { added, removed }
-}
-
 /**
  * The session workspace pane: the mode bar + interleaved transcript + composer,
  * with the live Changes rail (the worktree's real diff). Purely presentational —
@@ -108,7 +92,6 @@ export function ConversationView({
   cli = "claude",
   skills = [],
   files = [],
-  patch = "",
   paused = false,
   model,
   models = [],
@@ -125,14 +108,12 @@ export function ConversationView({
   onApprovePlan,
   onResumePlan,
   onOpenPlanReview,
-  changeActions,
   archived
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // Sticky-bottom: follow the newest content while the operator is parked at the
   // bottom, but never yank them down once they've scrolled up to read.
   const stick = useRef(true)
-  const [showChanges, setShowChanges] = useState(true)
 
   // Shift+Tab cycles the HITL mode (works while typing in the composer). Plan
   // mode joins the cycle on Claude sessions only (matches the composer's gate).
@@ -146,9 +127,6 @@ export function ConversationView({
     { enableOnFormTags: true, preventDefault: true },
     [mode, onSetMode, cycle]
   )
-
-  const counts = diffCounts(patch)
-  const hasChanges = counts.added + counts.removed > 0
 
   // Virtualize the transcript so large sessions stay fast. Heights are dynamic
   // (markdown, tool cards, diffs) so we measure each turn as it renders/grows.
@@ -193,28 +171,6 @@ export function ConversationView({
             onRestore={archived.onRestore}
             onDelete={archived.onDelete}
           />
-        )}
-        {/* Slim bar with a labelled Changes toggle — only when there are changes. */}
-        {!archived && hasChanges && (
-          <div className="flex h-[42px] flex-none items-center justify-end border-b border-hairline px-[30px]">
-            <button
-              type="button"
-              onClick={() => setShowChanges((v) => !v)}
-              title={showChanges ? "Hide the changes panel" : "Show the changes panel"}
-              aria-pressed={showChanges}
-              className={cn(
-                "flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                showChanges
-                  ? "border-blue/40 bg-blue/10 text-blue"
-                  : "border-line text-muted-foreground hover:bg-surface hover:text-text-bright"
-              )}
-            >
-              <PanelRight size={14} />
-              <span>Changes</span>
-              <span className="font-mono text-[10.5px] text-green">+{counts.added}</span>
-              <span className="font-mono text-[10.5px] text-red">−{counts.removed}</span>
-            </button>
-          </div>
         )}
 
         <div
@@ -349,10 +305,6 @@ export function ConversationView({
           </div>
         </div>
       </div>
-
-      {!archived && hasChanges && showChanges && (
-        <DiffPanel patch={patch} added={counts.added} removed={counts.removed} actions={changeActions} />
-      )}
     </div>
   )
 }

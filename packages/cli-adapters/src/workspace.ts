@@ -197,13 +197,34 @@ export class WorkspaceService extends Effect.Service<WorkspaceService>()(
         ),
 
       /**
-       * The unified working diff for a worktree (`git diff` incl. untracked, via
-       * `--`), for the Changes rail. Empty string when the tree is clean.
+       * The unified working diff for a worktree, for the Changes view. `git diff
+       * HEAD` alone covers modified + DELETED tracked files but omits NEW
+       * (untracked) files, so we `add -N` (intent-to-add) exactly the untracked
+       * paths first — which makes them appear as full additions — then `reset`
+       * only those paths so any pre-existing staged state is untouched. Empty
+       * string when the tree is clean.
        */
       diff: (
         worktreePath: string
       ): Effect.Effect<string, GitError, CommandExecutor.CommandExecutor> =>
-        runGit(worktreePath, ["diff", "HEAD"]),
+        Effect.gen(function* () {
+          const untracked = (yield* runGit(worktreePath, [
+            "ls-files",
+            "--others",
+            "--exclude-standard"
+          ]).pipe(Effect.orElseSucceed(() => "")))
+            .split("\n")
+            .map((l) => l.trim())
+            .filter(Boolean)
+          if (untracked.length > 0) {
+            yield* runGit(worktreePath, ["add", "-N", "--", ...untracked]).pipe(Effect.ignore)
+          }
+          const out = yield* runGit(worktreePath, ["diff", "HEAD"])
+          if (untracked.length > 0) {
+            yield* runGit(worktreePath, ["reset", "--quiet", "--", ...untracked]).pipe(Effect.ignore)
+          }
+          return out
+        }),
 
       /** The uncommitted working diff for one file (`git diff HEAD -- <path>`). */
       fileDiff: (

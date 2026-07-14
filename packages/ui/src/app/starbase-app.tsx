@@ -7,6 +7,7 @@ import type {
   GhStatus,
   GitConfig,
   GithubConfig,
+  DiffStat,
   ModelOption,
   PrSummary,
   ProviderConfig,
@@ -47,6 +48,8 @@ export interface StarbaseAppProps {
   ghStatus?: GhStatus
   /** Live per-session agent status (thinking / needs-input) while running. */
   liveStatus?: Record<string, SessionStatus>
+  /** Live per-session worktree diff totals, for the Changes tab badge. */
+  liveDiff?: Record<string, DiffStat>
   /** Provider usage snapshot for the Usage & limits modal. */
   usage?: Usage | null
   /** Fetch fresh usage (called when the modal opens); may be async. */
@@ -131,6 +134,7 @@ export function StarbaseApp({
   defaultRepoPath,
   ghStatus,
   liveStatus,
+  liveDiff,
   usage,
   onLoadUsage,
   githubConfig,
@@ -265,6 +269,7 @@ export function StarbaseApp({
         showEmpty={showEmpty}
         patch={patch}
         liveStatus={liveStatus}
+        liveDiff={liveDiff}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         onOpenUsage={onLoadUsage ? openUsage : undefined}
         onOpenSettings={onSaveProvider ? () => setSettingsOpen(true) : undefined}

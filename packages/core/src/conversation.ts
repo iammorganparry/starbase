@@ -229,7 +229,14 @@ export const PlanStep = Schema.Struct({
   graph: Schema.optional(Schema.NullOr(PlanGraph)),
   diff: Schema.NullOr(DiffStat),
   status: PlanStepStatus,
-  flagged: Schema.Boolean
+  flagged: Schema.Boolean,
+  /**
+   * True when this step's content differs from the previous plan revision — set
+   * by `applyStreamEvent` when a revised plan is proposed, so the UI can point out
+   * exactly what the agent changed to satisfy the operator's feedback. Optional
+   * (absent ⇒ unchanged) so pre-existing transcripts + step literals decode cleanly.
+   */
+  changed: Schema.optional(Schema.Boolean)
 })
 export type PlanStep = Schema.Schema.Type<typeof PlanStep>
 
@@ -508,6 +515,36 @@ const replaceLast = (
   next: ContentPart
 ): ReadonlyArray<ContentPart> => [...parts.slice(0, -1), next]
 
+/** A step's actual content (ignores volatile UI/status fields), for diffing. */
+const stepContent = (s: PlanStep): string =>
+  JSON.stringify({
+    title: s.title,
+    intent: s.intent,
+    approach: s.approach,
+    kind: s.kind,
+    condition: s.condition,
+    files: s.files,
+    guards: s.guards,
+    code: s.code
+  })
+
+/**
+ * Mark the steps of a REVISED plan that differ from the `prior` version (matched
+ * by `number`) — a step is `changed` if it's new or its content differs — so the
+ * Plan Review can show exactly what the agent altered to satisfy the operator's
+ * feedback. Unchanged steps are reset to `changed: false`. Pure.
+ */
+export const markChangedSteps = (prior: Plan, next: Plan): Plan => {
+  const priorByNumber = new Map(prior.steps.map((s) => [s.number, s]))
+  return {
+    ...next,
+    steps: next.steps.map((s) => {
+      const before = priorByNumber.get(s.number)
+      return { ...s, changed: before === undefined || stepContent(before) !== stepContent(s) }
+    })
+  }
+}
+
 /**
  * Fold one normalized `StreamEvent` into an assistant `Message`, returning a new
  * message. Pure and total — the same fold persists the transcript in the runner
@@ -574,7 +611,12 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
     }),
 
     Match.tag("PlanProposed", (e) => {
-      const part: PlanPart = { _tag: "Plan", plan: e.plan }
+      // If this turn already holds a plan, the new one is a REVISION — mark which
+      // steps changed vs it, so the review highlights what the feedback altered.
+      const prior =
+        [...parts].reverse().find((p): p is PlanPart => p._tag === "Plan")?.plan ?? null
+      const plan = prior ? markChangedSteps(prior, e.plan) : e.plan
+      const part: PlanPart = { _tag: "Plan", plan }
       return { ...msg, parts: [...parts, part] }
     }),
 

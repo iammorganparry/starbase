@@ -5,8 +5,7 @@
  * lives here — above the Conversation ↔ Plan Review view switch — so switching to
  * the Plan tab does NOT unmount the agent stream (which would abort a parked plan).
  */
-import { useMemo, useState } from "react"
-import type { DiffActions } from "@starbase/ui"
+import { useState } from "react"
 import type { Session } from "@starbase/core"
 import { AgentTabBar, ConversationView, MAIN_AGENT, PlanReview, SubagentView } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
@@ -44,25 +43,6 @@ export function ConversationPane({
   // while this pane is unmounted for a background session. Nothing to do here.
 
   const planId = convo.plan?.id ?? null
-
-  // Changes-rail actions: revert lines/files in the worktree (then re-read the
-  // diff), or comment on a range — routed to this session's agent as a prompt.
-  // Declared before the Plan Review early-return so hook order stays stable.
-  const changeActions = useMemo<DiffActions>(
-    () => ({
-      onRevertLines: (path, startLine, endLine) =>
-        void rpc.workspaceRevertLines(session.id, path, startLine, endLine).then(convo.refreshDiff).catch(() => {}),
-      onRevertFile: (path) =>
-        void rpc.workspaceRevertFile(session.id, path).then(convo.refreshDiff).catch(() => {}),
-      onComment: (path, startLine, endLine, body) => {
-        const ref = endLine > startLine ? `${path} L${startLine}-${endLine}` : `${path} L${startLine}`
-        convo.sendPrompt(`Regarding ${ref}:\n\n${body}`)
-      }
-    }),
-    // convo.refreshDiff / sendPrompt are stable send-wrappers.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session.id]
-  )
 
   if (view === "plan") {
     return (
@@ -105,7 +85,6 @@ export function ConversationPane({
           cli={session.cli}
           skills={convo.skills}
           files={convo.files}
-          patch={convo.patch}
           paused={convo.paused}
           busy={convo.busy}
           queued={convo.queued}
@@ -122,7 +101,6 @@ export function ConversationPane({
           onApprovePlan={(id) => convo.approvePlan(id)}
           onResumePlan={(id) => convo.resumePlan(id)}
           onOpenPlanReview={onOpenPlanReview}
-          changeActions={changeActions}
           archived={
             session.archived
               ? {
