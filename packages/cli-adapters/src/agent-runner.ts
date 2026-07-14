@@ -283,6 +283,29 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
       })
 
     /**
+     * The user's configured default execution mode for a session (`auto` /
+     * `accept-edits` / `ask`), read from their CLI config. `AppPaths.root` is
+     * `~/starbase`, so its parent is $HOME. Never fails.
+     */
+    const resolveExecMode = (sessionId: string): Effect.Effect<PermissionMode, never, PromptEnv> =>
+      Effect.gen(function* () {
+        const session = yield* SessionStore.get(sessionId).pipe(
+          Effect.map((s): Session | null => s),
+          Effect.orElseSucceed(() => null)
+        )
+        const pathSvc = yield* Path.Path
+        const appPaths = yield* AppPaths
+        return yield* readDefaultMode(session?.cli ?? "claude", pathSvc.dirname(appPaths.root))
+      })
+
+    /** The plan with `planId` from a session's persisted transcript, or null. */
+    const sessionPlan = (sessionId: string, planId: string): Effect.Effect<Plan | null, never, PromptEnv> =>
+      TranscriptStore.list(sessionId).pipe(
+        Effect.orElseSucceed(() => [] as ReadonlyArray<Message>),
+        Effect.map((messages) => messages.reduce<Plan | null>((found, m) => findPlan(m, planId) ?? found, null))
+      )
+
+    /**
      * Approve a plan whose original run is gone (e.g. after an app restart, when
      * the plan is "stale"): there's no parked Deferred to resume, so re-drive
      * execution as a FRESH run. Set the session's default exec mode, then prompt
@@ -292,15 +315,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     const resumePlan = (sessionId: string, planId: string): Stream.Stream<StreamEvent, never, PromptEnv> =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const messages = yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => []))
-          let plan: Plan | null = null
-          for (const m of messages) plan = findPlan(m, planId) ?? plan
+          const plan = yield* sessionPlan(sessionId, planId)
           if (plan === null) return Stream.empty
-          const session = yield* SessionStore.get(sessionId).pipe(Effect.map((s): Session | null => s), Effect.orElseSucceed(() => null))
-          const appPaths = yield* AppPaths
-          const pathSvc = yield* Path.Path
-          const execMode = yield* readDefaultMode(session?.cli ?? "claude", pathSvc.dirname(appPaths.root))
-          yield* setMode(sessionId, execMode)
+          yield* setMode(sessionId, yield* resolveExecMode(sessionId))
           return prompt(sessionId, resumePlanPrompt(plan))
         })
       )
@@ -352,10 +369,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           ])
           const cli = session?.cli ?? "claude"
           // Cache the user's configured default exec mode so approving a plan can
-          // restore it (AppPaths.root is ~/starbase, so its parent is $HOME).
-          const appPaths = yield* AppPaths
-          const pathSvc = yield* Path.Path
-          const execDefault = yield* readDefaultMode(cli, pathSvc.dirname(appPaths.root))
+          // restore it.
+          const execDefault = yield* resolveExecMode(sessionId)
           yield* Ref.update(execDefaults, (m) => new Map(m).set(sessionId, execDefault))
           // Resolve the harness binary; null → the dispatcher uses the scripted
           // fallback (also the path when the CLI isn't installed).
