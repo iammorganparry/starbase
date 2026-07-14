@@ -28,6 +28,8 @@ export * from "./components/diff-peek.js"
 export * from "./components/code-chip.js"
 export * from "./components/markdown.js"
 export * from "./components/chip-menu.js"
+export * from "./components/context-menu.js"
+export * from "./components/confirm-dialog.js"
 export * from "./components/provider-icon.js"
 
 // Molecules / composites

@@ -159,44 +159,12 @@ export const PlanStepCode = Schema.Struct({
 })
 export type PlanStepCode = Schema.Schema.Type<typeof PlanStepCode>
 
-/** One node of the plan — an ordered step or a branch/arm. */
-export const PlanStep = Schema.Struct({
-  id: Schema.String,
-  /** Display ordinal, e.g. "01", "04", "4a". */
-  number: Schema.String,
-  title: Schema.String,
-  intent: Schema.String,
-  /** Numbered "how" — one entry per line in the step spec. */
-  approach: Schema.Array(Schema.String),
-  kind: PlanStepKind,
-  /** The branch question when `kind === "branch"` (e.g. "token expired"), else null. */
-  condition: Schema.NullOr(Schema.String),
-  /** The branch step this arm hangs off, when `kind === "branch-arm"`, else null. */
-  parentId: Schema.NullOr(Schema.String),
-  dependsOn: Schema.Array(Schema.String),
-  blocks: Schema.Array(Schema.String),
-  files: Schema.Array(PlanFileChange),
-  guards: Schema.Array(PlanGuard),
-  /**
-   * An illustrative code sample of the proposed change, or null. `optionalWith`
-   * (default null) so transcripts persisted before this field decode cleanly
-   * instead of blanking the whole conversation.
-   */
-  code: Schema.optionalWith(Schema.NullOr(PlanStepCode), { default: () => null }),
-  diff: Schema.NullOr(DiffStat),
-  status: PlanStepStatus,
-  flagged: Schema.Boolean
-})
-export type PlanStep = Schema.Schema.Type<typeof PlanStep>
-
-export const PlanStatus = Schema.Literal("proposed", "revising", "approved", "rejected", "stale")
-export type PlanStatus = Schema.Schema.Type<typeof PlanStatus>
-
-// ── Decision graph (how the logic/decisions flow — rendered on a react-flow canvas) ──
+// ── Decision graph (how a step's logic/decisions flow — rendered on a react-flow canvas) ──
 
 /**
- * A node in the plan's decision graph. `decision` nodes branch (their out-edges
- * carry the conditions); `action`/`io`/`terminal`/`start` are the flow between.
+ * A node in a plan step's decision graph. `decision` nodes branch (their
+ * out-edges carry the conditions); `action`/`io`/`terminal`/`start` are the flow
+ * between. Defined above `PlanStep` because each step now carries its own graph.
  */
 export const PlanNodeKind = Schema.Literal("start", "decision", "action", "io", "terminal", "note")
 export type PlanNodeKind = Schema.Schema.Type<typeof PlanNodeKind>
@@ -221,12 +189,52 @@ export const PlanEdge = Schema.Struct({
 })
 export type PlanEdge = Schema.Schema.Type<typeof PlanEdge>
 
-/** The agent's map of how the decisions + logic flow through the change. */
+/** A map of how the decisions + logic flow through a single step's change. */
 export const PlanGraph = Schema.Struct({
   nodes: Schema.Array(PlanNode),
   edges: Schema.Array(PlanEdge)
 })
 export type PlanGraph = Schema.Schema.Type<typeof PlanGraph>
+
+/** One node of the plan — an ordered step or a branch/arm. */
+export const PlanStep = Schema.Struct({
+  id: Schema.String,
+  /** Display ordinal, e.g. "01", "04", "4a". */
+  number: Schema.String,
+  title: Schema.String,
+  intent: Schema.String,
+  /** Numbered "how" — one entry per line in the step spec. */
+  approach: Schema.Array(Schema.String),
+  kind: PlanStepKind,
+  /** The branch question when `kind === "branch"` (e.g. "token expired"), else null. */
+  condition: Schema.NullOr(Schema.String),
+  /** The branch step this arm hangs off, when `kind === "branch-arm"`, else null. */
+  parentId: Schema.NullOr(Schema.String),
+  dependsOn: Schema.Array(Schema.String),
+  blocks: Schema.Array(Schema.String),
+  files: Schema.Array(PlanFileChange),
+  guards: Schema.Array(PlanGuard),
+  /**
+   * An illustrative code sample of the proposed change, or null. `optionalWith`
+   * (default null) so transcripts persisted before this field decode cleanly
+   * instead of blanking the whole conversation.
+   */
+  code: Schema.optionalWith(Schema.NullOr(PlanStepCode), { default: () => null }),
+  /**
+   * This step's own decision/logic flow (a state machine / user flow grounded in
+   * the step's code), or absent/null when the step needs none. Optional so
+   * transcripts persisted before per-step flows decode cleanly, and so the many
+   * step literals in seeds/tests don't each need to spell it out.
+   */
+  graph: Schema.optional(Schema.NullOr(PlanGraph)),
+  diff: Schema.NullOr(DiffStat),
+  status: PlanStepStatus,
+  flagged: Schema.Boolean
+})
+export type PlanStep = Schema.Schema.Type<typeof PlanStep>
+
+export const PlanStatus = Schema.Literal("proposed", "revising", "approved", "rejected", "stale")
+export type PlanStatus = Schema.Schema.Type<typeof PlanStatus>
 
 /**
  * A structured plan the agent proposed (via ExitPlanMode) and the operator can
@@ -236,8 +244,12 @@ export type PlanGraph = Schema.Schema.Type<typeof PlanGraph>
 export const Plan = Schema.Struct({
   id: Schema.String,
   summary: Schema.String,
-  /** The decision/logic flow graph (rendered on the react-flow canvas), or null. */
-  graph: Schema.NullOr(PlanGraph),
+  /**
+   * Legacy plan-level flow graph — flows now live per-step (`PlanStep.graph`).
+   * Kept optional so a single untagged ` ```flow ` block from an older plan, and
+   * transcripts persisted before per-step flows, still decode.
+   */
+  graph: Schema.optional(Schema.NullOr(PlanGraph)),
   steps: Schema.Array(PlanStep),
   comments: Schema.Array(PlanComment),
   status: PlanStatus,

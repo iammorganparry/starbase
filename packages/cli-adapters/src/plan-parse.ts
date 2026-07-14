@@ -53,13 +53,14 @@ Format of the \`\`\`plan block (one step per header line; two-space-indented fie
 
 Rules: number steps 01, 02, … in order; a branch's arms are numbered 4a, 4b under it (two extra spaces). Keep each step's title under ~6 words and its intent to one sentence. Only ExitPlanMode; do not edit files or run commands in plan mode.
 
-ALSO include a fenced \`\`\`flow block that maps the DECISIONS and how logic flows through the change — this is the most important visual. It renders as an interactive graph, so focus on the branch points, not a linear list of steps. One node or edge per line:
+ALSO, for each step whose logic actually branches or moves through states, include a fenced \`\`\`flow step <NN> block that maps THAT STEP's own control flow — a state machine, a user flow, or the decision tree grounded in the step's code. One flow PER STEP, scoped to what that step does. Skip the block entirely for steps that are a straight-line edit with no meaningful decisions (most simple steps need none). This is the most important visual: focus on the branch points, not a linear list of actions. One node or edge per line:
 
+  \`\`\`flow step 04
   start   n0  "HTTP request"
   action  n1  "authMiddleware" file src/auth/session.ts
   decision n2 "token expired?"
-  action  n3  "refresh() + retry once" step 4a
-  action  n4  "proceed" step 4b
+  action  n3  "refresh() + retry once"
+  action  n4  "proceed"
   terminal n5 "response"
   n0 -> n1
   n1 -> n2
@@ -67,8 +68,9 @@ ALSO include a fenced \`\`\`flow block that maps the DECISIONS and how logic flo
   n2 -> n4 : no
   n3 -> n5
   n4 -> n5
+  \`\`\`
 
-Node syntax: \`<kind> <id> "<label>"\` where kind is start|decision|action|io|terminal|note; optionally add \`file <path>\` (a detail line) and \`step <NN>\` (links the node to that plan step). Edge syntax: \`<from> -> <to>\` with an optional \`: <condition>\` label (put the yes/no or condition on the edges LEAVING a decision node).
+The block's info string MUST name the step (\`flow step <NN>\`, matching a plan step's number). Node syntax: \`<kind> <id> "<label>"\` where kind is start|decision|action|io|terminal|note; optionally add \`file <path>\` (a detail line). Edge syntax: \`<from> -> <to>\` with an optional \`: <condition>\` label (put the yes/no or condition on the edges LEAVING a decision node).
 
 FINALLY, for the steps where it aids review — new service methods, key types, and the tests that cover them — include a short illustrative code sample so the operator can scrutinise the SHAPE of the change (signatures, error handling, test cases) before approving. Emit it as a normal fenced code block whose info string names the step: put \`step <NN>\` after the language. One block per step; keep it to the essential lines (a method signature + body sketch, or a test's arrange/act/assert), not the whole file:
 
@@ -255,14 +257,12 @@ const parseNode = (m: RegExpExecArray): PlanNode => {
 }
 
 /**
- * Parse a fenced ` ```flow ` block into a decision graph (nodes + edges). Node
+ * Parse the body of a flow block into a decision graph (nodes + edges). Node
  * lines start with a kind keyword; every other `a -> b` line is an edge whose
  * optional `: label` carries the condition. Returns null when there's nothing
  * renderable, so the Flow view falls back to its empty state.
  */
-export const parseFlow = (raw: string): PlanGraph | null => {
-  const block = fenced(raw, "flow")
-  if (!block) return null
+const graphFromBlock = (block: string): PlanGraph | null => {
   const nodes: Array<PlanNode> = []
   const edges: Array<PlanEdge> = []
   for (const line of block.split("\n")) {
@@ -289,10 +289,49 @@ export const parseFlow = (raw: string): PlanGraph | null => {
   return nodes.length > 0 ? { nodes, edges: kept } : null
 }
 
+/** Matches every fenced ` ```flow … ` block, capturing its info string + body. */
+const FLOW_BLOCK = /```flow[ \t]*([^\n]*)\n([\s\S]*?)```/gi
+
+/**
+ * Legacy: parse a single UNtagged ` ```flow ` block (per-step flows use
+ * ` ```flow step NN `). Returns null when there's no untagged block, so old
+ * single-flow plans keep rendering while new plans carry flows per step.
+ */
+export const parseFlow = (raw: string): PlanGraph | null => {
+  FLOW_BLOCK.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = FLOW_BLOCK.exec(raw)) !== null) {
+    if (/\bstep\b/i.test(m[1] ?? "")) continue
+    return graphFromBlock(m[2] ?? "")
+  }
+  return null
+}
+
+/**
+ * Parse every ` ```flow step NN ` block into a map of normalized step number →
+ * that step's own decision/logic flow. A step without a flow block simply isn't
+ * in the map (its `graph` stays null). First block per step wins.
+ */
+export const parseStepFlows = (raw: string): Map<string, PlanGraph> => {
+  const out = new Map<string, PlanGraph>()
+  FLOW_BLOCK.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = FLOW_BLOCK.exec(raw)) !== null) {
+    const step = /\bstep\s*=?\s*(\d+[a-z]?)\b/i.exec(m[1] ?? "")
+    if (!step) continue
+    const num = normNum(step[1]!)
+    if (out.has(num)) continue
+    const graph = graphFromBlock(m[2] ?? "")
+    if (graph) out.set(num, graph)
+  }
+  return out
+}
+
 /**
  * Scan every fenced code block whose info string links it to a step (e.g.
  * ` ```ts step 02 `) into a map of normalized step number → `PlanStepCode`. The
- * ` ```plan `/` ```flow ` blocks are skipped (their info strings carry no `step`).
+ * ` ```plan ` block carries no `step`, and ` ```flow step NN ` blocks are
+ * explicitly excluded (they're parsed as per-step flows, not code samples).
  */
 export const parseStepCode = (raw: string): Map<string, PlanStepCode> => {
   const out = new Map<string, PlanStepCode>()
@@ -300,6 +339,9 @@ export const parseStepCode = (raw: string): Map<string, PlanStepCode> => {
   let m: RegExpExecArray | null
   while ((m = re.exec(raw)) !== null) {
     const info = (m[1] ?? "").trim()
+    // Per-step flow blocks (` ```flow step NN `) also carry a step tag — they're
+    // graphs, not code, so never treat them as a code sample.
+    if (/^flow\b/i.test(info)) continue
     const stepMatch = /\bstep\s*=?\s*(\d+[a-z]?)\b/i.exec(info)
     if (!stepMatch) continue
     const num = normNum(stepMatch[1]!)
@@ -320,6 +362,7 @@ export const parsePlan = (raw: string, id: string): Plan => {
   const block = fenced(raw, "plan")
   const graph = parseFlow(raw)
   const code = parseStepCode(raw)
+  const flows = parseStepFlows(raw)
   const parsed = block ? parseBlock(block) : { summary: "", steps: [] as PlanStep[] }
 
   if (parsed.steps.length === 0) {
@@ -346,6 +389,9 @@ export const parsePlan = (raw: string, id: string): Plan => {
           files: [],
           guards: [],
           code: null,
+          // No structured steps — hang any single legacy flow on the one step so
+          // it still renders per-step.
+          graph,
           diff: null,
           status: "proposed",
           flagged: false
@@ -361,8 +407,13 @@ export const parsePlan = (raw: string, id: string): Plan => {
     id,
     summary: parsed.summary || parsed.steps[0]!.title,
     graph,
-    // Attach any per-step code sample keyed by the step's normalized number.
-    steps: parsed.steps.map((s) => (code.has(s.number) ? { ...s, code: code.get(s.number)! } : s)),
+    // Attach any per-step code sample + per-step flow, keyed by the step's
+    // normalized number.
+    steps: parsed.steps.map((s) => ({
+      ...s,
+      ...(code.has(s.number) && { code: code.get(s.number)! }),
+      ...(flows.has(s.number) && { graph: flows.get(s.number)! })
+    })),
     comments: [],
     status: "proposed",
     raw

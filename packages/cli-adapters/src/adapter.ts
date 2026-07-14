@@ -123,32 +123,38 @@ export class CliAdapter extends Context.Tag("@starbase/CliAdapter")<
  * one branch), used by the plan-mode e2e/tests. `rev` bumps the id/summary so a
  * revision cycle yields a distinct plan part.
  */
+/**
+ * The decision flow for the branch step (04 "Handle token refresh") — flows now
+ * live per-step, so it hangs off that step rather than the whole plan.
+ */
+const refreshFlow: NonNullable<Plan["steps"][number]["graph"]> = {
+  nodes: [
+    { id: "n0", label: "HTTP request", kind: "start", detail: null, stepId: null },
+    { id: "n1", label: "authMiddleware", kind: "action", detail: "src/auth/session.ts", stepId: null },
+    { id: "n2", label: "token expired?", kind: "decision", detail: null, stepId: null },
+    { id: "n3", label: "refresh() + retry once", kind: "action", detail: "src/auth/refresh.ts", stepId: null },
+    { id: "n4", label: "proceed", kind: "action", detail: null, stepId: null },
+    { id: "n5", label: "response", kind: "terminal", detail: null, stepId: null }
+  ],
+  edges: [
+    { id: "e0", from: "n0", to: "n1", label: null },
+    { id: "e1", from: "n1", to: "n2", label: null },
+    { id: "e2", from: "n2", to: "n3", label: "yes" },
+    { id: "e3", from: "n2", to: "n4", label: "no" },
+    { id: "e4", from: "n3", to: "n5", label: null },
+    { id: "e5", from: "n4", to: "n5", label: null }
+  ]
+}
+
 export const scriptedPlan = (sessionId: string, rev: number): Plan => ({
   id: `plan_${sessionId}_${rev}`,
   summary: rev > 1 ? "Refactor auth flow (revised)" : "Refactor auth flow",
-  graph: {
-    nodes: [
-      { id: "n0", label: "HTTP request", kind: "start", detail: null, stepId: null },
-      { id: "n1", label: "authMiddleware", kind: "action", detail: "src/auth/session.ts", stepId: "s_03" },
-      { id: "n2", label: "token expired?", kind: "decision", detail: null, stepId: "s_04" },
-      { id: "n3", label: "refresh() + retry once", kind: "action", detail: "src/auth/refresh.ts", stepId: "s_4a" },
-      { id: "n4", label: "proceed", kind: "action", detail: null, stepId: "s_4b" },
-      { id: "n5", label: "response", kind: "terminal", detail: null, stepId: null }
-    ],
-    edges: [
-      { id: "e0", from: "n0", to: "n1", label: null },
-      { id: "e1", from: "n1", to: "n2", label: null },
-      { id: "e2", from: "n2", to: "n3", label: "yes" },
-      { id: "e3", from: "n2", to: "n4", label: "no" },
-      { id: "e4", from: "n3", to: "n5", label: null },
-      { id: "e5", from: "n4", to: "n5", label: null }
-    ]
-  },
+  graph: null,
   steps: [
     { id: "s_01", number: "01", title: "Audit session middleware", intent: "See how sessions read tokens today.", approach: ["Read session.ts", "Trace the token path"], kind: "step", condition: null, parentId: null, dependsOn: [], blocks: [], files: [{ path: "src/auth/memory-store.ts", change: "M", added: 0, removed: 0 }], guards: [], code: null, diff: null, status: "proposed", flagged: false },
     { id: "s_02", number: "02", title: "Create TokenStore module", intent: "A dedicated store for token lifecycle.", approach: ["Add token-store.ts", "Expose get/set/refresh"], kind: "step", condition: null, parentId: null, dependsOn: ["01"], blocks: [], files: [{ path: "src/auth/token-store.ts", change: "A", added: 40, removed: 0 }], guards: [{ text: "Store is covered by tests", status: "ok" }], code: { lang: "ts", body: "export class TokenStore extends Effect.Service<TokenStore>()(\"TokenStore\", {\n  effect: Effect.gen(function* () {\n    const store = yield* KeyValueStore\n    return {\n      get: (id: string) =>\n        store.get(`token:${id}`).pipe(Effect.map(Option.getOrNull)),\n      set: (id: string, token: Token) =>\n        store.set(`token:${id}`, token),\n      refresh: (session: Session) =>\n        Effect.gen(function* () {\n          const next = yield* mintToken(session)\n          yield* store.set(`token:${session.id}`, next)\n          return next\n        })\n    }\n  })\n}) {}" }, diff: { added: 40, removed: 0 }, status: "proposed", flagged: false },
     { id: "s_03", number: "03", title: "Swap MemoryStore → TokenStore", intent: "Route the session through the new store.", approach: ["Replace the import", "Update call sites"], kind: "step", condition: null, parentId: null, dependsOn: ["02"], blocks: [], files: [{ path: "src/auth/session.ts", change: "M", added: 8, removed: 3 }], guards: [], code: { lang: "ts", body: "-import { MemoryStore } from \"./memory-store.js\"\n+import { TokenStore } from \"./token-store.js\"\n\n export const readSession = (id: string) =>\n   Effect.gen(function* () {\n-    const token = yield* MemoryStore.get(id)\n+    const token = yield* TokenStore.get(id)\n     return decode(token)\n   })" }, diff: { added: 8, removed: 3 }, status: "current", flagged: false },
-    { id: "s_04", number: "04", title: "Handle token refresh", intent: "Decide the refresh path on expiry.", approach: [], kind: "branch", condition: "token expired?", parentId: null, dependsOn: ["03"], blocks: ["05"], files: [], guards: [], code: null, diff: null, status: "proposed", flagged: false },
+    { id: "s_04", number: "04", title: "Handle token refresh", intent: "Decide the refresh path on expiry.", approach: [], kind: "branch", condition: "token expired?", parentId: null, dependsOn: ["03"], blocks: ["05"], files: [], guards: [], code: null, graph: refreshFlow, diff: null, status: "proposed", flagged: false },
     { id: "s_4a", number: "4a", title: "refresh() + retry on 401", intent: "Mint a new token and replay once.", approach: ["Detect a 401", "Call refresh(session)", "Replay the request once"], kind: "branch-arm", condition: null, parentId: "s_04", dependsOn: ["03"], blocks: ["05"], files: [{ path: "src/auth/refresh.ts", change: "M", added: 18, removed: 0 }, { path: "src/auth/retry.ts", change: "A", added: 15, removed: 0 }], guards: [{ text: "New token written before the replay", status: "ok" }, { text: "Refresh fires at most once per request", status: "ok" }, { text: "No refresh loop on repeated 401", status: "warn" }, { text: "Concurrent requests share a single refresh", status: "open" }], code: { lang: "ts", body: "export const withRetry = (req: Request, session: Session) =>\n  send(req).pipe(\n    Effect.catchIf(\n      (e) => e.status === 401,\n      () =>\n        Effect.gen(function* () {\n          yield* TokenStore.refresh(session) // once — guarded by a single-flight\n          return yield* send(req)\n        })\n    )\n  )" }, diff: { added: 42, removed: 1 }, status: "proposed", flagged: false },
     { id: "s_4b", number: "4b", title: "Proceed with request", intent: "Token still valid — carry on.", approach: [], kind: "branch-arm", condition: null, parentId: "s_04", dependsOn: [], blocks: [], files: [], guards: [], code: null, diff: null, status: "proposed", flagged: false },
     { id: "s_05", number: "05", title: "Update auth tests", intent: "Cover the new store + refresh path.", approach: ["Add token-store tests", "Add a 401-retry test"], kind: "step", condition: null, parentId: null, dependsOn: ["04"], blocks: [], files: [{ path: "src/auth/session.test.ts", change: "M", added: 24, removed: 2 }], guards: [], code: { lang: "ts", body: "it(\"refreshes once and replays on a 401\", () =>\n  Effect.gen(function* () {\n    const session = yield* seedSession({ expired: true })\n    const res = yield* withRetry(makeRequest(), session)\n    expect(res.status).toBe(200)\n    expect(refreshSpy).toHaveBeenCalledTimes(1) // no refresh loop\n  }).pipe(Effect.provide(TestTokenStore), Effect.runPromise))" }, diff: { added: 24, removed: 2 }, status: "proposed", flagged: false },

@@ -128,21 +128,35 @@ test("the / menu surfaces built-in + project skills and the @ menu references fi
   await expect(window.getByText("README.md").first()).toBeVisible()
 })
 
-test("the mode chip lives in the composer and Shift+Tab cycles it", async ({ launchApp }) => {
+test("the mode chip lives in the composer and Shift+Tab cycles it (incl. Plan on Claude)", async ({
+  launchApp
+}) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
 
   const composer = window.getByPlaceholder("Message Claude…")
   await composer.click()
 
+  // The composer wrapper reflects the active mode (drives the per-mode theming).
+  const surface = window.locator("[data-mode]").first()
+
   // Seeded mode is accept-edits → the chip reads "accept edits".
   await expect(window.getByText("accept edits")).toBeVisible()
+  await expect(surface).toHaveAttribute("data-mode", "accept-edits")
 
-  // Shift+Tab cycles accept-edits → auto → ask.
+  // On a Claude session Shift+Tab cycles accept-edits → auto → plan → ask.
   await window.keyboard.press("Shift+Tab")
   await expect(window.getByText("auto")).toBeVisible()
+  await expect(surface).toHaveAttribute("data-mode", "auto")
+
+  await window.keyboard.press("Shift+Tab")
+  // Plan mode is now reachable (Claude-only) and themes the composer purple.
+  await expect(window.getByText("plan")).toBeVisible()
+  await expect(surface).toHaveAttribute("data-mode", "plan")
+
   await window.keyboard.press("Shift+Tab")
   await expect(window.getByText("ask")).toBeVisible()
+  await expect(surface).toHaveAttribute("data-mode", "ask")
 })
 
 test("the model chip shows the harness model and switches", async ({ launchApp }) => {
@@ -274,6 +288,16 @@ test("Plan mode: propose a plan, review a step, and approve to start execution",
   await expect(window.getByText("Handle token refresh").first()).toBeVisible()
   await window.getByText("Handle token refresh").first().click()
   await expect(window.getByText("Decide the refresh path on expiry.")).toBeVisible()
+
+  // This step carries its OWN decision flow (flows are now per-step) — the
+  // "Control flow" section renders its graph, incl. the "token expired?" decision.
+  await expect(window.getByText("Control flow")).toBeVisible()
+  await expect(window.getByText("token expired?").first()).toBeVisible()
+
+  // A step without a flow (e.g. "Create TokenStore module") shows no such section.
+  await window.getByText("Create TokenStore module").first().click()
+  await expect(window.getByText("Decide the refresh path on expiry.")).toHaveCount(0)
+  await expect(window.getByText("Control flow")).toHaveCount(0)
 
   // Approve the plan from the header → the plan flips read-only and execution starts.
   await window.getByRole("button", { name: /Approve plan & start/ }).click()
@@ -542,6 +566,84 @@ test("an archived session shows in the Archived group, read-only, and restores",
   await window.getByRole("button", { name: "Restore session" }).click()
   await expect(window.getByText(/Composer disabled/)).toHaveCount(0)
   await expect(window.getByText("Merged #482")).toHaveCount(0)
+})
+
+// Two plain sessions so the sidebar quick-actions have something to act on and
+// the list stays non-empty after one is removed.
+const twoSessions = ({ repoPath }: { repoPath: string }): ReadonlyArray<SeedSession> => [
+  {
+    id: "s_keep",
+    repo: "widget",
+    branch: "starbase/one",
+    title: "First session",
+    status: "idle",
+    cli: "claude",
+    diff: { added: 0, removed: 0 },
+    prNumber: null,
+    costUsd: 0,
+    tokens: 0,
+    updatedAt: "2026-07-11T00:00:00.000Z",
+    worktreePath: repoPath,
+    mode: "accept-edits"
+  },
+  {
+    id: "s_act",
+    repo: "widget",
+    branch: "starbase/two",
+    title: "Second session",
+    status: "idle",
+    cli: "claude",
+    diff: { added: 0, removed: 0 },
+    prNumber: null,
+    costUsd: 0,
+    tokens: 0,
+    updatedAt: "2026-07-11T00:00:00.000Z",
+    mode: "accept-edits"
+  }
+]
+
+test("sidebar quick-actions: hover a row to archive an active session", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: twoSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // No Archived group yet — both sessions are active.
+  await expect(window.getByText("Archived", { exact: true })).toHaveCount(0)
+
+  // Hover the second row to reveal its quick-actions, then Archive it.
+  const row = window.getByTestId("session-row-s_act")
+  await row.hover()
+  await window.getByRole("button", { name: "Archive Second session" }).click()
+
+  // It drops into the Archived group (undoable via Restore).
+  await expect(window.getByText("Archived", { exact: true })).toBeVisible()
+})
+
+test("sidebar quick-actions: right-click → Delete removes a session after confirming", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: twoSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  await expect(window.getByText("Second session")).toBeVisible()
+
+  // Right-click the row opens the context menu; choose Delete.
+  const row = window.getByTestId("session-row-s_act")
+  await row.click({ button: "right" })
+  await window.getByRole("menuitem", { name: "Delete" }).click()
+
+  // Delete is destructive → a confirm dialog gates it. Cancel first leaves it.
+  const dialog = window.getByRole("dialog")
+  await expect(dialog.getByText("Delete session?")).toBeVisible()
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await expect(window.getByTestId("session-row-s_act")).toBeVisible()
+
+  // Reopen and confirm → the row is permanently gone (the other session remains).
+  await row.click({ button: "right" })
+  await window.getByRole("menuitem", { name: "Delete" }).click()
+  await window.getByRole("dialog").getByRole("button", { name: "Delete" }).click()
+
+  await expect(window.getByTestId("session-row-s_act")).toHaveCount(0)
+  await expect(window.getByText("Second session")).toHaveCount(0)
+  await expect(window.getByText("First session")).toBeVisible()
 })
 
 test("a merged PR auto-archives its linked session on load", async ({ launchApp }) => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseFlow, parsePlan, parseStepCode, planModeInstructions } from "./plan-parse.js"
+import { parseFlow, parsePlan, parseStepCode, parseStepFlows, planModeInstructions } from "./plan-parse.js"
 
 /**
  * `parsePlan` turns the free-form plan text Claude emits via ExitPlanMode into a
@@ -134,6 +134,52 @@ describe("parsePlan — fallback", () => {
 describe("parseFlow", () => {
   it("returns null when there's no flow block", () => {
     expect(parseFlow("just some text")).toBeNull()
+  })
+})
+
+describe("parseStepFlows — per-step flows", () => {
+  const STEP_FLOW = `\`\`\`plan
+summary: Refactor auth flow
+01 Audit session middleware
+03 Swap MemoryStore to TokenStore
+04 Handle token refresh
+\`\`\`
+
+\`\`\`flow step 04
+start n0 "request"
+decision n1 "token expired?"
+action n2 "refresh() + retry"
+action n3 "proceed"
+terminal n4 "response"
+n0 -> n1
+n1 -> n2 : yes
+n1 -> n3 : no
+n2 -> n4
+n3 -> n4
+\`\`\``
+
+  it("keys each ```flow step NN``` block by its normalized step number", () => {
+    const map = parseStepFlows(STEP_FLOW)
+    expect([...map.keys()]).toStrictEqual(["04"])
+    expect(map.get("04")!.nodes.map((n) => n.kind)).toStrictEqual([
+      "start",
+      "decision",
+      "action",
+      "action",
+      "terminal"
+    ])
+  })
+
+  it("attaches the flow onto the matching step (and leaves other steps without one)", () => {
+    const plan = parsePlan(STEP_FLOW, "plan_f")
+    expect(plan.steps.find((s) => s.number === "04")?.graph).not.toBeNull()
+    expect(plan.steps.find((s) => s.number === "04")?.graph?.nodes.length).toBe(5)
+    expect(plan.steps.find((s) => s.number === "01")?.graph ?? null).toBeNull()
+  })
+
+  it("does not treat a ```flow step NN``` block as a legacy plan-level flow or a code sample", () => {
+    expect(parsePlan(STEP_FLOW, "plan_f").graph).toBeNull()
+    expect(parseStepCode(STEP_FLOW).size).toBe(0)
   })
 })
 

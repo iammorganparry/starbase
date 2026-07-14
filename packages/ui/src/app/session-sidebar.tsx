@@ -34,6 +34,12 @@ export interface SessionSidebarProps {
   onSelect: (id: string) => void
   /** Manually rename a session (double-click its title) — pins the auto-name. */
   onRename?: (id: string, title: string) => void
+  /** Archive an active session from its row quick-actions (undoable via restore). */
+  onArchive?: (id: string) => void
+  /** Restore an archived session from its row quick-actions. */
+  onRestore?: (id: string) => void
+  /** Permanently delete a session from its row quick-actions (caller confirms). */
+  onDelete?: (id: string) => void
   /** Live per-session agent status, overriding the persisted status. */
   liveStatus?: Record<string, SessionStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
@@ -58,6 +64,9 @@ export function SessionSidebar({
   activeSessionId,
   onSelect,
   onRename,
+  onArchive,
+  onRestore,
+  onDelete,
   liveStatus,
   onNewSession,
   onOpenUsage,
@@ -235,6 +244,9 @@ export function SessionSidebar({
                   active={s.id === activeSessionId}
                   onSelect={onSelect}
                   onRename={onRename}
+                  onArchive={onArchive}
+                  onRestore={onRestore}
+                  onDelete={onDelete}
                 />
               ))}
             </div>
@@ -258,6 +270,8 @@ export function SessionSidebar({
                     session={s}
                     active={s.id === activeSessionId}
                     onSelect={onSelect}
+                    onRestore={onRestore}
+                    onDelete={onDelete}
                   />
                 ))}
               </div>

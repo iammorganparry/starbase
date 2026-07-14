@@ -15,6 +15,7 @@ import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { Markdown } from "../components/markdown.js"
+import { PlanFlow } from "./plan-flow.js"
 
 const CHANGE_TONE: Record<PlanFileChange["change"], "green" | "yellow" | "red"> = {
   A: "green",
@@ -134,6 +135,14 @@ export function PlanStepDetail({
                 </li>
               ))}
             </ol>
+          </Section>
+        )}
+
+        {step.graph && (
+          <Section title="Control flow">
+            <div className="h-[300px] overflow-hidden rounded-md border border-hairline bg-editor">
+              <PlanFlow graph={step.graph} selectedId={step.id} embedded />
+            </div>
           </Section>
         )}
 
