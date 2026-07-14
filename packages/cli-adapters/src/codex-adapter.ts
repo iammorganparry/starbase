@@ -35,7 +35,10 @@ export const codexEventToStreamEvents = (
 ): ReadonlyArray<StreamEvent> => {
   switch (event.type) {
     case "thread.started":
-      return [{ _tag: "Started", sessionId }]
+      // Carry Codex's OWN thread id (not the Starbase session key) so the runner
+      // persists it as the resume id and "continue" reloads the thread after a
+      // restart. Falls back to the Starbase key if the thread id is absent.
+      return [{ _tag: "Started", sessionId: event.thread_id || sessionId }]
 
     case "item.started": {
       const it = event.item
@@ -148,7 +151,10 @@ export const runCodex = (
           ...(spec.model ? { model: spec.model } : {}),
           ...mapCodexPolicy(spec.mode)
         }
-        const prior = resume.get(sessionId)
+        // Prefer the live in-memory thread id (this launch), else the id persisted
+        // on the session (survives an app restart), so "continue" resumes the
+        // Codex thread instead of starting a fresh one.
+        const prior = resume.get(sessionId) ?? spec.resumeId ?? undefined
         const thread = prior
           ? codex.resumeThread(prior, threadOptions)
           : codex.startThread(threadOptions)

@@ -76,6 +76,13 @@ export const Session = Schema.Struct({
   worktreePath: Schema.optional(Schema.String),
   /** The branch this session's worktree was forked from. */
   baseBranch: Schema.optional(Schema.String),
+  /**
+   * The harness's own session id for this conversation (Claude/Codex), persisted
+   * so the agent RESUMES its full memory across app restarts — the in-memory
+   * resume map is otherwise lost on quit, and "continue" would start the harness
+   * fresh (re-reading the plan, re-checking state) despite the visible transcript.
+   */
+  resumeId: Schema.optional(Schema.String),
   /** HITL permission mode; defaults to "accept-edits" when absent. */
   mode: Schema.optional(PermissionMode),
   /** Commands the operator chose to "Always allow" for this session. */

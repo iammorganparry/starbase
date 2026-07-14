@@ -723,3 +723,84 @@ describe("AgentRunner plan library", () => {
     expect(captured.prompt).toBe("just do X")
   })
 })
+
+describe("AgentRunner resume across restarts", () => {
+  const seedBareSession = () => {
+    const session: Session = {
+      id: SESSION,
+      repo: "acme/widget",
+      branch: "b",
+      title: "t",
+      status: "idle",
+      cli: "claude",
+      diff: { added: 0, removed: 0 },
+      prNumber: null,
+      costUsd: 0,
+      tokens: 0,
+      updatedAt: "2026-07-11T10:00:00.000Z",
+      mode: "auto"
+    }
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(join(temp.root, "sessions.json"), JSON.stringify([session]))
+  }
+
+  // An adapter that records the resume id it was handed and reports `harnessId`
+  // as the harness's own session id (on Started) — the value that should persist.
+  const resumeAdapter = (
+    captured: { resumeId: string | null },
+    harnessId: string
+  ): Layer.Layer<CliAdapter> =>
+    Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: (_sessionId, spec, ctx) =>
+          Effect.gen(function* () {
+            captured.resumeId = spec.resumeId
+            yield* ctx.emit({ _tag: "Started", sessionId: harnessId })
+            yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+          }) as ReturnType<CliAdapterShape["run"]>,
+        stop: () => Effect.void
+      })
+    )
+
+  it("persists the harness session id and resumes with it on the next run (survives a restart)", async () => {
+    seedBareSession()
+    const captured: { resumeId: string | null } = { resumeId: null }
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      PlanStore.Default,
+      resumeAdapter(captured, "sdk-123"),
+      DiscoveryService.Default,
+      temp.layer
+    )
+
+    // First run: no prior resume id; the harness reports "sdk-123" on Started.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.prompt(SESSION, "start").pipe(Stream.runDrain)
+      }).pipe(Effect.provide(base))
+    )
+    expect(captured.resumeId).toBeNull()
+
+    // It was persisted on the session (survives an app restart).
+    const persisted = await Effect.runPromise(
+      SessionStore.get(SESSION).pipe(Effect.provide(Layer.merge(SessionStore.Default, temp.layer)))
+    )
+    expect(persisted.resumeId).toBe("sdk-123")
+
+    // A SECOND run through a FRESH runner (= a restart, empty in-memory map) picks
+    // the id up from persistence and hands it to the adapter as spec.resumeId.
+    captured.resumeId = null
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.prompt(SESSION, "continue").pipe(Stream.runDrain)
+      }).pipe(Effect.provide(base))
+    )
+    expect(captured.resumeId).toBe("sdk-123")
+  })
+})

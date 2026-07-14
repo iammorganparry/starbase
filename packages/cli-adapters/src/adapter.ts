@@ -25,6 +25,13 @@ export interface SessionSpec {
   readonly mode: PermissionMode
   /** The model id to run, or null to use the harness default. */
   readonly model: string | null
+  /**
+   * The harness session id to RESUME from (persisted across app restarts), or
+   * null for a fresh conversation. The adapter prefers its live in-memory id and
+   * falls back to this, so "continue" reloads the full conversation even after a
+   * restart cleared the in-memory resume map.
+   */
+  readonly resumeId: string | null
 }
 
 /** What the agent is asking permission to do, surfaced before it acts. */
