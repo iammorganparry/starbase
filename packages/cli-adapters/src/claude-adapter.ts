@@ -336,6 +336,13 @@ export const streamEventsFor = (
           out.push({ _tag: "ToolStart", id, name, target: toolTarget(name, input), ...forAgent })
         }
       }
+      // Live token count: the SDK stamps cumulative turn usage on each assistant
+      // message, so surface it as it grows (the final `Done` still carries the
+      // authoritative total). Only the main agent's usage drives the readout.
+      if (agentId === undefined) {
+        const tokens = totalTokens((msg.message as { usage?: unknown }).usage)
+        if (tokens > 0) out.push({ _tag: "Usage", tokens })
+      }
       return out
     }
 

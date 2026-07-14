@@ -20,6 +20,7 @@ import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { ArchivedBanner } from "../composites/archived-banner.js"
+import { RunStats } from "../composites/run-stats.js"
 
 /**
  * Shift+Tab cycles through the HITL modes, Claude-Code style. Plan mode is
@@ -45,6 +46,10 @@ export interface ConversationViewProps {
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
   /** The agent is producing a turn — the composer queues messages instead of blocking. */
   busy?: boolean
+  /** Cumulative tokens for the current/last run (live analytics readout). */
+  tokens?: number
+  /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
+  runStartedAt?: number | null
   /** Messages the operator queued while the agent was busy (sent FIFO once it's free). */
   queued?: ReadonlyArray<{ text: string; images: ReadonlyArray<Attachment> }>
   /** Drop a queued message before it's sent (by its index in `queued`). */
@@ -98,6 +103,8 @@ export function ConversationView({
   onSetModel,
   onSend,
   busy = false,
+  tokens = 0,
+  runStartedAt = null,
   queued = [],
   onUnqueue,
   onSendNow,
@@ -171,6 +178,12 @@ export function ConversationView({
             onRestore={archived.onRestore}
             onDelete={archived.onDelete}
           />
+        )}
+        {/* Live session analytics — elapsed + token consumption, Claude-Code style. */}
+        {!archived && (busy || runStartedAt !== null || tokens > 0) && (
+          <div className="flex h-8 flex-none items-center justify-end border-b border-hairline px-[30px]">
+            <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
+          </div>
         )}
 
         <div

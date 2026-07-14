@@ -424,6 +424,12 @@ export const StreamEvent = Schema.Union(
   }),
   /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
   Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
+  /**
+   * A LIVE cumulative token count for the running turn (harness-agnostic), so the
+   * UI can show consumption as it grows — not just the final `Done` total. Emitted
+   * as the harness reports usage mid-run.
+   */
+  Schema.TaggedStruct("Usage", { tokens: Schema.Number }),
   Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )
@@ -639,6 +645,10 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
     // fold stays total even if one ever reaches the main message.
     Match.tag("SubagentStarted", () => msg),
     Match.tag("SubagentEnded", () => msg),
+
+    // Live usage is run-level analytics (tracked in the machine/session), not part
+    // of the transcript — no-op in the per-message fold.
+    Match.tag("Usage", () => msg),
 
     Match.exhaustive
   )

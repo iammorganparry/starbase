@@ -87,6 +87,8 @@ export function ConversationPane({
           files={convo.files}
           paused={convo.paused}
           busy={convo.busy}
+          tokens={convo.tokens}
+          runStartedAt={convo.runStartedAt}
           queued={convo.queued}
           onUnqueue={convo.unqueue}
           onSendNow={convo.sendNow}
