@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { NodeContext } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
@@ -136,6 +136,32 @@ describe("WorkspaceService", () => {
       expect(exit.value).toContain("+changed line")
       expect(exit.value).toContain("README.md")
     }
+  })
+
+  it("diff() includes NEW (untracked) and DELETED files, not just modified ones", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "netchanges"))
+    // A brand-new untracked file, and a deletion of a tracked one (README exists
+    // from initGitRepo's initial commit).
+    writeFileSync(join(repoPath, "brand-new.ts"), "export const hi = 1\n")
+    rmSync(join(repoPath, "README.md"))
+    const exit = await runExit(
+      WorkspaceService.diff(repoPath).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    // New file shows as an addition…
+    expect(exit.value).toContain("brand-new.ts")
+    expect(exit.value).toContain("+export const hi = 1")
+    // …and the deletion shows too.
+    expect(exit.value).toContain("README.md")
+    expect(exit.value).toContain("deleted file")
+    // The untracked file is left UNtracked afterwards (intent-to-add was reset).
+    const stillUntracked = execFileSync("git", ["status", "--porcelain", "--", "brand-new.ts"], {
+      cwd: repoPath,
+      encoding: "utf-8"
+    })
+    expect(stillUntracked.startsWith("??")).toBe(true)
   })
 
   it("diff() is empty for a clean worktree", async () => {

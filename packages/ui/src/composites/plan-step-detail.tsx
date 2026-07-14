@@ -100,6 +100,11 @@ export function PlanStepDetail({
             {plan.status === "revising" ? "agent revising" : "flagged"}
           </Badge>
         )}
+        {step.changed && (
+          <Badge tone="green" size="xs" className="ml-1">
+            updated
+          </Badge>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto px-5 py-4">
@@ -140,7 +145,10 @@ export function PlanStepDetail({
 
         {step.graph && (
           <Section title="Control flow">
-            <div className="h-[300px] overflow-hidden rounded-md border border-hairline bg-editor">
+            {/* Flex column so PlanFlow's `flex-1` react-flow host resolves to a
+                real height — without it the canvas collapses to 0 and the box
+                paints empty. */}
+            <div className="flex h-[300px] flex-col overflow-hidden rounded-md border border-hairline bg-editor">
               <PlanFlow graph={step.graph} selectedId={step.id} embedded />
             </div>
           </Section>

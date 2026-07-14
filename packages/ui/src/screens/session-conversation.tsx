@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react"
-import type { CliInfo, Session, SessionStatus, User } from "@starbase/core"
+import type { CliInfo, DiffStat, Session, SessionStatus, User } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
@@ -48,6 +48,8 @@ export interface SessionConversationProps {
   patch?: string
   /** Live per-session agent status, overriding the persisted status. */
   liveStatus?: Record<string, SessionStatus>
+  /** Live per-session worktree diff totals, for the Changes tab badge. */
+  liveDiff?: Record<string, DiffStat>
   /** Open the New Session dialog. */
   onNewSession?: () => void
   /** The signed-in user, shown in the sidebar footer account menu. */
@@ -157,6 +159,7 @@ export function SessionConversation(props: SessionConversationProps) {
               active={activeTab}
               onChange={setTab}
               prNumber={active?.prNumber ?? null}
+              changes={(active && props.liveDiff?.[active.id]) ?? null}
               status={
                 activeStatus === "thinking"
                   ? { label: "Thinking", tone: "yellow" }
@@ -189,7 +192,7 @@ export function SessionConversation(props: SessionConversationProps) {
                   ) : (
                     <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
                       {props.conversationPane ?? (
-                        <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" patch={props.patch} />
+                        <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" />
                       )}
                     </div>
                   )

@@ -447,6 +447,23 @@ describe("AgentRunner plan mode", () => {
     expect(mode).toBe("auto")
   })
 
+  it("keeps plan mode TRANSIENT — never persists 'plan' as the session mode", async () => {
+    // If "plan" were persisted, a restart (empty in-memory maps) would resurrect
+    // plan mode from session.mode with no priorModes captured, and approval would
+    // fall back to "accept-edits". Keeping session.mode at the real exec mode is
+    // what makes approval reliably restore it.
+    seedSession("auto")
+    const persisted = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.setMode(SESSION, "plan")
+        return (yield* SessionStore.get(SESSION)).mode
+      }).pipe(Effect.provide(base()))
+    )
+    expect(persisted).toBe("auto") // NOT "plan"
+  })
+
   it("re-drives execution for a stale plan (no live run): switches out of plan mode and runs", async () => {
     seedSession("plan")
     const result = await Effect.runPromise(

@@ -47,6 +47,10 @@ export interface Conversation {
   readonly queued: ReadonlyArray<QueuedMessage>
   /** Live sub-agents (harness `Task` spawns) for the current turn — watch-only tabs. */
   readonly subagents: ReadonlyArray<Subagent>
+  /** Cumulative tokens for the current/last turn (live analytics). */
+  readonly tokens: number
+  /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
+  readonly runStartedAt: number | null
   /** Drop a queued message before it's sent (by index). */
   readonly unqueue: (index: number) => void
   /** Interrupt the current turn and run a queued message now (steer mid-stream). */
@@ -75,7 +79,8 @@ export function useConversation(session: Session): Conversation {
   const actor = useMemo(() => getConversationActor(session), [session.id])
   const state = useSelector(actor, (s) => s)
   const send = actor.send
-  const { messages, mode, skills, files, model, models, patch, queued, subagents } = state.context
+  const { messages, mode, skills, files, model, models, patch, queued, subagents, tokens, runStartedAt } =
+    state.context
 
   const paused = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -108,6 +113,8 @@ export function useConversation(session: Session): Conversation {
     paused,
     queued,
     subagents,
+    tokens,
+    runStartedAt,
     unqueue: (index) => send({ type: "UNQUEUE", index }),
     sendNow: (index) => send({ type: "SEND_NOW", index }),
     question,

@@ -219,7 +219,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           yield* Ref.update(priorModes, (m) => new Map(m).set(sessionId, prior))
         }
         yield* Ref.update(modes, (m) => new Map(m).set(sessionId, mode))
-        yield* persistMode(sessionId, mode)
+        // Plan mode is TRANSIENT — never persist it to the session. If we did, a
+        // restart (or any run with an empty in-memory `modes`) would resurrect
+        // plan mode from `session.mode` with no `priorModes` captured, so
+        // approving the plan would fall back to "accept-edits" and re-gate every
+        // command. Keeping the real exec mode persisted means `session.mode` is
+        // always the mode to restore on approval.
+        if (mode !== "plan") yield* persistMode(sessionId, mode)
       })
 
     const decideGate = (sessionId: string, gateId: string, decision: GateDecision) =>
@@ -351,7 +357,17 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         Effect.gen(function* () {
           const plan = yield* sessionPlan(sessionId, planId)
           if (plan === null) return Stream.empty
-          yield* setMode(sessionId, yield* resolveExecMode(sessionId))
+          // Restore the mode the operator actually runs this session in. Plan mode
+          // is never persisted, so `session.mode` is their real exec mode (e.g.
+          // "auto"); fall back to the CLI-config default only if it's absent or a
+          // legacy "plan". This keeps a stale-plan re-drive from re-gating.
+          const persisted = yield* SessionStore.get(sessionId).pipe(
+            Effect.map((s) => s.mode),
+            Effect.orElseSucceed(() => undefined)
+          )
+          const restore =
+            persisted && persisted !== "plan" ? persisted : yield* resolveExecMode(sessionId)
+          yield* setMode(sessionId, restore)
           return prompt(sessionId, resumePlanPrompt(plan))
         })
       )

@@ -23,6 +23,7 @@ import { latestPlan, pendingPlan, pendingQuestion } from "@starbase/core"
 import { conversationMachine } from "./conversation-machine.js"
 import { setSessionStatus } from "./session-status.js"
 import { setPlanPresent } from "./plan-presence.js"
+import { clearSessionDiff, diffCounts, setSessionDiff } from "./diff-presence.js"
 
 type ConversationActor = ActorRefFrom<typeof conversationMachine>
 type ConversationSnapshot = SnapshotFrom<typeof conversationMachine>
@@ -57,9 +58,11 @@ export const getConversationActor = (session: Session): ConversationActor => {
     // `useMemo` — doesn't notify the status/plan stores mid-render.
     const status = statusOf(snap)
     const planPresent = latestPlan(snap.context.messages) !== null
+    const diff = diffCounts(snap.context.patch)
     queueMicrotask(() => {
       setSessionStatus(session.id, status)
       setPlanPresent(session.id, planPresent)
+      setSessionDiff(session.id, diff)
     })
   })
   actor.start()
@@ -75,4 +78,5 @@ export const disposeConversationActor = (sessionId: string): void => {
   registry.delete(sessionId)
   setSessionStatus(sessionId, null)
   setPlanPresent(sessionId, false)
+  clearSessionDiff(sessionId)
 }
