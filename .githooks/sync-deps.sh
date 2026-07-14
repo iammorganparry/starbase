@@ -28,4 +28,13 @@ fi
 
 echo "[starbase] pnpm-lock.yaml changed — syncing deps (pnpm install)…"
 pnpm install || echo "[starbase] ⚠ pnpm install failed — run 'pnpm install' manually." >&2
+
+# pnpm sometimes skips Electron's postinstall (the shared store thinks it was
+# already built across worktrees), leaving no binary and a broken `pnpm dev`
+# ("Error: Electron uninstall"). Detect + repair by running its own installer.
+if [ -f node_modules/electron/install.js ] && [ ! -f node_modules/electron/path.txt ]; then
+  echo "[starbase] Electron binary missing — repairing…"
+  ( cd node_modules/electron && node install.js ) ||
+    echo "[starbase] ⚠ Electron repair failed — run 'node node_modules/electron/install.js'." >&2
+fi
 exit 0
