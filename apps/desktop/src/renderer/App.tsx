@@ -21,6 +21,7 @@ import { useSessionStatuses } from "./session-status.js"
 import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
 import { completedSessionIds } from "./pr-refresh.js"
+import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
 
 const GH_UNKNOWN: GhStatus = {
@@ -177,6 +178,23 @@ export function App() {
       void qc.invalidateQueries({ queryKey: ["pr-state", id] })
     }
   }, [liveStatus, sessions, autoDetect, send, qc])
+
+  // Retitle a session as soon as it has a PLAN — a run that plans then executes
+  // stays "present" (thinking/needs-input) throughout, so the on-completion
+  // retitle above wouldn't fire until the whole thing finishes, leaving the
+  // sidebar stuck on "Untitled" through a long build. A proposed plan is already
+  // strong signal, so we retitle on the absent → present edge of plan presence.
+  const prevPlanRef = useRef<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    const prev = prevPlanRef.current
+    prevPlanRef.current = planSessions
+    for (const id of newlyPlannedSessionIds(prev, planSessions, sessions)) {
+      void rpc
+        .sessionsRetitle(id)
+        .then((session) => send({ type: "SESSION_UPDATED", session }))
+        .catch(() => {})
+    }
+  }, [planSessions, sessions, send])
 
   // Archive sweep: once a linked PR is merged or closed, auto-archive the session
   // so it drops into the sidebar's "Archived" group (read-only, kept). react-query

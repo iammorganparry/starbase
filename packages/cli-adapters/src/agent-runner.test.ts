@@ -424,6 +424,29 @@ describe("AgentRunner plan mode", () => {
     expect(mode).toBe("accept-edits")
   })
 
+  it("restores the operator's PRE-PLAN mode (auto), not the CLI-config default", async () => {
+    // Regression: execDefaults (CLI config → "accept-edits" fallback) used to win
+    // over priorModes, silently re-gating commands after approving a plan even
+    // though the operator was running the session in "auto".
+    seedSession("auto")
+    const mode = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        // Running in auto, then switch to plan (captures "auto" as the prior mode).
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.setMode(SESSION, "plan")
+        yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+          Stream.tap((ev) =>
+            ev._tag === "PlanProposed" ? runner.approvePlan(SESSION, ev.plan.id) : Effect.void
+          ),
+          Stream.runDrain
+        )
+        return (yield* SessionStore.get(SESSION)).mode
+      }).pipe(Effect.provide(base()))
+    )
+    expect(mode).toBe("auto")
+  })
+
   it("re-drives execution for a stale plan (no live run): switches out of plan mode and runs", async () => {
     seedSession("plan")
     const result = await Effect.runPromise(
