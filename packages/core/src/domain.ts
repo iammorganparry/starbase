@@ -447,5 +447,44 @@ export const CreateSessionFromPrInput = Schema.Struct({
 })
 export type CreateSessionFromPrInput = Schema.Schema.Type<typeof CreateSessionFromPrInput>
 
+// ── Terminal ─────────────────────────────────────────────────────────────────
+
+/** Lifecycle of a PTY-backed terminal. */
+export const TerminalStatus = Schema.Literal("running", "exited")
+export type TerminalStatus = Schema.Schema.Type<typeof TerminalStatus>
+
+/**
+ * Metadata for one PTY-backed terminal tab. The live byte stream rides
+ * `Terminal.attach`; this is just the sidebar/tab-strip descriptor. Terminals
+ * are scoped to a session (their cwd is the session's worktree).
+ */
+export const TerminalInfo = Schema.Struct({
+  /** Opaque id (also the RPC key for write/resize/kill/attach). */
+  id: Schema.String,
+  /** The session this terminal belongs to. */
+  sessionId: Schema.String,
+  /** Tab label — the shell's base name, e.g. "zsh" or "node". */
+  title: Schema.String,
+  /** Absolute working directory the shell was spawned in. */
+  cwd: Schema.String,
+  /** Whether the shell process is still alive. */
+  status: TerminalStatus,
+  /** Exit code once the shell has exited (null while running). */
+  exitCode: Schema.NullOr(Schema.Number)
+})
+export type TerminalInfo = Schema.Schema.Type<typeof TerminalInfo>
+
+/**
+ * One frame on a terminal's `attach` stream. Output frames carry a
+ * *coalesced* run of PTY bytes (the service batches raw `onData` chunks on a
+ * short tick / size threshold so throughput events stay bounded — the crux of
+ * the perf story). An `exit` frame is emitted once, last, when the shell dies.
+ */
+export const TerminalChunk = Schema.Union(
+  Schema.Struct({ _tag: Schema.Literal("data"), data: Schema.String }),
+  Schema.Struct({ _tag: Schema.Literal("exit"), exitCode: Schema.Number })
+)
+export type TerminalChunk = Schema.Schema.Type<typeof TerminalChunk>
+
 // The conversation/transcript model (Message, ToolCall, ApprovalGate) and the
 // normalized StreamEvent seam live in ./conversation.ts.

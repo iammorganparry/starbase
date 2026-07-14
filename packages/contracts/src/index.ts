@@ -24,6 +24,8 @@ import {
   Session,
   Skill,
   StreamEvent,
+  TerminalChunk,
+  TerminalInfo,
   Usage,
   WorkspaceConfig
 } from "@starbase/core"
@@ -33,6 +35,7 @@ import {
   GhError,
   GitError,
   SessionNotFoundError,
+  TerminalError,
   WorkspaceNotConfiguredError
 } from "@starbase/core"
 import { Rpc, RpcGroup } from "@effect/rpc"
@@ -400,5 +403,60 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Github.merge", {
     error: GhError,
     payload: { sessionId: Schema.String, method: Schema.optional(PrMergeMethod) }
+  }),
+
+  // ── Terminal ───────────────────────────────────────────────────────────────
+  // A native PTY-backed terminal, scoped to a session (cwd = its worktree). The
+  // PTY lives in the main process; only coalesced byte frames cross IPC. Lifecycle
+  // (create/resize/kill/list) is unary; the hot output path is the `attach` stream.
+
+  /**
+   * Spawn a login shell in `cwd` (defaults to the session's worktree) sized to
+   * `cols`×`rows`, and return its descriptor. The PTY outlives dock toggles and
+   * session switches — it is only reclaimed by `Terminal.kill`, session delete,
+   * or app quit.
+   */
+  Rpc.make("Terminal.create", {
+    success: TerminalInfo,
+    error: TerminalError,
+    payload: {
+      sessionId: Schema.String,
+      cwd: Schema.optional(Schema.String),
+      cols: Schema.Number,
+      rows: Schema.Number
+    }
+  }),
+
+  /**
+   * Subscribe to a terminal's output. Replays the recent scrollback (a bounded
+   * ring buffer) so a re-attach after a dock/session toggle restores the screen,
+   * then streams live *coalesced* frames. Long-lived: cancel the stream to
+   * detach (the PTY keeps running). Ends with an `exit` frame when the shell dies.
+   */
+  Rpc.make("Terminal.attach", {
+    success: TerminalChunk,
+    stream: true,
+    payload: { terminalId: Schema.String }
+  }),
+
+  /** Write operator keystrokes (or pasted text) to a terminal's PTY. No-op if unknown. */
+  Rpc.make("Terminal.write", {
+    payload: { terminalId: Schema.String, data: Schema.String }
+  }),
+
+  /** Resize a terminal's PTY (drives SIGWINCH so TUIs reflow). No-op if unknown. */
+  Rpc.make("Terminal.resize", {
+    payload: { terminalId: Schema.String, cols: Schema.Number, rows: Schema.Number }
+  }),
+
+  /** Kill a terminal's shell (SIGHUP) and drop it. Idempotent. */
+  Rpc.make("Terminal.kill", {
+    payload: { terminalId: Schema.String }
+  }),
+
+  /** List the live terminals for a session (to rebuild its tab strip on mount). */
+  Rpc.make("Terminal.list", {
+    success: Schema.Array(TerminalInfo),
+    payload: { sessionId: Schema.String }
   })
 ) {}

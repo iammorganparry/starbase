@@ -17,6 +17,8 @@ import { appMachine } from "./app-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
 import { PullRequestPane } from "./pull-request-pane.js"
 import { ReviewPane } from "./review-pane.js"
+import { TerminalDockView } from "./terminal-dock-view.js"
+import { useTerminalDock } from "./use-terminal-dock.js"
 import { useSessionStatuses } from "./session-status.js"
 import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
@@ -48,6 +50,7 @@ export function App() {
   const { clis, repos, reposDir, sessions } = state.context
   const liveStatus = useSessionStatuses()
   const planSessions = usePlanSessions()
+  const termDock = useTerminalDock()
   const qc = useQueryClient()
 
   // Renderer-side rpc reads, via react-query.
@@ -299,6 +302,16 @@ export function App() {
       )}
       renderCode={(session, ctx) => (
         <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
+      )}
+      terminalDockSide={termDock.side}
+      renderTerminalDock={(session) => (
+        <TerminalDockView
+          session={session}
+          visible={termDock.visible}
+          onToggle={termDock.toggle}
+          side={termDock.side}
+          onSideChange={termDock.setSide}
+        />
       )}
       version={__APP_VERSION__}
     />

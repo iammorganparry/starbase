@@ -16,6 +16,7 @@ import type {
   SessionStatus,
   Usage
 } from "@starbase/core"
+import type { DockSide } from "./terminal-panel.js"
 import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
@@ -72,6 +73,10 @@ export interface StarbaseAppProps {
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Changes tab — the Code Review view over the local worktree diff. */
   renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the per-session terminal dock (desktop app's live TerminalDock). */
+  renderTerminalDock?: (session: Session) => ReactNode
+  /** Which edge the terminal dock attaches to (drives the content column's flow). */
+  terminalDockSide?: DockSide
   activeSessionId?: string | null
   patch?: string
   /**
@@ -133,6 +138,8 @@ export function StarbaseApp({
   renderPullRequest,
   renderReview,
   renderCode,
+  renderTerminalDock,
+  terminalDockSide,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -273,6 +280,8 @@ export function StarbaseApp({
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
         renderCode={renderCode}
+        renderTerminalDock={renderTerminalDock}
+        terminalDockSide={terminalDockSide}
         version={version}
       />
       {onCreateSession && (

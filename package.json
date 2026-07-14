@@ -28,6 +28,11 @@
     "vitest": "^3.2.6"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["electron", "electron-builder", "esbuild"]
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-builder",
+      "esbuild",
+      "@homebridge/node-pty-prebuilt-multiarch"
+    ]
   }
 }

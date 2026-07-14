@@ -10,6 +10,8 @@ import { SlashCommandRow } from "./slash-command-row.js"
 import { McpServerRow } from "./mcp-server-row.js"
 import { Composer } from "./composer.js"
 import { Callout } from "../components/callout.js"
+import { TerminalDock, type DockSide, type TerminalTab } from "../app/terminal-panel.js"
+import { useState } from "react"
 
 const meta: Meta = { title: "Molecules/Overview" }
 export default meta
@@ -122,6 +124,53 @@ const DEMO_MODELS: Record<string, ReadonlyArray<ModelOption>> = {
   ],
   codex: [{ id: "gpt-5-codex", label: "gpt-5-codex" }],
   cursor: []
+}
+
+const DEMO_TABS: ReadonlyArray<TerminalTab> = [
+  { id: "t1", title: "zsh", status: "running" },
+  { id: "t2", title: "node", status: "idle" },
+  { id: "t3", title: "bash", status: "exited" }
+]
+
+/** Interactive dock: flip sides, toggle visibility, switch tabs — exercises the
+ * chrome/state seams (the live PTY cell is faked with a static block). */
+function TerminalDockDemo() {
+  const [dock, setDock] = useState<DockSide>("bottom")
+  const [visible, setVisible] = useState(true)
+  const [activeId, setActiveId] = useState<string | null>("t1")
+  return (
+    <div className="relative flex h-[560px] w-[1100px] overflow-hidden rounded-lg border border-line bg-editor">
+      <div className="flex-1 p-4 text-sm text-ink-dim">
+        Session workspace · dock is {dock}, {visible ? "visible" : "hidden"}
+        <button className="ml-3 rounded border border-line px-2 py-0.5" onClick={() => setVisible((v) => !v)}>
+          toggle (⌃`)
+        </button>
+      </div>
+      <TerminalDock
+        dock={dock}
+        onDockChange={setDock}
+        visible={visible}
+        onToggle={() => setVisible(false)}
+        tabs={DEMO_TABS}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onNew={() => {}}
+        onClose={() => {}}
+        cwdLabel="~/repos/starbase"
+        lastExit={0}
+        renderTerminal={(id) => (
+          <div className="h-full w-full p-3 font-mono text-xs text-ink">
+            $ terminal cell for {id}
+          </div>
+        )}
+      />
+    </div>
+  )
+}
+
+export const Terminal: Story = {
+  name: "Terminal Dock",
+  render: () => <TerminalDockDemo />
 }
 
 export const Settings: Story = {
