@@ -44,6 +44,12 @@ export interface PullRequestState {
   readonly merging: boolean
   /** The message from a failed `gh pr merge`, or null. */
   readonly mergeError: string | null
+  /** Flip the linked draft PR to ready for review. */
+  readonly markReady: () => Promise<void>
+  /** A mark-ready is in flight. */
+  readonly markingReady: boolean
+  /** The message from a failed `gh pr ready`, or null. */
+  readonly markReadyError: string | null
   readonly submitReview: (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => Promise<void>
   readonly sendEntryToAgent: (entryId: string) => Promise<void>
   /** Timeline entry ids already routed to the agent (their action stays "Sent"). */
@@ -105,6 +111,16 @@ export function usePullRequest(
     mutationFn: () => rpc.githubMerge(session.id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
   })
+  // "Ready for review" flips a draft PR via `gh pr ready`. On success the PR
+  // read is invalidated so the header + side panel leave the Draft state.
+  const markReadyMutation = useMutation({
+    mutationFn: () => rpc.githubMarkReady(session.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
+  })
+  const markReady = useCallback(
+    () => markReadyMutation.mutateAsync().then(() => undefined),
+    [markReadyMutation]
+  )
   const mergePr = useCallback(
     () => mergeMutation.mutateAsync().then(() => undefined),
     [mergeMutation]
@@ -146,6 +162,11 @@ export function usePullRequest(
     merging: mergeMutation.isPending,
     mergeError: mergeMutation.error
       ? ((mergeMutation.error as { message?: string }).message ?? "Failed to merge pull request")
+      : null,
+    markReady,
+    markingReady: markReadyMutation.isPending,
+    markReadyError: markReadyMutation.error
+      ? ((markReadyMutation.error as { message?: string }).message ?? "Failed to mark pull request ready")
       : null,
     submitReview,
     sendEntryToAgent,

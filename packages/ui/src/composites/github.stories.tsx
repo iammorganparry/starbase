@@ -63,6 +63,20 @@ export const PullRequestOpen: Story = {
   )
 }
 
+/** Draft PR — the side panel offers "Ready for review" instead of merge. */
+export const PullRequestDraft: Story = {
+  render: () => (
+    <div className="flex h-screen bg-editor">
+      <PullRequestView
+        pr={{ ...pr, state: "draft", isDraft: true, mergeBlockers: [] }}
+        connected
+        sessionTitle="Refactor auth flow"
+        onMarkReady={() => {}}
+      />
+    </div>
+  )
+}
+
 /** Empty state — no PR yet; offers to create one. */
 export const PullRequestEmpty: Story = {
   render: () => (
@@ -101,7 +115,10 @@ export const CodeReview: Story = {
         <CodeReviewView
           files={files}
           activePath="src/auth/session.ts"
-          fileDiff={fileDiff}
+          fileDiffs={[
+            { path: "src/auth/session.ts", diff: fileDiff },
+            { path: "src/auth/refresh.ts", diff: fileDiff }
+          ]}
           drafts={[]}
           routeTargetSession="Refactor auth flow"
           connected

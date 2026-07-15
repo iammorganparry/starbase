@@ -305,6 +305,16 @@ export const githubMerge = (input: { sessionId: string; method?: PrMergeMethod }
     yield* GhService.prMerge(session.worktreePath, session.prNumber, input.method)
   })
 
+/** `Github.markReady` handler — flip the session's draft PR to ready for review. */
+export const githubMarkReady = (input: { sessionId: string }) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to mark ready" }))
+    }
+    yield* GhService.prReady(session.worktreePath, session.prNumber)
+  })
+
 /**
  * `Terminal.create` handler. Resolves the terminal's working directory: an
  * explicit `cwd` wins, else the session's worktree, else the main-process cwd
@@ -378,6 +388,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setGithub": (github) => ConfigService.setGithub(github),
   "Config.setGit": (git) => ConfigService.setGit(git),
   "Config.setStarredRepos": ({ paths }) => ConfigService.setStarredRepos(paths),
+  "Config.setCollapsedRepos": ({ paths }) => ConfigService.setCollapsedRepos(paths),
   "Config.setLastRepoPath": ({ path }) => ConfigService.setLastRepoPath(path),
   "Config.setProvider": ({ cli, provider }) => ConfigService.setProvider(cli, provider),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
@@ -390,6 +401,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),
   "Github.merge": (input) => githubMerge(input),
+  "Github.markReady": (input) => githubMarkReady(input),
 
   // Terminal — PTY lifecycle is unary; the coalesced output path is a stream,
   // unwrapped from the service like `Agent.run`.

@@ -91,6 +91,12 @@ export interface PullRequestViewProps {
   merging?: boolean
   /** A failed `gh pr merge`, shown beneath the merge button. */
   mergeError?: string | null
+  /** Flip a draft PR to ready for review (shown only while the PR is a draft). */
+  onMarkReady?: () => void
+  /** A mark-ready is in flight — disables the button and shows a spinner. */
+  markingReady?: boolean
+  /** A failed `gh pr ready`, shown beneath the button. */
+  markReadyError?: string | null
 }
 
 /**
@@ -112,7 +118,10 @@ export function PullRequestView({
   onOpenOnGithub,
   onMerge,
   merging = false,
-  mergeError
+  mergeError,
+  onMarkReady,
+  markingReady = false,
+  markReadyError
 }: PullRequestViewProps) {
   // Loading — avoid flashing the "Create PR" empty state before the PR resolves.
   if (pr === null && busy) {
@@ -244,6 +253,9 @@ export function PullRequestView({
         onMerge={onMerge}
         merging={merging}
         mergeError={mergeError}
+        onMarkReady={onMarkReady}
+        markingReady={markingReady}
+        markReadyError={markReadyError}
       />
     </div>
   )

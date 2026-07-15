@@ -1,7 +1,7 @@
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import { GhService, mapPrSummary, mapPrView } from "./gh.js"
+import { GhService, mapPrSummary, mapPrView, mapReviewComments } from "./gh.js"
 import { failureOf, fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
 
@@ -146,6 +146,55 @@ describe("mapPrView", () => {
   it("maps MERGED and CLOSED states", () => {
     expect(mapPrView({ state: "MERGED", number: 1, url: "u" }).state).toBe("merged")
     expect(mapPrView({ state: "CLOSED", number: 1, url: "u" }).state).toBe("closed")
+  })
+})
+
+describe("mapReviewComments", () => {
+  it("maps inline review comments, falling back to original_line when line is null", () => {
+    const items = mapReviewComments([
+      {
+        id: 3590457963,
+        user: { login: "greptile-apps[bot]" },
+        body: "RAF not cancelled on unmount",
+        created_at: "2026-07-15T20:15:10Z",
+        path: "packages/ui/src/composites/code-review-view.tsx",
+        line: null,
+        original_line: 89
+      },
+      {
+        id: 3590470617,
+        user: { login: "iammorganparry" },
+        body: "Addressed",
+        created_at: "2026-07-15T20:17:16Z",
+        path: "packages/ui/src/composites/code-review-view.tsx",
+        line: 91
+      }
+    ])
+    expect(items).toStrictEqual([
+      {
+        id: "rc-3590457963",
+        author: "greptile-apps[bot]",
+        kind: "commented",
+        body: "RAF not cancelled on unmount",
+        createdAt: "2026-07-15T20:15:10Z",
+        path: "packages/ui/src/composites/code-review-view.tsx",
+        line: 89
+      },
+      {
+        id: "rc-3590470617",
+        author: "iammorganparry",
+        kind: "commented",
+        body: "Addressed",
+        createdAt: "2026-07-15T20:17:16Z",
+        path: "packages/ui/src/composites/code-review-view.tsx",
+        line: 91
+      }
+    ])
+  })
+
+  it("tolerates a null / empty payload", () => {
+    expect(mapReviewComments(null)).toStrictEqual([])
+    expect(mapReviewComments([])).toStrictEqual([])
   })
 })
 
@@ -351,5 +400,24 @@ describe("GhService pull-request writes", () => {
       stderr: "gh: not mergeable"
     }))
     expect(failureOf(merge)?._tag).toBe("GhError")
+  })
+
+  it("prReady passes the ready subcommand", async () => {
+    const calls: Array<ReadonlyArray<string>> = []
+    const capture: FakeCommandHandler = (cmd, args) => {
+      if (cmd === "gh") calls.push(args)
+      return { stdout: "" }
+    }
+
+    await providePr(GhService.prReady("/wt", 482), capture)
+    expect(calls[0]).toEqual(["pr", "ready", "482"])
+  })
+
+  it("prReady fails with GhError on a non-zero exit", async () => {
+    const ready = await providePr(GhService.prReady("/wt", 482), () => ({
+      exitCode: 1,
+      stderr: "gh: not a draft"
+    }))
+    expect(failureOf(ready)?._tag).toBe("GhError")
   })
 })

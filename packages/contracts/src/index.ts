@@ -305,6 +305,13 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { paths: Schema.Array(Schema.String) }
   }),
 
+  /** Persist the full set of collapsed repo paths (replaces the stored list). */
+  Rpc.make("Config.setCollapsedRepos", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { paths: Schema.Array(Schema.String) }
+  }),
+
   /** Remember the repo used for the most recent session create (picker default). */
   Rpc.make("Config.setLastRepoPath", {
     success: WorkspaceConfig,
@@ -406,6 +413,15 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Github.merge", {
     error: GhError,
     payload: { sessionId: Schema.String, method: Schema.optional(PrMergeMethod) }
+  }),
+
+  /**
+   * Flip the session's draft PR to "ready for review" (`gh pr ready`); surfaces
+   * `GhError` when there is no linked PR or GitHub rejects it.
+   */
+  Rpc.make("Github.markReady", {
+    error: GhError,
+    payload: { sessionId: Schema.String }
   }),
 
   // ── Terminal ───────────────────────────────────────────────────────────────

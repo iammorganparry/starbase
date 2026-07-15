@@ -1,6 +1,6 @@
 import * as React from "react"
 import type { Session, SessionStatus, User } from "@starbase/core"
-import { Archive, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
+import { Archive, ChevronRight, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
@@ -12,6 +12,12 @@ import { SessionRow } from "../composites/session-row.js"
 import { UserMenu } from "../composites/user-menu.js"
 
 type GroupBy = "repo" | "status"
+
+/**
+ * Reserved key used to collapse the Archived group. It is stored alongside repo
+ * paths in `collapsedRepos` (it is not a real repo path/name).
+ */
+export const ARCHIVED_GROUP_KEY = "__archived__"
 
 /** Status groups render in this order (most-active first). */
 const STATUS_ORDER: ReadonlyArray<SessionStatus> = [
@@ -59,6 +65,13 @@ export interface SessionSidebarProps {
   starredRepoNames?: ReadonlySet<string>
   /** Toggle a repo group's starred state from its header star button. */
   onToggleStar?: (repoName: string) => void | Promise<void>
+  /**
+   * Repo group keys (repo names, plus `ARCHIVED_GROUP_KEY`) that are collapsed —
+   * their session lists are hidden. Only applies to repo grouping + Archived.
+   */
+  collapsedRepoNames?: ReadonlySet<string>
+  /** Toggle a repo group's collapsed state from its header (repo grouping + Archived). */
+  onToggleCollapsed?: (repoName: string) => void | Promise<void>
   /** App version (from `__APP_VERSION__`), shown in the footer. */
   version?: string
 }
@@ -81,6 +94,8 @@ export function SessionSidebar({
   ghConnected = false,
   starredRepoNames,
   onToggleStar,
+  collapsedRepoNames,
+  onToggleCollapsed,
   version
 }: SessionSidebarProps) {
   const [filter, setFilter] = React.useState("")
@@ -128,6 +143,8 @@ export function SessionSidebar({
       (a, b) => Number(starredRepoNames.has(b[0])) - Number(starredRepoNames.has(a[0]))
     )
   }, [activeSessions, groupBy, statusOf, starredRepoNames])
+
+  const archivedCollapsed = collapsedRepoNames?.has(ARCHIVED_GROUP_KEY) ?? false
 
   return (
     <div className="flex w-[266px] flex-none flex-col border-r border-hairline bg-panel">
@@ -205,83 +222,138 @@ export function SessionSidebar({
           </div>
         ) : (
           <>
-          {groups.map(([key, list]) => (
-          <div key={key}>
-            <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
-              <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
-              {groupBy === "status" ? (
-                <StatusDot status={key as SessionStatus} size={8} />
-              ) : (
-                <GitBranch size={12} className="text-cyan" />
-              )}
-              <span
-                className={cn(
-                  "flex-1 text-[11.5px] font-semibold text-text",
-                  groupBy === "status" ? "" : "font-mono"
+          {groups.map(([key, list]) => {
+            // Collapse applies to repo grouping only (Status groups stay open).
+            const collapsible = groupBy === "repo" && Boolean(onToggleCollapsed)
+            const collapsed = collapsible && (collapsedRepoNames?.has(key) ?? false)
+            return (
+            <div key={key}>
+              <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
+                {collapsible ? (
+                  <button
+                    type="button"
+                    onClick={() => onToggleCollapsed?.(key)}
+                    aria-expanded={!collapsed}
+                    aria-label={collapsed ? "Expand repository" : "Collapse repository"}
+                    className="flex min-w-0 flex-1 items-center gap-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ChevronRight
+                      size={11}
+                      className={cn(
+                        "flex-none text-muted-foreground transition-transform",
+                        !collapsed && "rotate-90"
+                      )}
+                    />
+                    <GitBranch size={12} className="flex-none text-cyan" />
+                    <span className="flex-1 truncate font-mono text-[11.5px] font-semibold text-text">
+                      {key}
+                    </span>
+                  </button>
+                ) : (
+                  <>
+                    <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
+                    {groupBy === "status" ? (
+                      <StatusDot status={key as SessionStatus} size={8} />
+                    ) : (
+                      <GitBranch size={12} className="text-cyan" />
+                    )}
+                    <span
+                      className={cn(
+                        "flex-1 text-[11.5px] font-semibold text-text",
+                        groupBy === "status" ? "" : "font-mono"
+                      )}
+                    >
+                      {groupBy === "status" ? STATUS_LABEL[key as SessionStatus] : key}
+                    </span>
+                  </>
                 )}
-              >
-                {groupBy === "status" ? STATUS_LABEL[key as SessionStatus] : key}
-              </span>
-              {groupBy === "repo" && onToggleStar && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  type="button"
-                  aria-label={starredRepoNames?.has(key) ? "Unstar repository" : "Star repository"}
-                  aria-pressed={starredRepoNames?.has(key) ?? false}
-                  onClick={() => onToggleStar(key)}
-                  className={cn(
-                    "size-5 rounded hover:bg-surface",
-                    starredRepoNames?.has(key) && "text-yellow hover:text-yellow"
-                  )}
-                >
-                  <Star size={12} className={starredRepoNames?.has(key) ? "fill-current" : undefined} />
-                </Button>
+                {groupBy === "repo" && onToggleStar && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    type="button"
+                    aria-label={starredRepoNames?.has(key) ? "Unstar repository" : "Star repository"}
+                    aria-pressed={starredRepoNames?.has(key) ?? false}
+                    onClick={() => onToggleStar(key)}
+                    className={cn(
+                      "size-5 rounded hover:bg-surface",
+                      starredRepoNames?.has(key) && "text-yellow hover:text-yellow"
+                    )}
+                  >
+                    <Star size={12} className={starredRepoNames?.has(key) ? "fill-current" : undefined} />
+                  </Button>
+                )}
+                <Badge tone="count" size="xs">
+                  {list.length}
+                </Badge>
+              </div>
+              {!collapsed && (
+                <div className="mb-1 flex flex-col gap-[3px]">
+                  {list.map((s) => (
+                    <SessionRow
+                      key={s.id}
+                      session={s}
+                      status={liveStatus?.[s.id]}
+                      active={s.id === activeSessionId}
+                      onSelect={onSelect}
+                      onRename={onRename}
+                      onArchive={onArchive}
+                      onRestore={onRestore}
+                      onDelete={onDelete}
+                    />
+                  ))}
+                </div>
               )}
-              <Badge tone="count" size="xs">
-                {list.length}
-              </Badge>
             </div>
-            <div className="mb-1 flex flex-col gap-[3px]">
-              {list.map((s) => (
-                <SessionRow
-                  key={s.id}
-                  session={s}
-                  status={liveStatus?.[s.id]}
-                  active={s.id === activeSessionId}
-                  onSelect={onSelect}
-                  onRename={onRename}
-                  onArchive={onArchive}
-                  onRestore={onRestore}
-                  onDelete={onDelete}
-                />
-              ))}
-            </div>
-          </div>
-          ))}
+            )
+          })}
 
           {archivedSessions.length > 0 && (
             <div>
               <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
-                <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
-                <Archive size={12} className="text-purple" />
-                <span className="flex-1 text-[11.5px] font-semibold text-text">Archived</span>
+                {onToggleCollapsed ? (
+                  <button
+                    type="button"
+                    onClick={() => onToggleCollapsed(ARCHIVED_GROUP_KEY)}
+                    aria-expanded={!archivedCollapsed}
+                    aria-label={archivedCollapsed ? "Expand archived" : "Collapse archived"}
+                    className="flex min-w-0 flex-1 items-center gap-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ChevronRight
+                      size={11}
+                      className={cn(
+                        "flex-none text-muted-foreground transition-transform",
+                        !archivedCollapsed && "rotate-90"
+                      )}
+                    />
+                    <Archive size={12} className="flex-none text-purple" />
+                    <span className="flex-1 text-[11.5px] font-semibold text-text">Archived</span>
+                  </button>
+                ) : (
+                  <>
+                    <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
+                    <Archive size={12} className="text-purple" />
+                    <span className="flex-1 text-[11.5px] font-semibold text-text">Archived</span>
+                  </>
+                )}
                 <Badge tone="count" size="xs">
                   {archivedSessions.length}
                 </Badge>
               </div>
-              <div className="mb-1 flex flex-col gap-[3px]">
-                {archivedSessions.map((s) => (
-                  <SessionRow
-                    key={s.id}
-                    session={s}
-                    active={s.id === activeSessionId}
-                    onSelect={onSelect}
-                    onRestore={onRestore}
-                    onDelete={onDelete}
-                  />
-                ))}
-              </div>
+              {!archivedCollapsed && (
+                <div className="mb-1 flex flex-col gap-[3px]">
+                  {archivedSessions.map((s) => (
+                    <SessionRow
+                      key={s.id}
+                      session={s}
+                      active={s.id === activeSessionId}
+                      onSelect={onSelect}
+                      onRestore={onRestore}
+                      onDelete={onDelete}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
           </>

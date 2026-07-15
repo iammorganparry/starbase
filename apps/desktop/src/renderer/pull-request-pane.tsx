@@ -31,6 +31,9 @@ export function PullRequestPane({
     mergePr,
     merging,
     mergeError,
+    markReady,
+    markingReady,
+    markReadyError,
     submitReview,
     sendEntryToAgent,
     sentEntryIds,
@@ -49,6 +52,9 @@ export function PullRequestPane({
       onMerge={mergePr}
       merging={merging}
       mergeError={mergeError}
+      onMarkReady={markReady}
+      markingReady={markingReady}
+      markReadyError={markReadyError}
       onConnectGithub={onConnectGithub}
       onSubmitReview={submitReview}
       onSendEntryToAgent={sendEntryToAgent}

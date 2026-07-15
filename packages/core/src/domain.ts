@@ -203,6 +203,12 @@ export const WorkspaceConfig = Schema.Struct({
    */
   starredRepos: Schema.optional(Schema.Array(Schema.String)),
   /**
+   * Absolute paths of the repos the user has collapsed in the sidebar (their
+   * sessions hidden). The reserved sentinel `"__archived__"` collapses the
+   * Archived group. Absent on older configs (treated as an empty list).
+   */
+  collapsedRepos: Schema.optional(Schema.Array(Schema.String)),
+  /**
    * Absolute path of the repo used for the most recent session create, so the
    * New Session dialog can preselect it. Absent until the first create.
    */
