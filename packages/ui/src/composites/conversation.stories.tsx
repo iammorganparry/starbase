@@ -42,6 +42,42 @@ export const Transcript: Story = {
   )
 }
 
+/** An assistant turn with rich output: inline + display LaTeX, and an opt-in
+ *  sandboxed HTML preview block (defaults to the plain-text Code view). */
+const RICH_TURN: Message = {
+  id: "a_rich",
+  role: "assistant",
+  streaming: false,
+  createdAt: "2026-07-13T10:01:00.000Z",
+  parts: [
+    {
+      _tag: "Text",
+      text: [
+        "The energy–mass relation is $E = mc^2$, and the area under the curve is",
+        "",
+        "$$\\int_0^1 x^2\\,dx = \\tfrac{1}{3}.$$",
+        "",
+        "Here's a snippet you can preview:",
+        "",
+        "```html",
+        '<button style="padding:8px 14px;border-radius:8px;background:#61afef;color:#0b0e14;border:0;">',
+        "  Click me",
+        "</button>",
+        "```"
+      ].join("\n")
+    }
+  ]
+}
+
+/** LaTeX + an opt-in HTML preview inside a normal assistant turn. */
+export const RichPreviews: Story = {
+  render: () => (
+    <div className="flex w-[640px] flex-col gap-6 bg-editor p-6">
+      <MessageTurn message={RICH_TURN} />
+    </div>
+  )
+}
+
 export const ToolWithDiffPeek: Story = {
   render: () => (
     <div className="w-[560px] bg-editor p-6">

@@ -3,6 +3,7 @@ import {
   Attachment,
   AuthProvider,
   AuthSession,
+  BrowserBounds,
   CliInfo,
   CliKind,
   CreateSessionFromIssueInput,
@@ -37,6 +38,7 @@ import {
 } from "@starbase/core"
 import {
   AuthError,
+  BrowserPreviewError,
   ConfigError,
   DiscoveryError,
   GhError,
@@ -563,5 +565,38 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /** Sign out — revoke on the server (best effort) and clear the local token. */
-  Rpc.make("Auth.signOut", {})
+  Rpc.make("Auth.signOut", {}),
+
+  // ── Browser preview ──────────────────────────────────────────────────────────
+  // An embedded `WebContentsView` (main process) pointed at a localhost dev
+  // server. It renders OUTSIDE the renderer's DOM/CSP, so the renderer drives it
+  // through these procedures and streams the pane's on-screen bounds to keep the
+  // native view aligned. There is one preview view (the single window).
+
+  /**
+   * Show the preview view and load `url` at `bounds`. Only http/https URLs are
+   * accepted (fails with `BrowserPreviewError` otherwise). Idempotent — reuses
+   * the existing view if already open.
+   */
+  Rpc.make("BrowserPreview.open", {
+    error: BrowserPreviewError,
+    payload: { url: Schema.String, bounds: BrowserBounds }
+  }),
+
+  /** Reposition/resize the view to track the pane's rect (on layout/scroll). No-op if closed. */
+  Rpc.make("BrowserPreview.setBounds", {
+    payload: { bounds: BrowserBounds }
+  }),
+
+  /** Navigate the open view to a new URL. Fails with `BrowserPreviewError` for non-http(s). */
+  Rpc.make("BrowserPreview.navigate", {
+    error: BrowserPreviewError,
+    payload: { url: Schema.String }
+  }),
+
+  /** Reload the current page. No-op if closed. */
+  Rpc.make("BrowserPreview.reload", {}),
+
+  /** Hide + destroy the view (pane closed or session switched). Idempotent. */
+  Rpc.make("BrowserPreview.close", {})
 ) {}

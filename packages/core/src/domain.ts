@@ -602,5 +602,21 @@ export const TerminalChunk = Schema.Union(
 )
 export type TerminalChunk = Schema.Schema.Type<typeof TerminalChunk>
 
+// ── Browser preview (embedded WebContentsView over a localhost dev server) ────
+
+/**
+ * The on-screen rectangle (CSS pixels, relative to the renderer's top-left) the
+ * embedded browser `WebContentsView` should occupy. The renderer streams this
+ * from the preview pane's `getBoundingClientRect` so the native view stays
+ * aligned with its placeholder as the layout changes.
+ */
+export const BrowserBounds = Schema.Struct({
+  x: Schema.Number,
+  y: Schema.Number,
+  width: Schema.Number,
+  height: Schema.Number
+})
+export type BrowserBounds = Schema.Schema.Type<typeof BrowserBounds>
+
 // The conversation/transcript model (Message, ToolCall, ApprovalGate) and the
 // normalized StreamEvent seam live in ./conversation.ts.

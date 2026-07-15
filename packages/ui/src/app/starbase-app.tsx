@@ -89,6 +89,14 @@ export interface StarbaseAppProps {
   renderTerminalDock?: (session: Session) => ReactNode
   /** Which edge the terminal dock attaches to (drives the content column's flow). */
   terminalDockSide?: DockSide
+  /** Render the embedded browser-preview dock (desktop app's BrowserPreviewView). */
+  renderBrowserDock?: (session: Session | null) => ReactNode
+  /** Which edge the browser dock attaches to. */
+  browserDockSide?: DockSide
+  /** Toggle the browser-preview pane (adds a control to the tab bar). */
+  onToggleBrowser?: () => void
+  /** Whether the browser-preview pane is currently open. */
+  browserActive?: boolean
   activeSessionId?: string | null
   patch?: string
   /**
@@ -172,6 +180,10 @@ export function StarbaseApp({
   renderIssue,
   renderTerminalDock,
   terminalDockSide,
+  renderBrowserDock,
+  browserDockSide,
+  onToggleBrowser,
+  browserActive,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -335,6 +347,10 @@ export function StarbaseApp({
         renderIssue={renderIssue}
         renderTerminalDock={renderTerminalDock}
         terminalDockSide={terminalDockSide}
+        renderBrowserDock={renderBrowserDock}
+        browserDockSide={browserDockSide}
+        onToggleBrowser={onToggleBrowser}
+        browserActive={browserActive}
         version={version}
       />
       {onCreateSession && (

@@ -99,3 +99,16 @@ export class TerminalError extends Schema.TaggedError<TerminalError>()(
     cause: Schema.optional(Schema.Unknown)
   }
 ) {}
+
+/**
+ * Raised when the embedded browser preview can't act on a request — most
+ * commonly a non-http(s) URL (the pane only loads localhost dev servers). A
+ * `Schema.TaggedError` so it encodes across the RPC boundary; it is the error
+ * channel for `BrowserPreview.open` / `BrowserPreview.navigate`.
+ */
+export class BrowserPreviewError extends Schema.TaggedError<BrowserPreviewError>()(
+  "BrowserPreviewError",
+  {
+    message: Schema.String
+  }
+) {}

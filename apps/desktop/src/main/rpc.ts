@@ -45,6 +45,7 @@ import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessag
 import { Effect, Layer, Mailbox, Option, Runtime, Stream } from "effect"
 import type { WebContents } from "electron"
 import { ipcMain } from "electron"
+import { BrowserPreviewService } from "./browser-preview.js"
 import { DialogService } from "./dialog.js"
 
 /** The single IPC channel both directions of the RPC transport ride on. */
@@ -479,6 +480,17 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(TerminalService, (t) => t.kill(terminalId)),
   "Terminal.list": ({ sessionId }) =>
     Effect.flatMap(TerminalService, (t) => t.list(sessionId)),
+
+  // Browser preview — a native WebContentsView over a localhost dev server,
+  // driven from the renderer's preview pane (bounds streamed to stay aligned).
+  "BrowserPreview.open": ({ url, bounds }) =>
+    Effect.flatMap(BrowserPreviewService, (b) => b.open(url, bounds)),
+  "BrowserPreview.setBounds": ({ bounds }) =>
+    Effect.flatMap(BrowserPreviewService, (b) => b.setBounds(bounds)),
+  "BrowserPreview.navigate": ({ url }) =>
+    Effect.flatMap(BrowserPreviewService, (b) => b.navigate(url)),
+  "BrowserPreview.reload": () => Effect.flatMap(BrowserPreviewService, (b) => b.reload()),
+  "BrowserPreview.close": () => Effect.flatMap(BrowserPreviewService, (b) => b.close()),
 
   // Auth — the sign-in wall. Delegates to AuthService, which bridges the OS
   // keychain (SecretStore) and the BetterAuth backend.
