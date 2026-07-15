@@ -232,8 +232,18 @@ export function NewSessionDialog({
   const loadingPrs = state.matches({ prLoad: "loading" }) || state.matches({ prLoad: "debouncing" })
   const loadingIssues =
     state.matches({ issueLoad: "loading" }) || state.matches({ issueLoad: "debouncing" })
-  const canCreate = state.can({ type: "SUBMIT" })
-  const canAdvance = state.can({ type: "ADVANCE" })
+  // Mirror the machine's `canSubmit` guard directly off context — robust against
+  // any `state.can` timing quirk across the parallel regions, and cheap.
+  const canCreate =
+    repoPath !== "" &&
+    cli !== "" &&
+    (mode === "pr"
+      ? selectedPr !== null
+      : mode === "issue"
+        ? issueStep === "detail" && selectedIssue !== null && base !== ""
+        : base !== "")
+  const canAdvance =
+    mode === "issue" && issueStep === "list" && selectedIssue !== null
   // In the issue picker (list step) the primary button advances to the prefill
   // step ("Start on #N"); everywhere else it submits.
   const isIssueList = mode === "issue" && issueStep === "list"
@@ -573,6 +583,7 @@ export function NewSessionDialog({
         <DialogFooter>
           {isIssueDetail ? (
             <Button
+              type="button"
               variant="secondary"
               size="sm"
               onClick={() => send({ type: "BACK" })}
@@ -581,30 +592,31 @@ export function NewSessionDialog({
               Back
             </Button>
           ) : (
-            <Button variant="secondary" size="sm" onClick={onClose} disabled={submitting}>
+            <Button type="button" variant="secondary" size="sm" onClick={onClose} disabled={submitting}>
               Cancel
             </Button>
           )}
-          {isIssueList ? (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => send({ type: "ADVANCE" })}
-              disabled={!canAdvance}
-            >
-              {selectedIssue ? `Start on #${selectedIssue.number}` : "Select an issue"}
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              form="new-session-form"
-              variant="primary"
-              size="sm"
-              disabled={!canCreate}
-            >
-              {submitting ? "Creating…" : isIssueDetail ? "Create session" : "Create"}
-            </Button>
-          )}
+          {/* One always-`type=button` primary (dispatch via onClick, never a native
+              submit) — so toggling the label/action across the issue list→detail
+              step can't trigger a stray form submit mid-click. Enter-to-submit is
+              still handled by the form's onSubmit. */}
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={() => send({ type: isIssueList ? "ADVANCE" : "SUBMIT" })}
+            disabled={isIssueList ? !canAdvance : !canCreate}
+          >
+            {submitting
+              ? "Creating…"
+              : isIssueList
+                ? selectedIssue
+                  ? `Start on #${selectedIssue.number}`
+                  : "Select an issue"
+                : isIssueDetail
+                  ? "Create session"
+                  : "Create"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

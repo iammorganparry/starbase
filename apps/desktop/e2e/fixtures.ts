@@ -63,7 +63,7 @@ export interface LaunchOptions {
    */
   readonly gh?: {
     readonly login: string
-    readonly prs: ReadonlyArray<{
+    readonly prs?: ReadonlyArray<{
       number: number
       title: string
       headRefName: string
@@ -73,6 +73,17 @@ export interface LaunchOptions {
       isDraft?: boolean
       additions?: number
       deletions?: number
+      updatedAt?: string
+    }>
+    /** Open issues served by `gh issue list` (for the "new session from an issue" flow). */
+    readonly issues?: ReadonlyArray<{
+      number: number
+      title: string
+      url?: string
+      body?: string
+      labels?: ReadonlyArray<{ name: string; color?: string }>
+      author: { login: string }
+      assignees?: ReadonlyArray<{ login: string }>
       updatedAt?: string
     }>
   }
@@ -122,7 +133,7 @@ const installFakeGh = (
   gh: NonNullable<LaunchOptions["gh"]>
 ): Record<string, string> => {
   mkdirSync(binDir, { recursive: true })
-  const prs = gh.prs.map((p) => ({
+  const prs = (gh.prs ?? []).map((p) => ({
     number: p.number,
     title: p.title,
     headRefName: p.headRefName,
@@ -133,6 +144,16 @@ const installFakeGh = (
     additions: p.additions ?? 0,
     deletions: p.deletions ?? 0,
     updatedAt: p.updatedAt ?? "2026-07-11T00:00:00Z"
+  }))
+  const issues = (gh.issues ?? []).map((i) => ({
+    number: i.number,
+    title: i.title,
+    url: i.url ?? `https://github.com/acme/widget/issues/${i.number}`,
+    body: i.body ?? "",
+    labels: (i.labels ?? []).map((l) => ({ name: l.name, color: l.color ?? "cccccc" })),
+    author: i.author,
+    assignees: i.assignees ?? [],
+    updatedAt: i.updatedAt ?? "2026-07-11T00:00:00Z"
   }))
   // Pre-create the head branches off main so `gh pr checkout` can land on them.
   for (const p of prs) {
@@ -161,6 +182,12 @@ if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
   ref=$(printf '%s' "$STARBASE_E2E_GH_HEADS" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
   git checkout "$ref" >/dev/null 2>&1; exit $?
 fi
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  printf '%s' "$STARBASE_E2E_GH_ISSUES"; exit 0
+fi
+if [ "$1" = "issue" ]; then
+  exit 0
+fi
 exit 0
 `
   const ghPath = join(binDir, "gh")
@@ -168,6 +195,7 @@ exit 0
   chmodSync(ghPath, 0o755)
   return {
     STARBASE_E2E_GH_PRS: JSON.stringify(prs),
+    STARBASE_E2E_GH_ISSUES: JSON.stringify(issues),
     STARBASE_E2E_GH_HEADS: heads,
     STARBASE_E2E_GH_STATES: states
   }
