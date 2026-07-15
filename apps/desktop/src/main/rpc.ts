@@ -409,7 +409,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   // keychain (SecretStore) and the BetterAuth backend.
   "Auth.getSession": () => AuthService.getSession(),
   "Auth.startSignIn": ({ provider }) => AuthService.startSignIn(provider),
-  "Auth.sendMagicLink": ({ email }) => AuthService.sendMagicLink(email),
+  "Auth.sendMagicLink": ({ email, name }) => AuthService.sendMagicLink(email, name),
   "Auth.signOut": () => AuthService.signOut()
 })
 

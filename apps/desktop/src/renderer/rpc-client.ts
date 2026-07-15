@@ -266,9 +266,9 @@ export const rpc = {
   /** Begin OAuth sign-in — returns the URL to open in the system browser. */
   authStartSignIn: (provider: AuthProvider): Promise<string> =>
     run((c) => c.Auth.startSignIn({ provider })),
-  /** Request an email magic link. */
-  authSendMagicLink: (email: string): Promise<void> =>
-    run((c) => c.Auth.sendMagicLink({ email })),
+  /** Request an email magic link. `name` is set only from the sign-up form. */
+  authSendMagicLink: (email: string, name?: string): Promise<void> =>
+    run((c) => c.Auth.sendMagicLink({ email, name })),
   /** Sign out — revoke on the server and clear the local token. */
   authSignOut: (): Promise<void> => run((c) => c.Auth.signOut()),
 

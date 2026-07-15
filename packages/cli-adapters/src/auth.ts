@@ -104,10 +104,15 @@ export class AuthService extends Effect.Service<AuthService>()("@starbase/AuthSe
         return body.url
       })
 
-    /** Request a magic-link email. */
-    const sendMagicLink = (email: string): Effect.Effect<void, AuthError> =>
+    /**
+     * Request a magic-link email. `name` is passed through only for sign-up (the
+     * server applies it as the display name when creating a new user; BetterAuth
+     * ignores it for existing accounts).
+     */
+    const sendMagicLink = (email: string, name?: string): Effect.Effect<void, AuthError> =>
       post("/api/auth/sign-in/magic-link", {
         email,
+        ...(name ? { name } : {}),
         callbackURL: desktopCallback(authBaseUrl())
       }).pipe(Effect.asVoid)
 

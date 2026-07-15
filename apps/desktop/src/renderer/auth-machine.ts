@@ -26,6 +26,8 @@ import { rpc } from "./rpc-client.js"
 export interface AuthContext {
   /** Controlled email input (lifted so `sent`/`error` survive re-renders). */
   readonly email: string
+  /** Display name from the sign-up form; sent with the magic link on sign-up. */
+  readonly name: string | null
   /** The address a magic link was sent to (for the confirmation copy). */
   readonly sentEmail: string | null
   /** User-facing error message for the `error` substate. */
@@ -36,15 +38,15 @@ export interface AuthContext {
 
 export type AuthEvent =
   | { type: "OAUTH"; provider: AuthProvider }
-  | { type: "MAGIC_LINK"; email: string }
+  | { type: "MAGIC_LINK"; email: string; name?: string }
   | { type: "CALLBACK" }
   | { type: "RESET" }
   | { type: "SIGN_OUT" }
 
 const checkAuth = fromPromise<AuthSession | null>(() => rpc.authGetSession())
 
-const sendMagicLink = fromPromise<void, { email: string }>(({ input }) =>
-  rpc.authSendMagicLink(input.email)
+const sendMagicLink = fromPromise<void, { email: string; name: string | null }>(({ input }) =>
+  rpc.authSendMagicLink(input.email, input.name ?? undefined)
 )
 
 const startOAuth = fromPromise<void, { provider: AuthProvider }>(async ({ input }) => {
@@ -66,7 +68,7 @@ export const authMachine = setup({
 }).createMachine({
   id: "auth",
   initial: "checking",
-  context: { email: "", sentEmail: null, error: null, session: null },
+  context: { email: "", name: null, sentEmail: null, error: null, session: null },
   states: {
     checking: {
       invoke: {
@@ -90,7 +92,11 @@ export const authMachine = setup({
         OAUTH: { target: ".oauthPending", actions: assign({ error: () => null }) },
         MAGIC_LINK: {
           target: ".sending",
-          actions: assign({ email: ({ event }) => event.email, error: () => null })
+          actions: assign({
+            email: ({ event }) => event.email,
+            name: ({ event }) => event.name ?? null,
+            error: () => null
+          })
         },
         CALLBACK: "checking"
       },
@@ -99,7 +105,7 @@ export const authMachine = setup({
         sending: {
           invoke: {
             src: "sendMagicLink",
-            input: ({ context }) => ({ email: context.email }),
+            input: ({ context }) => ({ email: context.email, name: context.name }),
             onDone: {
               target: "magicLinkSent",
               actions: assign({ sentEmail: ({ context }) => context.email })
@@ -114,7 +120,10 @@ export const authMachine = setup({
         },
         magicLinkSent: {
           on: {
-            RESET: { target: "idle", actions: assign({ sentEmail: () => null, email: () => "" }) }
+            RESET: {
+              target: "idle",
+              actions: assign({ sentEmail: () => null, email: () => "", name: () => null })
+            }
           }
         },
         oauthPending: {

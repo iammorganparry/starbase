@@ -26,6 +26,17 @@ export const OAuthButtons: Story = {
   )
 }
 
+export const OAuthButtonsSignup: Story = {
+  render: () => (
+    <Frame>
+      <div className="flex flex-col gap-2">
+        <OAuthButton provider="github" mode="signup" onClick={() => {}} />
+        <OAuthButton provider="google" mode="signup" onClick={() => {}} />
+      </div>
+    </Frame>
+  )
+}
+
 export const Divider: Story = {
   render: () => (
     <Frame>
@@ -43,15 +54,25 @@ export const StarfieldBackdrop: Story = {
 }
 
 /** The magic-link molecule, one story per state. */
-const MagicLink = ({ state }: { state: MagicLinkState }) => {
+const MagicLink = ({
+  state,
+  mode = "signin"
+}: {
+  state: MagicLinkState
+  mode?: "signin" | "signup"
+}) => {
   const [email, setEmail] = useState(state === "sent" ? "" : "founder@example.com")
+  const [name, setName] = useState(mode === "signup" ? "Ada Lovelace" : "")
   return (
     <Frame>
       <MagicLinkForm
         state={state}
+        mode={mode}
         email={email}
+        name={name}
         sentEmail="founder@example.com"
         onEmailChange={setEmail}
+        onNameChange={setName}
         onSubmit={() => {}}
         onReset={() => {}}
       />
@@ -63,6 +84,10 @@ export const MagicLinkDefault: Story = { render: () => <MagicLink state="default
 export const MagicLinkLoading: Story = { render: () => <MagicLink state="loading" /> }
 export const MagicLinkSent: Story = { render: () => <MagicLink state="sent" /> }
 export const MagicLinkError: Story = { render: () => <MagicLink state="error" /> }
+
+export const SignupDefault: Story = { render: () => <MagicLink state="default" mode="signup" /> }
+export const SignupLoading: Story = { render: () => <MagicLink state="loading" mode="signup" /> }
+export const SignupSent: Story = { render: () => <MagicLink state="sent" mode="signup" /> }
 
 export const Card: Story = {
   render: () => (

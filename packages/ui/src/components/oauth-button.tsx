@@ -34,13 +34,15 @@ function GoogleMark() {
   )
 }
 
-const LABEL: Record<AuthProvider, string> = {
-  github: "Continue with GitHub",
-  google: "Continue with Google"
+const PROVIDER_NAME: Record<AuthProvider, string> = {
+  github: "GitHub",
+  google: "Google"
 }
 
 export interface OAuthButtonProps {
   provider: AuthProvider
+  /** "signin" → "Continue with …", "signup" → "Sign up with …". */
+  mode?: "signin" | "signup"
   onClick?: () => void
   disabled?: boolean
   className?: string
@@ -51,7 +53,14 @@ export interface OAuthButtonProps {
  * brand mark + label). Kept as an atom so each provider can be storybooked and
  * reused independently of the full LoginScreen.
  */
-export function OAuthButton({ provider, onClick, disabled, className }: OAuthButtonProps) {
+export function OAuthButton({
+  provider,
+  mode = "signin",
+  onClick,
+  disabled,
+  className
+}: OAuthButtonProps) {
+  const label = `${mode === "signup" ? "Sign up with" : "Continue with"} ${PROVIDER_NAME[provider]}`
   return (
     <button
       type="button"
@@ -64,7 +73,7 @@ export function OAuthButton({ provider, onClick, disabled, className }: OAuthBut
       )}
     >
       {provider === "github" ? <GitHubMark /> : <GoogleMark />}
-      <span className="flex-1 text-left">{LABEL[provider]}</span>
+      <span className="flex-1 text-left">{label}</span>
     </button>
   )
 }

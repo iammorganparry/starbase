@@ -412,7 +412,7 @@ export function App() {
         errorMessage={authState.context.error ?? undefined}
         onGithub={() => authSend({ type: "OAUTH", provider: "github" })}
         onGoogle={() => authSend({ type: "OAUTH", provider: "google" })}
-        onSendMagicLink={(email) => authSend({ type: "MAGIC_LINK", email })}
+        onSendMagicLink={(email, name) => authSend({ type: "MAGIC_LINK", email, name })}
         onReset={() => authSend({ type: "RESET" })}
       />
     )
