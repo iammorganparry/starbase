@@ -3,6 +3,7 @@ import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
@@ -114,6 +115,12 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   }
   const createSessionFromPr = async (input: CreateSessionFromPrInput) => {
     const session = await rpc.sessionsCreateFromPr(input)
+    void rememberLastRepo(input.repoPath)
+    send({ type: "SESSION_CREATED", session })
+    return session
+  }
+  const createSessionFromIssue = async (input: CreateSessionFromIssueInput) => {
+    const session = await rpc.sessionsCreateFromIssue(input)
     void rememberLastRepo(input.repoPath)
     send({ type: "SESSION_CREATED", session })
     return session
@@ -319,6 +326,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onDeleteSession={(id) => setPendingDelete(sessions.find((s) => s.id === id) ?? null)}
       loadPrs={connected ? rpc.githubListPrs : undefined}
       onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
+      loadIssues={connected ? rpc.githubListIssues : undefined}
+      onCreateSessionFromIssue={connected ? createSessionFromIssue : undefined}
       planSessions={planSessions}
       renderConversation={(session: Session, view, ctx) => (
         <ConversationPane

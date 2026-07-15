@@ -1,18 +1,30 @@
 import type {
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
+  IssueSummary,
   PrSummary,
   Repo
 } from "@starbase/core"
 import { assign, fromPromise, raise, setup } from "xstate"
 
 /** Which flavour of session the dialog is composing. */
-export type NewSessionMode = "blank" | "pr"
+export type NewSessionMode = "blank" | "pr" | "issue"
 
-/** How long typing in the PR search box settles before a fetch fires. */
+/** Which automations to enable on an issue-linked session (design I2 toggles). */
+export interface IssueAutomationsForm {
+  progressComments: boolean
+  closeOnMerge: boolean
+}
+
+/** How long typing in the PR / issue search box settles before a fetch fires. */
 const SEARCH_DEBOUNCE_MS = 250
+
+/** Compose the prefilled task from an issue (title + body). */
+const composeTask = (issue: IssueSummary | null): string =>
+  issue ? [issue.title, issue.body].map((s) => s.trim()).filter((s) => s.length > 0).join("\n\n") : ""
 
 /**
  * The live dependencies the machine reaches through — repos/clis to seed
@@ -30,8 +42,13 @@ export interface NewSessionDeps {
     repoPath: string,
     opts: { mine: boolean; search: string }
   ) => Promise<ReadonlyArray<PrSummary>>
+  loadIssues?: (
+    repoPath: string,
+    opts: { mine: boolean; search: string }
+  ) => Promise<ReadonlyArray<IssueSummary>>
   onCreate: (input: CreateSessionInput) => Promise<void>
   onCreateFromPr?: (input: CreateSessionFromPrInput) => Promise<void>
+  onCreateFromIssue?: (input: CreateSessionFromIssueInput) => Promise<void>
   onClose: () => void
 }
 
@@ -51,6 +68,13 @@ export interface NewSessionContext {
   mine: boolean
   prs: ReadonlyArray<PrSummary>
   selectedPr: PrSummary | null
+  issues: ReadonlyArray<IssueSummary>
+  selectedIssue: IssueSummary | null
+  /** Issue-mode two-step: pick an issue (`list`) then prefill + confirm (`detail`). */
+  issueStep: "list" | "detail"
+  /** Editable task (prefilled from the selected issue on advance). */
+  task: string
+  automations: IssueAutomationsForm
   error: string | null
 }
 
@@ -64,9 +88,15 @@ export type NewSessionEvent =
   | { type: "SET_SEARCH"; search: string }
   | { type: "SET_MINE"; mine: boolean }
   | { type: "SELECT_PR"; pr: PrSummary }
+  | { type: "SELECT_ISSUE"; issue: IssueSummary }
+  | { type: "ADVANCE" }
+  | { type: "BACK" }
+  | { type: "SET_TASK"; task: string }
+  | { type: "SET_AUTOMATION"; key: keyof IssueAutomationsForm; value: boolean }
   | { type: "SUBMIT" }
   | { type: "LOAD_BRANCHES" }
   | { type: "RELOAD_PRS" }
+  | { type: "RELOAD_ISSUES" }
 
 const repoFor = (ctx: NewSessionContext): Repo | undefined =>
   ctx.getDeps().repos.find((r) => r.path === ctx.repoPath)
@@ -82,12 +112,16 @@ const defaultBase = (repo: Repo | undefined, branches: ReadonlyArray<string>): s
 const errorText = (cause: unknown, fallback: string): string =>
   cause instanceof Error ? cause.message : fallback
 
+const DEFAULT_AUTOMATIONS: IssueAutomationsForm = { progressComments: true, closeOnMerge: true }
+
 /**
- * The New Session dialog's form state, modelled as a machine. Three concurrent
- * regions: `submission` (edit → submit → done), `branchLoad`, and `prLoad`
- * (which debounces via an `after` delay). Field edits assign into context and
- * `raise` the relevant reload; guards keep PR loading inert outside "From PR"
- * mode. The component stays a thin projection of `context` + `state.matches`.
+ * The New Session dialog's form state, modelled as a machine. Concurrent
+ * regions: `submission` (edit → submit → done), `branchLoad`, `prLoad`, and
+ * `issueLoad` (both debounce via an `after` delay). Field edits assign into
+ * context and `raise` the relevant reload; guards keep PR/issue loading inert
+ * outside their modes. "From issue" adds a two-step (`issueStep`): pick an issue,
+ * then prefill the task + automations before creating. The component stays a
+ * thin projection of `context` + `state.matches`.
  */
 export const newSessionMachine = setup({
   types: {
@@ -98,11 +132,18 @@ export const newSessionMachine = setup({
   delays: { search: SEARCH_DEBOUNCE_MS },
   guards: {
     inPrMode: ({ context }) => context.mode === "pr",
-    canSubmit: ({ context }) =>
-      context.repoPath !== "" &&
-      context.cli !== "" &&
+    inIssueMode: ({ context }) => context.mode === "issue",
+    // The issue picker → detail step is reachable once an issue is chosen.
+    canAdvance: ({ context }) =>
+      context.mode === "issue" && context.issueStep === "list" && context.selectedIssue !== null,
+    canSubmit: ({ context }) => {
+      if (context.repoPath === "" || context.cli === "") return false
+      if (context.mode === "pr") return context.selectedPr !== null
+      if (context.mode === "issue")
+        return context.issueStep === "detail" && context.selectedIssue !== null && context.base !== ""
       // Blank mode no longer requires a title — the agent auto-names the session.
-      (context.mode === "pr" ? context.selectedPr !== null : context.base !== "")
+      return context.base !== ""
+    }
   },
   actors: {
     loadBranches: fromPromise(
@@ -114,6 +155,16 @@ export const newSessionMachine = setup({
         input
       }: {
         input: { fn: NewSessionDeps["loadPrs"]; repoPath: string; mine: boolean; search: string }
+      }) =>
+        input.fn && input.repoPath
+          ? input.fn(input.repoPath, { mine: input.mine, search: input.search })
+          : Promise.resolve([])
+    ),
+    loadIssues: fromPromise(
+      ({
+        input
+      }: {
+        input: { fn: NewSessionDeps["loadIssues"]; repoPath: string; mine: boolean; search: string }
       }) =>
         input.fn && input.repoPath
           ? input.fn(input.repoPath, { mine: input.mine, search: input.search })
@@ -141,6 +192,11 @@ export const newSessionMachine = setup({
         mine: false,
         prs: [] as ReadonlyArray<PrSummary>,
         selectedPr: null,
+        issues: [] as ReadonlyArray<IssueSummary>,
+        selectedIssue: null,
+        issueStep: "list" as const,
+        task: "",
+        automations: DEFAULT_AUTOMATIONS,
         error: null
       }
     }),
@@ -153,6 +209,10 @@ export const newSessionMachine = setup({
       prs: ({ event }) => (event as unknown as { output: ReadonlyArray<PrSummary> }).output
     }),
     clearPrs: assign({ prs: [] }),
+    applyIssues: assign({
+      issues: ({ event }) => (event as unknown as { output: ReadonlyArray<IssueSummary> }).output
+    }),
+    clearIssues: assign({ issues: [] }),
     setError: assign({
       error: ({ event }) =>
         errorText((event as unknown as { error: unknown }).error, "Failed to create session.")
@@ -172,6 +232,11 @@ export const newSessionMachine = setup({
     mine: false,
     prs: [],
     selectedPr: null,
+    issues: [],
+    selectedIssue: null,
+    issueStep: "list",
+    task: "",
+    automations: DEFAULT_AUTOMATIONS,
     error: null
   }),
   type: "parallel",
@@ -190,9 +255,10 @@ export const newSessionMachine = setup({
                 const deps = context.getDeps()
                 const repo = repoFor(context)
                 if (!repo) return Promise.reject(new Error("No repository selected."))
+                if (context.cli === "") return Promise.reject(new Error("Select a harness."))
                 if (context.mode === "pr") {
-                  if (!context.selectedPr || !deps.onCreateFromPr || context.cli === "") {
-                    return Promise.reject(new Error("Select a pull request and harness."))
+                  if (!context.selectedPr || !deps.onCreateFromPr) {
+                    return Promise.reject(new Error("Select a pull request."))
                   }
                   return deps.onCreateFromPr({
                     repoPath: repo.path,
@@ -206,7 +272,27 @@ export const newSessionMachine = setup({
                     }
                   })
                 }
-                if (context.cli === "") return Promise.reject(new Error("Select a harness."))
+                if (context.mode === "issue") {
+                  const issue = context.selectedIssue
+                  if (!issue || !deps.onCreateFromIssue) {
+                    return Promise.reject(new Error("Select an issue."))
+                  }
+                  return deps.onCreateFromIssue({
+                    repoPath: repo.path,
+                    repoName: repo.name,
+                    cli: context.cli,
+                    baseBranch: context.base,
+                    issue: {
+                      number: issue.number,
+                      title: issue.title,
+                      url: issue.url,
+                      body: issue.body,
+                      labels: issue.labels
+                    },
+                    task: context.task,
+                    automations: context.automations
+                  })
+                }
                 const title = context.title.trim()
                 return deps.onCreate({
                   repoPath: repo.path,
@@ -261,6 +347,27 @@ export const newSessionMachine = setup({
           }
         }
       }
+    },
+    issueLoad: {
+      initial: "idle",
+      on: { RELOAD_ISSUES: { target: ".debouncing", guard: "inIssueMode" } },
+      states: {
+        idle: {},
+        debouncing: { after: { search: "loading" } },
+        loading: {
+          invoke: {
+            src: "loadIssues",
+            input: ({ context }) => ({
+              fn: context.getDeps().loadIssues,
+              repoPath: context.repoPath,
+              mine: context.mine,
+              search: context.search
+            }),
+            onDone: { target: "idle", actions: "applyIssues" },
+            onError: { target: "idle", actions: "clearIssues" }
+          }
+        }
+      }
     }
   },
   on: {
@@ -269,24 +376,56 @@ export const newSessionMachine = setup({
       actions: ["seed", raise({ type: "LOAD_BRANCHES" })]
     },
     SET_MODE: {
-      actions: [assign({ mode: ({ event }) => event.mode, error: null }), raise({ type: "RELOAD_PRS" })]
+      actions: [
+        assign({ mode: ({ event }) => event.mode, issueStep: "list", error: null }),
+        raise({ type: "RELOAD_PRS" }),
+        raise({ type: "RELOAD_ISSUES" })
+      ]
     },
     SET_REPO: {
       actions: [
-        assign({ repoPath: ({ event }) => event.repoPath, base: "", selectedPr: null }),
+        assign({
+          repoPath: ({ event }) => event.repoPath,
+          base: "",
+          selectedPr: null,
+          selectedIssue: null,
+          issueStep: "list"
+        }),
         raise({ type: "LOAD_BRANCHES" }),
-        raise({ type: "RELOAD_PRS" })
+        raise({ type: "RELOAD_PRS" }),
+        raise({ type: "RELOAD_ISSUES" })
       ]
     },
     SET_TITLE: { actions: assign({ title: ({ event }) => event.title }) },
     SET_CLI: { actions: assign({ cli: ({ event }) => event.cli }) },
     SET_BASE: { actions: assign({ base: ({ event }) => event.base }) },
     SET_SEARCH: {
-      actions: [assign({ search: ({ event }) => event.search }), raise({ type: "RELOAD_PRS" })]
+      actions: [
+        assign({ search: ({ event }) => event.search }),
+        raise({ type: "RELOAD_PRS" }),
+        raise({ type: "RELOAD_ISSUES" })
+      ]
     },
     SET_MINE: {
-      actions: [assign({ mine: ({ event }) => event.mine }), raise({ type: "RELOAD_PRS" })]
+      actions: [
+        assign({ mine: ({ event }) => event.mine }),
+        raise({ type: "RELOAD_PRS" }),
+        raise({ type: "RELOAD_ISSUES" })
+      ]
     },
-    SELECT_PR: { actions: assign({ selectedPr: ({ event }) => event.pr }) }
+    SELECT_PR: { actions: assign({ selectedPr: ({ event }) => event.pr }) },
+    SELECT_ISSUE: { actions: assign({ selectedIssue: ({ event }) => event.issue }) },
+    // Advance to the prefill/automations step and seed the editable task.
+    ADVANCE: {
+      guard: "canAdvance",
+      actions: assign({ issueStep: "detail", task: ({ context }) => composeTask(context.selectedIssue) })
+    },
+    BACK: { actions: assign({ issueStep: "list" }) },
+    SET_TASK: { actions: assign({ task: ({ event }) => event.task }) },
+    SET_AUTOMATION: {
+      actions: assign({
+        automations: ({ context, event }) => ({ ...context.automations, [event.key]: event.value })
+      })
+    }
   }
 })

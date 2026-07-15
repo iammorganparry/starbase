@@ -262,10 +262,13 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             slug,
             baseBranch: input.baseBranch
           })
-          const task = [input.issue.title, input.issue.body]
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0)
-            .join("\n\n")
+          // Prefer the edited task from the dialog; fall back to title + body.
+          const task =
+            input.task.trim() ||
+            [input.issue.title, input.issue.body]
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0)
+              .join("\n\n")
           const session: Session = {
             id: `s_${slug}`,
             repo: input.repoName,

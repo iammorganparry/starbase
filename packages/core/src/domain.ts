@@ -527,6 +527,11 @@ export const CreateSessionFromIssueInput = Schema.Struct({
     body: Schema.String,
     labels: Schema.Array(PrLabel)
   }),
+  /**
+   * The (editable) task to seed the composer with — prefilled from the issue in
+   * the dialog. Empty falls back to the issue title + body.
+   */
+  task: Schema.String,
   /** Automations to enable on the new session. */
   automations: IssueAutomations
 })

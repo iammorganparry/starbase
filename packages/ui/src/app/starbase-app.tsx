@@ -2,12 +2,14 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import type {
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
   GitConfig,
   GithubConfig,
   DiffStat,
+  IssueSummary,
   ModelOption,
   PrSummary,
   ProviderConfig,
@@ -119,6 +121,16 @@ export interface StarbaseAppProps {
   loadPrs?: (repoPath: string, opts: { mine: boolean; search: string }) => Promise<ReadonlyArray<PrSummary>>
   /** Create a session from an existing PR (checks out its head branch) and return it. */
   onCreateSessionFromPr?: (input: CreateSessionFromPrInput) => Promise<Session>
+  /**
+   * List open issues for a repo. Presence (with `onCreateSessionFromIssue`) wires
+   * the "From issue" mode; absent (GitHub not connected) hides it.
+   */
+  loadIssues?: (
+    repoPath: string,
+    opts: { mine: boolean; search: string }
+  ) => Promise<ReadonlyArray<IssueSummary>>
+  /** Create a session from a GitHub issue (forks a fresh branch, links it) and return it. */
+  onCreateSessionFromIssue?: (input: CreateSessionFromIssueInput) => Promise<Session>
   /** App version (from `__APP_VERSION__`), shown in the sidebar footer. */
   version?: string
 }
@@ -169,6 +181,8 @@ export function StarbaseApp({
   onDeleteSession,
   loadPrs,
   onCreateSessionFromPr,
+  loadIssues,
+  onCreateSessionFromIssue,
   version
 }: StarbaseAppProps) {
   const [selected, setSelected] = useState<string | null>(
@@ -260,6 +274,15 @@ export function StarbaseApp({
     [onCreateSessionFromPr]
   )
 
+  const handleCreateFromIssue = useCallback(
+    async (input: CreateSessionFromIssueInput) => {
+      if (!onCreateSessionFromIssue) return
+      const session = await onCreateSessionFromIssue(input)
+      setSelected(session.id)
+    },
+    [onCreateSessionFromIssue]
+  )
+
   return (
     <AppShell title="Starbase">
       <SessionConversation
@@ -323,6 +346,8 @@ export function StarbaseApp({
           onCreate={handleCreate}
           loadPrs={loadPrs}
           onCreateFromPr={onCreateSessionFromPr ? handleCreateFromPr : undefined}
+          loadIssues={loadIssues}
+          onCreateFromIssue={onCreateSessionFromIssue ? handleCreateFromIssue : undefined}
         />
       )}
       {onLoadUsage && (
