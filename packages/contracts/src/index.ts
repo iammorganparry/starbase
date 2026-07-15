@@ -5,12 +5,15 @@ import {
   AuthSession,
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GateDecision,
   GhStatus,
   GitConfig,
   GithubConfig,
+  IssueAutomations,
+  IssueSummary,
   Message,
   ModelOption,
   PermissionMode,
@@ -134,6 +137,40 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: Session,
     error: Schema.Union(GitError, GhError),
     payload: CreateSessionFromPrInput
+  }),
+
+  /**
+   * Create a session from a GitHub issue: fork a fresh `<number>-<slug>` branch
+   * off base, link the issue + automations, seed the task from the issue.
+   */
+  Rpc.make("Sessions.createFromIssue", {
+    success: Session,
+    error: GitError,
+    payload: CreateSessionFromIssueInput
+  }),
+
+  /** Link a GitHub issue to a live session (attach flow); returns the updated session. */
+  Rpc.make("Sessions.linkIssue", {
+    success: Session,
+    error: Schema.Union(GitError, SessionNotFoundError),
+    payload: {
+      sessionId: Schema.String,
+      issue: IssueSummary,
+      automations: IssueAutomations
+    }
+  }),
+
+  /** Unlink the session's GitHub issue; returns the updated session. */
+  Rpc.make("Sessions.unlinkIssue", {
+    success: Session,
+    error: Schema.Union(GitError, SessionNotFoundError),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** Clear a session's one-shot `initialPrompt` once the composer has consumed it. */
+  Rpc.make("Sessions.clearInitialPrompt", {
+    error: GitError,
+    payload: { sessionId: Schema.String }
   }),
 
   /** Archive a session (its linked PR merged/closed) — read-only, kept. */
@@ -342,6 +379,26 @@ export class StarbaseRpcs extends RpcGroup.make(
       mine: Schema.Boolean,
       search: Schema.String
     }
+  }),
+
+  /**
+   * List open issues for a repo (for the "new session from an issue" picker +
+   * attach dialog). `mine` filters to issues assigned to you. Never errors —
+   * folds to an empty list.
+   */
+  Rpc.make("Github.listIssues", {
+    success: Schema.Array(IssueSummary),
+    payload: {
+      repoPath: Schema.String,
+      mine: Schema.Boolean,
+      search: Schema.String
+    }
+  }),
+
+  /** Close the session's linked issue (close-on-merge automation). */
+  Rpc.make("Github.closeIssue", {
+    error: GhError,
+    payload: { sessionId: Schema.String }
   }),
 
   /** The lifecycle state of a session's linked PR (for the archive sweep). */

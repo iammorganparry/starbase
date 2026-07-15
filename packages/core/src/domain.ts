@@ -55,6 +55,18 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
 export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan")
 export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 
+/**
+ * Automations for a session linked to a GitHub issue (design I2 toggles).
+ * Defined before `Session` so it can be referenced inline below.
+ */
+export const IssueAutomations = Schema.Struct({
+  /** Post agent progress comments back to the linked issue as work happens. */
+  progressComments: Schema.Boolean,
+  /** Close the linked issue automatically when the session's PR merges. */
+  closeOnMerge: Schema.Boolean
+})
+export type IssueAutomations = Schema.Schema.Type<typeof IssueAutomations>
+
 /** A single agent session shown in the sidebar and opened in the main pane. */
 export const Session = Schema.Struct({
   id: Schema.String,
@@ -68,6 +80,24 @@ export const Session = Schema.Struct({
   diff: DiffStat,
   /** Optional linked pull-request number. */
   prNumber: Schema.NullOr(Schema.Number),
+  /** Optional linked GitHub issue number (drives the sidebar badge + banner). */
+  issueNumber: Schema.optional(Schema.Number),
+  /** Linked issue web URL (the banner "Open" link). */
+  issueUrl: Schema.optional(Schema.String),
+  /** Linked issue title (banner). */
+  issueTitle: Schema.optional(Schema.String),
+  /** Linked issue label chips (banner). Same shape as `PrLabel`. */
+  issueLabels: Schema.optional(
+    Schema.Array(Schema.Struct({ name: Schema.String, color: Schema.NullOr(Schema.String) }))
+  ),
+  /** Issue automation prefs (progress comments / close-on-merge). */
+  automations: Schema.optional(IssueAutomations),
+  /**
+   * A one-shot prompt to seed the composer with the first time the session is
+   * opened (e.g. the task derived from a linked issue). Cleared once consumed so
+   * it never re-seeds; HITL — the user reviews and sends it themselves.
+   */
+  initialPrompt: Schema.optional(Schema.String),
   costUsd: Schema.Number,
   tokens: Schema.Number,
   /** ISO-8601 last-activity timestamp. */
@@ -403,6 +433,26 @@ export const PrSummary = Schema.Struct({
 })
 export type PrSummary = Schema.Schema.Type<typeof PrSummary>
 
+/**
+ * A lightweight open-issue list-item for the "new session from an issue" picker
+ * and the attach-issue dialog (from `gh issue list --json …`). Mirrors
+ * `PrSummary`; `body` seeds the prefilled task.
+ */
+export const IssueSummary = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  /** Issue web URL (for "Open ⧉"). */
+  url: Schema.String,
+  /** Issue body (markdown) — seeds the composer's prefilled task. */
+  body: Schema.String,
+  labels: Schema.Array(PrLabel),
+  author: GithubUser,
+  assignees: Schema.Array(GithubUser),
+  /** ISO-8601 last-updated timestamp (for the relative "2h ago" label). */
+  updatedAt: Schema.String
+})
+export type IssueSummary = Schema.Schema.Type<typeof IssueSummary>
+
 /** A pending inline review comment anchored to a file + line. */
 export const ReviewComment = Schema.Struct({
   path: Schema.String,
@@ -453,6 +503,34 @@ export const CreateSessionFromPrInput = Schema.Struct({
   })
 })
 export type CreateSessionFromPrInput = Schema.Schema.Type<typeof CreateSessionFromPrInput>
+
+/**
+ * Parameters for creating a session from a GitHub issue. Unlike
+ * `CreateSessionFromPrInput` (which checks out an existing PR branch), this
+ * forks a fresh `<number>-<slug>` branch off `baseBranch` like a blank session,
+ * links the issue, and seeds the task from the issue title + body.
+ */
+export const CreateSessionFromIssueInput = Schema.Struct({
+  /** Absolute path to the origin repo. */
+  repoPath: Schema.String,
+  /** The repo's folder name, used for grouping + the worktree directory. */
+  repoName: Schema.String,
+  /** Which CLI will drive the session. */
+  cli: CliKind,
+  /** The branch to fork the worktree from. */
+  baseBranch: Schema.String,
+  /** The issue to link + seed the task from. */
+  issue: Schema.Struct({
+    number: Schema.Number,
+    title: Schema.String,
+    url: Schema.String,
+    body: Schema.String,
+    labels: Schema.Array(PrLabel)
+  }),
+  /** Automations to enable on the new session. */
+  automations: IssueAutomations
+})
+export type CreateSessionFromIssueInput = Schema.Schema.Type<typeof CreateSessionFromIssueInput>
 
 // ── Terminal ─────────────────────────────────────────────────────────────────
 

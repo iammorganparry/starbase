@@ -1,6 +1,8 @@
 import type {
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
+  IssueAutomations,
   PermissionMode,
   Session
 } from "@starbase/core"
@@ -228,6 +230,71 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           return session
         })
 
+      /**
+       * Create a session from a GitHub issue. Like `create` it forks a FRESH
+       * `starbase/<number>-<slug>` branch off `baseBranch` (the issue number keys
+       * the slug so it's unique per repo and reads well), but it links the issue,
+       * enables the chosen automations, and seeds `initialPrompt` from the issue
+       * title + body (the composer pre-fills it once; HITL — the user sends it).
+       */
+      const createFromIssue = (
+        input: CreateSessionFromIssueInput,
+        options: { defaultMode?: PermissionMode; defaultModel?: string } = {}
+      ): Effect.Effect<
+        Session,
+        GitError,
+        GitService | FileSystem.FileSystem | Path.Path | CommandExecutor.CommandExecutor | AppPaths
+      > =>
+        Effect.gen(function* () {
+          const now = yield* Effect.sync(() => new Date().toISOString())
+          const slug = `${input.issue.number}-${kebab(input.issue.title)}`
+          // Guard: one session per issue worktree (the slug is deterministic).
+          const worktreePath = yield* GitService.worktreePathFor(input.repoName, slug)
+          const prior = yield* readAll()
+          if (prior.some((s) => s.worktreePath === worktreePath)) {
+            return yield* Effect.fail(
+              new GitError({ message: "A session already exists for this issue." })
+            )
+          }
+          const worktree = yield* GitService.createWorktree({
+            repoPath: input.repoPath,
+            repoName: input.repoName,
+            slug,
+            baseBranch: input.baseBranch
+          })
+          const task = [input.issue.title, input.issue.body]
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0)
+            .join("\n\n")
+          const session: Session = {
+            id: `s_${slug}`,
+            repo: input.repoName,
+            branch: worktree.branch,
+            // Seed (and pin) the title from the issue.
+            title: input.issue.title,
+            autoTitle: false,
+            status: "idle",
+            cli: input.cli,
+            diff: { added: 0, removed: 0 },
+            prNumber: null,
+            issueNumber: input.issue.number,
+            issueUrl: input.issue.url,
+            issueTitle: input.issue.title,
+            issueLabels: input.issue.labels.map((l) => ({ name: l.name, color: l.color })),
+            automations: input.automations,
+            ...(task.length > 0 ? { initialPrompt: task } : {}),
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: now,
+            worktreePath: worktree.path,
+            baseBranch: input.baseBranch,
+            ...(options.defaultMode ? { mode: options.defaultMode } : {}),
+            ...(options.defaultModel ? { model: options.defaultModel } : {})
+          }
+          yield* writeAll([session, ...prior])
+          return session
+        })
+
       /** Apply `patch` to the matching session and persist; no-op if absent. */
       const update = (
         id: string,
@@ -265,6 +332,41 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Link (or clear) the session's pull-request number. */
       const setPrNumber = (id: string, prNumber: number | null) =>
         update(id, (s) => ({ ...s, prNumber }))
+
+      /** Link (or, with `null`, unlink) a GitHub issue on a live session. */
+      const setIssue = (
+        id: string,
+        issue: {
+          number: number
+          url: string
+          title: string
+          labels: ReadonlyArray<{ name: string; color: string | null }>
+          automations: IssueAutomations
+        } | null
+      ) =>
+        update(id, (s) =>
+          issue
+            ? {
+                ...s,
+                issueNumber: issue.number,
+                issueUrl: issue.url,
+                issueTitle: issue.title,
+                issueLabels: issue.labels,
+                automations: issue.automations
+              }
+            : {
+                ...s,
+                issueNumber: undefined,
+                issueUrl: undefined,
+                issueTitle: undefined,
+                issueLabels: undefined,
+                automations: undefined
+              }
+        )
+
+      /** Clear the one-shot `initialPrompt` once the composer has consumed it. */
+      const clearInitialPrompt = (id: string) =>
+        update(id, (s) => ({ ...s, initialPrompt: undefined }))
 
       /** Archive a session (its linked PR was merged/closed) — read-only, kept. */
       const archive = (id: string, reason: "merged" | "closed") =>
@@ -313,6 +415,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         get,
         create,
         createFromPr,
+        createFromIssue,
         setMode,
         setModel,
         setResumeId,
@@ -320,6 +423,8 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         renameTitle,
         addAllowlist,
         setPrNumber,
+        setIssue,
+        clearInitialPrompt,
         archive,
         restore,
         remove

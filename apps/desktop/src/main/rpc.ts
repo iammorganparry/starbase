@@ -31,8 +31,11 @@ import {
 import { homedir } from "node:os"
 import { GhError, GitError } from "@starbase/core"
 import type {
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
+  IssueAutomations,
+  IssueSummary,
   PrMergeMethod,
   ReviewSubmitKind
 } from "@starbase/core"
@@ -127,6 +130,58 @@ export const createSession = (input: CreateSessionInput) =>
       defaultMode: provider?.defaultMode,
       defaultModel: provider?.defaultModel
     })
+  })
+
+/**
+ * `Sessions.createFromIssue` handler. Like `createSession` (fresh branch, same
+ * provider-default seeding) but links the issue + automations and seeds the task
+ * from the issue. Exported for tests.
+ */
+export const createSessionFromIssue = (input: CreateSessionFromIssueInput) =>
+  Effect.gen(function* () {
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const provider = config?.providers?.[input.cli]
+    return yield* SessionStore.createFromIssue(input, {
+      defaultMode: provider?.defaultMode,
+      defaultModel: provider?.defaultModel
+    })
+  })
+
+/** `Sessions.linkIssue` handler — attach an issue (+ automations) to a live session. */
+export const linkIssue = (input: {
+  sessionId: string
+  issue: IssueSummary
+  automations: IssueAutomations
+}) =>
+  Effect.gen(function* () {
+    yield* SessionStore.setIssue(input.sessionId, {
+      number: input.issue.number,
+      url: input.issue.url,
+      title: input.issue.title,
+      labels: input.issue.labels.map((l) => ({ name: l.name, color: l.color })),
+      automations: input.automations
+    })
+    return yield* SessionStore.get(input.sessionId)
+  })
+
+/** `Sessions.unlinkIssue` handler — detach the session's issue. */
+export const unlinkIssue = (sessionId: string) =>
+  Effect.gen(function* () {
+    yield* SessionStore.setIssue(sessionId, null)
+    return yield* SessionStore.get(sessionId)
+  })
+
+/**
+ * `Github.closeIssue` handler — close the session's linked issue (close-on-merge).
+ * Fails with `GhError` when there's no worktree or linked issue.
+ */
+export const githubCloseIssue = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath || session.issueNumber == null) {
+      return yield* Effect.fail(new GhError({ message: "No linked issue to close" }))
+    }
+    yield* GhService.closeIssue(session.worktreePath, session.issueNumber)
   })
 
 /**
@@ -342,6 +397,10 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.get": ({ id }) => SessionStore.get(id),
   "Sessions.create": (input) => createSession(input),
   "Sessions.createFromPr": (input) => createSessionFromPr(input),
+  "Sessions.createFromIssue": (input) => createSessionFromIssue(input),
+  "Sessions.linkIssue": (input) => linkIssue(input),
+  "Sessions.unlinkIssue": ({ sessionId }) => unlinkIssue(sessionId),
+  "Sessions.clearInitialPrompt": ({ sessionId }) => SessionStore.clearInitialPrompt(sessionId),
   "Sessions.archive": ({ sessionId, reason }) => archiveSession(sessionId, reason),
   "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
   "Sessions.retitle": ({ sessionId }) => retitleSession(sessionId, claudeTitleGenerator),
@@ -383,6 +442,9 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
   "Github.prState": ({ sessionId }) => githubPrState(sessionId),
   "Github.listPrs": ({ repoPath, mine, search }) => GhService.listPrs(repoPath, { mine, search }),
+  "Github.listIssues": ({ repoPath, mine, search }) =>
+    GhService.listIssues(repoPath, { mine, search }),
+  "Github.closeIssue": ({ sessionId }) => githubCloseIssue(sessionId),
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),

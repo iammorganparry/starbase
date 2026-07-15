@@ -11,12 +11,15 @@ import type {
   AuthSession,
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GateDecision,
   GhStatus,
   GitConfig,
   GithubConfig,
+  IssueAutomations,
+  IssueSummary,
   Message,
   ModelOption,
   PermissionMode,
@@ -106,6 +109,17 @@ export const rpc = {
     run((c) => c.Sessions.create(input)),
   sessionsCreateFromPr: (input: CreateSessionFromPrInput): Promise<Session> =>
     run((c) => c.Sessions.createFromPr(input)),
+  sessionsCreateFromIssue: (input: CreateSessionFromIssueInput): Promise<Session> =>
+    run((c) => c.Sessions.createFromIssue(input)),
+  sessionsLinkIssue: (
+    sessionId: string,
+    issue: IssueSummary,
+    automations: IssueAutomations
+  ): Promise<Session> => run((c) => c.Sessions.linkIssue({ sessionId, issue, automations })),
+  sessionsUnlinkIssue: (sessionId: string): Promise<Session> =>
+    run((c) => c.Sessions.unlinkIssue({ sessionId })),
+  sessionsClearInitialPrompt: (sessionId: string): Promise<void> =>
+    run((c) => c.Sessions.clearInitialPrompt({ sessionId })),
   sessionsArchive: (sessionId: string, reason: ArchiveReason): Promise<Session> =>
     run((c) => c.Sessions.archive({ sessionId, reason })),
   sessionsRestore: (sessionId: string): Promise<Session> =>
@@ -172,6 +186,13 @@ export const rpc = {
     opts: { mine: boolean; search: string }
   ): Promise<ReadonlyArray<PrSummary>> =>
     run((c) => c.Github.listPrs({ repoPath, mine: opts.mine, search: opts.search })),
+  githubListIssues: (
+    repoPath: string,
+    opts: { mine: boolean; search: string }
+  ): Promise<ReadonlyArray<IssueSummary>> =>
+    run((c) => c.Github.listIssues({ repoPath, mine: opts.mine, search: opts.search })),
+  githubCloseIssue: (sessionId: string): Promise<void> =>
+    run((c) => c.Github.closeIssue({ sessionId })),
   githubFiles: (sessionId: string): Promise<ReadonlyArray<PrFileChange>> =>
     run((c) => c.Github.files({ sessionId })),
   githubDiff: (sessionId: string): Promise<string> =>
