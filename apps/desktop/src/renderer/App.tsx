@@ -272,8 +272,16 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       if (archivedRef.current.has(id)) continue
       archivedRef.current.add(id)
       archiveMutation.mutate({ id, reason })
+      // Close-on-merge automation: when the linked PR MERGES (not just closes),
+      // close the session's linked issue too, if the user opted in. Best-effort.
+      if (reason === "merged") {
+        const s = sessions.find((x) => x.id === id)
+        if (s?.issueNumber != null && s.automations?.closeOnMerge) {
+          void rpc.githubCloseIssue(id).catch(() => {})
+        }
+      }
     }
-  }, [toArchive, archiveMutation])
+  }, [toArchive, archiveMutation, sessions])
 
   if (state.matches("loading") || state.matches("starting")) {
     return <LoadingScreen />
