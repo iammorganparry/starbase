@@ -3,6 +3,7 @@ import {
   FileDiff,
   GitCompareArrows,
   GitPullRequest,
+  Globe,
   type LucideIcon,
   MessagesSquare,
   Waypoints,
@@ -47,7 +48,9 @@ export function TabBar({
   onChange,
   prNumber = null,
   changes = null,
-  status
+  status,
+  onToggleBrowser,
+  browserActive = false
 }: {
   tabs: ReadonlyArray<TabKey>
   active: TabKey
@@ -57,6 +60,10 @@ export function TabBar({
   /** Live worktree diff totals, shown as `+N −N` on the Changes tab. */
   changes?: { added: number; removed: number } | null
   status?: { label: string; tone: "yellow" | "blue" | "green" }
+  /** Toggle the embedded browser preview pane (desktop only; absent in stories). */
+  onToggleBrowser?: () => void
+  /** Whether the browser preview pane is currently open (highlights the toggle). */
+  browserActive?: boolean
 }) {
   return (
     <div className="flex h-9 flex-none items-stretch border-b border-hairline bg-sunken">
@@ -106,6 +113,21 @@ export function TabBar({
           <Pill tone={status.tone} pulse>
             {status.label}
           </Pill>
+        )}
+        {onToggleBrowser && (
+          <button
+            type="button"
+            onClick={onToggleBrowser}
+            aria-label="Browser preview"
+            aria-pressed={browserActive}
+            title="Toggle browser preview (⌃⇧B)"
+            className={cn(
+              "flex size-6 items-center justify-center rounded transition-colors hover:bg-hairline",
+              browserActive ? "text-blue" : "text-dim hover:text-text-bright"
+            )}
+          >
+            <Globe className="size-4" />
+          </button>
         )}
       </div>
     </div>

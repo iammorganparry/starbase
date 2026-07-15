@@ -9,6 +9,7 @@ import type {
   Attachment,
   AuthProvider,
   AuthSession,
+  BrowserBounds,
   CliInfo,
   CliKind,
   CreateSessionFromIssueInput,
@@ -283,6 +284,21 @@ export const rpc = {
   /** List a session's live terminals (rebuild the tab strip on mount). */
   terminalList: (sessionId: string): Promise<ReadonlyArray<TerminalInfo>> =>
     run((c) => c.Terminal.list({ sessionId })),
+
+  // ── Browser preview ────────────────────────────────────────────────────────
+  /** Show the preview view and load `url` at `bounds` (rejects non-http(s)). */
+  browserPreviewOpen: (url: string, bounds: BrowserBounds): Promise<void> =>
+    run((c) => c.BrowserPreview.open({ url, bounds })),
+  /** Keep the native view aligned with the pane's on-screen rect. */
+  browserPreviewSetBounds: (bounds: BrowserBounds): Promise<void> =>
+    run((c) => c.BrowserPreview.setBounds({ bounds })),
+  /** Navigate the open preview to a new URL (rejects non-http(s)). */
+  browserPreviewNavigate: (url: string): Promise<void> =>
+    run((c) => c.BrowserPreview.navigate({ url })),
+  /** Reload the current preview page. */
+  browserPreviewReload: (): Promise<void> => run((c) => c.BrowserPreview.reload()),
+  /** Hide + destroy the preview view (pane closed / session switched). */
+  browserPreviewClose: (): Promise<void> => run((c) => c.BrowserPreview.close()),
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   /** The current authenticated session, or null when signed out. */
