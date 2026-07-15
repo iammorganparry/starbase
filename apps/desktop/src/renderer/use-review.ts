@@ -74,8 +74,6 @@ export interface ReviewState {
   readonly prAvailable: boolean
   readonly localAvailable: boolean
   readonly files: ReadonlyArray<PrFileChange>
-  /** The active file's unified diff (sliced from the active source's full diff). */
-  readonly fileDiff: string
   /** Every changed file's unified diff, in list order — for the continuous scroll view. */
   readonly fileDiffs: ReadonlyArray<{ readonly path: string; readonly diff: string }>
   readonly activePath: string | null
@@ -168,7 +166,6 @@ export function useReview(session: Session): ReviewState {
   )
   const fullDiff = effective === "local" ? localDiff : prDiff
   const activePath = selectedPath ?? files[0]?.path ?? null
-  const fileDiff = useMemo(() => sliceDiffForFile(fullDiff, activePath), [fullDiff, activePath])
   // Every file's diff, sliced once from the full diff — the continuous scroll
   // view renders them all stacked rather than one active file at a time.
   const fileDiffs = useMemo(
@@ -241,7 +238,6 @@ export function useReview(session: Session): ReviewState {
     prAvailable,
     localAvailable,
     files,
-    fileDiff,
     fileDiffs,
     activePath,
     drafts,

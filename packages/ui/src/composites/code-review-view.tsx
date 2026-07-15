@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 import type { PrFileChange } from "@starbase/core"
 import { Undo2 } from "lucide-react"
 import { Button } from "../components/button.js"
@@ -86,13 +86,25 @@ export function CodeReviewView({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const rafRef = useRef<number | null>(null)
-  const setSectionRef = useCallback(
-    (path: string) => (el: HTMLDivElement | null) => {
-      if (el) sectionRefs.current.set(path, el)
-      else sectionRefs.current.delete(path)
-    },
-    []
-  )
+  // Cancel any pending scroll-spy frame when the tab unmounts.
+  useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // One stable ref callback per file path (cached), so re-renders don't thrash
+  // `sectionRefs` via React's detach-old/attach-new ref protocol.
+  const refCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map())
+  const setSectionRef = useCallback((path: string) => {
+    let cb = refCallbacks.current.get(path)
+    if (!cb) {
+      cb = (el: HTMLDivElement | null) => {
+        if (el) sectionRefs.current.set(path, el)
+        else sectionRefs.current.delete(path)
+      }
+      refCallbacks.current.set(path, cb)
+    }
+    return cb
+  }, [])
 
   // Scroll-spy: the active file is the last section whose top has scrolled to (or
   // above) the top of the viewport. rAF-throttled so it stays cheap while scrolling.
