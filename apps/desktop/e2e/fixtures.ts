@@ -155,6 +155,24 @@ const installFakeGh = (
     assignees: i.assignees ?? [],
     updatedAt: i.updatedAt ?? "2026-07-11T00:00:00Z"
   }))
+  // Per-issue `gh issue view` payloads (the Issue tab fetches these).
+  for (const i of issues) {
+    writeFileSync(
+      join(binDir, `issue-${i.number}.json`),
+      JSON.stringify({
+        number: i.number,
+        title: i.title,
+        url: i.url,
+        state: "OPEN",
+        body: i.body,
+        author: i.author,
+        assignees: i.assignees,
+        labels: i.labels,
+        createdAt: i.updatedAt,
+        comments: []
+      })
+    )
+  }
   // Pre-create the head branches off main so `gh pr checkout` can land on them.
   for (const p of prs) {
     if (repoPath) git(repoPath, ["branch", p.headRefName, "main"])
@@ -185,6 +203,9 @@ fi
 if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
   printf '%s' "$STARBASE_E2E_GH_ISSUES"; exit 0
 fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  cat "$STARBASE_E2E_GH_DIR/issue-$3.json" 2>/dev/null || echo '{}'; exit 0
+fi
 if [ "$1" = "issue" ]; then
   exit 0
 fi
@@ -196,6 +217,7 @@ exit 0
   return {
     STARBASE_E2E_GH_PRS: JSON.stringify(prs),
     STARBASE_E2E_GH_ISSUES: JSON.stringify(issues),
+    STARBASE_E2E_GH_DIR: binDir,
     STARBASE_E2E_GH_HEADS: heads,
     STARBASE_E2E_GH_STATES: states
   }

@@ -83,6 +83,8 @@ export interface StarbaseAppProps {
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Changes tab — the Code Review view over the local worktree diff. */
   renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Issue tab — the rich linked-issue view. */
+  renderIssue?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the per-session terminal dock (desktop app's live TerminalDock). */
   renderTerminalDock?: (session: Session) => ReactNode
   /** Which edge the terminal dock attaches to (drives the content column's flow). */
@@ -167,6 +169,7 @@ export function StarbaseApp({
   renderPullRequest,
   renderReview,
   renderCode,
+  renderIssue,
   renderTerminalDock,
   terminalDockSide,
   activeSessionId,
@@ -329,6 +332,7 @@ export function StarbaseApp({
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
         renderCode={renderCode}
+        renderIssue={renderIssue}
         renderTerminalDock={renderTerminalDock}
         terminalDockSide={terminalDockSide}
         version={version}

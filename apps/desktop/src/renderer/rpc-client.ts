@@ -18,6 +18,7 @@ import type {
   GhStatus,
   GitConfig,
   GithubConfig,
+  Issue,
   IssueAutomations,
   IssueSummary,
   Message,
@@ -193,6 +194,8 @@ export const rpc = {
     run((c) => c.Github.listIssues({ repoPath, mine: opts.mine, search: opts.search })),
   githubCloseIssue: (sessionId: string): Promise<void> =>
     run((c) => c.Github.closeIssue({ sessionId })),
+  githubIssue: (sessionId: string): Promise<Issue | null> =>
+    run((c) => c.Github.issue({ sessionId })),
   githubFiles: (sessionId: string): Promise<ReadonlyArray<PrFileChange>> =>
     run((c) => c.Github.files({ sessionId })),
   githubDiff: (sessionId: string): Promise<string> =>

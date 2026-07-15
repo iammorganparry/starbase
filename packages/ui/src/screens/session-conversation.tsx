@@ -77,6 +77,8 @@ export interface SessionConversationProps {
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Changes tab — the Code Review view over the local worktree diff. */
   renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Issue tab — the rich linked-issue view (shown when one is linked). */
+  renderIssue?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /**
    * Render the per-session terminal dock (the desktop app's live TerminalDock).
    * Docked to the main content column beside/below the tab body — never shown in
@@ -99,6 +101,8 @@ const visibleTabs = (
   planSessions?: ReadonlySet<string>
 ): ReadonlyArray<TabKey> => {
   const tabs: TabKey[] = ["conversation"]
+  // A linked GitHub issue gets its own rich Issue tab, right after Conversation.
+  if (active?.issueNumber != null) tabs.push("issue")
   if (active && planSessions?.has(active.id)) tabs.push("plan")
   if (active?.prNumber != null) tabs.push("pr", "review")
   // No PR yet: the local worktree diff gets its own Changes tab (Code Review
@@ -198,7 +202,11 @@ export function SessionConversation(props: SessionConversationProps) {
                   )
                 ) : (
                   <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
-                    {activeTab === "pr" && active ? (
+                    {activeTab === "issue" && active ? (
+                      (props.renderIssue?.(active, { onConnectGithub: connectGithub }) ?? (
+                        <StubScreen tab="issue" />
+                      ))
+                    ) : activeTab === "pr" && active ? (
                       (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
                         <StubScreen tab="pr" />
                       ))

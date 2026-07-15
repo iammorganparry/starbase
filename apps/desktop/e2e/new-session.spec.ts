@@ -206,6 +206,14 @@ test("creating a session from an issue forks a linked branch and seeds the task"
   // The composer is prefilled (HITL) with the task derived from the issue.
   await expect(window.getByPlaceholder("Message Claude…")).toHaveValue(/Fix the refund route/)
 
+  // The session gains an "Issue" tab → the rich issue view (title, body, state).
+  await window.getByRole("button", { name: "Issue" }).click()
+  await expect(
+    window.getByRole("heading", { name: /Refund route 500s on a stale token/ })
+  ).toBeVisible()
+  await expect(window.getByText(/triggers a refresh \+ retry/)).toBeVisible()
+  await expect(window.getByText("Open", { exact: true })).toBeVisible()
+
   // Real outcome: a fresh `starbase/128-<slug>` worktree exists on that branch.
   const worktreePath = join(
     home,

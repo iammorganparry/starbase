@@ -1,5 +1,6 @@
 import type {
   GhStatus,
+  Issue,
   IssueSummary,
   PrCheck,
   PrCheckStatus,
@@ -335,6 +336,44 @@ export const mapIssueSummary = (raw: unknown): IssueSummary => {
   }
 }
 
+/**
+ * Map a raw `gh issue view --json …` payload into the full `Issue` view model
+ * for the Issue tab (title, body, labels, assignees, comments). Pure + defensive.
+ */
+export const mapIssue = (raw: unknown): Issue => {
+  const j = rec(raw)
+  return {
+    number: num(j.number) ?? 0,
+    title: str(j.title) ?? "",
+    url: str(j.url) ?? "",
+    state: str(j.state)?.toUpperCase() === "CLOSED" ? "closed" : "open",
+    body: str(j.body) ?? "",
+    author: { login: str(rec(j.author).login) ?? "unknown", avatarUrl: null },
+    assignees: arr(j.assignees).map((a) => ({ login: str(rec(a).login) ?? "", avatarUrl: null })),
+    labels: arr(j.labels).map((l) => ({ name: str(rec(l).name) ?? "", color: str(rec(l).color) })),
+    createdAt: str(j.createdAt) ?? "",
+    comments: arr(j.comments).map((c) => ({
+      author: { login: str(rec(rec(c).author).login) ?? "unknown", avatarUrl: null },
+      body: str(rec(c).body) ?? "",
+      createdAt: str(rec(c).createdAt) ?? ""
+    }))
+  }
+}
+
+/** The `--json` field set requested from `gh issue view` (drives `mapIssue`). */
+const ISSUE_VIEW_FIELDS = [
+  "number",
+  "title",
+  "url",
+  "state",
+  "body",
+  "author",
+  "assignees",
+  "labels",
+  "createdAt",
+  "comments"
+].join(",")
+
 /** The `--json` field set requested from `gh issue list` (drives `mapIssueSummary`). */
 const ISSUE_LIST_FIELDS = [
   "number",
@@ -471,6 +510,15 @@ export class GhService extends Effect.Service<GhService>()(
             ]
           )
         ).pipe(Effect.map((raw) => arr(raw).map(mapIssueSummary))),
+
+      /** The full `Issue` view model for `number` (Issue tab), or null on failure. */
+      issueView: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<Issue | null, never, CommandExecutor.CommandExecutor> =>
+        ghJson(cwd, ["issue", "view", String(number), "--json", ISSUE_VIEW_FIELDS]).pipe(
+          Effect.map((raw) => (raw === null ? null : mapIssue(raw)))
+        ),
 
       /**
        * The lifecycle state of PR `number` — cheap check (`gh pr view --json

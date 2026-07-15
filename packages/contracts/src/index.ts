@@ -12,6 +12,7 @@ import {
   GhStatus,
   GitConfig,
   GithubConfig,
+  Issue,
   IssueAutomations,
   IssueSummary,
   Message,
@@ -401,6 +402,13 @@ export class StarbaseRpcs extends RpcGroup.make(
 
   /** Close the session's linked issue (close-on-merge automation). */
   Rpc.make("Github.closeIssue", {
+    error: GhError,
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** The full linked-issue view model for the session's Issue tab (null if none). */
+  Rpc.make("Github.issue", {
+    success: Schema.NullOr(Issue),
     error: GhError,
     payload: { sessionId: Schema.String }
   }),

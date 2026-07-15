@@ -18,6 +18,7 @@ import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } f
 import { appMachine } from "./app-machine.js"
 import { authMachine } from "./auth-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
+import { IssuePane } from "./issue-pane.js"
 import { PullRequestPane } from "./pull-request-pane.js"
 import { ReviewPane } from "./review-pane.js"
 import { TerminalDockView } from "./terminal-dock-view.js"
@@ -354,7 +355,6 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onOpenPlanReview={ctx.onOpenPlanReview}
           onRestore={restoreSession}
           onDelete={deleteSession}
-          onUnlinkIssue={unlinkIssue}
           onInitialPromptConsumed={consumeInitialPrompt}
         />
       )}
@@ -368,6 +368,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onPrLinked={onPrLinked}
         />
       )}
+      renderIssue={(session) => <IssuePane session={session} onUnlink={unlinkIssue} />}
       renderReview={(session, ctx) => (
         <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
       )}

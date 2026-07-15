@@ -17,7 +17,6 @@ export function ConversationPane({
   onOpenPlanReview,
   onRestore,
   onDelete,
-  onUnlinkIssue,
   onInitialPromptConsumed
 }: {
   session: Session
@@ -29,8 +28,6 @@ export function ConversationPane({
   onRestore?: (sessionId: string) => void
   /** Permanently delete this session (the banner). */
   onDelete?: (sessionId: string) => void
-  /** Detach the session's linked issue (linked-issue banner). */
-  onUnlinkIssue?: (sessionId: string) => void
   /** Notify once the composer has consumed the one-shot initial prompt. */
   onInitialPromptConsumed?: (sessionId: string) => void
 }) {
@@ -43,17 +40,6 @@ export function ConversationPane({
     // Only when this session first mounts with a prompt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id])
-
-  const linkedIssue =
-    session.issueNumber != null
-      ? {
-          number: session.issueNumber,
-          title: session.issueTitle ?? "",
-          url: session.issueUrl,
-          labels: session.issueLabels,
-          automations: session.automations
-        }
-      : undefined
 
   // Which sub-agent tab is selected ("main" = the parent conversation). Declared
   // before the Plan Review early-return so hook order stays stable. We derive the
@@ -128,12 +114,7 @@ export function ConversationPane({
           onApprovePlan={(id) => convo.approvePlan(id)}
           onResumePlan={(id) => convo.resumePlan(id)}
           onOpenPlanReview={onOpenPlanReview}
-          linkedIssue={linkedIssue}
           initialDraft={session.initialPrompt}
-          onOpenIssue={
-            session.issueUrl ? () => void window.starbase.openExternal(session.issueUrl!) : undefined
-          }
-          onUnlinkIssue={onUnlinkIssue ? () => onUnlinkIssue(session.id) : undefined}
           archived={
             session.archived
               ? {

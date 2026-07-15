@@ -453,6 +453,32 @@ export const IssueSummary = Schema.Struct({
 })
 export type IssueSummary = Schema.Schema.Type<typeof IssueSummary>
 
+/** A comment on a GitHub issue (for the Issue tab's rich view). */
+export const IssueComment = Schema.Struct({
+  author: GithubUser,
+  body: Schema.String,
+  createdAt: Schema.String
+})
+export type IssueComment = Schema.Schema.Type<typeof IssueComment>
+
+/**
+ * The full GitHub issue view model for the Issue tab — a recreation of the
+ * issue page (from `gh issue view --json …`). Read-only.
+ */
+export const Issue = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  state: Schema.Literal("open", "closed"),
+  body: Schema.String,
+  author: GithubUser,
+  assignees: Schema.Array(GithubUser),
+  labels: Schema.Array(PrLabel),
+  createdAt: Schema.String,
+  comments: Schema.Array(IssueComment)
+})
+export type Issue = Schema.Schema.Type<typeof Issue>
+
 /** A pending inline review comment anchored to a file + line. */
 export const ReviewComment = Schema.Struct({
   path: Schema.String,

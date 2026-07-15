@@ -184,6 +184,14 @@ export const githubCloseIssue = (sessionId: string) =>
     yield* GhService.closeIssue(session.worktreePath, session.issueNumber)
   })
 
+/** `Github.issue` handler — the full linked-issue view model for the Issue tab. */
+export const githubIssue = (sessionId: string) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId)
+    if (!session?.worktreePath || session.issueNumber == null) return null
+    return yield* GhService.issueView(session.worktreePath, session.issueNumber)
+  })
+
 /**
  * `Workspace.revertFile` handler — discard all uncommitted changes to `path` in
  * the session's worktree. A no-op for an unknown / worktree-less session.
@@ -449,6 +457,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.listIssues": ({ repoPath, mine, search }) =>
     GhService.listIssues(repoPath, { mine, search }),
   "Github.closeIssue": ({ sessionId }) => githubCloseIssue(sessionId),
+  "Github.issue": ({ sessionId }) => githubIssue(sessionId),
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
