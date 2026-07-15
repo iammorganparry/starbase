@@ -352,4 +352,23 @@ describe("GhService pull-request writes", () => {
     }))
     expect(failureOf(merge)?._tag).toBe("GhError")
   })
+
+  it("prReady passes the ready subcommand", async () => {
+    const calls: Array<ReadonlyArray<string>> = []
+    const capture: FakeCommandHandler = (cmd, args) => {
+      if (cmd === "gh") calls.push(args)
+      return { stdout: "" }
+    }
+
+    await providePr(GhService.prReady("/wt", 482), capture)
+    expect(calls[0]).toEqual(["pr", "ready", "482"])
+  })
+
+  it("prReady fails with GhError on a non-zero exit", async () => {
+    const ready = await providePr(GhService.prReady("/wt", 482), () => ({
+      exitCode: 1,
+      stderr: "gh: not a draft"
+    }))
+    expect(failureOf(ready)?._tag).toBe("GhError")
+  })
 })

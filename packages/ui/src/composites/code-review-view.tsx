@@ -1,3 +1,4 @@
+import { useCallback, useMemo, useRef } from "react"
 import type { PrFileChange } from "@starbase/core"
 import { Undo2 } from "lucide-react"
 import { Button } from "../components/button.js"
@@ -15,9 +16,10 @@ export type ReviewSource = "pr" | "local"
 
 export interface CodeReviewViewProps {
   files: readonly PrFileChange[]
+  /** The file currently in view (highlighted in the list; tracked by scroll). */
   activePath: string | null
-  /** Unified diff text for `activePath`. */
-  fileDiff: string
+  /** Every changed file's unified diff, in list order — rendered as one continuous scroll. */
+  fileDiffs: readonly { readonly path: string; readonly diff: string }[]
   drafts: readonly ReviewDraft[]
   routeTargetSession: string | null
   connected: boolean
@@ -52,7 +54,7 @@ export interface CodeReviewViewProps {
 export function CodeReviewView({
   files,
   activePath,
-  fileDiff,
+  fileDiffs,
   drafts,
   routeTargetSession,
   connected,
@@ -72,8 +74,59 @@ export function CodeReviewView({
   const added = files.reduce((sum, f) => sum + f.additions, 0)
   const removed = files.reduce((sum, f) => sum + f.deletions, 0)
   const viewed = files.filter((f) => f.viewed).length
-  const activeFile = files.find((f) => f.path === activePath) ?? null
   const isLocal = source === "local"
+
+  const diffByPath = useMemo(
+    () => new Map(fileDiffs.map((d) => [d.path, d.diff])),
+    [fileDiffs]
+  )
+
+  // The continuous diff scroller and one anchor per file section, so scrolling can
+  // track the current file and clicking a file can jump to its section.
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const rafRef = useRef<number | null>(null)
+  const setSectionRef = useCallback(
+    (path: string) => (el: HTMLDivElement | null) => {
+      if (el) sectionRefs.current.set(path, el)
+      else sectionRefs.current.delete(path)
+    },
+    []
+  )
+
+  // Scroll-spy: the active file is the last section whose top has scrolled to (or
+  // above) the top of the viewport. rAF-throttled so it stays cheap while scrolling.
+  const handleScroll = useCallback(() => {
+    if (rafRef.current !== null) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null
+      const container = scrollRef.current
+      if (!container) return
+      const top = container.getBoundingClientRect().top
+      let current: string | null = null
+      for (const f of files) {
+        const el = sectionRefs.current.get(f.path)
+        if (!el) continue
+        if (el.getBoundingClientRect().top - top <= 60) current = f.path
+        else break
+      }
+      if (current && current !== activePath) onSelectFile(current)
+    })
+  }, [files, activePath, onSelectFile])
+
+  // Clicking a file in the list jumps the scroller to its section.
+  const scrollToFile = useCallback(
+    (path: string) => {
+      const el = sectionRefs.current.get(path)
+      const container = scrollRef.current
+      if (el && container) {
+        const offset = el.getBoundingClientRect().top - container.getBoundingClientRect().top
+        container.scrollTo({ top: container.scrollTop + offset })
+      }
+      onSelectFile(path)
+    },
+    [onSelectFile]
+  )
 
   // Persisted, drag-resizable widths for the two side panels.
   const fileList = useResizableWidth({ storageKey: "sb.review.files", initial: 212, min: 160, max: 440 })
@@ -133,7 +186,7 @@ export function CodeReviewView({
                 key={file.path}
                 file={file}
                 active={file.path === activePath}
-                onSelect={() => onSelectFile(file.path)}
+                onSelect={() => scrollToFile(file.path)}
                 onToggleViewed={(v) => onToggleViewed(file.path, v)}
               />
             ))}
@@ -149,73 +202,82 @@ export function CodeReviewView({
 
         <ResizeHandle onResize={fileList.adjust} aria-label="Resize file list" />
 
-        {/* Diff center */}
-        <div className="flex min-w-0 flex-1 flex-col bg-editor">
-          {activeFile ? (
-            <>
-              <div className="flex h-[42px] flex-none items-center gap-2.5 border-b border-hairline bg-panel px-4">
-                <FileIcon path={activeFile.path} size={13} />
-                <span className="truncate font-mono text-[12.5px] text-text-bright">
-                  {activeFile.path}
-                </span>
-                <DiffStat
-                  added={activeFile.additions}
-                  removed={activeFile.deletions}
-                  className="flex-none text-[10.5px]"
-                />
-                <div className="min-w-[8px] flex-1" />
-                {isLocal
-                  ? onRevertFile && (
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={() => onRevertFile(activeFile.path)}
-                      >
-                        <Undo2 size={13} />
-                        Revert file
-                      </Button>
-                    )
-                  : (
-                    <button
-                      type="button"
-                      onClick={() => onToggleViewed(activeFile.path, !activeFile.viewed)}
-                      className="flex items-center gap-1.5 text-[11.5px] text-text"
-                    >
-                      <span
-                        className={
-                          activeFile.viewed
-                            ? "flex size-[15px] items-center justify-center rounded-[3px] border border-green/60 text-green"
-                            : "size-[15px] rounded-[3px] border border-line"
-                        }
-                      >
-                        {activeFile.viewed && "✓"}
-                      </span>
-                      Viewed
-                    </button>
-                  )}
-              </div>
-              <ReviewDiff
-                path={activeFile.path}
-                diff={fileDiff}
-                connected={connected}
-                routeTargetSession={routeTargetSession}
-                onAddDraft={(d) =>
-                  onAddDraft({
-                    path: d.path,
-                    line: d.startLine,
-                    endLine: d.endLine > d.startLine ? d.endLine : null,
-                    body: d.body,
-                    routeToAgent: d.routeToAgent
-                  })
-                }
-                onRevert={isLocal ? onRevertLines : undefined}
-              />
-            </>
-          ) : (
+        {/* Diff center — one continuous scroll through every changed file. Each
+            file gets a sticky header; scrolling tracks the current file in the
+            list, and clicking a file jumps here. */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor"
+        >
+          {files.length === 0 ? (
             <div className="flex flex-1 items-center justify-center text-[13px] text-dim">
-              Select a file to review its changes.
+              No changes to review.
             </div>
+          ) : (
+            files.map((file) => (
+              <div key={file.path} ref={setSectionRef(file.path)} className="flex flex-col">
+                <div className="sticky top-0 z-10 flex h-[42px] flex-none items-center gap-2.5 border-b border-hairline bg-panel px-4">
+                  <FileIcon path={file.path} size={13} />
+                  <span className="truncate font-mono text-[12.5px] text-text-bright">
+                    {file.path}
+                  </span>
+                  <DiffStat
+                    added={file.additions}
+                    removed={file.deletions}
+                    className="flex-none text-[10.5px]"
+                  />
+                  <div className="min-w-[8px] flex-1" />
+                  {isLocal
+                    ? onRevertFile && (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => onRevertFile(file.path)}
+                        >
+                          <Undo2 size={13} />
+                          Revert file
+                        </Button>
+                      )
+                    : (
+                      <button
+                        type="button"
+                        onClick={() => onToggleViewed(file.path, !file.viewed)}
+                        className="flex items-center gap-1.5 text-[11.5px] text-text"
+                      >
+                        <span
+                          className={
+                            file.viewed
+                              ? "flex size-[15px] items-center justify-center rounded-[3px] border border-green/60 text-green"
+                              : "size-[15px] rounded-[3px] border border-line"
+                          }
+                        >
+                          {file.viewed && "✓"}
+                        </span>
+                        Viewed
+                      </button>
+                    )}
+                </div>
+                <ReviewDiff
+                  path={file.path}
+                  diff={diffByPath.get(file.path) ?? ""}
+                  scroll={false}
+                  connected={connected}
+                  routeTargetSession={routeTargetSession}
+                  onAddDraft={(d) =>
+                    onAddDraft({
+                      path: d.path,
+                      line: d.startLine,
+                      endLine: d.endLine > d.startLine ? d.endLine : null,
+                      body: d.body,
+                      routeToAgent: d.routeToAgent
+                    })
+                  }
+                  onRevert={isLocal ? onRevertLines : undefined}
+                />
+              </div>
+            ))
           )}
         </div>
 

@@ -541,7 +541,17 @@ export class GhService extends Effect.Service<GhService>()(
         number: number,
         method: PrMergeMethod = "merge"
       ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
-        runGh(cwd, ["pr", "merge", String(number), `--${method}`]).pipe(Effect.asVoid)
+        runGh(cwd, ["pr", "merge", String(number), `--${method}`]).pipe(Effect.asVoid),
+
+      /**
+       * Flip draft PR `number` to "ready for review" (`gh pr ready`). Surfaces
+       * `GhError` when GitHub rejects it (e.g. the PR is not a draft).
+       */
+      prReady: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["pr", "ready", String(number)]).pipe(Effect.asVoid)
     })
   }
 ) {}

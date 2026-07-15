@@ -71,6 +71,10 @@ export interface SessionConversationProps {
   starredRepoNames?: ReadonlySet<string>
   /** Toggle a repo group's starred state from its sidebar header. */
   onToggleStar?: (repoName: string) => void | Promise<void>
+  /** Repo names (sidebar group keys) collapsed to hide their sessions. */
+  collapsedRepoNames?: ReadonlySet<string>
+  /** Toggle a repo group's collapsed state from its sidebar header. */
+  onToggleCollapsed?: (repoName: string) => void | Promise<void>
   /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
@@ -140,6 +144,8 @@ export function SessionConversation(props: SessionConversationProps) {
         ghConnected={props.ghConnected}
         starredRepoNames={props.starredRepoNames}
         onToggleStar={props.onToggleStar}
+        collapsedRepoNames={props.collapsedRepoNames}
+        onToggleCollapsed={props.onToggleCollapsed}
         version={props.version}
       />
 

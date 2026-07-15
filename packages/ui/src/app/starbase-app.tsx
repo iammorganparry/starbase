@@ -24,6 +24,7 @@ import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
 import { SettingsView } from "../composites/settings-view.js"
 import { SessionConversation } from "../screens/session-conversation.js"
+import { ARCHIVED_GROUP_KEY } from "./session-sidebar.js"
 import { SEED_PATCH } from "../seed.js"
 
 const GH_UNAVAILABLE: GhStatus = {
@@ -47,6 +48,13 @@ export interface StarbaseAppProps {
   starredRepos?: ReadonlyArray<string>
   /** Toggle a repo's starred state (by absolute path); persists upstream. */
   onToggleStar?: (repoPath: string) => void | Promise<void>
+  /**
+   * Absolute paths of repos collapsed in the sidebar; the sentinel
+   * `"__archived__"` collapses the Archived group.
+   */
+  collapsedRepos?: ReadonlyArray<string>
+  /** Toggle a repo's collapsed state (by absolute path or the archived sentinel). */
+  onToggleCollapsed?: (repoPath: string) => void | Promise<void>
   /** Preselect this repo (by path) when the New Session dialog opens. */
   defaultRepoPath?: string | null
   /** GitHub CLI status for the harnesses strip. */
@@ -138,6 +146,8 @@ export function StarbaseApp({
   repos = [],
   starredRepos = [],
   onToggleStar,
+  collapsedRepos = [],
+  onToggleCollapsed,
   defaultRepoPath,
   ghStatus,
   liveStatus,
@@ -211,6 +221,23 @@ export function StarbaseApp({
       if (repo) return onToggleStar?.(repo.path)
     },
     [repos, onToggleStar]
+  )
+
+  // Same path→name translation for collapsed repos; the archived sentinel is
+  // passed through untranslated (it is not a repo).
+  const collapsedRepoNames = useMemo(() => {
+    const paths = new Set(collapsedRepos)
+    const names = new Set(repos.filter((r) => paths.has(r.path)).map((r) => r.name))
+    if (paths.has(ARCHIVED_GROUP_KEY)) names.add(ARCHIVED_GROUP_KEY)
+    return names
+  }, [repos, collapsedRepos])
+  const toggleCollapsedByName = useCallback(
+    (repoName: string) => {
+      if (repoName === ARCHIVED_GROUP_KEY) return onToggleCollapsed?.(ARCHIVED_GROUP_KEY)
+      const repo = repos.find((r) => r.name === repoName)
+      if (repo) return onToggleCollapsed?.(repo.path)
+    },
+    [repos, onToggleCollapsed]
   )
 
   const active = sessions.find((s) => s.id === selected) ?? null
@@ -303,6 +330,8 @@ export function StarbaseApp({
         ghConnected={ghConnected}
         starredRepoNames={starredRepoNames}
         onToggleStar={onToggleStar ? toggleStarByName : undefined}
+        collapsedRepoNames={collapsedRepoNames}
+        onToggleCollapsed={onToggleCollapsed ? toggleCollapsedByName : undefined}
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
         renderCode={renderCode}

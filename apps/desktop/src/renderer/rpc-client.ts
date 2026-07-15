@@ -159,6 +159,8 @@ export const rpc = {
     run((c) => c.Config.setGit(git)),
   configSetStarredRepos: (paths: ReadonlyArray<string>): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setStarredRepos({ paths })),
+  configSetCollapsedRepos: (paths: ReadonlyArray<string>): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setCollapsedRepos({ paths })),
   configSetLastRepoPath: (path: string): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setLastRepoPath({ path })),
   configSetProvider: (cli: CliKind, provider: ProviderConfig): Promise<WorkspaceConfig> =>
@@ -191,6 +193,8 @@ export const rpc = {
     run((c) => c.Github.review({ sessionId, kind, body })),
   githubMerge: (sessionId: string, method?: PrMergeMethod): Promise<void> =>
     run((c) => c.Github.merge({ sessionId, method })),
+  githubMarkReady: (sessionId: string): Promise<void> =>
+    run((c) => c.Github.markReady({ sessionId })),
 
   /**
    * Subscribe to a prompt's normalized event stream. Forks the RPC stream on the
