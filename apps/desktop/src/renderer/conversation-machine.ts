@@ -270,13 +270,22 @@ export const conversationMachine = setup({
         return { tokens: Math.max(context.tokens, e.tokens) }
       }
       const messages = patchLast(context.messages, (last) => applyStreamEvent(last, e))
-      // A finished/failed turn has no live sub-agents — clear any that never
-      // reported completion (e.g. an interrupted run), so no tab lingers. Stamp
-      // the authoritative final token count and stop the elapsed timer.
+      // A finished/failed turn KEEPS its sub-agents (their tabs stay readable) —
+      // any still marked "working" (e.g. an interrupted run) settle to "done" so no
+      // tab shows a live spinner. The list resets when the next run starts
+      // (`clearSubagents`). Stamp the final token count and stop the elapsed timer.
+      const settled = context.subagents.map((s) =>
+        s.status === "working" ? { ...s, status: "done" as const } : s
+      )
       if (e._tag === "Done") {
-        return { messages, subagents: [], tokens: Math.max(context.tokens, e.tokens), runStartedAt: null }
+        return {
+          messages,
+          subagents: settled,
+          tokens: Math.max(context.tokens, e.tokens),
+          runStartedAt: null
+        }
       }
-      if (e._tag === "Failed") return { messages, subagents: [], runStartedAt: null }
+      if (e._tag === "Failed") return { messages, subagents: settled, runStartedAt: null }
       // The harness reports its actual model on init — reflect it in the chip.
       return e._tag === "Started" && e.model ? { messages, model: e.model } : { messages }
     }),
