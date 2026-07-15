@@ -118,7 +118,7 @@ export const rpc = {
   ): Promise<Session> => run((c) => c.Sessions.linkIssue({ sessionId, issue, automations })),
   sessionsUnlinkIssue: (sessionId: string): Promise<Session> =>
     run((c) => c.Sessions.unlinkIssue({ sessionId })),
-  sessionsClearInitialPrompt: (sessionId: string): Promise<void> =>
+  sessionsClearInitialPrompt: (sessionId: string): Promise<Session> =>
     run((c) => c.Sessions.clearInitialPrompt({ sessionId })),
   sessionsArchive: (sessionId: string, reason: ArchiveReason): Promise<Session> =>
     run((c) => c.Sessions.archive({ sessionId, reason })),

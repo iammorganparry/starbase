@@ -17,6 +17,7 @@ import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
 import { Composer } from "../composites/composer.js"
+import { LinkedIssueBanner, type LinkedIssue } from "../composites/linked-issue-banner.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { ArchivedBanner } from "../composites/archived-banner.js"
@@ -81,6 +82,14 @@ export interface ConversationViewProps {
     onRestore?: () => void
     onDelete?: () => void
   }
+  /** A linked GitHub issue — shows the banner atop the transcript (design I4). */
+  linkedIssue?: LinkedIssue
+  /** Open the linked issue in the system browser. */
+  onOpenIssue?: () => void
+  /** Detach the linked issue from this session. */
+  onUnlinkIssue?: () => void
+  /** One-shot draft to seed the composer with (task prefilled from an issue). */
+  initialDraft?: string
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
@@ -115,7 +124,11 @@ export function ConversationView({
   onApprovePlan,
   onResumePlan,
   onOpenPlanReview,
-  archived
+  archived,
+  linkedIssue,
+  onOpenIssue,
+  onUnlinkIssue,
+  initialDraft
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // Sticky-bottom: follow the newest content while the operator is parked at the
@@ -183,6 +196,19 @@ export function ConversationView({
         {!archived && (busy || runStartedAt !== null || tokens > 0) && (
           <div className="flex h-8 flex-none items-center justify-end border-b border-hairline px-[30px]">
             <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
+          </div>
+        )}
+
+        {/* Linked-issue banner (design I4) — above the transcript. */}
+        {linkedIssue && !archived && (
+          <div className="flex-none border-b border-hairline px-[30px] py-3">
+            <div className="mx-auto w-full max-w-[760px]">
+              <LinkedIssueBanner
+                issue={linkedIssue}
+                onOpen={onOpenIssue}
+                onUnlink={onUnlinkIssue}
+              />
+            </div>
           </div>
         )}
 
@@ -312,6 +338,7 @@ export function ConversationView({
                 onSetMode={onSetMode}
                 allowPlan={cli === "claude"}
                 onSend={onSend}
+                initialValue={initialDraft}
               />
             </>
           )}

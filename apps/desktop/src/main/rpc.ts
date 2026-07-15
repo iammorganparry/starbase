@@ -400,7 +400,11 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.createFromIssue": (input) => createSessionFromIssue(input),
   "Sessions.linkIssue": (input) => linkIssue(input),
   "Sessions.unlinkIssue": ({ sessionId }) => unlinkIssue(sessionId),
-  "Sessions.clearInitialPrompt": ({ sessionId }) => SessionStore.clearInitialPrompt(sessionId),
+  "Sessions.clearInitialPrompt": ({ sessionId }) =>
+    Effect.gen(function* () {
+      yield* SessionStore.clearInitialPrompt(sessionId)
+      return yield* SessionStore.get(sessionId)
+    }),
   "Sessions.archive": ({ sessionId, reason }) => archiveSession(sessionId, reason),
   "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
   "Sessions.retitle": ({ sessionId }) => retitleSession(sessionId, claudeTitleGenerator),

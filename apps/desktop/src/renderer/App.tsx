@@ -128,6 +128,16 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const onPrLinked = (sessionId: string, prNumber: number) =>
     send({ type: "SESSION_PR_LINKED", sessionId, prNumber })
 
+  const unlinkIssue = (sessionId: string) =>
+    void rpc.sessionsUnlinkIssue(sessionId).then((session) => send({ type: "SESSION_UPDATED", session }))
+
+  // The composer consumed the one-shot prompt: clear it (backend returns the
+  // updated session) so re-opening the session never re-seeds the draft.
+  const consumeInitialPrompt = (sessionId: string) =>
+    void rpc
+      .sessionsClearInitialPrompt(sessionId)
+      .then((session) => send({ type: "SESSION_UPDATED", session }))
+
   const restoreSession = async (sessionId: string) => {
     const session = await rpc.sessionsRestore(sessionId)
     send({ type: "SESSION_UPDATED", session })
@@ -336,6 +346,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onOpenPlanReview={ctx.onOpenPlanReview}
           onRestore={restoreSession}
           onDelete={deleteSession}
+          onUnlinkIssue={unlinkIssue}
+          onInitialPromptConsumed={consumeInitialPrompt}
         />
       )}
       renderPullRequest={(session, ctx) => (

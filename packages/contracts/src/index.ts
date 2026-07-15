@@ -167,9 +167,13 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String }
   }),
 
-  /** Clear a session's one-shot `initialPrompt` once the composer has consumed it. */
+  /**
+   * Clear a session's one-shot `initialPrompt` once the composer has consumed
+   * it; returns the updated session so the client state stops re-seeding.
+   */
   Rpc.make("Sessions.clearInitialPrompt", {
-    error: GitError,
+    success: Session,
+    error: Schema.Union(GitError, SessionNotFoundError),
     payload: { sessionId: Schema.String }
   }),
 
