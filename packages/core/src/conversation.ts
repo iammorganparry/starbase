@@ -359,8 +359,9 @@ export type SubagentStatus = Schema.Schema.Type<typeof SubagentStatus>
  * spawning tool_use id — the same value the SDK stamps as `parent_tool_use_id`
  * on the sub-agent's own messages, which is how its output is routed here. The
  * sub-agent's activity accrues onto a single rolling assistant `message` via the
- * ordinary `applyStreamEvent` fold. Sub-agents are live-only (never persisted):
- * a tab exists only while the agent runs and is dropped when it finishes.
+ * ordinary `applyStreamEvent` fold. A sub-agent's tab persists after it finishes
+ * (its status flips to done/error) so its output stays readable; the list resets
+ * when the next run starts. Not disk-persisted across app restarts.
  */
 export const Subagent = Schema.Struct({
   id: Schema.String,
@@ -379,6 +380,8 @@ export type Subagent = Schema.Schema.Type<typeof Subagent>
  * When set, this content event belongs to a spawned sub-agent (the harness's
  * `Task` tool), not the main turn — it routes into that sub-agent's own rolling
  * transcript (see `applySubagentEvent`) instead of the main assistant message.
+ * Sub-agents persist (with a done/error status) until the next run starts, so
+ * their output stays readable after they finish.
  * The id is the spawning tool_use id (`parent_tool_use_id` on the SDK message).
  */
 const AgentId = Schema.optional(Schema.String)
@@ -691,7 +694,9 @@ export const applySubagentEvent = (
     ]
   }
   if (event._tag === "SubagentEnded") {
-    return subagents.filter((s) => s.id !== event.id)
+    // Keep the finished sub-agent (mark its status) so its tab + transcript stay
+    // readable after it completes — the operator reviews each one's output.
+    return subagents.map((s) => (s.id === event.id ? { ...s, status: event.status } : s))
   }
   if ("agentId" in event && event.agentId != null) {
     const agentId = event.agentId
