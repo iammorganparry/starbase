@@ -78,9 +78,12 @@ test("renders LaTeX + an opt-in HTML preview, and drives the browser pane", asyn
   await preview.click()
   await expect(window.locator('iframe[title="HTML preview"]')).toBeVisible()
 
-  // Browser pane: toggle it open from the tab-bar control, then navigate. The
+  // Browser pane: open it from the tab-bar control, then navigate. The
   // WebContentsView is out-of-DOM, so we assert on the address bar (in DOM).
-  await window.getByRole("button", { name: "Browser preview" }).click()
+  // `exact` avoids matching the pane's "Hide browser preview" button, and we open
+  // only if it isn't already (its visibility persists in localStorage across runs).
+  const toggle = window.getByRole("button", { name: "Browser preview", exact: true })
+  if ((await toggle.getAttribute("aria-pressed")) !== "true") await toggle.click()
   const url = window.getByLabel("Preview URL")
   await expect(url).toBeVisible()
   await url.fill("http://localhost:4321")

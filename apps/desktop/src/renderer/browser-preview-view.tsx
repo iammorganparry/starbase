@@ -38,20 +38,42 @@ export function BrowserPreviewView({ session, visible, onToggle, side, onSideCha
     return { x: r.x, y: r.y, width: r.width, height: r.height }
   }, [])
 
-  // Open/close the native view with the pane's visibility, and (re)load on URL
-  // change. `open` is idempotent (reuses the view) and also sets initial bounds.
+  // The URL last loaded into the native view (via open OR navigate), so a URL
+  // change navigates IN PLACE instead of tearing the view down. Held in a ref so
+  // it doesn't drive the lifecycle effect below.
+  const loadedUrl = useRef<string | null>(null)
+  const urlRef = useRef(url)
+  useEffect(() => {
+    urlRef.current = url
+  }, [url])
+
+  // Lifecycle: create the native view when the pane opens (loading the current
+  // URL + setting initial bounds), and destroy it when the pane hides or this
+  // component unmounts. Deliberately NOT keyed on `url` — navigating must not
+  // recreate the view (that would flash a blank overlay); see the effect below.
   useEffect(() => {
     if (!visible) {
-      void rpc.browserPreviewClose()
+      loadedUrl.current = null
       return
     }
     const r = rect()
-    if (r) void rpc.browserPreviewOpen(url, r).catch(() => {})
-    // Destroy the view when the pane hides or this component unmounts.
+    if (r) {
+      void rpc.browserPreviewOpen(urlRef.current, r).catch(() => {})
+      loadedUrl.current = urlRef.current
+    }
     return () => {
       void rpc.browserPreviewClose()
+      loadedUrl.current = null
     }
-  }, [visible, url, rect])
+  }, [visible, rect])
+
+  // Navigation: load a new URL on the already-open view (no teardown). Skips the
+  // value `open` just loaded, so opening the pane doesn't double-load.
+  useEffect(() => {
+    if (!visible || loadedUrl.current === url) return
+    loadedUrl.current = url
+    void rpc.browserPreviewNavigate(url).catch(() => {})
+  }, [visible, url])
 
   // Keep the native view aligned with the placeholder: a rAF loop that pushes new
   // bounds only when they change (handles dock resize AND layout shifts that move
