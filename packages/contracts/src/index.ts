@@ -483,10 +483,14 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { provider: AuthProvider }
   }),
 
-  /** Request an email magic link (sent by the server; console-logged in dev). */
+  /**
+   * Request an email magic link (sent by the server; console-logged in dev).
+   * `name` is supplied only from the sign-up form; on first sign-in the server
+   * uses it as the new user's display name (ignored for existing users).
+   */
   Rpc.make("Auth.sendMagicLink", {
     error: AuthError,
-    payload: { email: Schema.String }
+    payload: { email: Schema.String, name: Schema.optional(Schema.String) }
   }),
 
   /** Sign out — revoke on the server (best effort) and clear the local token. */
