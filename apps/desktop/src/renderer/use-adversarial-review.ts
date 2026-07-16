@@ -29,6 +29,25 @@ const routedKey = (headSha: string, findingId: string): string =>
 /** Stable empty set, so `sentFindingIds` keeps a stable identity when there's no review. */
 const EMPTY_IDS: ReadonlySet<string> = new Set()
 
+/**
+ * The routed-store keys, resolved down to plain ids for `review`'s own findings.
+ *
+ * Pure + exported so the namespacing is actually covered (this repo tests the
+ * renderer's pure seams, not its hooks). Note the two sets are both
+ * `ReadonlySet<string>` — the compiler cannot tell a key set from an id set, so
+ * handing the wrong one to the UI type-checks cleanly and silently breaks the
+ * "Sent" state. That is exactly what happened once; keep them named apart.
+ */
+export const resolveSentIds = (
+  review: AdversarialReview | null,
+  routedKeys: ReadonlySet<string>
+): ReadonlySet<string> =>
+  review === null
+    ? EMPTY_IDS
+    : new Set(
+        review.findings.filter((f) => routedKeys.has(routedKey(review.headSha, f.id))).map((f) => f.id)
+      )
+
 /** Format a finding as the instruction handed to the session's agent. */
 const findingPrompt = (finding: ReviewFinding): string => {
   const where =
@@ -98,20 +117,13 @@ export function useAdversarialReview(
   )
 
   const review = query.data ?? null
-  const routed = useRoutedEntries(session.id)
+  const routedKeys = useRoutedEntries(session.id)
 
   // Resolve the namespaced keys down to plain ids for THIS review, so the UI
   // never has to reconstruct a key format it doesn't own.
   const sentFindingIds = useMemo(
-    () =>
-      review === null
-        ? EMPTY_IDS
-        : new Set(
-            review.findings
-              .filter((f) => routed.has(routedKey(review.headSha, f.id)))
-              .map((f) => f.id)
-          ),
-    [review, routed]
+    () => resolveSentIds(review, routedKeys),
+    [review, routedKeys]
   )
 
   const sendFindingToAgent = useCallback(
@@ -133,6 +145,6 @@ export function useAdversarialReview(
       : null,
     runReview,
     sendFindingToAgent,
-    sentFindingIds: routed
+    sentFindingIds
   }
 }

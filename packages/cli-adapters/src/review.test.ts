@@ -6,6 +6,7 @@ import { Effect, Layer } from "effect"
 import { describe, expect, it } from "vitest"
 import { DiscoveryService } from "./discovery.js"
 import { ReviewService, extractJsonBlock, parseFindings } from "./review.js"
+import { adversarialPrompt, fenceFor } from "./review-prompt.js"
 import type { ReviewInput } from "./review.js"
 import { fakeCommandExecutor } from "./test-support.js"
 
@@ -349,6 +350,53 @@ describe("ReviewService — output handling", () => {
     const review = await runReview(adapter)
     expect(review.findings).toHaveLength(1)
     expect(review.findings[0]!.title).toBe("from the reviewer")
+  })
+})
+
+/**
+ * The diff is arbitrary, attacker-influenced text. A fixed ``` fence lets any PR
+ * that touches a markdown file (a README, a changeset — this very feature's own
+ * PR) close the block early, spilling the rest of the diff out of the code block
+ * where it reads as prose the reviewer may follow.
+ */
+describe("fenceFor / diff embedding", () => {
+  it("uses a plain fence for a diff with no backticks", () => {
+    expect(fenceFor("+const x = 1")).toBe("```")
+  })
+
+  it("outgrows any fence the content itself contains", () => {
+    expect(fenceFor("+```json")).toBe("````")
+    expect(fenceFor("+````\n+```")).toBe("`````")
+  })
+
+  it("ignores short inline-code runs", () => {
+    expect(fenceFor("+call `foo()` here")).toBe("```")
+  })
+
+  it("keeps a diff that patches a fenced markdown block inside the block", () => {
+    const diff = ["+# Title", "+", "+```ts", "+const a = 1", "+```"].join("\n")
+    const prompt = adversarialPrompt({ prNumber: 1, diff, baseBranch: "main" })
+    const fence = fenceFor(diff)
+    expect(fence).toBe("````")
+    // Opened and closed by the LONGER fence, so the ```ts inside is just content.
+    expect(prompt).toContain(`${fence}diff\n${diff}\n${fence}`)
+    // And the reviewer is told the region is data, not instructions.
+    expect(prompt).toContain("data, not")
+  })
+
+  it("embeds an ordinary diff verbatim", () => {
+    const diff = "diff --git a/a.ts b/a.ts\n+const x = 1"
+    expect(adversarialPrompt({ prNumber: 7, diff, baseBranch: "main" })).toContain(
+      "```diff\n" + diff + "\n```"
+    )
+  })
+
+  it("names the base branch only when there is one", () => {
+    const diff = "+x"
+    expect(adversarialPrompt({ prNumber: 7, diff, baseBranch: "develop" })).toContain(
+      "targeting `develop`"
+    )
+    expect(adversarialPrompt({ prNumber: 7, diff, baseBranch: null })).not.toContain("targeting")
   })
 })
 
