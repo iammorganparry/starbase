@@ -247,6 +247,26 @@ export const mapPrView = (raw: unknown): PullRequest => {
   }
 }
 
+/**
+ * Map GitHub's REST inline review comments (`GET /pulls/{n}/comments`) into
+ * timeline items. `gh pr view` only exposes each review's top-level body — never
+ * the inline thread comments — so an inline-only review (e.g. Greptile, which
+ * submits an empty-body `COMMENTED` review with all content inline) would
+ * otherwise never surface. Anchors to the comment's current line, falling back
+ * to the original line when the hunk has since moved (`line` is null on outdated
+ * comments).
+ */
+export const mapReviewComments = (raw: unknown): ReadonlyArray<PrTimelineItem> =>
+  arr(raw).map((c, i) => ({
+    id: `rc-${num(c.id) ?? i}`,
+    author: str(rec(c.user).login) ?? "unknown",
+    kind: "commented" as const,
+    body: str(c.body) ?? "",
+    createdAt: str(c.created_at) ?? "",
+    path: str(c.path),
+    line: num(c.line) ?? num(c.original_line)
+  }))
+
 /** The `--json` field set requested from `gh pr view` (drives `mapPrView`). */
 const PR_VIEW_FIELDS = [
   "state",
@@ -540,9 +560,24 @@ export class GhService extends Effect.Service<GhService>()(
         cwd: string,
         number: number
       ): Effect.Effect<PullRequest | null, never, CommandExecutor.CommandExecutor> =>
-        ghJson(cwd, ["pr", "view", String(number), "--json", PR_VIEW_FIELDS]).pipe(
-          Effect.map((raw) => (raw === null ? null : mapPrView(raw)))
-        ),
+        Effect.gen(function* () {
+          const raw = yield* ghJson(cwd, ["pr", "view", String(number), "--json", PR_VIEW_FIELDS])
+          if (raw === null) return null
+          const pr = mapPrView(raw)
+          // `gh pr view` omits inline review-thread comments — fetch them via the
+          // REST API and merge so inline-only reviews (Greptile, etc.) appear.
+          const commentsRaw = yield* ghJson(cwd, [
+            "api",
+            `repos/{owner}/{repo}/pulls/${number}/comments`,
+            "--paginate"
+          ])
+          const inline = mapReviewComments(commentsRaw)
+          if (inline.length === 0) return pr
+          const timeline = [...pr.timeline, ...inline].sort((a, b) =>
+            a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0
+          )
+          return { ...pr, timeline }
+        }),
 
       /** The changed files of `number` for the Code Review file list. */
       prFiles: (
@@ -643,6 +678,16 @@ export class GhService extends Effect.Service<GhService>()(
         method: PrMergeMethod = "merge"
       ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
         runGh(cwd, ["pr", "merge", String(number), `--${method}`]).pipe(Effect.asVoid),
+
+      /**
+       * Flip draft PR `number` to "ready for review" (`gh pr ready`). Surfaces
+       * `GhError` when GitHub rejects it (e.g. the PR is not a draft).
+       */
+      prReady: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["pr", "ready", String(number)]).pipe(Effect.asVoid),
 
       // ── Issue writes (surface GhError) ─────────────────────────────────────
 

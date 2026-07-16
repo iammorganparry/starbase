@@ -30,7 +30,8 @@ export function ReviewDiff({
   connected,
   routeTargetSession = null,
   onAddDraft,
-  onRevert
+  onRevert,
+  scroll = true
 }: {
   path: string
   diff: string
@@ -45,6 +46,11 @@ export function ReviewDiff({
   }) => void
   /** Revert the selected lines (only offered for a session's own uncommitted diff). */
   onRevert?: (range: { path: string; startLine: number; endLine: number }) => void
+  /**
+   * When true (default) the renderer owns its own scroll area. Set false to render
+   * inline at natural height so an outer container scrolls all files continuously.
+   */
+  scroll?: boolean
 }) {
   const rows = React.useMemo(() => parseUnifiedDiff(diff).filter((r) => r.kind !== "file"), [diff])
 
@@ -99,12 +105,11 @@ export function ReviewDiff({
 
   const composerAnchor = selection === null ? null : hi(selection)
 
-  return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      {/* Size to the widest line (`w-max`) but never narrower than the viewport
-          (`min-w-full`) so every row's background + selection highlight spans the
-          full line — not just the visible width — when scrolled horizontally. */}
-      <div className="w-max min-w-full">
+  // Size to the widest line (`w-max`) but never narrower than the viewport
+  // (`min-w-full`) so every row's background + selection highlight spans the full
+  // line — not just the visible width — when scrolled horizontally.
+  const body = (
+    <div className="w-max min-w-full">
       {rows.map((row, i) => {
         if (row.kind === "hunk") {
           return (
@@ -156,9 +161,12 @@ export function ReviewDiff({
           </React.Fragment>
         )
       })}
-      </div>
     </div>
   )
+
+  // `scroll`: own the vertical scroll (single-file view) vs render inline so an
+  // outer container scrolls every file continuously.
+  return scroll ? <div className="min-h-0 flex-1 overflow-auto">{body}</div> : body
 }
 
 function DiffLine({

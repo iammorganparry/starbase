@@ -76,6 +76,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const gitConfig = configQuery.data?.git ?? null
   const providersConfig = configQuery.data?.providers ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
+  const collapsedRepos = configQuery.data?.collapsedRepos ?? []
   const lastRepoPath = configQuery.data?.lastRepoPath ?? null
   const ghStatus = ghStatusQuery.data ?? GH_UNKNOWN
   const usage = usageQuery.data ?? null
@@ -102,6 +103,16 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       ? starredRepos.filter((p) => p !== repoPath)
       : [...starredRepos, repoPath]
     return rpc.configSetStarredRepos(next).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  }
+  // Toggle a repo's collapsed state (path-keyed; "__archived__" collapses the
+  // Archived group), persist the whole list, and update the cache.
+  const toggleCollapsed = (repoPath: string) => {
+    const next = collapsedRepos.includes(repoPath)
+      ? collapsedRepos.filter((p) => p !== repoPath)
+      : [...collapsedRepos, repoPath]
+    return rpc.configSetCollapsedRepos(next).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
   }
@@ -326,6 +337,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       repos={repos}
       starredRepos={starredRepos}
       onToggleStar={toggleStar}
+      collapsedRepos={collapsedRepos}
+      onToggleCollapsed={toggleCollapsed}
       defaultRepoPath={lastRepoPath}
       ghStatus={ghStatus}
       liveStatus={liveStatus}

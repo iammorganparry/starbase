@@ -51,6 +51,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.github ? { github: existing.github } : {}),
             ...(existing?.git ? { git: existing.git } : {}),
             ...(existing?.starredRepos ? { starredRepos: existing.starredRepos } : {}),
+            ...(existing?.collapsedRepos ? { collapsedRepos: existing.collapsedRepos } : {}),
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...(existing?.providers ? { providers: existing.providers } : {}),
             ...patch
@@ -66,6 +67,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
 
       const setStarredRepos = (starredRepos: ReadonlyArray<string>) =>
         patch({ starredRepos })
+
+      const setCollapsedRepos = (collapsedRepos: ReadonlyArray<string>) =>
+        patch({ collapsedRepos })
 
       const setLastRepoPath = (lastRepoPath: string) => patch({ lastRepoPath })
 
@@ -101,6 +105,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setGithub,
         setGit,
         setStarredRepos,
+        setCollapsedRepos,
         setLastRepoPath,
         setProvider
       }

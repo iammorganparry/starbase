@@ -43,18 +43,25 @@ export function PrSidePanel({
   connected,
   onMerge,
   merging = false,
-  mergeError
+  mergeError,
+  onMarkReady,
+  markingReady = false,
+  markReadyError
 }: {
   pr: PullRequest
   connected: boolean
   onMerge?: () => void
   merging?: boolean
   mergeError?: string | null
+  onMarkReady?: () => void
+  markingReady?: boolean
+  markReadyError?: string | null
 }) {
   const failing = pr.checks.filter((c) => c.status === "fail").length
   const blocked = pr.mergeBlockers.length > 0
   const merged = pr.state === "merged"
   const closed = pr.state === "closed"
+  const draft = pr.state === "draft"
 
   return (
     <div className="flex w-[352px] flex-none flex-col overflow-auto border-l border-hairline bg-panel">
@@ -89,6 +96,23 @@ export function PrSidePanel({
           <Callout tone="purple">This pull request has been merged.</Callout>
         ) : closed ? (
           <Callout tone="red">This pull request is closed.</Callout>
+        ) : draft ? (
+          <div className="flex flex-col gap-3">
+            <Callout tone="blue">This pull request is a draft. Mark it ready to request review.</Callout>
+            <Button
+              className="w-full justify-center gap-2"
+              disabled={!connected || markingReady || !onMarkReady}
+              onClick={onMarkReady}
+            >
+              {markingReady && <Spinner size={13} />}
+              {markingReady ? "Marking ready…" : "Ready for review"}
+            </Button>
+            {markReadyError && (
+              <Callout tone="red" className="items-start">
+                {markReadyError}
+              </Callout>
+            )}
+          </div>
         ) : blocked ? (
           <div className="overflow-hidden rounded-lg border border-red/30">
             <div className="flex items-center gap-[9px] border-b border-hairline bg-red/[0.06] px-[13px] py-[10px]">

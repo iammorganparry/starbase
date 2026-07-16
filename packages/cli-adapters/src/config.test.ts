@@ -114,6 +114,23 @@ describe("ConfigService", () => {
     }
   })
 
+  it("setCollapsedRepos persists the list and preserves reposDir + starredRepos", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setReposDir("/repos/a")
+        yield* ConfigService.setStarredRepos(["/repos/a/one"])
+        yield* ConfigService.setCollapsedRepos(["/repos/a/two", "__archived__"])
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.collapsedRepos).toStrictEqual(["/repos/a/two", "__archived__"])
+      expect(exit.value?.starredRepos).toStrictEqual(["/repos/a/one"])
+      expect(exit.value?.reposDir).toBe("/repos/a")
+    }
+  })
+
   it("setProvider upserts one CLI's defaults and preserves the other providers + sections", async () => {
     const github = { enabled: true, autoCreatePr: false, autoDetectPr: true }
     const claude = { enabled: true, defaultMode: "plan", defaultModel: "opus" } as const

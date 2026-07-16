@@ -22,7 +22,7 @@ export function ReviewPane({
     <CodeReviewView
       files={review.files}
       activePath={review.activePath}
-      fileDiff={review.fileDiff}
+      fileDiffs={review.fileDiffs}
       drafts={review.drafts}
       routeTargetSession={session.title}
       connected={connected}
