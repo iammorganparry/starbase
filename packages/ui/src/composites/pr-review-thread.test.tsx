@@ -1,5 +1,5 @@
 import type { PrReviewThread } from "@starbase/core"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 import { PrReviewThreadView } from "./pr-review-thread.js"
 
@@ -82,6 +82,33 @@ describe("PrReviewThreadView state", () => {
     expect(screen.getByText("Bot")).toBeDefined()
     // association is NONE for bots, so it must not produce a chip.
     expect(screen.queryByText("None")).toBeNull()
+  })
+
+  it("collapses when resolved underneath it, and re-opens when unresolved", () => {
+    // Resolving refetches the PR and re-renders with new props; the open state
+    // must follow, or the thread sits expanded showing a "Resolved" badge.
+    const { rerender } = render(<PrReviewThreadView thread={thread()} />)
+    expect(screen.getByText("Prefilled draft lost")).toBeDefined()
+
+    rerender(<PrReviewThreadView thread={thread({ isResolved: true, resolvedBy: "greptile-apps[bot]" })} />)
+    expect(screen.queryByText("Prefilled draft lost")).toBeNull()
+
+    rerender(<PrReviewThreadView thread={thread({ isResolved: false })} />)
+    expect(screen.getByText("Prefilled draft lost")).toBeDefined()
+  })
+
+  it("keeps a manually-expanded resolved thread open across an unrelated re-render", () => {
+    const resolved = thread({ isResolved: true, resolvedBy: "greptile-apps[bot]" })
+    const { rerender } = render(<PrReviewThreadView thread={resolved} />)
+    expect(screen.queryByText("Prefilled draft lost")).toBeNull()
+
+    // The operator expands it to read the discussion…
+    fireEvent.click(screen.getByText(resolved.path))
+    expect(screen.getByText("Prefilled draft lost")).toBeDefined()
+
+    // …and a refetch that doesn't change resolution must not slam it shut.
+    rerender(<PrReviewThreadView thread={{ ...resolved }} />)
+    expect(screen.getByText("Prefilled draft lost")).toBeDefined()
   })
 
   it("offers Resolve when open and Unresolve when already resolved", () => {

@@ -68,6 +68,22 @@ describe("Markdown image attributes (ALLOWED_TAGS must not clobber defaults)", (
     expect(md().textContent).not.toContain("[blocked]")
     expect(md().querySelector("span[title^='Blocked URL']")).toBeNull()
   })
+
+  it("unwraps a no-op anchor that carries other attributes too", async () => {
+    render(
+      <Markdown>{`<a rel="nofollow" href="#" class="badge"><img alt="P1" src="https://example.com/p1.svg"></a>`}</Markdown>
+    )
+    await waitFor(() => expect(screen.getByAltText("P1")).toBeDefined())
+    expect(md().textContent).not.toContain("[blocked]")
+  })
+
+  it("leaves a real link alone even when an attribute merely contains href=\"#\"", async () => {
+    render(<Markdown>{`<a href="https://example.com" data-href="#">real link</a>`}</Markdown>)
+    await settled()
+    // Unwrapping this would silently strip a working link.
+    expect(md().textContent).toContain("real link")
+    expect(md().querySelector("[data-streamdown='link']")).not.toBeNull()
+  })
 })
 
 describe("Markdown GFM (remark-gfm must survive)", () => {

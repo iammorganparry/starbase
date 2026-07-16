@@ -151,6 +151,19 @@ export function PrReviewThreadView({
 }) {
   const [open, setOpen] = useState(!thread.isResolved)
   const [draft, setDraft] = useState("")
+
+  // Follow resolution when it changes underneath us — resolving refetches the PR
+  // and hands us new props, and GitHub collapses the thread the moment it's
+  // resolved (and re-opens it on unresolve). Adjusted during render rather than
+  // in an effect: an effect would paint the stale state first, flashing the
+  // thread open-but-Resolved. Keyed on the previous value so a MANUAL toggle of
+  // an already-resolved thread survives an unrelated re-render.
+  const [wasResolved, setWasResolved] = useState(thread.isResolved)
+  if (wasResolved !== thread.isResolved) {
+    setWasResolved(thread.isResolved)
+    setOpen(!thread.isResolved)
+  }
+
   const caption = anchorCaption(thread)
   const replyTo = thread.comments[0]?.databaseId ?? null
 

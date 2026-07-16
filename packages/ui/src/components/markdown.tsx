@@ -97,9 +97,14 @@ const COMPONENTS = { pre: MarkdownPre }
  * through to `new URL("#")`, which throws. The href is judged unsafe and the
  * badge renders with a literal "[blocked]" stamped next to it. Such an anchor
  * targets nothing, so unwrapping it is lossless and drops the artifact.
+ *
+ * `href` must appear as a real attribute — preceded by whitespace and holding
+ * exactly "#" — so this can't misfire on a link that merely CONTAINS that text
+ * (`<a href="https://x" data-href="#">`) and silently strip it. `#section` is a
+ * genuine jump link and harden accepts it, so it's deliberately not matched.
  */
-const NO_OP_ANCHOR = /<a\s+href="#"\s*>([\s\S]*?)<\/a>/gi
-const unwrapNoOpAnchors = (md: string): string => md.replace(NO_OP_ANCHOR, "$1")
+const NO_OP_ANCHOR = /<a\s(?:[^>]*\s)?href=(["'])#\1(?:\s[^>]*)?>([\s\S]*?)<\/a>/gi
+const unwrapNoOpAnchors = (md: string): string => md.replace(NO_OP_ANCHOR, "$2")
 
 /**
  * Renders agent markdown as prose via `streamdown` — headings, bold, lists,
