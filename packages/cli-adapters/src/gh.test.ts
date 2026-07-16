@@ -1,7 +1,14 @@
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import { GhService, mapIssueSummary, mapPrSummary, mapPrView, mapReviewThreads } from "./gh.js"
+import {
+  GhService,
+  mapIssueSummary,
+  mapPrSummary,
+  mapPrView,
+  mapReviewThreads,
+  unifiedDiffFromApiFiles
+} from "./gh.js"
 import { failureOf, fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
 
@@ -415,6 +422,110 @@ const RAW_PR_LIST = [
     updatedAt: "2026-07-09T09:00:00Z"
   }
 ]
+
+describe("unifiedDiffFromApiFiles", () => {
+  /**
+   * The REST `patch` starts bare at `@@` — the renderer slices files on
+   * `diff --git` and matches ` b/<path>`, so those headers must be rebuilt.
+   */
+  it("rebuilds the git headers the renderer slices on", () => {
+    const diff = unifiedDiffFromApiFiles([
+      { filename: "src/a.ts", status: "modified", patch: "@@ -1,2 +1,3 @@\n ctx\n+added" }
+    ])
+    expect(diff).toBe("diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,3 @@\n ctx\n+added\n")
+  })
+
+  it("marks added / removed against /dev/null, and follows a rename's old path", () => {
+    const added = unifiedDiffFromApiFiles([{ filename: "new.ts", status: "added", patch: "@@ -0,0 +1 @@\n+hi" }])
+    expect(added).toContain("--- /dev/null")
+    expect(added).toContain("+++ b/new.ts")
+
+    const removed = unifiedDiffFromApiFiles([{ filename: "old.ts", status: "removed", patch: "@@ -1 +0,0 @@\n-bye" }])
+    expect(removed).toContain("--- a/old.ts")
+    expect(removed).toContain("+++ /dev/null")
+
+    const renamed = unifiedDiffFromApiFiles([
+      { filename: "to.ts", previous_filename: "from.ts", status: "renamed", patch: "@@ -1 +1 @@\n-a\n+b" }
+    ])
+    expect(renamed).toContain("diff --git a/from.ts b/to.ts")
+    expect(renamed).toContain("--- a/from.ts")
+    expect(renamed).toContain("+++ b/to.ts")
+  })
+
+  it("keeps a patch-less file (GitHub omits `patch` for oversized/binary) as a header-only entry", () => {
+    // Without this the file would vanish from the diff entirely, even though it
+    // is in the file list — so the two views would disagree.
+    const diff = unifiedDiffFromApiFiles([
+      { filename: "yarn.lock", status: "modified" },
+      { filename: "src/b.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }
+    ])
+    expect(diff).toContain("diff --git a/yarn.lock b/yarn.lock")
+    expect(diff.match(/^diff --git /gm)).toHaveLength(2)
+  })
+
+  it("is empty for no files, and skips entries with no filename", () => {
+    expect(unifiedDiffFromApiFiles([])).toBe("")
+    expect(unifiedDiffFromApiFiles("not an array")).toBe("")
+    expect(unifiedDiffFromApiFiles([{ status: "modified", patch: "@@ -1 +1 @@" }])).toBe("")
+  })
+})
+
+describe("GhService.prFiles / prDiff on a LARGE pull request", () => {
+  // `gh pr view --json files` caps at 100 (GraphQL `files(first: 100)`, unpaginated),
+  // which truncated the list AND its totals. prFiles now reads paginated REST.
+  const apiFiles = [
+    { filename: "src/a.ts", status: "modified", additions: 3, deletions: 1, patch: "@@ -1 +1,3 @@\n-a\n+b\n+c\n+d" },
+    { filename: "src/b.ts", status: "added", additions: 2, deletions: 0, patch: "@@ -0,0 +1,2 @@\n+x\n+y" }
+  ]
+
+  it("prFiles reads the paginated REST endpoint, not the 100-capped `pr view`", async () => {
+    let requested: ReadonlyArray<string> = []
+    const files = await providePr(GhService.prFiles("/wt", 1609), (cmd, args) => {
+      if (cmd !== "gh" || args[0] !== "api") return undefined
+      requested = args
+      return { stdout: JSON.stringify(apiFiles) }
+    })
+    expect(files._tag === "Success" && files.value.map((f) => f.path)).toStrictEqual(["src/a.ts", "src/b.ts"])
+    expect(requested).toContain("--paginate")
+    expect(requested.join(" ")).toContain("repos/{owner}/{repo}/pulls/1609/files")
+  })
+
+  it("prDiff falls back to the REST patches when `gh pr diff` refuses (HTTP 406 too_large)", async () => {
+    // GitHub refuses a diff past 20k lines. `readStdout` folds that to null just
+    // like any other failure, which used to surface as a silently EMPTY diff.
+    const diff = await providePr(GhService.prDiff("/wt", 1609), (cmd, args) => {
+      if (cmd === "gh" && args[0] === "pr" && args[1] === "diff") {
+        return { exitCode: 1, stderr: "HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)" }
+      }
+      if (cmd === "gh" && args[0] === "api") return { stdout: JSON.stringify(apiFiles) }
+      return undefined
+    })
+    expect(diff._tag).toBe("Success")
+    if (diff._tag === "Success") {
+      expect(diff.value).toContain("diff --git a/src/a.ts b/src/a.ts")
+      expect(diff.value).toContain("diff --git a/src/b.ts b/src/b.ts")
+      expect(diff.value).toContain("+++ b/src/b.ts")
+    }
+  })
+
+  it("prDiff prefers `gh pr diff` when it succeeds, and never falls back on an EMPTY diff", async () => {
+    const real = "diff --git a/src/a.ts b/src/a.ts\n@@ -1 +1 @@\n-a\n+b\n"
+    const ok = await providePr(GhService.prDiff("/wt", 1609), (cmd, args) =>
+      cmd === "gh" && args[0] === "pr" && args[1] === "diff" ? { stdout: real } : { stdout: "SHOULD NOT BE CALLED" }
+    )
+    expect(ok._tag === "Success" && ok.value).toBe(real.trim())
+
+    // "" is a genuinely empty diff (success), NOT a failure — it must not trigger
+    // the fallback, or an empty PR would round-trip through a pointless API read.
+    let apiCalled = false
+    const empty = await providePr(GhService.prDiff("/wt", 1609), (cmd, args) => {
+      if (cmd === "gh" && args[0] === "api") apiCalled = true
+      return cmd === "gh" && args[0] === "pr" && args[1] === "diff" ? { stdout: "" } : { stdout: "[]" }
+    })
+    expect(empty._tag === "Success" && empty.value).toBe("")
+    expect(apiCalled).toBe(false)
+  })
+})
 
 describe("mapPrSummary", () => {
   it("maps a raw gh pr list item, synthesizing the draft state", () => {
