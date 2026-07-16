@@ -9,16 +9,18 @@ import type {
   PrMergeMethod,
   PrReviewer,
   PrReviewKind,
+  PrReviewThread,
   PrState,
+  PrThreadComment,
   PrSummary,
   PrTimelineItem,
   PullRequest,
   ReviewSubmitKind
 } from "@starbase/core"
-import { GhError } from "@starbase/core"
+import { GhError, PrAuthorAssociation } from "@starbase/core"
 import { Command } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
-import { Effect, Stream } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
 import { runGh, runString, which } from "./command.js"
 
 const UNAVAILABLE: GhStatus = {
@@ -240,6 +242,9 @@ export const mapPrView = (raw: unknown): PullRequest => {
     labels,
     reviewers,
     timeline,
+    // `gh pr view` cannot see inline review threads; `prView` fills these in
+    // from a separate GraphQL call.
+    reviewThreads: [],
     checks,
     mergeable,
     mergeStateStatus,
@@ -248,24 +253,107 @@ export const mapPrView = (raw: unknown): PullRequest => {
 }
 
 /**
- * Map GitHub's REST inline review comments (`GET /pulls/{n}/comments`) into
- * timeline items. `gh pr view` only exposes each review's top-level body — never
- * the inline thread comments — so an inline-only review (e.g. Greptile, which
- * submits an empty-body `COMMENTED` review with all content inline) would
- * otherwise never surface. Anchors to the comment's current line, falling back
- * to the original line when the hunk has since moved (`line` is null on outdated
- * comments).
+ * The GraphQL query behind `prReviewThreads`.
+ *
+ * `gh pr view` exposes only each review's top-level body — never the inline
+ * thread comments — so an inline-only review (Greptile submits an empty-body
+ * `COMMENTED` review with all content inline) would otherwise never surface.
+ * REST `/pulls/{n}/comments` carries the comments but cannot report resolution
+ * state at all; `reviewThreads` is the only source for `isResolved` /
+ * `isOutdated`, and it returns the grouping, diff hunk and replies in one call.
  */
-export const mapReviewComments = (raw: unknown): ReadonlyArray<PrTimelineItem> =>
-  arr(raw).map((c, i) => ({
-    id: `rc-${num(c.id) ?? i}`,
-    author: str(rec(c.user).login) ?? "unknown",
-    kind: "commented" as const,
+const REVIEW_THREADS_QUERY = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewThreads(first:100){
+        nodes{
+          id isResolved isOutdated path line startLine originalLine originalStartLine
+          resolvedBy{ login }
+          comments(first:50){
+            nodes{
+              id databaseId body createdAt diffHunk authorAssociation
+              author{ login avatarUrl __typename }
+              pullRequestReview{ id }
+              reactionGroups{ content reactors{ totalCount } }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+/** Thread resolution is GraphQL-only — REST has no equivalent. */
+const RESOLVE_THREAD_MUTATION = `mutation($id:ID!){
+  resolveReviewThread(input:{threadId:$id}){ thread{ id isResolved } }
+}`
+const UNRESOLVE_THREAD_MUTATION = `mutation($id:ID!){
+  unresolveReviewThread(input:{threadId:$id}){ thread{ id isResolved } }
+}`
+
+/**
+ * Narrow GitHub's `authorAssociation` through the schema itself, so the accepted
+ * values live in exactly one place (`packages/core`) and an unknown value from a
+ * future API revision degrades to null rather than throwing.
+ */
+const decodeAssociation = Schema.decodeUnknownOption(PrAuthorAssociation)
+const associationOf = (v: unknown): PrAuthorAssociation | null =>
+  Option.getOrNull(decodeAssociation(str(v)?.toUpperCase()))
+
+const mapThreadComment = (c: Json): PrThreadComment => {
+  const author = rec(c.author)
+  return {
+    id: str(c.id) ?? "",
+    databaseId: num(c.databaseId),
+    author: str(author.login) ?? "unknown",
+    authorAvatarUrl: str(author.avatarUrl),
+    // Bots report an `authorAssociation` of NONE, so __typename is the only tell.
+    isBot: str(author.__typename) === "Bot",
+    association: associationOf(c.authorAssociation),
     body: str(c.body) ?? "",
-    createdAt: str(c.created_at) ?? "",
-    path: str(c.path),
-    line: num(c.line) ?? num(c.original_line)
-  }))
+    createdAt: str(c.createdAt) ?? "",
+    reactions: arr(c.reactionGroups).flatMap((g) => {
+      const count = num(rec(g.reactors).totalCount) ?? 0
+      const content = str(g.content)
+      // GitHub returns every reaction kind, including the ones nobody used.
+      return count > 0 && content ? [{ content, count }] : []
+    })
+  }
+}
+
+/**
+ * Map a raw `reviewThreads` GraphQL payload into `PrReviewThread`s. Pure +
+ * defensive, like `mapPrView` — the primary unit-test target.
+ *
+ * The thread's diff hunk and owning review both come from its FIRST comment:
+ * GitHub anchors the thread to the hunk the review was written against, and
+ * replies repeat the same hunk. Threads with no comments are dropped — there is
+ * nothing to anchor or render.
+ */
+export const mapReviewThreads = (raw: unknown): ReadonlyArray<PrReviewThread> => {
+  const pr = rec(rec(rec(rec(raw).data).repository).pullRequest)
+  return arr(rec(pr.reviewThreads).nodes).flatMap((t) => {
+    const nodes = arr(rec(t.comments).nodes)
+    const first = nodes[0]
+    if (first === undefined) return []
+    return [
+      {
+        id: str(t.id) ?? "",
+        reviewId: str(rec(first.pullRequestReview).id),
+        path: str(t.path) ?? "",
+        line: num(t.line),
+        startLine: num(t.startLine),
+        originalLine: num(t.originalLine),
+        originalStartLine: num(t.originalStartLine),
+        diffHunk: str(first.diffHunk) ?? "",
+        isResolved: t.isResolved === true,
+        isOutdated: t.isOutdated === true,
+        resolvedBy: str(rec(t.resolvedBy).login),
+        comments: nodes.map(mapThreadComment)
+      } satisfies PrReviewThread
+    ]
+  })
+}
 
 /** The `--json` field set requested from `gh pr view` (drives `mapPrView`). */
 const PR_VIEW_FIELDS = [
@@ -564,19 +652,23 @@ export class GhService extends Effect.Service<GhService>()(
           const raw = yield* ghJson(cwd, ["pr", "view", String(number), "--json", PR_VIEW_FIELDS])
           if (raw === null) return null
           const pr = mapPrView(raw)
-          // `gh pr view` omits inline review-thread comments — fetch them via the
-          // REST API and merge so inline-only reviews (Greptile, etc.) appear.
-          const commentsRaw = yield* ghJson(cwd, [
+          // `gh pr view` omits inline review threads entirely — fetch them via
+          // GraphQL so inline-only reviews (Greptile, etc.) appear at all, and
+          // with their resolution state. Folding a failure to [] degrades to the
+          // top-level timeline rather than blanking the tab.
+          const threadsRaw = yield* ghJson(cwd, [
             "api",
-            `repos/{owner}/{repo}/pulls/${number}/comments`,
-            "--paginate"
+            "graphql",
+            "-F",
+            "owner={owner}",
+            "-F",
+            "repo={repo}",
+            "-F",
+            `number=${number}`,
+            "-f",
+            `query=${REVIEW_THREADS_QUERY}`
           ])
-          const inline = mapReviewComments(commentsRaw)
-          if (inline.length === 0) return pr
-          const timeline = [...pr.timeline, ...inline].sort((a, b) =>
-            a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0
-          )
-          return { ...pr, timeline }
+          return { ...pr, reviewThreads: mapReviewThreads(threadsRaw) }
         }),
 
       /** The changed files of `number` for the Code Review file list. */
@@ -664,6 +756,47 @@ export class GhService extends Effect.Service<GhService>()(
           String(number),
           REVIEW_FLAG[kind],
           ...(body.length > 0 ? ["--body", body] : [])
+        ]).pipe(Effect.asVoid),
+
+      /**
+       * Resolve / unresolve inline review thread `threadId` (a GraphQL node id
+       * from `prReviewThreads`). GitHub exposes thread resolution through
+       * GraphQL only — there is no REST equivalent.
+       */
+      resolveThread: (
+        cwd: string,
+        threadId: string,
+        resolved: boolean
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, [
+          "api",
+          "graphql",
+          "-F",
+          `id=${threadId}`,
+          "-f",
+          `query=${resolved ? RESOLVE_THREAD_MUTATION : UNRESOLVE_THREAD_MUTATION}`
+        ]).pipe(Effect.asVoid),
+
+      /**
+       * Reply to the inline review thread that `commentId` belongs to.
+       * `commentId` is a REST numeric id (`PrThreadComment.databaseId`), NOT a
+       * GraphQL node id: this purpose-built REST endpoint threads the reply
+       * automatically, whereas GraphQL's `addPullRequestReviewThreadReply`
+       * entangles the reply with pending-review state.
+       */
+      replyToThread: (
+        cwd: string,
+        number: number,
+        commentId: number,
+        body: string
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, [
+          "api",
+          "--method",
+          "POST",
+          `repos/{owner}/{repo}/pulls/${number}/comments/${commentId}/replies`,
+          "-f",
+          `body=${body}`
         ]).pipe(Effect.asVoid),
 
       /**

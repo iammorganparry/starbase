@@ -357,8 +357,12 @@ export const PrCheck = Schema.Struct({
 export type PrCheck = Schema.Schema.Type<typeof PrCheck>
 
 /**
- * A review / comment entry in the PR timeline. `path`/`line` are set only for
- * inline review comments (null for issue comments / v1 — see the plan).
+ * A review / comment entry in the PR timeline — top-level reviews and issue
+ * comments only. Inline review comments live in `PrReviewThread` instead, so
+ * they can keep their diff hunk and reply structure.
+ *
+ * `path`/`line` are retained for the "send to agent" code reference and are null
+ * for everything the timeline currently carries.
  */
 export const PrTimelineItem = Schema.Struct({
   id: Schema.String,
@@ -370,6 +374,82 @@ export const PrTimelineItem = Schema.Struct({
   line: Schema.NullOr(Schema.Number)
 })
 export type PrTimelineItem = Schema.Schema.Type<typeof PrTimelineItem>
+
+/** GitHub's relationship between a commenter and the repo (drives the chips). */
+export const PrAuthorAssociation = Schema.Literal(
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+  "CONTRIBUTOR",
+  "FIRST_TIME_CONTRIBUTOR",
+  "FIRST_TIMER",
+  "MANNEQUIN",
+  "NONE"
+)
+export type PrAuthorAssociation = Schema.Schema.Type<typeof PrAuthorAssociation>
+
+/** A reaction tally on a comment — e.g. `THUMBS_UP` × 1. Zero-counts are dropped. */
+export const PrReaction = Schema.Struct({
+  content: Schema.String,
+  count: Schema.Number
+})
+export type PrReaction = Schema.Schema.Type<typeof PrReaction>
+
+/** One comment inside an inline review thread. */
+export const PrThreadComment = Schema.Struct({
+  /** GraphQL node id. */
+  id: Schema.String,
+  /**
+   * REST numeric id. Replies POST to `/pulls/{n}/comments/{databaseId}/replies`,
+   * which does not accept a GraphQL node id.
+   */
+  databaseId: Schema.NullOr(Schema.Number),
+  author: Schema.String,
+  authorAvatarUrl: Schema.NullOr(Schema.String),
+  /**
+   * A GitHub App posted this (`__typename === "Bot"`). Note that bots report an
+   * `authorAssociation` of `NONE`, so this is the only reliable bot signal.
+   */
+  isBot: Schema.Boolean,
+  association: Schema.NullOr(PrAuthorAssociation),
+  body: Schema.String,
+  createdAt: Schema.String,
+  reactions: Schema.Array(PrReaction)
+})
+export type PrThreadComment = Schema.Schema.Type<typeof PrThreadComment>
+
+/**
+ * An inline review thread anchored to a diff hunk — GitHub's unit of inline
+ * review conversation, and what the Pull Request tab renders instead of a flat
+ * list of comments.
+ *
+ * `line`/`startLine` are the CURRENT anchor and GitHub nulls BOTH of them once
+ * the thread is outdated (the hunk has moved), which is the common case on any
+ * PR that has been pushed to since review. `originalLine`/`originalStartLine`
+ * are the anchor at review time and always survive — so rendering the
+ * "Comment on lines +x to +y" caption means falling back to them.
+ * A null start (after that fallback) means a single-line comment.
+ */
+export const PrReviewThread = Schema.Struct({
+  id: Schema.String,
+  /**
+   * Node id of the review that opened the thread, used to group threads under a
+   * single "<author> reviewed <when>" header. Null when GitHub reports none.
+   */
+  reviewId: Schema.NullOr(Schema.String),
+  path: Schema.String,
+  line: Schema.NullOr(Schema.Number),
+  startLine: Schema.NullOr(Schema.Number),
+  originalLine: Schema.NullOr(Schema.Number),
+  originalStartLine: Schema.NullOr(Schema.Number),
+  /** The raw unified-diff hunk (`@@ …` header included) the thread is anchored to. */
+  diffHunk: Schema.String,
+  isResolved: Schema.Boolean,
+  isOutdated: Schema.Boolean,
+  resolvedBy: Schema.NullOr(Schema.String),
+  comments: Schema.Array(PrThreadComment)
+})
+export type PrReviewThread = Schema.Schema.Type<typeof PrReviewThread>
 
 /** A changed file in a PR, for the Code Review file list. */
 export const PrFileChange = Schema.Struct({
@@ -407,6 +487,8 @@ export const PullRequest = Schema.Struct({
   labels: Schema.Array(PrLabel),
   reviewers: Schema.Array(PrReviewer),
   timeline: Schema.Array(PrTimelineItem),
+  /** Inline review threads, grouped and rendered separately from `timeline`. */
+  reviewThreads: Schema.Array(PrReviewThread),
   checks: Schema.Array(PrCheck),
   /** GitHub `mergeable` (MERGEABLE | CONFLICTING | UNKNOWN), or null. */
   mergeable: Schema.NullOr(Schema.String),

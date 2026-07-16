@@ -43,6 +43,82 @@ const pr: PullRequestData = {
       line: 34
     }
   ],
+  // Mirrors what GitHub returns for a bot review: raw-HTML badge + <details>
+  // block, an outdated thread (live anchor nulled), a reply, and a reaction.
+  reviewThreads: [
+    {
+      id: "PRRT_1",
+      reviewId: "PRR_1",
+      path: "src/auth/session.ts",
+      line: null,
+      startLine: null,
+      originalLine: 38,
+      originalStartLine: 34,
+      diffHunk: `@@ -30,7 +31,11 @@ export function session({
+   const token = useToken()
+
++  // Refresh once, then retry the original request.
++  useEffect(() => {
++    if (!expired) return
++    void refresh()
++  }, [expired])`,
+      isResolved: false,
+      isOutdated: true,
+      resolvedBy: null,
+      comments: [
+        {
+          id: "PRRC_1",
+          databaseId: 1001,
+          author: "greptile-apps",
+          authorAvatarUrl: null,
+          isBot: true,
+          association: "NONE",
+          body: `<a href="#"><img alt="P1" src="https://greptile-static-assets.s3.amazonaws.com/badges/p1.svg?v=9" align="top"></a> **Stale token 500s instead of refreshing**\n\nThe \`useEffect\` refresh fires after the request has already failed.\n\n<details><summary>Prompt To Fix With AI</summary>\n\nMove the refresh ahead of the request.\n\n</details>`,
+          createdAt: "2026-07-11T09:05:00.000Z",
+          reactions: []
+        },
+        {
+          id: "PRRC_2",
+          databaseId: 1002,
+          author: "claude-agent",
+          authorAvatarUrl: null,
+          isBot: false,
+          association: "OWNER",
+          body: "✅ Addressed in `1f8653e` — the refresh now runs before the request.",
+          createdAt: "2026-07-11T10:20:00.000Z",
+          reactions: [{ content: "THUMBS_UP", count: 1 }]
+        }
+      ]
+    },
+    {
+      id: "PRRT_2",
+      reviewId: "PRR_1",
+      path: "src/auth/token-store.ts",
+      line: 91,
+      startLine: null,
+      originalLine: 91,
+      originalStartLine: null,
+      diffHunk: `@@ -88,3 +88,4 @@ export const store = {
+   get: () => cache.token,
++  clear: () => cache.token = null,`,
+      isResolved: true,
+      isOutdated: false,
+      resolvedBy: "greptile-apps[bot]",
+      comments: [
+        {
+          id: "PRRC_3",
+          databaseId: 1003,
+          author: "greptile-apps",
+          authorAvatarUrl: null,
+          isBot: true,
+          association: "NONE",
+          body: "`clear()` doesn't reset the refresh timer.",
+          createdAt: "2026-07-11T09:06:00.000Z",
+          reactions: []
+        }
+      ]
+    }
+  ],
   checks: [
     { name: "build", status: "pass", detailsUrl: null, durationMs: 72_000 },
     { name: "unit tests", status: "pass", detailsUrl: null, durationMs: 48_000 },

@@ -1,7 +1,7 @@
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import { GhService, mapIssueSummary, mapPrSummary, mapPrView, mapReviewComments } from "./gh.js"
+import { GhService, mapIssueSummary, mapPrSummary, mapPrView, mapReviewThreads } from "./gh.js"
 import { failureOf, fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
 
@@ -149,52 +149,141 @@ describe("mapPrView", () => {
   })
 })
 
-describe("mapReviewComments", () => {
-  it("maps inline review comments, falling back to original_line when line is null", () => {
-    const items = mapReviewComments([
-      {
-        id: 3590457963,
-        user: { login: "greptile-apps[bot]" },
-        body: "RAF not cancelled on unmount",
-        created_at: "2026-07-15T20:15:10Z",
-        path: "packages/ui/src/composites/code-review-view.tsx",
-        line: null,
-        original_line: 89
-      },
-      {
-        id: 3590470617,
-        user: { login: "iammorganparry" },
-        body: "Addressed",
-        created_at: "2026-07-15T20:17:16Z",
-        path: "packages/ui/src/composites/code-review-view.tsx",
-        line: 91
+/**
+ * Trimmed from the real `reviewThreads` payload for starbase#36 — the PR whose
+ * Greptile review the thread UI was built against. The first thread is outdated
+ * (so GitHub nulls `line`/`startLine`), bot-authored, and answered by the repo
+ * owner with a reaction; that combination covers every branch of the mapper.
+ */
+const RAW_THREADS = {
+  data: {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes: [
+            {
+              id: "PRRT_kwDOTVMKJc6RFyZM",
+              isResolved: true,
+              isOutdated: true,
+              path: "apps/desktop/src/renderer/conversation-pane.tsx",
+              line: null,
+              startLine: null,
+              originalLine: 38,
+              originalStartLine: 31,
+              resolvedBy: { login: "greptile-apps[bot]" },
+              comments: {
+                nodes: [
+                  {
+                    id: "PRRC_kwDOTVMKJc7Vz61q",
+                    databaseId: 3587157354,
+                    body: "Prefilled draft lost when user navigates to the Issue tab",
+                    createdAt: "2026-07-15T20:15:10Z",
+                    diffHunk: "@@ -27,9 +28,19 @@\n   const convo = useConversation(session)",
+                    authorAssociation: "NONE",
+                    author: {
+                      login: "greptile-apps",
+                      avatarUrl: "https://avatars.githubusercontent.com/in/867647?v=4",
+                      __typename: "Bot"
+                    },
+                    pullRequestReview: { id: "PRR_kwDOTVMKJc8AAAABGGEaWw" },
+                    reactionGroups: [
+                      { content: "THUMBS_UP", reactors: { totalCount: 0 } },
+                      { content: "HEART", reactors: { totalCount: 0 } }
+                    ]
+                  },
+                  {
+                    id: "PRRC_kwDOTVMKJc7WKg6W",
+                    databaseId: 3593080470,
+                    body: "Addressed in 1f8653e",
+                    createdAt: "2026-07-16T08:02:41Z",
+                    diffHunk: "@@ -27,9 +28,19 @@\n   const convo = useConversation(session)",
+                    authorAssociation: "OWNER",
+                    author: {
+                      login: "iammorganparry",
+                      avatarUrl: "https://avatars.githubusercontent.com/u/2838620?v=4",
+                      __typename: "User"
+                    },
+                    pullRequestReview: { id: "PRR_kwDOTVMKJc8AAAABGGEaWw" },
+                    reactionGroups: [{ content: "THUMBS_UP", reactors: { totalCount: 1 } }]
+                  }
+                ]
+              }
+            }
+          ]
+        }
       }
-    ])
-    expect(items).toStrictEqual([
-      {
-        id: "rc-3590457963",
-        author: "greptile-apps[bot]",
-        kind: "commented",
-        body: "RAF not cancelled on unmount",
-        createdAt: "2026-07-15T20:15:10Z",
-        path: "packages/ui/src/composites/code-review-view.tsx",
-        line: 89
-      },
-      {
-        id: "rc-3590470617",
-        author: "iammorganparry",
-        kind: "commented",
-        body: "Addressed",
-        createdAt: "2026-07-15T20:17:16Z",
-        path: "packages/ui/src/composites/code-review-view.tsx",
-        line: 91
-      }
-    ])
+    }
+  }
+}
+
+describe("mapReviewThreads", () => {
+  it("maps a thread, its anchor, resolution state and owning review", () => {
+    const [thread] = mapReviewThreads(RAW_THREADS)
+    expect(thread).toMatchObject({
+      id: "PRRT_kwDOTVMKJc6RFyZM",
+      reviewId: "PRR_kwDOTVMKJc8AAAABGGEaWw",
+      path: "apps/desktop/src/renderer/conversation-pane.tsx",
+      isResolved: true,
+      isOutdated: true,
+      resolvedBy: "greptile-apps[bot]",
+      diffHunk: "@@ -27,9 +28,19 @@\n   const convo = useConversation(session)"
+    })
+    // GitHub nulls the live anchor once a thread is outdated; the original
+    // anchor is what the "Comment on lines +31 to +38" caption falls back to.
+    expect(thread).toMatchObject({
+      line: null,
+      startLine: null,
+      originalLine: 38,
+      originalStartLine: 31
+    })
   })
 
-  it("tolerates a null / empty payload", () => {
-    expect(mapReviewComments(null)).toStrictEqual([])
-    expect(mapReviewComments([])).toStrictEqual([])
+  it("flags bots by __typename, not authorAssociation (bots report NONE)", () => {
+    const [thread] = mapReviewThreads(RAW_THREADS)
+    expect(thread?.comments[0]).toMatchObject({
+      author: "greptile-apps",
+      isBot: true,
+      association: "NONE",
+      databaseId: 3587157354,
+      authorAvatarUrl: "https://avatars.githubusercontent.com/in/867647?v=4"
+    })
+    expect(thread?.comments[1]).toMatchObject({ author: "iammorganparry", isBot: false, association: "OWNER" })
+  })
+
+  it("folds an unknown or absent authorAssociation to null rather than throwing", () => {
+    const withAssoc = (authorAssociation: unknown) => {
+      const base = structuredClone(RAW_THREADS)
+      Object.assign(base.data.repository.pullRequest.reviewThreads.nodes[0]!.comments.nodes[0]!, {
+        authorAssociation
+      })
+      return mapReviewThreads(base)[0]?.comments[0]?.association
+    }
+    // A value from a future API revision must degrade, not blow up the tab.
+    expect(withAssoc("SOMETHING_NEW")).toBeNull()
+    expect(withAssoc(undefined)).toBeNull()
+    expect(withAssoc(null)).toBeNull()
+    expect(withAssoc(42)).toBeNull()
+    // …and a real one still decodes, case-insensitively.
+    expect(withAssoc("owner")).toBe("OWNER")
+  })
+
+  it("keeps only reactions anyone actually used", () => {
+    const [thread] = mapReviewThreads(RAW_THREADS)
+    expect(thread?.comments[0]?.reactions).toStrictEqual([])
+    expect(thread?.comments[1]?.reactions).toStrictEqual([{ content: "THUMBS_UP", count: 1 }])
+  })
+
+  it("drops comment-less threads and tolerates a null / sparse payload", () => {
+    expect(mapReviewThreads(null)).toStrictEqual([])
+    expect(mapReviewThreads({})).toStrictEqual([])
+    const empty = {
+      data: {
+        repository: {
+          pullRequest: { reviewThreads: { nodes: [{ id: "t1", path: "a.ts", comments: { nodes: [] } }] } }
+        }
+      }
+    }
+    expect(mapReviewThreads(empty)).toStrictEqual([])
   })
 })
 
@@ -249,6 +338,33 @@ describe("GhService pull-request reads", () => {
 
     const fail = await providePr(GhService.prView("/wt", 482), () => ({ exitCode: 1, stderr: "no PR" }))
     expect(fail._tag === "Success" && fail.value).toBe(null)
+  })
+
+  it("prView merges inline review threads from the GraphQL call", async () => {
+    const res = await providePr(GhService.prView("/wt", 482), (cmd, args) => {
+      if (cmd !== "gh") return undefined
+      if (args[0] === "api" && args[1] === "graphql") return { stdout: JSON.stringify(RAW_THREADS) }
+      if (args[1] === "view") return { stdout: JSON.stringify(RAW_PR) }
+      return undefined
+    })
+    expect(res._tag).toBe("Success")
+    if (res._tag !== "Success") return
+    expect(res.value?.reviewThreads).toHaveLength(1)
+    expect(res.value?.reviewThreads[0]?.path).toBe("apps/desktop/src/renderer/conversation-pane.tsx")
+    // The threads must NOT also be flattened into the timeline, or every inline
+    // comment renders twice.
+    expect(res.value?.timeline.some((t) => t.body.includes("Prefilled draft lost"))).toBe(false)
+  })
+
+  it("prView degrades to an empty thread list when the GraphQL call fails", async () => {
+    const res = await providePr(GhService.prView("/wt", 482), (cmd, args) => {
+      if (cmd !== "gh") return undefined
+      if (args[0] === "api" && args[1] === "graphql") return { exitCode: 1, stderr: "gone" }
+      if (args[1] === "view") return { stdout: JSON.stringify(RAW_PR) }
+      return undefined
+    })
+    expect(res._tag === "Success" && res.value?.number).toBe(482)
+    expect(res._tag === "Success" && res.value?.reviewThreads).toStrictEqual([])
   })
 })
 
@@ -439,6 +555,52 @@ describe("GhService pull-request writes", () => {
       stderr: "gh: not mergeable"
     }))
     expect(failureOf(merge)?._tag).toBe("GhError")
+  })
+
+  it("resolveThread picks the resolve vs unresolve mutation", async () => {
+    const calls: Array<ReadonlyArray<string>> = []
+    const capture: FakeCommandHandler = (cmd, args) => {
+      if (cmd === "gh") calls.push(args)
+      return { stdout: "{}" }
+    }
+
+    await providePr(GhService.resolveThread("/wt", "PRRT_abc", true), capture)
+    expect(calls[0]?.slice(0, 4)).toEqual(["api", "graphql", "-F", "id=PRRT_abc"])
+    expect(calls[0]?.at(-1)).toContain("resolveReviewThread")
+
+    calls.length = 0
+    await providePr(GhService.resolveThread("/wt", "PRRT_abc", false), capture)
+    expect(calls[0]?.at(-1)).toContain("unresolveReviewThread")
+  })
+
+  it("replyToThread POSTs to the REST replies endpoint keyed by the comment's databaseId", async () => {
+    const calls: Array<ReadonlyArray<string>> = []
+    await providePr(GhService.replyToThread("/wt", 482, 3587157354, "ack"), (cmd, args) => {
+      if (cmd === "gh") calls.push(args)
+      return { stdout: "{}" }
+    })
+    expect(calls[0]).toEqual([
+      "api",
+      "--method",
+      "POST",
+      "repos/{owner}/{repo}/pulls/482/comments/3587157354/replies",
+      "-f",
+      "body=ack"
+    ])
+  })
+
+  it("resolveThread / replyToThread fail with GhError on a non-zero exit", async () => {
+    const resolve = await providePr(GhService.resolveThread("/wt", "PRRT_abc", true), () => ({
+      exitCode: 1,
+      stderr: "gh: forbidden"
+    }))
+    expect(failureOf(resolve)?._tag).toBe("GhError")
+
+    const reply = await providePr(GhService.replyToThread("/wt", 482, 1, "hi"), () => ({
+      exitCode: 1,
+      stderr: "gh: gone"
+    }))
+    expect(failureOf(reply)?._tag).toBe("GhError")
   })
 
   it("prReady passes the ready subcommand", async () => {

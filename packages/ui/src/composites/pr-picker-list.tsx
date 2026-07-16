@@ -1,6 +1,7 @@
 import type { PrState, PrSummary } from "@starbase/core"
 import { GitPullRequest } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { relativeTime } from "../lib/relative-time.js"
 import { Avatar, githubAvatarUrl } from "../components/avatar.js"
 import { Badge } from "../components/badge.js"
 import { DiffStat } from "../components/diff-stat.js"
@@ -13,21 +14,6 @@ const stateDot: Record<PrState, string> = {
   merged: "bg-purple",
   closed: "bg-red",
   draft: "bg-line-strong"
-}
-
-const MS_PER_MINUTE = 60_000
-const MS_PER_HOUR = 60 * MS_PER_MINUTE
-const MS_PER_DAY = 24 * MS_PER_HOUR
-
-/** Format an ISO timestamp as a compact relative "2h ago" string. */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ""
-  const elapsed = Math.max(0, Date.now() - then)
-  if (elapsed < MS_PER_MINUTE) return "just now"
-  if (elapsed < MS_PER_HOUR) return `${Math.floor(elapsed / MS_PER_MINUTE)}m ago`
-  if (elapsed < MS_PER_DAY) return `${Math.floor(elapsed / MS_PER_HOUR)}h ago`
-  return `${Math.floor(elapsed / MS_PER_DAY)}d ago`
 }
 
 /**

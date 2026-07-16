@@ -1,6 +1,14 @@
-import type { PrLabel, PrState, PullRequest, ReviewSubmitKind } from "@starbase/core"
+import type {
+  PrLabel,
+  PrReviewThread,
+  PrState,
+  PrTimelineItem,
+  PullRequest,
+  ReviewSubmitKind
+} from "@starbase/core"
 import { GitPullRequest } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { relativeTime } from "../lib/relative-time.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { AsyncButton } from "../components/async-button.js"
@@ -9,6 +17,7 @@ import { Spinner } from "../components/loading.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { StatusDot } from "../components/status-dot.js"
 import { PrReviewComposer } from "./pr-review-composer.js"
+import { PrReviewGroup } from "./pr-review-group.js"
 import { PrSidePanel } from "./pr-side-panel.js"
 import { PrTimelineEntry } from "./pr-timeline-entry.js"
 
@@ -58,15 +67,44 @@ function LabelChip({ label }: { label: PrLabel }) {
   )
 }
 
-/** Format an ISO timestamp as a compact relative "2h ago" string. */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ""
-  const s = Math.max(0, Math.round((Date.now() - then) / 1000))
-  if (s < 60) return "just now"
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86_400)}d ago`
+/**
+ * One entry in the merged timeline: either a top-level review / issue comment,
+ * or a group of inline threads opened by a single review.
+ */
+type FeedEntry =
+  | { kind: "item"; at: string; item: PrTimelineItem }
+  | { kind: "threads"; at: string; id: string; threads: ReadonlyArray<PrReviewThread> }
+
+/**
+ * Merge top-level timeline items and inline review threads into one
+ * chronological feed, so a review's threads appear at the moment the review was
+ * submitted rather than in a separate block.
+ *
+ * Threads are grouped by the review that opened them; a thread whose `reviewId`
+ * is null (GitHub occasionally reports none) stands alone under its own header,
+ * keyed by thread id so it can't collide with a real review group.
+ */
+const buildFeed = (pr: PullRequest): ReadonlyArray<FeedEntry> => {
+  const groups = new Map<string, Array<PrReviewThread>>()
+  for (const thread of pr.reviewThreads) {
+    const key = thread.reviewId ?? `thread:${thread.id}`
+    const existing = groups.get(key)
+    if (existing) existing.push(thread)
+    else groups.set(key, [thread])
+  }
+
+  const entries: Array<FeedEntry> = [
+    ...pr.timeline.map((item) => ({ kind: "item" as const, at: item.createdAt, item })),
+    ...[...groups].flatMap(([id, threads]) => {
+      // The group sits at its earliest comment — when the review landed.
+      const at = threads
+        .flatMap((t) => t.comments.map((c) => c.createdAt))
+        .reduce<string | null>((min, c) => (min === null || c < min ? c : min), null)
+      return at === null ? [] : [{ kind: "threads" as const, at, id, threads }]
+    })
+  ]
+
+  return entries.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
 }
 
 export interface PullRequestViewProps {
@@ -85,6 +123,10 @@ export interface PullRequestViewProps {
   onSendEntryToAgent?: (entryId: string) => Promise<void> | void
   /** Timeline entry ids already routed to the agent — their action stays "Sent". */
   sentEntryIds?: ReadonlySet<string>
+  /** Resolve / unresolve an inline review thread. */
+  onResolveThread?: (threadId: string, resolved: boolean) => Promise<void> | void
+  /** Reply into an inline review thread (`commentId` = the REST databaseId). */
+  onReplyToThread?: (commentId: number, body: string) => Promise<void> | void
   onOpenOnGithub?: () => void
   onMerge?: () => void
   /** A merge is in flight — disables the button and shows a spinner. */
@@ -115,6 +157,8 @@ export function PullRequestView({
   onSubmitReview,
   onSendEntryToAgent,
   sentEntryIds,
+  onResolveThread,
+  onReplyToThread,
   onOpenOnGithub,
   onMerge,
   merging = false,
@@ -172,6 +216,10 @@ export function PullRequestView({
     )
   }
 
+  // Not memoized: the early returns above rule out a hook here, and this is a
+  // map + sort over a handful of entries.
+  const feed = buildFeed(pr)
+
   return (
     <div className="flex min-h-0 flex-1">
       {/* Centre column: header + timeline + sticky composer */}
@@ -221,18 +269,30 @@ export function PullRequestView({
 
           <div className="h-px bg-line" />
 
-          {/* Timeline */}
-          {pr.timeline.length === 0 ? (
+          {/* Timeline — top-level reviews/comments and inline thread groups, interleaved */}
+          {feed.length === 0 ? (
             <p className="text-[13px] text-dim">No reviews or comments yet.</p>
           ) : (
-            pr.timeline.map((item) => (
-              <PrTimelineEntry
-                key={item.id}
-                item={item}
-                sent={sentEntryIds?.has(item.id)}
-                onSendToAgent={onSendEntryToAgent}
-              />
-            ))
+            feed.map((entry) =>
+              entry.kind === "item" ? (
+                <PrTimelineEntry
+                  key={entry.item.id}
+                  item={entry.item}
+                  sent={sentEntryIds?.has(entry.item.id)}
+                  onSendToAgent={onSendEntryToAgent}
+                />
+              ) : (
+                <PrReviewGroup
+                  key={entry.id}
+                  threads={entry.threads}
+                  prAuthor={pr.author.login}
+                  sentEntryIds={sentEntryIds}
+                  onSendToAgent={onSendEntryToAgent}
+                  onResolve={onResolveThread}
+                  onReply={onReplyToThread}
+                />
+              )
+            )
           )}
 
           {/* Sticky review composer */}
