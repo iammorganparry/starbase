@@ -15,11 +15,13 @@ import type {
   Attachment,
   GateDecision,
   Message,
-  ModelOption,
+  CliKind,
+  ProviderModels,
   PermissionMode,
   Plan,
   QuestionAnswer,
   QuestionRequest,
+  ReviewPhase,
   Session,
   SessionStatus,
   Skill,
@@ -34,9 +36,14 @@ export interface Conversation {
   readonly mode: PermissionMode
   readonly skills: ReadonlyArray<Skill>
   readonly files: ReadonlyArray<string>
-  /** Current harness model id + the models it supports. */
+  /**
+   * The session's live harness + model, and the catalogue of every installed
+   * harness's models. `cli` can change mid-session, so read it from here rather
+   * than off the `Session` the hook was called with.
+   */
+  readonly cli: CliKind
   readonly model: string
-  readonly models: ReadonlyArray<ModelOption>
+  readonly catalog: ReadonlyArray<ProviderModels>
   /** The worktree's current unified diff, for the Changes rail. */
   readonly patch: string
   /** The agent is producing a turn (or paused at a gate). */
@@ -69,7 +76,15 @@ export interface Conversation {
   readonly sendPrompt: (text: string, images?: ReadonlyArray<Attachment>) => void
   readonly decideGate: (gateId: string, decision: GateDecision) => void
   readonly setMode: (mode: PermissionMode) => void
-  readonly setModel: (model: string) => void
+  /** Picking a model implies its harness, so both are set together. */
+  readonly setHarness: (cli: CliKind, model: string) => void
+  /**
+   * The adversarial reviewer as a watch-only agent tab (null until one runs),
+   * plus where it has got to and when it started — the PR button's live label.
+   */
+  readonly reviewer: Subagent | null
+  readonly reviewPhase: ReviewPhase
+  readonly reviewStartedAt: number | null
   readonly stop: () => void
   /** Re-read the worktree diff (e.g. after reverting from the Changes rail). */
   readonly refreshDiff: () => void
@@ -79,8 +94,10 @@ export function useConversation(session: Session): Conversation {
   const actor = useMemo(() => getConversationActor(session), [session.id])
   const state = useSelector(actor, (s) => s)
   const send = actor.send
-  const { messages, mode, skills, files, model, models, patch, queued, subagents, tokens, runStartedAt } =
-    state.context
+  const {
+    messages, mode, skills, files, cli, model, catalog, patch, queued, subagents, tokens,
+    runStartedAt, reviewer, reviewPhase, reviewStartedAt
+  } = state.context
 
   const paused = useMemo(() => {
     const last = messages[messages.length - 1]
@@ -106,8 +123,9 @@ export function useConversation(session: Session): Conversation {
     mode,
     skills,
     files,
+    cli,
     model,
-    models,
+    catalog,
     patch,
     busy,
     paused,
@@ -115,6 +133,9 @@ export function useConversation(session: Session): Conversation {
     subagents,
     tokens,
     runStartedAt,
+    reviewer,
+    reviewPhase,
+    reviewStartedAt,
     unqueue: (index) => send({ type: "UNQUEUE", index }),
     sendNow: (index) => send({ type: "SEND_NOW", index }),
     question,
@@ -128,7 +149,7 @@ export function useConversation(session: Session): Conversation {
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
     answerQuestion: (requestId, answers) => send({ type: "ANSWER_QUESTION", requestId, answers }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),
-    setModel: (m) => send({ type: "SET_MODEL", model: m }),
+    setHarness: (c, m) => send({ type: "SET_HARNESS", cli: c, model: m }),
     stop: () => send({ type: "STOP" }),
     refreshDiff: () => send({ type: "REFRESH_DIFF" })
   }

@@ -4,7 +4,7 @@ import type {
   CliKind,
   GateDecision,
   Message,
-  ModelOption,
+  ProviderModels,
   PermissionMode,
   Plan,
   QuestionAnswer,
@@ -42,10 +42,10 @@ export interface ConversationViewProps {
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
   paused?: boolean
-  /** Current harness model id + the models it supports (composer model chip). */
+  /** Current harness model id + every installed harness's models (model chip). */
   model?: string
-  models?: ReadonlyArray<ModelOption>
-  onSetModel?: (model: string) => void
+  catalog?: ReadonlyArray<ProviderModels>
+  onSetHarness?: (cli: CliKind, model: string) => void
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
   /** The agent is producing a turn — the composer queues messages instead of blocking. */
   busy?: boolean
@@ -120,8 +120,8 @@ export function ConversationView({
   files = [],
   paused = false,
   model,
-  models = [],
-  onSetModel,
+  catalog = [],
+  onSetHarness,
   onSend,
   busy = false,
   tokens = 0,
@@ -335,9 +335,10 @@ export function ConversationView({
                 files={files}
                 paused={paused}
                 busy={busy}
+                cli={cli}
                 model={model}
-                models={models}
-                onSetModel={onSetModel}
+                catalog={catalog}
+                onSetHarness={onSetHarness}
                 mode={mode}
                 onSetMode={onSetMode}
                 allowPlan={cli === "claude"}

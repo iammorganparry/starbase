@@ -817,6 +817,52 @@ export const applySubagentEvent = (
   return subagents
 }
 
+/**
+ * The reserved tab id for the adversarial reviewer. It is not a harness sub-agent
+ * (no `Task` spawned it, so there is no tool_use id to key it by) — it's a whole
+ * agent run of its own that we surface in the same tab bar, so it needs an id
+ * that cannot collide with a real sub-agent's.
+ */
+export const REVIEWER_AGENT_ID = "__reviewer__"
+
+/**
+ * Fold one reviewer `StreamEvent` into the Reviewer tab.
+ *
+ * The reviewer is presented as a `Subagent` because that is exactly the shape the
+ * agent tab bar already renders: a name, a status dot, and one rolling watch-only
+ * message. Its events are main-thread (no `agentId`) — `applySubagentEvent` would
+ * ignore them — so this is its own reducer.
+ *
+ * `Started` rebuilds from scratch: re-reviewing publishes onto the same channel,
+ * and an attached watcher would otherwise append the new run's output onto the
+ * previous one's transcript.
+ */
+export const applyReviewEvent = (
+  reviewer: Subagent | null,
+  event: StreamEvent
+): Subagent | null => {
+  const fresh = (): Subagent => ({
+    id: REVIEWER_AGENT_ID,
+    name: "Reviewer",
+    description: "Adversarial review",
+    // Top-level: no `Task` spawned it, so it hangs off the main agent rather than
+    // nesting under one — it sits beside the turn's sub-agents in the bar.
+    parentId: null,
+    status: "working",
+    message: assistantMessage(REVIEWER_AGENT_ID, "")
+  })
+  const base = event._tag === "Started" ? fresh() : (reviewer ?? fresh())
+  return {
+    ...base,
+    // `Done` is published by ReviewService itself once a run produces a verdict,
+    // so it deliberately lands after (and overrides) any `Failed` the harness
+    // emitted for the turn — a reviewer that refused still completed a review.
+    status:
+      event._tag === "Done" ? "done" : event._tag === "Failed" ? "error" : base.status,
+    message: applyStreamEvent(base.message, event)
+  }
+}
+
 /** Update a gate part's status in place (after the operator decides). */
 export const setGateStatus = (msg: Message, gateId: string, status: GateStatus): Message => ({
   ...msg,
@@ -1078,4 +1124,51 @@ export const resumePlanPrompt = (plan: Plan): string => {
     ...(steps ? ["", "Steps:", steps] : []),
     ...(plan.raw ? ["", "Full plan:", plan.raw] : [])
   ].join("\n")
+}
+
+/**
+ * How far a running adversarial review has got. Derived from the reviewer's own
+ * `StreamEvent`s — there is no percentage to report and nothing announces a
+ * total, so this names what the agent is *actually doing* rather than inventing
+ * a bar. Findings can't be counted mid-flight either: the reviewer emits them as
+ * one JSON block at the very end (see `parseFindings`).
+ */
+export const ReviewPhase = Schema.Literal(
+  /** Spawned; the harness hasn't reported anything yet. */
+  "starting",
+  /** Running a tool — for a read-only reviewer that means reading the code. */
+  "reading",
+  "thinking",
+  /** Producing its reply — the findings block is written last. */
+  "writing",
+  "done",
+  "error"
+)
+export type ReviewPhase = Schema.Schema.Type<typeof ReviewPhase>
+
+/**
+ * Advance the review phase by one event. Unknown/irrelevant events leave the
+ * phase alone, so callers can route the whole stream through it.
+ *
+ * `ToolEnd` deliberately does NOT reset the phase: a reviewer runs tools
+ * back-to-back, and flipping to another label in the gap between them would make
+ * the button strobe between two words a few times a second.
+ */
+export const nextReviewPhase = (phase: ReviewPhase, event: StreamEvent): ReviewPhase => {
+  switch (event._tag) {
+    case "Started":
+      return "starting"
+    case "ToolStart":
+      return "reading"
+    case "Thinking":
+      return "thinking"
+    case "Assistant":
+      return "writing"
+    case "Done":
+      return "done"
+    case "Failed":
+      return "error"
+    default:
+      return phase
+  }
 }

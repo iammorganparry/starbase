@@ -72,7 +72,11 @@ export function ConversationPane({
   // effective selection so a finished (auto-removed) sub-agent falls back to Main
   // without an effect — its tab and view disappear together.
   const [selectedAgent, setSelectedAgent] = useState<string>(MAIN_AGENT)
-  const activeSubagent = convo.subagents.find((s) => s.id === selectedAgent) ?? null
+  // The reviewer sits in the same bar as the turn's sub-agents but is not one of
+  // them (it is a whole agent run of its own, started by the PR tab or the
+  // background auto-review), so it is appended here rather than living in the list.
+  const agents = convo.reviewer ? [...convo.subagents, convo.reviewer] : convo.subagents
+  const activeSubagent = agents.find((s) => s.id === selectedAgent) ?? null
   const activeAgent = activeSubagent ? selectedAgent : MAIN_AGENT
 
   // Sub-agents nest, so the bar shows one level at a time: `level` is the agent
@@ -86,6 +90,13 @@ export function ConversationPane({
     convo.subagents,
     effectiveLevel === MAIN_AGENT ? null : effectiveLevel
   )
+  // The reviewer is a top-level agent of its own — a whole run started by the PR
+  // tab or the background auto-review, not a `Task` spawn — so it joins the top
+  // level of the bar, but never the children of a sub-agent drilled into.
+  const barAgents =
+    effectiveLevel === MAIN_AGENT && convo.reviewer
+      ? [...levelAgents, convo.reviewer]
+      : levelAgents
   const trail =
     effectiveLevel === MAIN_AGENT
       ? []
@@ -130,9 +141,9 @@ export function ConversationPane({
   // view never aborts the run.
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {convo.subagents.length > 0 && (
+      {barAgents.length > 0 && (
         <AgentTabBar
-          agents={levelAgents.map((s) => ({
+          agents={barAgents.map((s) => ({
             id: s.id,
             name: s.name,
             description: s.description,
@@ -152,7 +163,7 @@ export function ConversationPane({
         <ConversationView
           messages={convo.messages}
           mode={convo.mode}
-          cli={session.cli}
+          cli={convo.cli}
           skills={convo.skills}
           files={convo.files}
           paused={convo.paused}
@@ -163,8 +174,8 @@ export function ConversationPane({
           onUnqueue={convo.unqueue}
           onSendNow={convo.sendNow}
           model={convo.model}
-          models={convo.models}
-          onSetModel={convo.setModel}
+          catalog={convo.catalog}
+          onSetHarness={convo.setHarness}
           onSend={sendPrompt}
           onDecideGate={convo.decideGate}
           onSetMode={convo.setMode}

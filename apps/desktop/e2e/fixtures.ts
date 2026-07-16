@@ -47,6 +47,13 @@ export interface LaunchOptions {
    * an orphaned pending gate (to assert it settles on load).
    */
   readonly transcripts?: Record<string, ReadonlyArray<unknown>>
+  /**
+   * Seed a finished reviewer's event stream, keyed by session id → the events
+   * written to `~/starbase/reviews/<id>.transcript.json`. A fresh launch with one
+   * of these IS the "restored after a restart" case: the app has no live reviewer,
+   * so a Reviewer tab can only come from the disk.
+   */
+  readonly reviewTranscripts?: Record<string, ReadonlyArray<unknown>>
   /** Seed extra fixtures (e.g. project skills) after repo creation, before launch. */
   readonly seed?: (ctx: { reposDir: string; repoPath: string }) => void
   /**
@@ -75,6 +82,8 @@ export interface LaunchOptions {
       deletions?: number
       updatedAt?: string
     }>
+    /** The unified diff served by `gh pr diff` (what an adversarial review reads). */
+    readonly diff?: string
     /** Open issues served by `gh issue list` (for the "new session from an issue" flow). */
     readonly issues?: ReadonlyArray<{
       number: number
@@ -192,9 +201,17 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   printf '%s' "$STARBASE_E2E_GH_PRS"; exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  # The adversarial-review de-dupe reads the head SHA on its own cadence, as a
+  # single-field query — answer that separately from the state read above.
+  case "$*" in
+    *headRefOid*) printf '{"headRefOid":"e2ehead%s"}' "$3"; exit 0;;
+  esac
   st=$(printf '%s' "$STARBASE_E2E_GH_STATES" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
   [ -z "$st" ] && st="OPEN"
   printf '{"state":"%s"}' "$st"; exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
+  printf '%s' "$STARBASE_E2E_GH_DIFF"; exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
   ref=$(printf '%s' "$STARBASE_E2E_GH_HEADS" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
@@ -215,6 +232,11 @@ exit 0
   writeFileSync(ghPath, script)
   chmodSync(ghPath, 0o755)
   return {
+    // A reviewer refuses to run on an empty diff (that would cache a false
+    // all-clear), so `gh pr diff` has to return something real.
+    STARBASE_E2E_GH_DIFF:
+      gh.diff ??
+      "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -1,3 +1,4 @@\n const a = 1\n+const token = refresh()\n",
     STARBASE_E2E_GH_PRS: JSON.stringify(prs),
     STARBASE_E2E_GH_ISSUES: JSON.stringify(issues),
     STARBASE_E2E_GH_DIR: binDir,
@@ -261,6 +283,13 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         mkdirSync(dir, { recursive: true })
         for (const [sessionId, messages] of Object.entries(options.transcripts)) {
           writeFileSync(join(dir, `${sessionId}.json`), JSON.stringify(messages, null, 2))
+        }
+      }
+      if (options.reviewTranscripts) {
+        const dir = join(starbaseDir, "reviews")
+        mkdirSync(dir, { recursive: true })
+        for (const [sessionId, events] of Object.entries(options.reviewTranscripts)) {
+          writeFileSync(join(dir, `${sessionId}.transcript.json`), JSON.stringify(events))
         }
       }
 

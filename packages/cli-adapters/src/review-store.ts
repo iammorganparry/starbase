@@ -1,10 +1,12 @@
-import type { AdversarialReview } from "@starbase/core"
-import { AdversarialReview as AdversarialReviewSchema } from "@starbase/core"
+import type { AdversarialReview, StreamEvent } from "@starbase/core"
+import { AdversarialReview as AdversarialReviewSchema, StreamEvent as StreamEventSchema } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import { Effect, Ref, Schema } from "effect"
 import { AppPaths } from "./app-paths.js"
 
 type ReviewEnv = FileSystem.FileSystem | Path.Path | AppPaths
+
+const Transcript = Schema.Array(StreamEventSchema)
 
 /**
  * The last adversarial review per session, persisted to
@@ -95,7 +97,70 @@ export class ReviewStore extends Effect.Service<ReviewStore>()("@starbase/Review
         yield* fs.writeFileString(file, JSON.stringify(encoded, null, 2)).pipe(Effect.ignore)
       })
 
-    /** Drop the stored review (e.g. when a session is deleted). */
+    const transcriptFileFor = (
+      sessionId: string
+    ): Effect.Effect<string, never, Path.Path | AppPaths> =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        const paths = yield* AppPaths
+        return path.join(paths.reviewsDir, `${sessionId}.transcript.json`)
+      })
+
+    /**
+     * The reviewer's own event stream for the last COMPLETED review, so its tab
+     * survives a restart instead of vanishing while its findings remain.
+     *
+     * Kept in a separate file from the review itself, deliberately: the review is
+     * the verdict and is read constantly (the auto-review poll hits `get` for
+     * every session on a timer), while this is a bulky write-once artefact that
+     * only the tab reads. Folding it into `AdversarialReview` would put a
+     * transcript on the wire every poll.
+     *
+     * No memory mirror, unlike `get`: nothing depends on this being readable —
+     * a failed write costs you a tab after restart, not a re-review loop.
+     */
+    const getTranscript = (
+      sessionId: string
+    ): Effect.Effect<ReadonlyArray<StreamEvent>, never, ReviewEnv> =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const file = yield* transcriptFileFor(sessionId)
+        const exists = yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))
+        if (!exists) return []
+        const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))
+        if (raw.trim().length === 0) return []
+        return yield* Schema.decodeUnknown(Schema.parseJson(Transcript))(raw).pipe(
+          Effect.map((events): ReadonlyArray<StreamEvent> => events),
+          // A malformed transcript is a cosmetic loss — fall back to no tab
+          // rather than failing the watch that every session opens.
+          Effect.orElseSucceed(() => [] as ReadonlyArray<StreamEvent>)
+        )
+      })
+
+    /** Persist a finished reviewer's events. Best-effort, like `set`. */
+    const setTranscript = (
+      sessionId: string,
+      events: ReadonlyArray<StreamEvent>
+    ): Effect.Effect<void, never, ReviewEnv> =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const paths = yield* AppPaths
+        const file = yield* transcriptFileFor(sessionId)
+        yield* fs.makeDirectory(paths.reviewsDir, { recursive: true }).pipe(Effect.ignore)
+        const encoded = yield* Schema.encode(Transcript)(events).pipe(Effect.orElseSucceed(() => null))
+        if (encoded === null) return
+        yield* fs.writeFileString(file, JSON.stringify(encoded)).pipe(Effect.ignore)
+      })
+
+    /** Drop the stored transcript (a new run supersedes it). */
+    const clearTranscript = (sessionId: string): Effect.Effect<void, never, ReviewEnv> =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const file = yield* transcriptFileFor(sessionId)
+        yield* fs.remove(file).pipe(Effect.ignore)
+      })
+
+    /** Drop the stored review AND its transcript (e.g. when a session is deleted). */
     const clear = (sessionId: string): Effect.Effect<void, never, ReviewEnv> =>
       Effect.gen(function* () {
         yield* Ref.update(memory, (m) => {
@@ -106,8 +171,9 @@ export class ReviewStore extends Effect.Service<ReviewStore>()("@starbase/Review
         const fs = yield* FileSystem.FileSystem
         const file = yield* fileFor(sessionId)
         yield* fs.remove(file).pipe(Effect.ignore)
+        yield* clearTranscript(sessionId)
       })
 
-    return { get, set, clear }
+    return { get, set, clear, getTranscript, setTranscript, clearTranscript }
   })
 }) {}

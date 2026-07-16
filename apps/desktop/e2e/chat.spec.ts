@@ -169,9 +169,38 @@ test("the model chip shows the harness model and switches", async ({ launchApp }
   await expect(modelChip).toBeVisible()
   await modelChip.click()
 
-  // The menu lists the harness's models — pick sonnet.
-  await window.getByRole("menuitem", { name: "sonnet" }).click()
+  // The menu lists EVERY installed harness's models grouped by provider, so
+  // `sonnet` must be matched exactly — Cursor also offers a `sonnet-4.5`, and a
+  // substring match resolves to both.
+  await window.getByRole("menuitem", { name: "sonnet", exact: true }).click()
   await expect(window.getByRole("button", { name: /sonnet/ })).toBeVisible()
+})
+
+/**
+ * Switching provider from the model chip. The menu only lists harnesses that are
+ * actually installed, so this skips rather than fails on a machine without the
+ * Codex CLI (discovery probes the real binary — there's no fixture for it).
+ */
+test("the model chip switches provider", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByPlaceholder("Message Claude…")).toBeVisible()
+
+  await window.getByRole("button", { name: /opus/ }).click()
+  const codexSection = window.getByText("Codex CLI", { exact: true })
+  if ((await codexSection.count()) === 0) {
+    test.skip(true, "Codex CLI not installed on this host")
+    return
+  }
+
+  // Codex's models come live from the CLI itself, so assert the shape of a real
+  // id (`gpt-5.…`) rather than a specific one — the catalogue moves upstream.
+  const codexModel = window.getByRole("menuitem").filter({ hasText: /^GPT-5\./ }).first()
+  const label = (await codexModel.textContent())!.trim()
+  await codexModel.click()
+
+  // The chip follows the pick, and the composer now addresses the new harness.
+  await expect(window.getByRole("button", { name: label })).toBeVisible()
+  await expect(window.getByPlaceholder("Message Codex…")).toBeVisible()
 })
 
 test("the sidebar Usage & limits button opens the usage modal", async ({ launchApp }) => {
@@ -691,4 +720,93 @@ test("a merged PR auto-archives its linked session on load", async ({ launchApp 
   // The archive sweep detects the merged PR → the session moves into Archived.
   await expect(window.getByText("Archived", { exact: true })).toBeVisible({ timeout: 15_000 })
   await expect(window.getByText("Merged #500")).toBeVisible()
+})
+
+/**
+ * The adversarial reviewer is a full agent run. Before this it ran completely
+ * unobserved — a bare "Reviewing…" spinner for minutes, with its output dropped
+ * on the floor. It must now report where it is on the button, and be watchable in
+ * the agent tab bar like any other agent.
+ */
+test("a running adversarial review reports its phase and appears in the agent tab bar", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    gh: {
+      login: "e2e-user",
+      prs: [
+        {
+          number: 482,
+          title: "Refactor auth flow",
+          headRefName: "starbase/refactor",
+          baseRefName: "main",
+          author: { login: "octocat" },
+          state: "OPEN"
+        }
+      ]
+    }
+  })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The browser preview docks over the right rail, covering the review button.
+  // Collapse it only IF it's open: its visibility persists in localStorage across
+  // runs, so an unconditional toggle opens it whenever the last run left it shut.
+  // `exact` also matters — otherwise this matches "Hide browser preview" too.
+  const preview = window.getByRole("button", { name: "Browser preview", exact: true })
+  if ((await preview.getAttribute("aria-pressed")) === "true") await preview.click()
+
+  await window.getByText("Pull Request").first().click()
+  const runButton = window.getByRole("button", { name: /Adversarial review/ })
+  await expect(runButton).toBeEnabled()
+  await runButton.click()
+
+  // The button names what the reviewer is actually doing. "Starting…" is
+  // deliberately NOT accepted: it's the default phase and renders off the pending
+  // mutation alone, so it would pass with the event stream completely broken.
+  // Only a LATER phase proves the reviewer's events reached the button.
+  await expect(
+    window.getByRole("button", { name: /Reading the code…|Thinking…|Writing findings…/ })
+  ).toBeVisible({ timeout: 20_000 })
+
+  // …and the reviewer is watchable in the agent tab bar, mid-run.
+  await window.getByText("Conversation").first().click()
+  await expect(window.getByRole("button", { name: /Reviewer/ })).toBeVisible()
+})
+
+/**
+ * A finished review's findings already survive a restart, so its Reviewer tab has
+ * to as well — a tab that vanishes while its verdict is still on screen reads as
+ * a bug. A fresh launch with a stored reviewer transcript and no live review is
+ * exactly that case: the tab can only come from the disk.
+ */
+test("a finished reviewer's tab is restored after a restart", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    reviewTranscripts: {
+      s_pr: [
+        { _tag: "Started", sessionId: "review_s_pr" },
+        { _tag: "ToolStart", id: "t1", name: "Read", target: "src/auth.ts" },
+        { _tag: "ToolEnd", id: "t1", status: "success", meta: null, diff: null, preview: null },
+        { _tag: "Assistant", text: "A stale token can be reused after logout." },
+        { _tag: "Done", costUsd: 0, tokens: 0 }
+      ]
+    }
+  })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  // The tab is back with the previous run's output readable behind it.
+  const reviewerTab = window.getByRole("button", { name: /Reviewer/ })
+  await expect(reviewerTab).toBeVisible()
+  await reviewerTab.click()
+  await expect(window.getByText(/stale token can be reused/)).toBeVisible()
+
+  // Restored as finished, not mid-flight: the stored stream ends in `Done`, which
+  // is why only completed runs are ever persisted — a half-written one would come
+  // back as a reviewer that appears to still be working with nothing behind it.
+  await expect(window.getByText("watch-only")).toBeVisible()
 })

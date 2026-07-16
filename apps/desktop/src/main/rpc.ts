@@ -555,12 +555,19 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(AgentRunner, (runner) => runner.approvePlan(sessionId, planId)),
   "Agent.resumePlan": ({ sessionId, planId }) =>
     Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.resumePlan(sessionId, planId))),
-  "Agent.setModel": ({ sessionId, model }) =>
-    SessionStore.setModel(sessionId, model).pipe(Effect.ignore),
+  "Agent.setHarness": ({ sessionId, cli, model }) =>
+    SessionStore.setHarness(sessionId, cli, model).pipe(Effect.ignore),
   "Agent.stop": ({ sessionId }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
   "Skills.list": ({ sessionId }) => skillsList(sessionId),
-  "Models.list": ({ cli }) => ModelsService.list(cli),
+  // Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
+  // app has a threadbare PATH, so Codex's own model list is only reachable via
+  // the absolute path discovery found.
+  "Models.list": ({ cli }) =>
+    Effect.flatMap(DiscoveryService.list(), (clis) =>
+      ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
+    ),
+  "Models.catalog": () => Effect.flatMap(DiscoveryService.list(), (clis) => ModelsService.catalog(clis)),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),
@@ -580,6 +587,10 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
   "Review.run": ({ sessionId, force }) => reviewRun(sessionId, force),
+  // Unwrapped from the service like `Terminal.attach` — the reviewer outlives any
+  // one watcher, so the stream attaches to it rather than starting it.
+  "Review.watch": ({ sessionId }) =>
+    Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId))),
   "Review.get": ({ sessionId }) => reviewGet(sessionId),
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),

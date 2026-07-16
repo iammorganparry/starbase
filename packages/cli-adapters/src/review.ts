@@ -1,10 +1,12 @@
-import type { AdversarialReview, CliKind, ReviewFinding, ReviewSeverity } from "@starbase/core"
+import type { AdversarialReview, CliKind, ReviewFinding, ReviewSeverity, StreamEvent } from "@starbase/core"
 import { ReviewError } from "@starbase/core"
-import type { CommandExecutor } from "@effect/platform"
-import { Effect, Ref, Schema } from "effect"
+import type { CommandExecutor, FileSystem, Path } from "@effect/platform"
+import { Effect, PubSub, Ref, Schema, Stream } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
 import { DiscoveryService } from "./discovery.js"
+import type { AppPaths } from "./app-paths.js"
+import { ReviewStore } from "./review-store.js"
 import { adversarialPrompt } from "./review-prompt.js"
 
 /**
@@ -118,7 +120,14 @@ export const parseFindings = (text: string): ReadonlyArray<ReviewFinding> | null
  * What a review run needs from its environment: the harness adapter, CLI
  * discovery, and the executor discovery shells out through.
  */
-export type ReviewEnv = CliAdapter | DiscoveryService | CommandExecutor.CommandExecutor
+export type ReviewEnv =
+  | CliAdapter
+  | DiscoveryService
+  | CommandExecutor.CommandExecutor
+  | ReviewStore
+  | FileSystem.FileSystem
+  | Path.Path
+  | AppPaths
 
 export interface ReviewInput {
   readonly sessionId: string
@@ -134,9 +143,115 @@ export interface ReviewInput {
   readonly diff: string
 }
 
+/**
+ * How many of a run's events are kept for a late watcher to replay.
+ *
+ * A review is a few hundred events at most, so this is generous — but it is a
+ * ceiling, not a target: without one, a reviewer that spun on tool calls would
+ * grow this array until the app died. Overflow drops the OLDEST events, so a
+ * late watcher may miss the start of a pathological run and still see its tail.
+ */
+const REPLAY_CAP = 2000
+
 export class ReviewService extends Effect.Service<ReviewService>()("@starbase/ReviewService", {
   accessors: true,
   effect: Effect.gen(function* () {
+    /**
+     * Per-session broadcast of the running reviewer's events, so the UI can watch
+     * an agent it did not start.
+     *
+     * A hub rather than a return value because a review is not always something
+     * the viewer kicked off: the auto-review is a 60s poll across every session
+     * (App.tsx), so by the time you open a session its reviewer may already be
+     * mid-flight. `buffer` is what lets that late watcher catch up; `gate` makes
+     * "snapshot the buffer, then subscribe" atomic against a concurrent publish —
+     * without it a watcher would either miss an event or replay one twice, and a
+     * duplicated Assistant chunk shows up as doubled text in its transcript.
+     */
+    const liveFor = yield* Effect.cachedFunction((_sessionId: string) =>
+      Effect.gen(function* () {
+        const hub = yield* PubSub.unbounded<StreamEvent>()
+        const buffer = yield* Ref.make<ReadonlyArray<StreamEvent>>([])
+        const gate = yield* Effect.makeSemaphore(1)
+        return { hub, buffer, gate }
+      })
+    )
+
+    const publish = (sessionId: string, event: StreamEvent): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const live = yield* liveFor(sessionId)
+        yield* live.gate.withPermits(1)(
+          Effect.gen(function* () {
+            yield* Ref.update(live.buffer, (acc) =>
+              acc.length >= REPLAY_CAP ? [...acc.slice(1), event] : [...acc, event]
+            )
+            yield* PubSub.publish(live.hub, event)
+          })
+        )
+      })
+
+    /**
+     * Drop the previous run's events — a watcher must never see two runs merged.
+     * The stored transcript goes too: `watch` falls back to it when the buffer is
+     * cold, so leaving it would let the last run's transcript replay underneath
+     * the one now starting.
+     */
+    const resetLive = (sessionId: string): Effect.Effect<void, never, ReviewEnv> =>
+      Effect.gen(function* () {
+        const live = yield* liveFor(sessionId)
+        // BOTH clears under one permit. `watch` reads the buffer and the stored
+        // transcript under this same permit, so clearing them separately leaves a
+        // window where it sees an empty buffer but a not-yet-deleted file — and
+        // replays the previous run ahead of the one just starting.
+        yield* live.gate.withPermits(1)(
+          Effect.zipRight(Ref.set(live.buffer, []), ReviewStore.clearTranscript(sessionId))
+        )
+      })
+
+    /**
+     * Persist the finished run's events so its tab survives a restart.
+     *
+     * Only ever called once a run has emitted a terminal event, and deliberately
+     * NOT incrementally: a transcript saved mid-run would replay on restart with
+     * no `Done`/`Failed` at the end, and its tab would sit at "working" forever
+     * for a reviewer that died with the process.
+     */
+    const persistLive = (sessionId: string): Effect.Effect<void, never, ReviewEnv> =>
+      Effect.gen(function* () {
+        const live = yield* liveFor(sessionId)
+        const events = yield* live.gate.withPermits(1)(Ref.get(live.buffer))
+        if (events.length === 0) return
+        yield* ReviewStore.setTranscript(sessionId, events)
+      })
+
+    /**
+     * The running reviewer's events for a session: what it has emitted so far,
+     * then everything after, live. Empty (but open) when nothing is running, so a
+     * watcher can subscribe before a review starts and still catch the whole run.
+     */
+    const watch = (sessionId: string): Stream.Stream<StreamEvent, never, ReviewEnv> =>
+      Stream.unwrapScoped(
+        Effect.gen(function* () {
+          const live = yield* liveFor(sessionId)
+          // Snapshot + subscribe under the same permit `publish` takes, so no
+          // event can slip between the two (missed) or land in both (doubled).
+          return yield* live.gate.withPermits(1)(
+            Effect.gen(function* () {
+              const buffered = yield* Ref.get(live.buffer)
+              // A cold buffer means no run has happened in THIS process — so fall
+              // back to the last completed run on disk, which is what makes the
+              // Reviewer tab survive a restart. Read inside the permit: a run
+              // starting between the read and the subscribe would otherwise splice
+              // the old transcript onto the new run's events.
+              const replay =
+                buffered.length > 0 ? buffered : yield* ReviewStore.getTranscript(sessionId)
+              const subscription = yield* PubSub.subscribe(live.hub)
+              return Stream.concat(Stream.fromIterable(replay), Stream.fromQueue(subscription))
+            })
+          )
+        })
+      )
+
     // One review at a time per session. The handler's de-dupe is a check-then-act
     // with no lock, and the manual run (a mutation) and the auto run (a polled
     // query) live in different react-query caches — so clicking "Review again"
@@ -224,19 +339,40 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
         }
 
         const ctx: AgentContext = {
-          // Only main-thread text. A reviewer that spawns a subagent would
-          // otherwise interleave its chatter into the reply we parse — and a
-          // subagent's illustrative JSON would win the "last block" race.
           emit: (event) =>
-            event._tag === "Assistant" && event.agentId === undefined
-              ? Ref.update(collected, (acc) => [...acc, event.text])
-              : Effect.void,
+            Effect.zipRight(
+              // Broadcast everything, so the UI can watch the reviewer work. This
+              // is observation only — it must never change what gets parsed, so
+              // it sits beside the collector below rather than filtering it.
+              publish(input.sessionId, event),
+              // Only main-thread text is COLLECTED. A reviewer that spawns a
+              // subagent would otherwise interleave its chatter into the reply we
+              // parse — and a subagent's illustrative JSON would win the "last
+              // block" race.
+              event._tag === "Assistant" && event.agentId === undefined
+                ? Ref.update(collected, (acc) => [...acc, event.text])
+                : Effect.void
+            ),
           canUseTool: () => Effect.succeed("deny" as const),
           askQuestion: () => Effect.succeed([]),
           proposePlan: () => Effect.succeed(PlanDecision.Reject())
         }
 
+        // Clear the previous run's replay buffer. Deliberately here, AFTER the
+        // pre-flight failures above: those publish nothing, so a "cursor can't
+        // review" error stays on the button instead of leaving a phantom failed
+        // Reviewer tab that every later watcher would replay.
+        yield* resetLive(input.sessionId)
+
         yield* adapter.run(`review_${input.sessionId}`, spec, ctx).pipe(
+          // The adapter emits `Failed` for a turn the harness rejected, but a
+          // crash (a throw out of the SDK) fails the Effect with no event at all —
+          // which would leave a watcher's tab spinning at "working" forever.
+          Effect.tapError((cause) =>
+            publish(input.sessionId, { _tag: "Failed", message: cause.message }).pipe(
+              Effect.zipRight(persistLive(input.sessionId))
+            )
+          ),
           Effect.mapError(
             (cause) =>
               new ReviewError({
@@ -245,6 +381,13 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
               })
           )
         )
+
+        // Close the stream on our own terms rather than trusting the harness to
+        // have emitted `Done`. A run that reached here produced a review — even a
+        // refusal, which lands as `note` (see below) — so "done" is the truth,
+        // and it wins over any `Failed` the adapter emitted for the turn itself.
+        yield* publish(input.sessionId, { _tag: "Done", costUsd: 0, tokens: 0 })
+        yield* persistLive(input.sessionId)
 
         const text = (yield* Ref.get(collected)).join("")
         const findings = parseFindings(text)
@@ -271,6 +414,6 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
         return yield* lock.withPermits(1)(runExclusive(input))
       })
 
-    return { run }
+    return { run, watch }
   })
 }) {}
