@@ -77,13 +77,14 @@ afterEach(() => {
 
 const env = (
   adapter: Layer.Layer<CliAdapter>,
-  executor: Layer.Layer<CommandExecutor.CommandExecutor> = installedHarnesses
+  executor: Layer.Layer<CommandExecutor.CommandExecutor> = installedHarnesses,
+  store: Layer.Layer<ReviewStore> = ReviewStore.Default
 ) =>
   Layer.mergeAll(
     ReviewService.Default,
     adapter,
     DiscoveryService.Default,
-    ReviewStore.Default,
+    store,
     // Real FS + AppPaths for the transcript store…
     temp.layer,
     // …but CLI detection must stay canned, so the fake executor is merged LAST
@@ -819,5 +820,82 @@ describe("ReviewService — transcript persistence", () => {
     )
     const seen = await Effect.runPromise(attach(INPUT.sessionId).pipe(Effect.provide(env(adapter))))
     expect(seen).toEqual([])
+  })
+})
+
+/**
+ * The reset of a new run must be ATOMIC — the in-memory buffer and the stored
+ * transcript are cleared under the same permit `watch` snapshots under.
+ *
+ * Clearing them one after the other looks equivalent and isn't: a watcher that
+ * takes the gate in between sees an empty buffer, falls back to the file that has
+ * not been deleted yet, and replays the PREVIOUS run in front of the new one.
+ * That window lives inside `resetLive`, so the store is stubbed to park in it —
+ * the ordinary splice test attaches once the whole reset is done and sails past.
+ */
+describe("ReviewService — reset is atomic", () => {
+  const watchStream = (sessionId: string) =>
+    Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId)))
+
+  it("never replays the previous transcript in front of a starting run", async () => {
+    let releaseClear: () => void = () => {}
+    const clearing = new Promise<void>((resolve) => {
+      releaseClear = resolve
+    })
+    // The last run's transcript, as it would sit on disk.
+    let stored: ReadonlyArray<StreamEvent> = [
+      { _tag: "Started", sessionId: "review_s1" },
+      { _tag: "Assistant", text: "PREVIOUS RUN" },
+      { _tag: "Done", costUsd: 0, tokens: 0 }
+    ]
+    const parkedStore = Layer.succeed(
+      ReviewStore,
+      ReviewStore.of({
+        _tag: "@starbase/ReviewStore",
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        clear: () => Effect.void,
+        getTranscript: () => Effect.sync(() => stored),
+        setTranscript: (_id, events) => Effect.sync(() => void (stored = events)),
+        // Parks INSIDE the reset — precisely the window under test.
+        clearTranscript: () =>
+          Effect.promise(() => clearing).pipe(Effect.map(() => void (stored = [])))
+      })
+    )
+
+    const seen = await Effect.runPromise(
+      Effect.gen(function* () {
+        const run = yield* Effect.fork(ReviewService.run(INPUT))
+        // The run is now parked mid-reset: buffer cleared, transcript not yet.
+        yield* Effect.sleep("50 millis")
+        const watcher = yield* Effect.fork(
+          watchStream(INPUT.sessionId).pipe(
+            Stream.timeout("250 millis"),
+            Stream.runCollect,
+            Effect.map((chunk) => Array.from(chunk) as ReadonlyArray<StreamEvent>)
+          )
+        )
+        yield* Effect.sleep("50 millis")
+        yield* Effect.sync(() => releaseClear())
+        yield* Fiber.join(run)
+        return yield* Fiber.join(watcher)
+      }).pipe(
+        Effect.provide(
+          env(
+            stubAdapter((_id, _s, ctx) =>
+              Effect.gen(function* () {
+                yield* ctx.emit({ _tag: "Started", sessionId: "review_s1" })
+                yield* emitJson(ctx, '{"findings":[]}')
+              })
+            ),
+            installedHarnesses,
+            parkedStore
+          )
+        )
+      )
+    )
+
+    expect(JSON.stringify(seen)).not.toContain("PREVIOUS RUN")
+    expect(seen.filter((e) => e._tag === "Done")).toHaveLength(1)
   })
 })

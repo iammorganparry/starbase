@@ -199,8 +199,13 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
     const resetLive = (sessionId: string): Effect.Effect<void, never, ReviewEnv> =>
       Effect.gen(function* () {
         const live = yield* liveFor(sessionId)
-        yield* live.gate.withPermits(1)(Ref.set(live.buffer, []))
-        yield* ReviewStore.clearTranscript(sessionId)
+        // BOTH clears under one permit. `watch` reads the buffer and the stored
+        // transcript under this same permit, so clearing them separately leaves a
+        // window where it sees an empty buffer but a not-yet-deleted file — and
+        // replays the previous run ahead of the one just starting.
+        yield* live.gate.withPermits(1)(
+          Effect.zipRight(Ref.set(live.buffer, []), ReviewStore.clearTranscript(sessionId))
+        )
       })
 
     /**
