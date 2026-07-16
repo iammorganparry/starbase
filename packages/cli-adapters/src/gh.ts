@@ -355,6 +355,64 @@ export const mapReviewThreads = (raw: unknown): ReadonlyArray<PrReviewThread> =>
   })
 }
 
+/**
+ * The REST `pulls/{n}/files` read, paginated — the source for BOTH the Code
+ * Review file list and (when `gh pr diff` refuses) the diff itself.
+ *
+ * `gh pr view --json files` silently caps at 100 files: it is GitHub's GraphQL
+ * `files(first: 100)`, which gh does not paginate. On a large PR that truncated
+ * the file list *and* its +/− totals with no indication — e.g. a 176-file PR
+ * rendered as exactly 100 files summing +5516/−11226 instead of +10871/−24491.
+ * REST + `--paginate` returns every file (to GitHub's own 3000-file ceiling) and
+ * carries a per-file `patch`. `{owner}/{repo}` resolve from the worktree's remote.
+ */
+const prFilesApiArgs = (number: number): ReadonlyArray<string> => [
+  "api",
+  "--paginate",
+  `repos/{owner}/{repo}/pulls/${number}/files`
+]
+
+/** Map the REST `pulls/{n}/files` payload into the Code Review file list. */
+export const mapApiFiles = (raw: unknown): ReadonlyArray<PrFileChange> =>
+  arr(raw)
+    .map((f) => ({
+      path: str(f.filename) ?? "",
+      additions: num(f.additions) ?? 0,
+      deletions: num(f.deletions) ?? 0,
+      commentCount: 0,
+      viewed: false
+    }))
+    .filter((f) => f.path.length > 0)
+
+/**
+ * Rebuild a unified diff from the REST `pulls/{n}/files` payload — the fallback
+ * for when `gh pr diff` refuses outright (`HTTP 406: the diff exceeded the
+ * maximum number of lines (20000)`), which previously surfaced as a silently
+ * EMPTY diff: every file listed, not one line of change rendered.
+ *
+ * Each REST `patch` starts bare at `@@`, so we re-add the `diff --git` +
+ * `---`/`+++` headers the renderer slices files on. Pure — the unit-test target.
+ */
+export const unifiedDiffFromApiFiles = (raw: unknown): string => {
+  const out: string[] = []
+  for (const f of arr(raw)) {
+    const path = str(f.filename)
+    if (path === null || path.length === 0) continue
+    const status = str(f.status)
+    // Renames carry the old path; everything else diffs against itself.
+    const old = str(f.previous_filename) ?? path
+    out.push(`diff --git a/${old} b/${path}`)
+    out.push(status === "added" ? "--- /dev/null" : `--- a/${old}`)
+    out.push(status === "removed" ? "+++ /dev/null" : `+++ b/${path}`)
+    // GitHub omits `patch` for oversized/binary files (e.g. a lockfile). Emit the
+    // header anyway so the file still appears, with no hunks to render, rather
+    // than vanishing from the diff entirely.
+    const patch = str(f.patch)
+    if (patch !== null && patch.length > 0) out.push(patch)
+  }
+  return out.length > 0 ? `${out.join("\n")}\n` : ""
+}
+
 /** The `--json` field set requested from `gh pr view` (drives `mapPrView`). */
 const PR_VIEW_FIELDS = [
   "state",
@@ -685,29 +743,40 @@ export class GhService extends Effect.Service<GhService>()(
           return { ...pr, reviewThreads: mapReviewThreads(threadsRaw) }
         }),
 
-      /** The changed files of `number` for the Code Review file list. */
+      /**
+       * The changed files of `number` for the Code Review file list — EVERY file,
+       * via the paginated REST read (see `prFilesApiArgs`). The old
+       * `gh pr view --json files` capped this at 100 with no signal.
+       */
       prFiles: (
         cwd: string,
         number: number
       ): Effect.Effect<ReadonlyArray<PrFileChange>, never, CommandExecutor.CommandExecutor> =>
-        ghJson(cwd, ["pr", "view", String(number), "--json", "files"]).pipe(
-          Effect.map((raw) =>
-            arr(rec(raw).files).map((f) => ({
-              path: str(f.path) ?? "",
-              additions: num(f.additions) ?? 0,
-              deletions: num(f.deletions) ?? 0,
-              commentCount: 0,
-              viewed: false
-            }))
-          )
-        ),
+        ghJson(cwd, prFilesApiArgs(number)).pipe(Effect.map(mapApiFiles)),
 
-      /** The unified diff of `number` vs its base, or "" on any failure. */
+      /**
+       * The unified diff of `number` vs its base, or "" on any failure.
+       *
+       * `gh pr diff` is the primary read — one cheap call, and the authoritative
+       * diff. But GitHub refuses it outright past 20k lines (HTTP 406), which
+       * `readStdout` folds to null exactly like any other failure — so a large PR
+       * rendered its whole file list with an empty diff and no error. On failure
+       * we rebuild the diff from the per-file `patch`es of the paginated REST
+       * read, which has no such ceiling.
+       */
       prDiff: (
         cwd: string,
         number: number
       ): Effect.Effect<string, never, CommandExecutor.CommandExecutor> =>
-        readStdout(cwd, ["pr", "diff", String(number)]).pipe(Effect.map((out) => out ?? "")),
+        readStdout(cwd, ["pr", "diff", String(number)]).pipe(
+          // null = gh failed (406 too_large, auth, no binary). "" = a genuinely
+          // empty diff, which must NOT trigger the fallback.
+          Effect.flatMap((out) =>
+            out !== null
+              ? Effect.succeed(out)
+              : ghJson(cwd, prFilesApiArgs(number)).pipe(Effect.map(unifiedDiffFromApiFiles))
+          )
+        ),
 
       // ── Pull-request writes (surface GhError) ──────────────────────────────
 

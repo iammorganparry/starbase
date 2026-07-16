@@ -32,6 +32,7 @@ import {
   setPlanStatus,
   setQuestionAnswers,
   settleLoaded,
+  settleStreaming,
   userMessage
 } from "@starbase/core"
 import { assign, fromCallback, fromPromise, setup } from "xstate"
@@ -271,11 +272,16 @@ export const conversationMachine = setup({
       }
       const messages = patchLast(context.messages, (last) => applyStreamEvent(last, e))
       // A finished/failed turn KEEPS its sub-agents (their tabs stay readable) —
-      // any still marked "working" (e.g. an interrupted run) settle to "done" so no
-      // tab shows a live spinner. The list resets when the next run starts
-      // (`clearSubagents`). Stamp the final token count and stop the elapsed timer.
+      // any still marked "working" (e.g. an interrupted run, or a sub-agent whose
+      // `task_notification` never arrived) settle to "done" so no tab shows a live
+      // spinner. The spinner is driven by the message's `streaming` flag, NOT by
+      // `status`, so the rolling message has to settle too — flipping the status
+      // alone left the dots pulsing forever. The list resets when the next run
+      // starts (`clearSubagents`). Stamp the final token count and stop the timer.
       const settled = context.subagents.map((s) =>
-        s.status === "working" ? { ...s, status: "done" as const } : s
+        s.status === "working"
+          ? { ...s, status: "done" as const, message: settleStreaming(s.message) }
+          : s
       )
       if (e._tag === "Done") {
         return {

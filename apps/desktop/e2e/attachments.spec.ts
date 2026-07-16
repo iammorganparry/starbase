@@ -7,9 +7,12 @@ import type { SeedSession } from "./fixtures.js"
 /**
  * End-to-end coverage for this pass's UI additions, against the built app and the
  * deterministic scripted adapter: attaching an image as context (thumbnail in the
- * composer, then persisted on the sent user turn), the labelled Changes toggle in
- * the conversation header, and queueing a message while the agent is busy. We
- * assert on what the operator sees, never on internals.
+ * composer, then persisted on the sent user turn) and queueing a message while the
+ * agent is busy. We assert on what the operator sees, never on internals.
+ *
+ * NOTE: the "Changes" rail + header toggle this file used to cover was replaced by
+ * a top-level Changes tab (see `rail→tab` in #21); that tab is covered by
+ * chat.spec.ts — "a worktree session without a PR shows a Changes tab".
  */
 
 const seededSessions = ({ repoPath }: { repoPath: string }): ReadonlyArray<SeedSession> => [
@@ -65,35 +68,6 @@ test("attaching an image shows a thumbnail and persists it on the sent turn", as
   await expect(window.getByText("Here is the failing screen.")).toBeVisible()
   // The image persists on the sent turn (still visible after the composer clears).
   await expect(window.getByRole("img", { name: "login.png" })).toBeVisible()
-})
-
-test("the conversation header shows a labelled Changes toggle that hides the rail", async ({
-  launchApp
-}) => {
-  const { window } = await launchApp({
-    configured: true,
-    withRepo: true,
-    sessions: seededSessions,
-    // An uncommitted edit makes the worktree diff non-empty → the rail + toggle show.
-    seed: ({ repoPath }) => {
-      writeFileSync(join(repoPath, "README.md"), "# e2e repo\nan uncommitted edit\n")
-    }
-  })
-  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
-
-  // The labelled toggle (icon + "Changes" + diff counts) sits in the header, open
-  // by default, so its title is the "hide" affordance.
-  const toggle = window.getByTitle("Hide the changes panel")
-  await expect(toggle).toBeVisible()
-  await expect(toggle).toHaveAttribute("aria-pressed", "true")
-
-  // The Changes rail is open → the uncommitted edit is visible in it.
-  await expect(window.getByText("an uncommitted edit")).toBeVisible({ timeout: 20_000 })
-
-  // Toggling hides the rail (and flips the button to the "show" affordance).
-  await toggle.click()
-  await expect(window.getByTitle("Show the changes panel")).toBeVisible()
-  await expect(window.getByText("an uncommitted edit")).toHaveCount(0)
 })
 
 test("a message sent while the agent is busy is queued, then processed", async ({ launchApp }) => {

@@ -287,8 +287,19 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         writeFileSync(join(starbaseDir, "auth.enc"), authServer.token)
       }
 
+      // A throwaway Chromium profile per launch. `STARBASE_HOME` isolates the
+      // app's own JSON state, but NOT `localStorage` — which lives in Electron's
+      // userData dir and backs the renderer's UI chrome prefs (browser-preview
+      // visibility + dock side, panel widths). Without this the default profile is
+      // shared by every test AND every run, so `previews.spec.ts` opening the
+      // preview leaked into later tests forever: at the 1320px default window the
+      // extra rail squeezed the Plan Review step spec to zero width, and its
+      // assertions failed on an element that was rendered but had no box.
+      const userDataDir = mkdtempSync(join(tmpdir(), "starbase-e2e-userdata-"))
+      cleanups.push(() => rmSync(userDataDir, { recursive: true, force: true }))
+
       const app = await electron.launch({
-        args: [MAIN_ENTRY],
+        args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
         env: {
           ...process.env,
           ...ghEnv,
