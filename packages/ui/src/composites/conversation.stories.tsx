@@ -139,10 +139,25 @@ export const ComposerWithMenus: Story = {
         ]}
         files={["src/routes/billing.ts", "README.md"]}
         mode="accept-edits"
+        cli="claude"
         model="opus"
-        models={[
-          { id: "opus", label: "opus" },
-          { id: "sonnet", label: "sonnet" }
+        catalog={[
+          {
+            cli: "claude",
+            label: "Claude Code",
+            models: [
+              { id: "opus", label: "opus" },
+              { id: "sonnet", label: "sonnet" }
+            ]
+          },
+          {
+            cli: "codex",
+            label: "Codex CLI",
+            models: [
+              { id: "gpt-5.6-sol", label: "GPT-5.6-Sol" },
+              { id: "gpt-5.6-terra", label: "GPT-5.6-Terra" }
+            ]
+          }
         ]}
       />
     </div>
@@ -171,8 +186,9 @@ export const ComposerBusy: Story = {
       <Composer
         busy
         mode="accept-edits"
+        cli="claude"
         model="sonnet"
-        models={[{ id: "sonnet", label: "sonnet" }]}
+        catalog={[{ cli: "claude", label: "Claude Code", models: [{ id: "sonnet", label: "sonnet" }] }]}
       />
     </div>
   )

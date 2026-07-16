@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import type { CliKind } from "./domain.js"
+import { CliKind } from "./domain.js"
 
 /** A model a harness can run, shown in the composer's model chip. */
 export const ModelOption = Schema.Struct({
@@ -9,6 +9,15 @@ export const ModelOption = Schema.Struct({
   label: Schema.String
 })
 export type ModelOption = Schema.Schema.Type<typeof ModelOption>
+
+/** A harness plus the models it offers — one section of the composer's model menu. */
+export const ProviderModels = Schema.Struct({
+  cli: CliKind,
+  /** Human label for the section header ("Claude Code", "Codex CLI"). */
+  label: Schema.String,
+  models: Schema.Array(ModelOption)
+})
+export type ProviderModels = Schema.Schema.Type<typeof ProviderModels>
 
 /**
  * Fallback model choices per harness — used only when live discovery from the
@@ -26,10 +35,14 @@ export const FALLBACK_MODELS: Record<CliKind, ReadonlyArray<ModelOption>> = {
     // would silently switch every new *session* onto the priciest tier.
     { id: "claude-fable-5", label: "fable" }
   ],
+  // Codex's real catalogue comes from the CLI itself (`codex app-server` →
+  // `model/list`), which is authoritative and needs no API key. These are only
+  // the offline shape. Do NOT reach for the OpenAI *API* catalogue here: Codex
+  // models are a different vocabulary and mostly aren't served from /v1/models.
   codex: [
-    { id: "gpt-5-codex", label: "gpt-5-codex" },
-    { id: "gpt-5", label: "gpt-5" },
-    { id: "o3", label: "o3" }
+    { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+    { id: "gpt-5.6-terra", label: "gpt-5.6-terra" },
+    { id: "gpt-5.5", label: "gpt-5.5" }
   ],
   cursor: [
     { id: "auto", label: "auto" },
@@ -55,7 +68,7 @@ export const DEFAULT_REVIEW_MODEL: Record<CliKind, string> = {
   // Same as `defaultModel("codex")` — the Codex fallback list has no stronger
   // tier to reach for, so a Codex review runs on the model that wrote the code
   // unless the user picks otherwise. Live discovery surfaces the real catalogue.
-  codex: "gpt-5-codex",
+  codex: "gpt-5.6-sol",
   // Cursor has no headless adapter, so a review on it is rejected before this is
   // ever read (see ReviewService). Present only to keep the record total.
   cursor: "auto"

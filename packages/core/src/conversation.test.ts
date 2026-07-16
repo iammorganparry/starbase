@@ -7,8 +7,11 @@ import {
   Skill,
   StreamEvent,
   Subagent,
+  REVIEWER_AGENT_ID,
   addPlanComment,
+  applyReviewEvent,
   applyStreamEvent,
+  nextReviewPhase,
   markChangedSteps,
   applySubagentEvent,
   assistantMessage,
@@ -702,5 +705,82 @@ describe("sub-agents", () => {
       { id: "t1", name: "Explore", description: "one", status: "working", message: assistantMessage("t1", "") }
     ]
     expect(applySubagentEvent(subs, { _tag: "Done", costUsd: 1, tokens: 2 })).toBe(subs)
+  })
+})
+
+/**
+ * The reviewer is a whole agent run surfaced in the sub-agent tab bar. These pin
+ * the two pure reducers behind that: the tab's fold, and the phase the PR button
+ * reports. Both are driven straight off the reviewer's normalized StreamEvents —
+ * there is no percentage anywhere because nothing reports a total.
+ */
+describe("applyReviewEvent", () => {
+  const started: StreamEvent = { _tag: "Started", sessionId: "review_s1" }
+
+  it("opens a working tab on the first event", () => {
+    const reviewer = applyReviewEvent(null, started)
+    expect(reviewer?.id).toBe(REVIEWER_AGENT_ID)
+    expect(reviewer?.name).toBe("Reviewer")
+    expect(reviewer?.status).toBe("working")
+  })
+
+  it("accrues output onto one rolling message", () => {
+    const a = applyReviewEvent(null, started)
+    const b = applyReviewEvent(a, { _tag: "Assistant", text: "one " })
+    const c = applyReviewEvent(b, { _tag: "Assistant", text: "two" })
+    expect(JSON.stringify(c?.message.parts)).toContain("one two")
+  })
+
+  it("marks the tab done", () => {
+    const a = applyReviewEvent(null, started)
+    expect(applyReviewEvent(a, { _tag: "Done", costUsd: 0, tokens: 0 })?.status).toBe("done")
+  })
+
+  it("marks the tab errored", () => {
+    const a = applyReviewEvent(null, started)
+    expect(applyReviewEvent(a, { _tag: "Failed", message: "boom" })?.status).toBe("error")
+  })
+
+  // ReviewService publishes its own `Done` once a run produces a verdict, after
+  // any `Failed` the harness emitted — a reviewer that refused still completed a
+  // review (it lands as `note`), so "done" has to win.
+  it("lets a trailing Done override a harness Failed", () => {
+    const a = applyReviewEvent(null, started)
+    const failed = applyReviewEvent(a, { _tag: "Failed", message: "turn failed" })
+    expect(applyReviewEvent(failed, { _tag: "Done", costUsd: 0, tokens: 0 })?.status).toBe("done")
+  })
+
+  // Re-review publishes onto the same channel; an attached watcher would
+  // otherwise show run 2 appended to run 1's transcript.
+  it("rebuilds from scratch on a second Started", () => {
+    const a = applyReviewEvent(null, started)
+    const b = applyReviewEvent(a, { _tag: "Assistant", text: "stale output" })
+    const done = applyReviewEvent(b, { _tag: "Done", costUsd: 0, tokens: 0 })
+
+    const restarted = applyReviewEvent(done, started)
+    expect(restarted?.status).toBe("working")
+    expect(JSON.stringify(restarted?.message.parts)).not.toContain("stale output")
+  })
+})
+
+describe("nextReviewPhase", () => {
+  it("names what the reviewer is doing", () => {
+    expect(nextReviewPhase("starting", { _tag: "ToolStart", id: "t", name: "Read", target: "a.ts" })).toBe("reading")
+    expect(nextReviewPhase("reading", { _tag: "Thinking", text: "hm", seconds: null, done: false })).toBe("thinking")
+    expect(nextReviewPhase("thinking", { _tag: "Assistant", text: "{" })).toBe("writing")
+    expect(nextReviewPhase("writing", { _tag: "Done", costUsd: 0, tokens: 0 })).toBe("done")
+    expect(nextReviewPhase("writing", { _tag: "Failed", message: "x" })).toBe("error")
+  })
+
+  // A reviewer runs tools back-to-back; flipping the label in the gap between
+  // them would make the button strobe between two words.
+  it("holds the phase across a ToolEnd", () => {
+    expect(
+      nextReviewPhase("reading", { _tag: "ToolEnd", id: "t", status: "success", meta: null, diff: null, preview: null })
+    ).toBe("reading")
+  })
+
+  it("ignores events that say nothing about progress", () => {
+    expect(nextReviewPhase("reading", { _tag: "Usage", tokens: 10 })).toBe("reading")
   })
 })

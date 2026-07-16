@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react"
-import type { Attachment, ModelOption, PermissionMode, Skill } from "@starbase/core"
+import type { Attachment, CliKind, PermissionMode, ProviderModels, Skill } from "@starbase/core"
 import { ImagePlus, Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { modeAccent } from "../tokens.js"
@@ -8,6 +8,7 @@ import { Button } from "../components/button.js"
 import { ChipMenu, type ChipOption } from "../components/chip-menu.js"
 import { CodeChip } from "../components/code-chip.js"
 import { Pill } from "../components/pill.js"
+import { PROVIDER_LABEL } from "../components/provider-icon.js"
 import { CommandMenu } from "./command-menu.js"
 import { MentionMenu } from "./mention-menu.js"
 
@@ -63,15 +64,16 @@ export function Composer({
   skills = [],
   files = [],
   onSend,
+  cli,
   model,
-  models = [],
-  onSetModel,
+  catalog = [],
+  onSetHarness,
   mode = "accept-edits",
   onSetMode,
   allowPlan = false,
   paused = false,
   busy = false,
-  placeholder = "Message Claude…",
+  placeholder,
   initialValue,
   className
 }: {
@@ -80,11 +82,14 @@ export function Composer({
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
   /** Seed the draft once on mount (e.g. a task prefilled from a linked issue). */
   initialValue?: string
+  /** The session's current harness (which section of the menu is checked). */
+  cli?: CliKind
   /** Current harness model id (shown in the model chip). */
   model?: string
-  /** Models the harness supports (the model chip's menu). */
-  models?: ReadonlyArray<ModelOption>
-  onSetModel?: (model: string) => void
+  /** Installed harnesses and their models — the model chip's sectioned menu. */
+  catalog?: ReadonlyArray<ProviderModels>
+  /** Picking a model implies its harness, so both travel together. */
+  onSetHarness?: (cli: CliKind, model: string) => void
   /** Current HITL mode (shown in the mode chip; Shift+Tab cycles it). */
   mode?: PermissionMode
   onSetMode?: (mode: PermissionMode) => void
@@ -96,11 +101,37 @@ export function Composer({
    * rather than blocked, so the composer stays live and the button reads "Queue".
    */
   busy?: boolean
+  /** Overrides the default "Message <harness>…" prompt. */
   placeholder?: string
   className?: string
 }) {
   const modeOptions = allowPlan ? [...MODE_OPTIONS, PLAN_OPTION] : MODE_OPTIONS
   const accent = modeAccent[mode]
+
+  // Menu values are `<cli>:<modelId>`, not a bare model id: ids aren't unique
+  // across harnesses (`gpt-5` is offered by both codex and cursor), and the
+  // provider has to survive the round trip so selecting a model can switch
+  // harness in one go.
+  const modelGroups = useMemo(
+    () =>
+      catalog.map((p) => ({
+        label: p.label,
+        options: p.models.map((m) => ({ value: `${p.cli}:${m.id}`, label: m.label }))
+      })),
+    [catalog]
+  )
+  // Prefer the exact harness+model pair; if the session's model isn't in the
+  // catalogue (stale id, or discovery replaced the list), fall back to the first
+  // model of its harness so the chip shows a real label instead of a raw id.
+  // Last resort is the bare model id — the catalogue arrives a beat after mount,
+  // and the chip must read "opus" in the meantime, never blank or "claude:opus".
+  const exact = modelGroups.flatMap((g) => g.options).find((o) => o.value === `${cli}:${model}`)
+  const harnessDefault = catalog.find((p) => p.cli === cli)?.models[0]
+  const modelValue =
+    exact?.value ?? (harnessDefault ? `${cli}:${harnessDefault.id}` : (model ?? ""))
+  // Follows the harness — the prompt used to be hardwired to "Message Claude…",
+  // which now visibly lies the moment the operator switches provider.
+  const prompt = placeholder ?? `Message ${PROVIDER_LABEL[cli ?? "claude"]}…`
   // Seed once from `initialValue` (a linked-issue task); later edits are local.
   const [value, setValue] = useState(() => initialValue ?? "")
   const [menu, setMenu] = useState<MenuState | null>(null)
@@ -309,7 +340,7 @@ export function Composer({
               ? "Reply, or answer the prompt above…"
               : busy
                 ? "Queue a message while the agent works…"
-                : placeholder
+                : prompt
           }
           onChange={(e) => sync(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={onKeyDown}
@@ -338,10 +369,16 @@ export function Composer({
             <ImagePlus size={14} />
           </button>
           <ChipMenu
-            value={model ?? models[0]?.id ?? ""}
-            options={models.map((m) => ({ value: m.id, label: m.label }))}
-            onSelect={onSetModel}
-            disabled={models.length === 0}
+            value={modelValue}
+            groups={modelGroups}
+            onSelect={(value) => {
+              // Split on the FIRST colon only — the harness is one token, but a
+              // model id could in principle contain one.
+              const separator = value.indexOf(":")
+              if (separator < 0) return
+              onSetHarness?.(value.slice(0, separator) as CliKind, value.slice(separator + 1))
+            }}
+            disabled={modelGroups.length === 0}
           />
           <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} className={accent.chip} />
           <span className="font-mono text-[11px] text-line-strong">/ · @ · paste image</span>
