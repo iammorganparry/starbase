@@ -1,23 +1,13 @@
 import type { PrTimelineItem } from "@starbase/core"
 import { Check, MessageSquare, X } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { relativeTime } from "../lib/relative-time.js"
 import { Avatar, githubAvatarUrl } from "../components/avatar.js"
 import { Card } from "../components/card.js"
 import { ClaudeGlyph } from "../components/eyebrow.js"
 import { CodeChip } from "../components/code-chip.js"
 import { Markdown } from "../components/markdown.js"
 import { AsyncButton } from "../components/async-button.js"
-
-/** Format an ISO timestamp as a compact relative "2h ago" string. */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ""
-  const s = Math.max(0, Math.round((Date.now() - then) / 1000))
-  if (s < 60) return "just now"
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86_400)}d ago`
-}
 
 const kindMeta = {
   commented: { Icon: MessageSquare, tone: "text-blue", label: "commented", rail: "bg-blue/12" },

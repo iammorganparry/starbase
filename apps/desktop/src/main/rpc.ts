@@ -421,6 +421,34 @@ export const githubReview = (input: {
     yield* GhService.prReview(session.worktreePath, session.prNumber, input.kind, input.body)
   })
 
+/** `Github.resolveThread` handler — resolve/unresolve an inline review thread. */
+export const githubResolveThread = (input: {
+  sessionId: string
+  threadId: string
+  resolved: boolean
+}) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath) {
+      return yield* Effect.fail(new GhError({ message: "No worktree to resolve the thread from" }))
+    }
+    yield* GhService.resolveThread(session.worktreePath, input.threadId, input.resolved)
+  })
+
+/** `Github.replyToThread` handler — post a reply into an inline review thread. */
+export const githubReplyToThread = (input: {
+  sessionId: string
+  commentId: number
+  body: string
+}) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to reply to" }))
+    }
+    yield* GhService.replyToThread(session.worktreePath, session.prNumber, input.commentId, input.body)
+  })
+
 /** `Github.merge` handler — merge the session's linked PR (merge commit by default). */
 export const githubMerge = (input: { sessionId: string; method?: PrMergeMethod }) =>
   Effect.gen(function* () {
@@ -543,6 +571,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),
+  "Github.resolveThread": (input) => githubResolveThread(input),
+  "Github.replyToThread": (input) => githubReplyToThread(input),
   "Github.merge": (input) => githubMerge(input),
   "Github.markReady": (input) => githubMarkReady(input),
 

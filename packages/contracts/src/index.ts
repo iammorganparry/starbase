@@ -501,6 +501,24 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Resolve / unresolve an inline review thread on the session's PR. `threadId`
+   * is the GraphQL node id carried on `PrReviewThread.id`.
+   */
+  Rpc.make("Github.resolveThread", {
+    error: GhError,
+    payload: { sessionId: Schema.String, threadId: Schema.String, resolved: Schema.Boolean }
+  }),
+
+  /**
+   * Reply to the inline review thread `commentId` belongs to. `commentId` is the
+   * REST numeric id from `PrThreadComment.databaseId` (not the node id).
+   */
+  Rpc.make("Github.replyToThread", {
+    error: GhError,
+    payload: { sessionId: Schema.String, commentId: Schema.Number, body: Schema.String }
+  }),
+
+  /**
    * Merge the session's linked PR. `method` defaults to a merge commit; surfaces
    * `GhError` when GitHub rejects the merge (branch protection, conflicts, …).
    */

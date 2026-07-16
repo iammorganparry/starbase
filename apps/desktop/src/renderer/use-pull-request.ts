@@ -54,6 +54,10 @@ export interface PullRequestState {
   readonly sendEntryToAgent: (entryId: string) => Promise<void>
   /** Timeline entry ids already routed to the agent (their action stays "Sent"). */
   readonly sentEntryIds: ReadonlySet<string>
+  /** Resolve / unresolve an inline review thread. */
+  readonly resolveThread: (threadId: string, resolved: boolean) => Promise<void>
+  /** Reply into an inline review thread (`commentId` = the REST databaseId). */
+  readonly replyToThread: (commentId: number, body: string) => Promise<void>
   readonly openOnGithub: () => void
 }
 
@@ -136,14 +140,54 @@ export function usePullRequest(
     [reviewMutation, routeToAgent]
   )
 
+  // Resolve / unresolve an inline review thread, then re-read the PR so the
+  // thread's badge and collapsed state follow GitHub.
+  const resolveThreadMutation = useMutation({
+    mutationFn: (input: { threadId: string; resolved: boolean }) =>
+      rpc.githubResolveThread(session.id, input.threadId, input.resolved),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
+  })
+  const resolveThread = useCallback(
+    (threadId: string, resolved: boolean) =>
+      resolveThreadMutation.mutateAsync({ threadId, resolved }).then(() => undefined),
+    [resolveThreadMutation]
+  )
+
+  // Reply into an inline review thread; the re-read brings the new comment back.
+  const replyToThreadMutation = useMutation({
+    mutationFn: (input: { commentId: number; body: string }) =>
+      rpc.githubReplyToThread(session.id, input.commentId, input.body),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
+  })
+  const replyToThread = useCallback(
+    (commentId: number, body: string) =>
+      replyToThreadMutation.mutateAsync({ commentId, body }).then(() => undefined),
+    [replyToThreadMutation]
+  )
+
   const pr = query.data ?? null
   const sentEntryIds = useRoutedEntries(session.id)
   const sendEntryToAgent = useCallback(
     async (entryId: string) => {
+      // An id is either a top-level timeline entry or a comment inside an inline
+      // review thread — the latter carries its code reference on the thread.
       const item = pr?.timeline.find((t) => t.id === entryId)
-      if (!item) return
-      const ref = item.path ? ` (on ${item.path}${item.line ? ` line ${item.line}` : ""})` : ""
-      routeToAgent(`Review feedback from @${item.author}${ref}:\n\n${item.body}\n\nPlease address this.`)
+      const thread = pr?.reviewThreads.find((t) => t.comments.some((c) => c.id === entryId))
+      const comment = thread?.comments.find((c) => c.id === entryId)
+      const found = item
+        ? { author: item.author, body: item.body, path: item.path, line: item.line }
+        : thread && comment
+          ? {
+              author: comment.author,
+              body: comment.body,
+              path: thread.path,
+              // GitHub nulls the live anchor once the thread is outdated.
+              line: thread.line ?? thread.originalLine
+            }
+          : null
+      if (!found) return
+      const ref = found.path ? ` (on ${found.path}${found.line ? ` line ${found.line}` : ""})` : ""
+      routeToAgent(`Review feedback from @${found.author}${ref}:\n\n${found.body}\n\nPlease address this.`)
       markRouted(session.id, entryId)
     },
     [pr, routeToAgent, session.id]
@@ -171,6 +215,8 @@ export function usePullRequest(
     submitReview,
     sendEntryToAgent,
     sentEntryIds,
+    resolveThread,
+    replyToThread,
     openOnGithub
   }
 }
