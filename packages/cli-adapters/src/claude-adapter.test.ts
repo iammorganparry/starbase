@@ -1,6 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { describe, expect, it } from "vitest"
-import type { Question, QuestionAnswer } from "@starbase/core"
+import type { PermissionMode, Question, QuestionAnswer } from "@starbase/core"
 import type { Attachment } from "@starbase/core"
 import {
   buildPromptInput,
@@ -27,9 +27,17 @@ const msg = (m: unknown): SDKMessage => m as SDKMessage
 
 describe("mapPermissionMode", () => {
   it("maps our HITL modes onto the SDK's permission modes", () => {
-    expect(mapPermissionMode("auto")).toBe("bypassPermissions")
     expect(mapPermissionMode("accept-edits")).toBe("acceptEdits")
     expect(mapPermissionMode("ask")).toBe("default")
+  })
+
+  it("maps 'auto' to 'default', never 'bypassPermissions'", () => {
+    // "bypassPermissions" makes the SDK skip canUseTool entirely
+    // (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), which silently disables the
+    // ExitPlanMode / AskUserQuestion interception that callback also owns — an
+    // auto-mode session would swallow every question the agent asks. Gating is
+    // unaffected: `verdict()` in agent-runner already allows everything in auto.
+    expect(mapPermissionMode("auto")).toBe("default")
   })
 })
 
@@ -320,9 +328,17 @@ describe("streamEventsFor — sub-agents", () => {
 describe("plan mode + AskUserQuestion (canUseTool path)", () => {
   it("maps our 'plan' mode onto the SDK's plan permission mode", () => {
     expect(mapPermissionMode("plan")).toBe("plan")
-    expect(mapPermissionMode("auto")).toBe("bypassPermissions")
     expect(mapPermissionMode("accept-edits")).toBe("acceptEdits")
     expect(mapPermissionMode("ask")).toBe("default")
+  })
+
+  it("keeps canUseTool live in every mode, so questions/plans are never shadowed", () => {
+    // The SDK consults canUseTool in every mode EXCEPT bypassPermissions, so no
+    // mode may map to it — see the mapPermissionMode docblock.
+    const modes: ReadonlyArray<PermissionMode> = ["auto", "ask", "accept-edits", "plan"]
+    for (const mode of modes) {
+      expect(mapPermissionMode(mode)).not.toBe("bypassPermissions")
+    }
   })
 
   it("suppresses the ExitPlanMode + AskUserQuestion raw tool cards (dedicated UI)", () => {

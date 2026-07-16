@@ -30,15 +30,24 @@ export const isEditTool = (name: string): boolean => EDIT_TOOLS.has(name)
  */
 const SUPPRESSED_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"])
 
-/** Map our HITL mode onto the SDK's permission mode. */
+/**
+ * Map our HITL mode onto the SDK's permission mode.
+ *
+ * "auto" maps to "default", NOT "bypassPermissions" — deliberately. The SDK
+ * skips `canUseTool` entirely under "bypassPermissions" (it warns as much:
+ * CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), and that callback is not just a permission
+ * gate: it's where `ExitPlanMode` and `AskUserQuestion` are intercepted and
+ * turned into the plan / question cards. Shadowed, `AskUserQuestion` is
+ * auto-approved, runs headlessly and silently skips — the agent's question
+ * never reaches the operator.
+ *
+ * Nothing is lost by dropping it: `verdict()` in `agent-runner.ts` already
+ * returns "allow" for every request in "auto", so our own gate keeps the mode
+ * ungated. This is the same reasoning the plan-approval path uses when it
+ * restores "default" mid-run (see `setPermissionMode` below).
+ */
 export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
-  mode === "auto"
-    ? "bypassPermissions"
-    : mode === "accept-edits"
-      ? "acceptEdits"
-      : mode === "plan"
-        ? "plan"
-        : "default"
+  mode === "accept-edits" ? "acceptEdits" : mode === "plan" ? "plan" : "default"
 
 /**
  * The gate request for a tool the SDK asked about, or null for read-only tools
@@ -435,11 +444,11 @@ export const runClaude = (
             const plan = parsePlan(strOf(input.plan) ?? "", `plan_${sessionId}_${planCount}`)
             const decision = await runP(ctx.proposePlan(plan))
             if (decision._tag === "Approve") {
-              // Exit plan mode via "default" — always settable mid-run (unlike
-              // "bypassPermissions", which the SDK rejects). Our own canUseTool
-              // (below) then enforces the session's restored HITL mode, so an
-              // "auto" approval still runs ungated. Best-effort: never let a
-              // permission-mode hiccup block the approval.
+              // Exit plan mode via "default" — the same mode every non-plan run
+              // uses (see `mapPermissionMode`), so canUseTool below keeps being
+              // consulted and enforces the session's restored HITL mode; an
+              // "auto" approval still runs ungated via `verdict()`. Best-effort:
+              // never let a permission-mode hiccup block the approval.
               try {
                 await planQuery?.setPermissionMode("default")
               } catch {
@@ -488,7 +497,6 @@ export const runClaude = (
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
-            ...(spec.mode === "auto" ? { allowDangerouslySkipPermissions: true } : {}),
             ...(spec.mode === "plan" ? { planModeInstructions } : {}),
             includePartialMessages: true,
             canUseTool,
