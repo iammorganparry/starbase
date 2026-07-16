@@ -25,6 +25,7 @@ import {
   PrState,
   PrSummary,
   ProviderConfig,
+  ProviderModels,
   PullRequest,
   QuestionAnswer,
   Repo,
@@ -298,9 +299,17 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String, planId: Schema.String }
   }),
 
-  /** Change a session's harness model (used on the next turn). */
-  Rpc.make("Agent.setModel", {
-    payload: { sessionId: Schema.String, model: Schema.String }
+  /**
+   * Change a session's harness and/or model (used on the next turn — a turn
+   * already streaming finishes on the old one).
+   *
+   * Model and harness move together because a model id only means something to
+   * the harness that offers it: `opus` is nonsense to Codex. Switching `cli`
+   * also drops the session's `resumeId` (a Codex thread id is meaningless to
+   * Claude) so the new harness starts a fresh thread.
+   */
+  Rpc.make("Agent.setHarness", {
+    payload: { sessionId: Schema.String, cli: CliKind, model: Schema.String }
   }),
 
   /** Stop a running agent (denies any pending gate). */
@@ -318,6 +327,15 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Models.list", {
     success: Schema.Array(ModelOption),
     payload: { cli: CliKind }
+  }),
+
+  /**
+   * Every installed harness with its models — the composer's model menu, which
+   * lets the user switch provider by picking a model under its section. One
+   * round trip instead of one per harness.
+   */
+  Rpc.make("Models.catalog", {
+    success: Schema.Array(ProviderModels)
   }),
 
   /** Provider usage / rate-limit windows for the Usage & limits modal. */
@@ -385,6 +403,22 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: AdversarialReview,
     error: ReviewError,
     payload: { sessionId: Schema.String, force: Schema.Boolean }
+  }),
+
+  /**
+   * Watch the running reviewer's events for a session — what it has emitted so
+   * far, then everything after, live.
+   *
+   * Separate from `Review.run` (which blocks for the whole multi-minute run and
+   * returns only the verdict) because the watcher usually isn't the caller: the
+   * auto-review is a poll across every session, so a reviewer may already be
+   * mid-flight when you open one. Subscribing is safe at any time — the stream is
+   * simply empty until a review starts.
+   */
+  Rpc.make("Review.watch", {
+    success: StreamEvent,
+    stream: true,
+    payload: { sessionId: Schema.String }
   }),
 
   /** The last stored adversarial review for a session, or null. Never errors. */

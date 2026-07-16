@@ -59,8 +59,17 @@ describe("DEFAULT_REVIEW_MODEL / reviewModelFor", () => {
 
   it("gives every harness a review model", () => {
     expect(reviewModelFor("claude")).toBe("claude-fable-5")
-    expect(reviewModelFor("codex")).toBe("gpt-5-codex")
+    expect(reviewModelFor("codex")).toBe("gpt-5.6-sol")
     expect(reviewModelFor("cursor")).toBe("auto")
+  })
+
+  // The review model has to be a model the harness will actually accept. This
+  // caught nothing when the fallbacks were stale (`gpt-5-codex` was in both, and
+  // both were wrong) — it's here so the two can't drift apart again.
+  it("names a review model the harness offers", () => {
+    for (const cli of ["claude", "codex", "cursor"] as const) {
+      expect(FALLBACK_MODELS[cli].map((m) => m.id)).toContain(DEFAULT_REVIEW_MODEL[cli])
+    }
   })
 
   it("honours a configured override", () => {

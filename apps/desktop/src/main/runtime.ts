@@ -60,7 +60,9 @@ const HarnessLayers = Layer.mergeAll(AgentRunner.Default, ReviewService.Default)
 // Later `Layer.provide`s satisfy the requirements of earlier ones, so the leaf
 // dependencies (paths, dialog, Node platform) come last.
 const AppLayer = RpcServerLive.pipe(
-  Layer.provide(DiscoveryService.Default),
+  // provideMerge: the RPC handlers consume DiscoveryService AND the main process
+  // reaches the same instance to warm the model cache at startup (index.ts).
+  Layer.provideMerge(DiscoveryService.Default),
   // AuthService requires SecretStore, satisfied by SecretStoreLive (merged below).
   Layer.provide(AuthService.Default),
   Layer.provide(WorkspaceService.Default),
@@ -75,7 +77,10 @@ const AppLayer = RpcServerLive.pipe(
   // reaches the same instance directly (deep-link token storage in index.ts).
   Layer.provideMerge(SecretStoreLayer),
   Layer.provide(SkillsService.Default),
-  Layer.provide(ModelsService.Default),
+  // provideMerge: the `Models.*` handlers consume ModelsService AND the startup
+  // prefetch reaches the very same instance — a different one would warm a cache
+  // nobody reads, so the merge is what makes the prefetch actually count.
+  Layer.provideMerge(ModelsService.Default),
   Layer.provide(UsageService.Default),
   Layer.provide(GhService.Default),
   Layer.provide(ConfigService.Default),
@@ -85,8 +90,9 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(BrowserPreviewServiceLive),
   Layer.provide(AppPathsLive),
   // NodeContext bundles CommandExecutor + FileSystem + Path used by the git/gh/
-  // discovery/config/workspace/session services.
-  Layer.provide(NodeContext.layer)
+  // discovery/config/workspace/session services. Merged (not just provided) so
+  // the startup prefetch can run `DiscoveryService.list`, which needs the executor.
+  Layer.provideMerge(NodeContext.layer)
 )
 
 export const runtime = ManagedRuntime.make(AppLayer)

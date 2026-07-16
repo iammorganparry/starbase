@@ -1,9 +1,29 @@
-import type { AdversarialReview, ReviewFinding, ReviewSeverity } from "@starbase/core"
+import { useEffect, useState } from "react"
+import type { AdversarialReview, ReviewFinding, ReviewPhase, ReviewSeverity } from "@starbase/core"
 import type { BadgeProps } from "../components/badge.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { Spinner } from "../components/loading.js"
+import { fmtElapsed } from "../lib/relative-time.js"
+
+/**
+ * What the reviewer is doing right now, in the operator's words.
+ *
+ * There is no percentage here on purpose: nothing in a review announces a total,
+ * so a bar would be a fabricated animation. Naming the actual phase is honest and
+ * more useful — a review stuck on "Reading" for two minutes is legible, where a
+ * bar at 60% would not be. `done`/`error` never render (the button leaves its
+ * running state), but are mapped so the record is total.
+ */
+const PHASE_LABEL: Record<ReviewPhase, string> = {
+  starting: "Starting…",
+  reading: "Reading the code…",
+  thinking: "Thinking…",
+  writing: "Writing findings…",
+  done: "Finishing…",
+  error: "Failing…"
+}
 
 /**
  * Severity → Badge tone. The reviewer is asked for coverage and honest tagging
@@ -15,6 +35,23 @@ const severityBadge: Record<ReviewSeverity, { tone: BadgeProps["tone"]; label: s
   major: { tone: "yellow", label: "major" },
   minor: { tone: "blue", label: "minor" },
   nit: { tone: "count", label: "nit" }
+}
+
+/**
+ * The formatted elapsed time since `startedAt`, re-rendering each second while
+ * `live`. Returns null when there's nothing to time — so the timer only ticks
+ * during a run, and stops dead the moment it ends.
+ */
+function useTicker(live: boolean, startedAt: number | null): string | null {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!live || startedAt === null) return
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [live, startedAt])
+  if (!live || startedAt === null) return null
+  return fmtElapsed(now - startedAt)
 }
 
 /** Sort order for triage — worst first. */
@@ -91,6 +128,10 @@ export interface ReviewFindingsProps {
   review: AdversarialReview | null
   /** A reviewer run is in flight. */
   running: boolean
+  /** Where the running reviewer has got to (ignored unless `running`). */
+  phase?: ReviewPhase
+  /** Epoch ms the run started, or null — drives the button's live timer. */
+  startedAt?: number | null
   /** The message from a failed run, or null. */
   error?: string | null
   /** GitHub is connected and the session has a PR — the run action is available. */
@@ -112,6 +153,8 @@ export interface ReviewFindingsProps {
 export function ReviewFindings({
   review,
   running,
+  phase = "starting",
+  startedAt = null,
   error,
   canRun,
   canRoute = true,
@@ -120,6 +163,7 @@ export function ReviewFindings({
   sentFindingIds
 }: ReviewFindingsProps) {
   const findings = review === null ? [] : rankFindings(review.findings)
+  const elapsed = useTicker(running && startedAt !== null, startedAt)
 
   return (
     <div className="flex flex-col gap-3">
@@ -130,11 +174,17 @@ export function ReviewFindings({
         onClick={onRun}
       >
         {running && <Spinner size={13} />}
-        {running
-          ? "Reviewing…"
-          : review === null
-            ? "Adversarial review"
-            : "Review again"}
+        {running ? (
+          <>
+            <span>{PHASE_LABEL[phase]}</span>
+            {/* Tabular numerals so a ticking timer doesn't jiggle the label. */}
+            {elapsed && <span className="text-dim tabular-nums">{elapsed}</span>}
+          </>
+        ) : review === null ? (
+          "Adversarial review"
+        ) : (
+          "Review again"
+        )}
       </Button>
 
       {error && (

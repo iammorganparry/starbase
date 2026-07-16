@@ -1,14 +1,17 @@
+import type { StreamEvent } from "@starbase/core"
+import { CliExecError } from "@starbase/core"
 import type { PermissionDecision } from "./adapter.js"
 import { CliAdapter } from "./adapter.js"
 import type { AgentContext, CliAdapterShape, SessionSpec } from "./adapter.js"
 import { CommandExecutor } from "@effect/platform"
-import { Effect, Layer } from "effect"
-import { describe, expect, it } from "vitest"
+import { Effect, Fiber, Layer, Stream } from "effect"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DiscoveryService } from "./discovery.js"
 import { ReviewService, extractJsonBlock, parseFindings } from "./review.js"
 import { adversarialPrompt, fenceFor } from "./review-prompt.js"
-import type { ReviewInput } from "./review.js"
-import { fakeCommandExecutor } from "./test-support.js"
+import type { ReviewEnv, ReviewInput } from "./review.js"
+import { ReviewStore } from "./review-store.js"
+import { fakeCommandExecutor, withTempRoot } from "./test-support.js"
 
 /**
  * The reviewer has two guarantees that are load-bearing and easy to break
@@ -61,13 +64,33 @@ const installedHarnesses = fakeCommandExecutor((command, args) => {
 /** A host with no coding CLI installed at all. */
 const noHarnesses = fakeCommandExecutor(() => ({ exitCode: 1, stdout: "" }))
 
+// A real temp `~/starbase` per test: the reviewer's transcript is persisted so
+// its tab survives a restart, and asserting that against a real file is the only
+// way to know the round-trip actually works.
+let temp: ReturnType<typeof withTempRoot>
+beforeEach(() => {
+  temp = withTempRoot()
+})
+afterEach(() => {
+  temp.cleanup()
+})
+
 const env = (
   adapter: Layer.Layer<CliAdapter>,
-  executor: Layer.Layer<CommandExecutor.CommandExecutor> = installedHarnesses
+  executor: Layer.Layer<CommandExecutor.CommandExecutor> = installedHarnesses,
+  store: Layer.Layer<ReviewStore> = ReviewStore.Default
 ) =>
-  Layer.mergeAll(ReviewService.Default, adapter, DiscoveryService.Default, executor) as Layer.Layer<
-    ReviewService | CliAdapter | DiscoveryService | CommandExecutor.CommandExecutor
-  >
+  Layer.mergeAll(
+    ReviewService.Default,
+    adapter,
+    DiscoveryService.Default,
+    store,
+    // Real FS + AppPaths for the transcript store…
+    temp.layer,
+    // …but CLI detection must stay canned, so the fake executor is merged LAST
+    // and wins over the Node one `temp.layer` brings in.
+    executor
+  ) as Layer.Layer<ReviewService | ReviewEnv>
 
 const runReview = (adapter: Layer.Layer<CliAdapter>, input: ReviewInput = INPUT) =>
   Effect.runPromise(ReviewService.run(input).pipe(Effect.provide(env(adapter))))
@@ -527,5 +550,352 @@ describe("parseFindings", () => {
 
   it("treats a blank suggestion as absent", () => {
     expect(parseFindings(block([{ title: "a", suggestion: "   " }]))?.[0]!.suggestion).toBeNull()
+  })
+})
+
+/**
+ * `watch` is what lets the UI show a reviewer it did not start — the auto-review
+ * poll runs one on a new head with nobody's finger on the button. These assert
+ * the behaviours a watcher depends on: it sees the run's events, a run always
+ * terminates the stream, and two runs never bleed into each other.
+ */
+describe("ReviewService.watch", () => {
+  // Reached through the service instance, not the generated accessor — the
+  // accessors are Effect-shaped and mangle a Stream-returning method. This is the
+  // same way the RPC handler consumes it (`Stream.unwrap(Effect.map(...))`).
+  const watchStream = (sessionId: string) =>
+    Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId)))
+
+  /** Run a review while collecting everything a watcher attached first would see. */
+  const runWatched = (adapter: Layer.Layer<CliAdapter>, input: ReviewInput = INPUT) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const seen: Array<StreamEvent> = []
+        const watcher = yield* watchStream(input.sessionId).pipe(
+          Stream.runForEach((e) => Effect.sync(() => seen.push(e))),
+          Effect.fork
+        )
+        yield* Effect.yieldNow()
+        const review = yield* ReviewService.run(input).pipe(Effect.either)
+        // The stream stays open for the next run, so stop watching once the run
+        // settles rather than waiting for an end that never comes.
+        yield* Fiber.interrupt(watcher)
+        return { seen, review }
+      }).pipe(Effect.provide(env(adapter)))
+    )
+
+  const workingStub = () =>
+    stubAdapter((_id, _s, ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.emit({ _tag: "Started", sessionId: "review_s1" })
+        yield* ctx.emit({ _tag: "ToolStart", id: "t1", name: "Read", target: "a.ts" })
+        yield* emitJson(ctx, '{"findings":[]}')
+      })
+    )
+
+  it("streams the reviewer's activity to a watcher", async () => {
+    const { seen } = await runWatched(workingStub())
+    expect(seen.map((e) => e._tag)).toContain("ToolStart")
+    expect(seen.map((e) => e._tag)).toContain("Assistant")
+  })
+
+  // Without a terminal event the watcher's tab spins at "working" forever.
+  it("ends the stream with Done when the review completes", async () => {
+    const { seen } = await runWatched(workingStub())
+    expect(seen[seen.length - 1]!._tag).toBe("Done")
+  })
+
+  // A crash out of the adapter fails the Effect and emits NO event of its own —
+  // the reviewer would otherwise appear to still be running.
+  it("ends the stream with Failed when the reviewer crashes", async () => {
+    const crashing = stubAdapter(
+      () => Effect.fail(new CliExecError({ kind: "claude", message: "boom" })) as unknown as Effect.Effect<void>
+    )
+    const { seen, review } = await runWatched(crashing)
+    expect(review._tag).toBe("Left")
+    expect(seen[seen.length - 1]!._tag).toBe("Failed")
+  })
+
+  // A pre-flight failure never spawns a reviewer, so it must not leave a failed
+  // event in the buffer — every later watcher would replay it and show a phantom
+  // errored Reviewer tab for a review that never ran.
+  it("publishes nothing when the review can't start", async () => {
+    const { seen, review } = await runWatched(workingStub(), { ...INPUT, diff: "   " })
+    expect(review._tag).toBe("Left")
+    expect(seen).toEqual([])
+  })
+
+  // The auto-review can be mid-flight before you open the session.
+  it("replays the run so far to a watcher that attaches late", async () => {
+    const seen: Array<StreamEvent> = []
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* ReviewService.run(INPUT)
+        // Attach only AFTER the whole run is over.
+        const watcher = yield* watchStream(INPUT.sessionId).pipe(
+          Stream.runForEach((e) => Effect.sync(() => seen.push(e))),
+          Effect.fork
+        )
+        yield* Effect.yieldNow()
+        yield* Fiber.interrupt(watcher)
+      }).pipe(Effect.provide(env(workingStub())))
+    )
+    expect(seen.map((e) => e._tag)).toContain("ToolStart")
+    expect(seen[seen.length - 1]!._tag).toBe("Done")
+  })
+
+  it("does not merge two runs into one replay", async () => {
+    const seen: Array<StreamEvent> = []
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* ReviewService.run(INPUT)
+        yield* ReviewService.run(INPUT)
+        const watcher = yield* watchStream(INPUT.sessionId).pipe(
+          Stream.runForEach((e) => Effect.sync(() => seen.push(e))),
+          Effect.fork
+        )
+        yield* Effect.yieldNow()
+        yield* Fiber.interrupt(watcher)
+      }).pipe(Effect.provide(env(workingStub())))
+    )
+    // Exactly one run's worth — the second run cleared the first's buffer.
+    expect(seen.filter((e) => e._tag === "Done")).toHaveLength(1)
+    expect(seen.filter((e) => e._tag === "ToolStart")).toHaveLength(1)
+  })
+
+  it("stays quiet, and open, when no review has run", async () => {
+    const seen: Array<StreamEvent> = []
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const watcher = yield* watchStream("never-reviewed").pipe(
+          Stream.runForEach((e) => Effect.sync(() => seen.push(e))),
+          Effect.fork
+        )
+        yield* Effect.yieldNow()
+        yield* Fiber.interrupt(watcher)
+      }).pipe(Effect.provide(env(workingStub())))
+    )
+    expect(seen).toEqual([])
+  })
+})
+
+/**
+ * The Reviewer tab must survive a restart — the findings already do, so a tab
+ * that vanishes while its verdict remains reads as a bug. Persistence rides on
+ * `watch`'s replay: a fresh process has a cold buffer and falls back to disk, so
+ * the renderer needs no idea any of this happened.
+ *
+ * "A fresh process" is modelled by building a SECOND ReviewService over the same
+ * temp `~/starbase` — a new instance has new in-memory state and can only know
+ * what actually reached the disk.
+ */
+describe("ReviewService — transcript persistence", () => {
+  const watchStream = (sessionId: string) =>
+    Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId)))
+
+  const workingStub = () =>
+    stubAdapter((_id, _s, ctx) =>
+      Effect.gen(function* () {
+        yield* ctx.emit({ _tag: "Started", sessionId: "review_s1" })
+        yield* ctx.emit({ _tag: "ToolStart", id: "t1", name: "Read", target: "a.ts" })
+        yield* emitJson(ctx, '{"findings":[]}')
+      })
+    )
+
+  /**
+   * Everything a watcher sees when it attaches, in a given service instance.
+   *
+   * Collected via a quiet-period timeout rather than a yield: restoring from disk
+   * is real file IO, so a watcher on a cold buffer has not produced anything yet
+   * by the next tick — and the hub stays open for the next review, so there is no
+   * end-of-stream to wait for either.
+   */
+  const attach = (sessionId: string) =>
+    watchStream(sessionId).pipe(
+      Stream.timeout("250 millis"),
+      Stream.runCollect,
+      Effect.map((chunk) => Array.from(chunk) as ReadonlyArray<StreamEvent>)
+    )
+
+  it("replays a finished review to a brand-new process", async () => {
+    const adapter = workingStub()
+    // Process 1: run a review.
+    await Effect.runPromise(ReviewService.run(INPUT).pipe(Effect.provide(env(adapter))))
+    // Process 2: a cold instance over the same ~/starbase.
+    const seen = await Effect.runPromise(attach(INPUT.sessionId).pipe(Effect.provide(env(adapter))))
+
+    expect(seen.map((e) => e._tag)).toContain("ToolStart")
+    expect(seen.map((e) => e._tag)).toContain("Assistant")
+  })
+
+  // Without a terminal event the restored tab would sit at "working" forever.
+  it("restores a transcript that ends in a terminal event", async () => {
+    const adapter = workingStub()
+    await Effect.runPromise(ReviewService.run(INPUT).pipe(Effect.provide(env(adapter))))
+    const seen = await Effect.runPromise(attach(INPUT.sessionId).pipe(Effect.provide(env(adapter))))
+    expect(seen[seen.length - 1]!._tag).toBe("Done")
+  })
+
+  it("restores a failed reviewer as failed", async () => {
+    const crashing = stubAdapter(
+      () => Effect.fail(new CliExecError({ kind: "claude", message: "boom" })) as unknown as Effect.Effect<void>
+    )
+    await Effect.runPromise(ReviewService.run(INPUT).pipe(Effect.provide(env(crashing)), Effect.either))
+    const seen = await Effect.runPromise(attach(INPUT.sessionId).pipe(Effect.provide(env(crashing))))
+    expect(seen[seen.length - 1]!._tag).toBe("Failed")
+  })
+
+  // A review that never spawned has no transcript to restore — persisting one
+  // would leave a phantom Reviewer tab for a review that never happened.
+  it("stores nothing when the review can't start", async () => {
+    const adapter = workingStub()
+    await Effect.runPromise(
+      ReviewService.run({ ...INPUT, diff: "   " }).pipe(Effect.provide(env(adapter)), Effect.either)
+    )
+    const seen = await Effect.runPromise(attach(INPUT.sessionId).pipe(Effect.provide(env(adapter))))
+    expect(seen).toEqual([])
+  })
+
+  it("has nothing to restore for a session that was never reviewed", async () => {
+    const seen = await Effect.runPromise(
+      attach("never-reviewed").pipe(Effect.provide(env(workingStub())))
+    )
+    expect(seen).toEqual([])
+  })
+
+  /**
+   * The dangerous one. A new run clears the STORED transcript as well as the live
+   * buffer — otherwise a watcher attaching in the gap before the reviewer's first
+   * event finds a cold buffer, falls back to the PREVIOUS run's transcript, and
+   * splices it in front of the run now starting.
+   *
+   * That gap is the whole point, so the reviewer is held open inside it: attaching
+   * after a run instead would find a warm buffer, never read the disk, and pass
+   * whether or not the clear happens.
+   */
+  it("does not splice a stored transcript onto a new run", async () => {
+    // A completed review, whose transcript is now on disk.
+    await Effect.runPromise(ReviewService.run(INPUT).pipe(Effect.provide(env(workingStub()))))
+
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const blocking = stubAdapter((_id, _s, ctx) =>
+      Effect.gen(function* () {
+        // Parked AFTER the run reset the buffers, BEFORE its first event.
+        yield* Effect.promise(() => held)
+        yield* ctx.emit({ _tag: "Started", sessionId: "review_s1" })
+        yield* ctx.emit({ _tag: "ToolStart", id: "t1", name: "Read", target: "a.ts" })
+        yield* emitJson(ctx, '{"findings":[]}')
+      })
+    )
+
+    // A cold instance, as after a restart: its buffer is empty, so a watcher that
+    // attaches now can only fall back to the disk.
+    const seen = await Effect.runPromise(
+      Effect.gen(function* () {
+        const run = yield* Effect.fork(ReviewService.run(INPUT))
+        yield* Effect.sleep("50 millis")
+        const watcher = yield* Effect.fork(attach(INPUT.sessionId))
+        yield* Effect.sleep("20 millis")
+        yield* Effect.sync(() => release())
+        yield* Fiber.join(run)
+        return yield* Fiber.join(watcher)
+      }).pipe(Effect.provide(env(blocking)))
+    )
+
+    // Exactly one run's worth: the stale transcript was cleared, not prepended.
+    expect(seen.filter((e) => e._tag === "Done")).toHaveLength(1)
+    expect(seen.filter((e) => e._tag === "ToolStart")).toHaveLength(1)
+  })
+
+  it("drops the transcript when the session's review is cleared", async () => {
+    const adapter = workingStub()
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* ReviewService.run(INPUT)
+        yield* ReviewStore.clear(INPUT.sessionId)
+      }).pipe(Effect.provide(env(adapter)))
+    )
+    const seen = await Effect.runPromise(attach(INPUT.sessionId).pipe(Effect.provide(env(adapter))))
+    expect(seen).toEqual([])
+  })
+})
+
+/**
+ * The reset of a new run must be ATOMIC — the in-memory buffer and the stored
+ * transcript are cleared under the same permit `watch` snapshots under.
+ *
+ * Clearing them one after the other looks equivalent and isn't: a watcher that
+ * takes the gate in between sees an empty buffer, falls back to the file that has
+ * not been deleted yet, and replays the PREVIOUS run in front of the new one.
+ * That window lives inside `resetLive`, so the store is stubbed to park in it —
+ * the ordinary splice test attaches once the whole reset is done and sails past.
+ */
+describe("ReviewService — reset is atomic", () => {
+  const watchStream = (sessionId: string) =>
+    Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId)))
+
+  it("never replays the previous transcript in front of a starting run", async () => {
+    let releaseClear: () => void = () => {}
+    const clearing = new Promise<void>((resolve) => {
+      releaseClear = resolve
+    })
+    // The last run's transcript, as it would sit on disk.
+    let stored: ReadonlyArray<StreamEvent> = [
+      { _tag: "Started", sessionId: "review_s1" },
+      { _tag: "Assistant", text: "PREVIOUS RUN" },
+      { _tag: "Done", costUsd: 0, tokens: 0 }
+    ]
+    const parkedStore = Layer.succeed(
+      ReviewStore,
+      ReviewStore.of({
+        _tag: "@starbase/ReviewStore",
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        clear: () => Effect.void,
+        getTranscript: () => Effect.sync(() => stored),
+        setTranscript: (_id, events) => Effect.sync(() => void (stored = events)),
+        // Parks INSIDE the reset — precisely the window under test.
+        clearTranscript: () =>
+          Effect.promise(() => clearing).pipe(Effect.map(() => void (stored = [])))
+      })
+    )
+
+    const seen = await Effect.runPromise(
+      Effect.gen(function* () {
+        const run = yield* Effect.fork(ReviewService.run(INPUT))
+        // The run is now parked mid-reset: buffer cleared, transcript not yet.
+        yield* Effect.sleep("50 millis")
+        const watcher = yield* Effect.fork(
+          watchStream(INPUT.sessionId).pipe(
+            Stream.timeout("250 millis"),
+            Stream.runCollect,
+            Effect.map((chunk) => Array.from(chunk) as ReadonlyArray<StreamEvent>)
+          )
+        )
+        yield* Effect.sleep("50 millis")
+        yield* Effect.sync(() => releaseClear())
+        yield* Fiber.join(run)
+        return yield* Fiber.join(watcher)
+      }).pipe(
+        Effect.provide(
+          env(
+            stubAdapter((_id, _s, ctx) =>
+              Effect.gen(function* () {
+                yield* ctx.emit({ _tag: "Started", sessionId: "review_s1" })
+                yield* emitJson(ctx, '{"findings":[]}')
+              })
+            ),
+            installedHarnesses,
+            parkedStore
+          )
+        )
+      )
+    )
+
+    expect(JSON.stringify(seen)).not.toContain("PREVIOUS RUN")
+    expect(seen.filter((e) => e._tag === "Done")).toHaveLength(1)
   })
 })

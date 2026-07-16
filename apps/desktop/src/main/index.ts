@@ -10,7 +10,7 @@
  * to re-check auth.
  */
 import { join } from "node:path"
-import { SecretStore, TerminalService } from "@starbase/cli-adapters"
+import { DiscoveryService, ModelsService, SecretStore, TerminalService } from "@starbase/cli-adapters"
 import { app, BrowserWindow, ipcMain, shell } from "electron"
 import { Effect } from "effect"
 import type { AuthCallback } from "./deep-link.js"
@@ -25,6 +25,24 @@ import { initAutoUpdater } from "./updater.js"
 
 /** The single renderer window (kept so deep-link callbacks can reach + focus it). */
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * Warm `ModelsService`'s cache before anything asks for it.
+ *
+ * Discovering models is the slowest read the app makes: it probes for each CLI
+ * and then asks the Codex CLI for its catalogue over its app-server protocol.
+ * Doing that lazily means the first session's model chip fills in a beat late.
+ * Doing it here means it happens while the window paints and the user signs in —
+ * by the time anyone opens a session, `Models.catalog` is a cache hit.
+ *
+ * Deliberately fire-and-forget: it must never delay the window or fail the boot.
+ * A cold cache is only ever a slower chip, never a broken app, so nothing waits
+ * on this and every error is swallowed.
+ */
+const prefetchModels = Effect.gen(function* () {
+  const clis = yield* DiscoveryService.list()
+  yield* ModelsService.catalog(clis)
+}).pipe(Effect.ignore)
 
 // Only one instance may run: a second launch (e.g. the OS handing us a
 // `starbase://` deep link) must forward its argv into the primary instance
@@ -125,6 +143,8 @@ if (!gotPrimaryLock) {
     // Force the layer to build so the RPC server + `ipcMain` listener are live
     // before the renderer can send its first frame.
     await runtime.runPromise(Effect.void)
+    // Not awaited — the catalogue warms in the background while the window opens.
+    void runtime.runPromise(prefetchModels)
     createWindow()
 
     // Self-update only makes sense in a packaged build (dev has no update feed).

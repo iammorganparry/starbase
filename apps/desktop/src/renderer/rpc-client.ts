@@ -25,6 +25,7 @@ import type {
   IssueSummary,
   Message,
   ModelOption,
+  ProviderModels,
   PermissionMode,
   PrFileChange,
   PrMergeMethod,
@@ -150,6 +151,7 @@ export const rpc = {
     run((c) => c.Skills.list({ sessionId })),
   modelsList: (cli: CliKind): Promise<ReadonlyArray<ModelOption>> =>
     run((c) => c.Models.list({ cli })),
+  modelsCatalog: (): Promise<ReadonlyArray<ProviderModels>> => run((c) => c.Models.catalog()),
   usageGet: (): Promise<Usage> => run((c) => c.Usage.get()),
   agentDecideGate: (sessionId: string, gateId: string, decision: GateDecision): Promise<void> =>
     run((c) => c.Agent.decideGate({ sessionId, gateId, decision })),
@@ -166,8 +168,8 @@ export const rpc = {
     run((c) => c.Agent.revisePlan({ sessionId, planId })),
   agentApprovePlan: (sessionId: string, planId: string): Promise<void> =>
     run((c) => c.Agent.approvePlan({ sessionId, planId })),
-  agentSetModel: (sessionId: string, model: string): Promise<void> =>
-    run((c) => c.Agent.setModel({ sessionId, model })),
+  agentSetHarness: (sessionId: string, cli: CliKind, model: string): Promise<void> =>
+    run((c) => c.Agent.setHarness({ sessionId, cli, model })),
   agentStop: (sessionId: string): Promise<void> => run((c) => c.Agent.stop({ sessionId })),
 
   configSetGithub: (github: GithubConfig): Promise<WorkspaceConfig> =>
@@ -336,6 +338,28 @@ export const rpc = {
    * that detaches (interrupts the fiber) WITHOUT killing the PTY — used on
    * unmount / dock-hide / session switch.
    */
+  /**
+   * Subscribe to the running reviewer's events for a session. Safe to call when
+   * nothing is running — it just stays quiet until a review starts. Returns the
+   * unsubscribe.
+   */
+  reviewWatch: (sessionId: string, onEvent: (event: StreamEvent) => void): (() => void) => {
+    let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
+    let cancelled = false
+    void clientPromise.then((client) => {
+      if (cancelled) return
+      fiber = runtime.runFork(
+        client.Review.watch({ sessionId }).pipe(
+          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
+        )
+      )
+    })
+    return () => {
+      cancelled = true
+      if (fiber) runtime.runFork(Fiber.interrupt(fiber))
+    }
+  },
+
   terminalAttach: (
     terminalId: string,
     onChunk: (chunk: TerminalChunk) => void

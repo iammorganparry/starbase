@@ -1,17 +1,7 @@
 import { useEffect, useState } from "react"
 import { Loader } from "lucide-react"
 import { cn } from "../lib/cn.js"
-
-/** "1h 4m" / "3m 12s" / "42s" — compact elapsed, like Claude Code's status. */
-const fmtElapsed = (ms: number): string => {
-  const secs = Math.max(0, Math.floor(ms / 1000))
-  const h = Math.floor(secs / 3600)
-  const m = Math.floor((secs % 3600) / 60)
-  const s = secs % 60
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`
-  return `${s}s`
-}
+import { fmtElapsed } from "../lib/relative-time.js"
 
 /** "42.6k" / "980" — compact token count. */
 const fmtTokens = (n: number): string =>

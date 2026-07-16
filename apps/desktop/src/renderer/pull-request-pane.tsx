@@ -46,6 +46,8 @@ export function PullRequestPane({
   const {
     review,
     running: reviewRunning,
+    phase: reviewPhase,
+    startedAt: reviewStartedAt,
     error: reviewError,
     runReview,
     sendFindingToAgent,
@@ -77,6 +79,8 @@ export function PullRequestPane({
       review={{
         review,
         running: reviewRunning,
+        phase: reviewPhase,
+        startedAt: reviewStartedAt,
         error: reviewError,
         onRun: runReview,
         onSendFindingToAgent: sendFindingToAgent,

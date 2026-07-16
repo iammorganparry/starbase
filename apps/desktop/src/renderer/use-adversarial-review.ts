@@ -7,8 +7,9 @@
  * forever with its gates rendered nowhere.
  */
 import { useCallback, useMemo } from "react"
+import { useSelector } from "@xstate/react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { AdversarialReview, ReviewFinding, Session } from "@starbase/core"
+import type { AdversarialReview, ReviewFinding, ReviewPhase, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
 import { getConversationActor } from "./conversation-registry.js"
 import { markRouted, useRoutedEntries } from "./routed-store.js"
@@ -35,8 +36,12 @@ export interface AdversarialReviewState {
   readonly review: AdversarialReview | null
   /** The stored review is still loading. */
   readonly loading: boolean
-  /** A reviewer run is in flight. */
+  /** A reviewer run is in flight — whoever started it. */
   readonly running: boolean
+  /** Where the running reviewer has got to (meaningless unless `running`). */
+  readonly phase: ReviewPhase
+  /** Epoch ms the running review started, or null — drives the button's timer. */
+  readonly startedAt: number | null
   /** The message from a failed run, or null. */
   readonly error: string | null
   /** Run a fresh review, ignoring the stored one for this head. */
@@ -84,6 +89,14 @@ export function useAdversarialReview(
     [runMutation]
   )
 
+  // Live progress comes from the session's conversation actor, which watches the
+  // reviewer's event stream for this session. Reading it here (rather than from
+  // the mutation) is what lets the button report a review it did not start — the
+  // auto-review poll runs one on a new head with nobody's finger on the button.
+  const actor = useMemo(() => getConversationActor(session), [session.id])
+  const phase = useSelector(actor, (s) => s.context.reviewPhase)
+  const startedAt = useSelector(actor, (s) => s.context.reviewStartedAt)
+
   const review = query.data ?? null
   const routedKeys = useRoutedEntries(session.id)
 
@@ -107,7 +120,11 @@ export function useAdversarialReview(
   return {
     review,
     loading: query.isPending && hasPr && connected,
-    running: runMutation.isPending,
+    // Either half alone is a lie: the mutation misses an auto-review entirely, and
+    // the stream is silent for the beat between the click and the agent spawning.
+    running: runMutation.isPending || startedAt !== null,
+    phase,
+    startedAt,
     error: runMutation.error
       ? ((runMutation.error as { message?: string }).message ?? "The adversarial review failed")
       : null,

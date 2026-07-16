@@ -1,4 +1,5 @@
 import type {
+  CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
@@ -319,6 +320,32 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Persist the session's harness model. */
       const setModel = (id: string, model: string) => update(id, (s) => ({ ...s, model }))
 
+      /**
+       * Switch the session's harness and model together.
+       *
+       * When `cli` actually changes, `resumeId` MUST be dropped: it holds the
+       * *previous* harness's thread id, and handing a Codex thread id to Claude
+       * (or vice versa) would either error or resume something unrelated. The new
+       * harness therefore starts a fresh thread — the transcript on screen is
+       * unaffected, but the agent won't recall earlier turns.
+       *
+       * `plan` mode is Claude-only, so leaving Claude coerces it back to `ask`
+       * rather than handing a mode the new harness can't honour to the runner.
+       */
+      const setHarness = (id: string, cli: CliKind, model: string) =>
+        update(id, (s) =>
+          s.cli === cli
+            ? { ...s, model }
+            : {
+                ...s,
+                cli,
+                model,
+                // `optional`, not nullable — undefined drops the key on write.
+                resumeId: undefined,
+                mode: s.mode === "plan" && cli !== "claude" ? "ask" : s.mode
+              }
+        )
+
       /** Persist the harness session id so the conversation resumes after a restart. */
       const setResumeId = (id: string, resumeId: string) => update(id, (s) => ({ ...s, resumeId }))
 
@@ -425,6 +452,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         createFromIssue,
         setMode,
         setModel,
+        setHarness,
         setResumeId,
         setTitle,
         renameTitle,

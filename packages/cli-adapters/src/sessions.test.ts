@@ -249,6 +249,94 @@ describe("SessionStore", () => {
     }
   })
 
+  /**
+   * Switching harness is not just a field write. `resumeId` holds the PREVIOUS
+   * harness's thread id — handing a Codex thread id to Claude would resume
+   * something unrelated or error — and `plan` mode is Claude-only. Both must be
+   * reconciled atomically with the switch, or the next turn runs wrong.
+   */
+  describe("setHarness", () => {
+    it("keeps the resume id when only the model changes", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Switcher" }))
+          yield* SessionStore.setResumeId(created.id, "thread_from_claude")
+          yield* SessionStore.setHarness(created.id, "claude", "haiku")
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.model).toBe("haiku")
+      expect(exit.value.cli).toBe("claude")
+      // Same harness → the thread is still valid, so continuation must survive.
+      expect(exit.value.resumeId).toBe("thread_from_claude")
+    })
+
+    it("drops the resume id when the harness changes", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Switcher" }))
+          yield* SessionStore.setResumeId(created.id, "thread_from_claude")
+          yield* SessionStore.setHarness(created.id, "codex", "gpt-5.6-sol")
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.cli).toBe("codex")
+      expect(exit.value.model).toBe("gpt-5.6-sol")
+      expect(exit.value.resumeId).toBeUndefined()
+    })
+
+    it("coerces plan mode when leaving Claude (plan is Claude-only)", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Switcher" }))
+          yield* SessionStore.setMode(created.id, "plan")
+          yield* SessionStore.setHarness(created.id, "codex", "gpt-5.6-sol")
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.mode).toBe("ask")
+    })
+
+    it("leaves plan mode alone when staying on Claude", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Switcher" }))
+          yield* SessionStore.setMode(created.id, "plan")
+          yield* SessionStore.setHarness(created.id, "claude", "opus")
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.mode).toBe("plan")
+    })
+
+    it("does not disturb a non-plan mode on switch", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Switcher" }))
+          yield* SessionStore.setMode(created.id, "auto")
+          yield* SessionStore.setHarness(created.id, "codex", "gpt-5.6-sol")
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.mode).toBe("auto")
+    })
+  })
+
   // `createFromPr` orchestrates real GitService (worktree add) + GhService
   // (`gh pr checkout`). `gh` isn't available in CI and the fork isn't real, so we
   // drive both binaries with a fake executor overlaid on the real temp FS: the
