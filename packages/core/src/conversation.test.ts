@@ -685,11 +685,16 @@ describe("sub-agents", () => {
     expect(subs.find((s) => s.id === "t2")?.message.parts).toHaveLength(1)
   })
 
-  it("SubagentEnded removes the tab (transcripts are live-only)", () => {
+  it("SubagentEnded keeps the tab (marks its status) so output stays readable", () => {
     let subs: ReadonlyArray<Subagent> = []
     subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one" })
+    expect(subs[0]?.status).toBe("working")
     subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "done" })
-    expect(subs).toHaveLength(0)
+    expect(subs).toHaveLength(1)
+    expect(subs[0]?.status).toBe("done")
+    // An error end is reflected the same way.
+    subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "error" })
+    expect(subs[0]?.status).toBe("error")
   })
 
   it("passes non-sub-agent events through untouched (callers can route unconditionally)", () => {

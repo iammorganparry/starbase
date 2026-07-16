@@ -1,7 +1,7 @@
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import { GhService, mapPrSummary, mapPrView, mapReviewComments } from "./gh.js"
+import { GhService, mapIssueSummary, mapPrSummary, mapPrView, mapReviewComments } from "./gh.js"
 import { failureOf, fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
 
@@ -302,6 +302,45 @@ describe("mapPrSummary", () => {
     expect(s.title).toBe("")
     expect(s.author.login).toBe("unknown")
     expect(s.state).toBe("open")
+  })
+})
+
+describe("mapIssueSummary", () => {
+  it("maps a raw gh issue list item incl. labels + assignees", () => {
+    const s = mapIssueSummary({
+      number: 128,
+      title: "Refund route 500s on a stale token",
+      url: "https://github.com/acme/api/issues/128",
+      body: "Fix the refund route.",
+      labels: [
+        { name: "bug", color: "e06c75" },
+        { name: "auth", color: "c678dd" }
+      ],
+      author: { login: "mira" },
+      assignees: [{ login: "dan" }],
+      updatedAt: "2026-07-15T09:00:00Z"
+    })
+    expect(s).toMatchObject({
+      number: 128,
+      title: "Refund route 500s on a stale token",
+      url: "https://github.com/acme/api/issues/128",
+      body: "Fix the refund route.",
+      author: { login: "mira", avatarUrl: null },
+      assignees: [{ login: "dan", avatarUrl: null }]
+    })
+    expect(s.labels).toEqual([
+      { name: "bug", color: "e06c75" },
+      { name: "auth", color: "c678dd" }
+    ])
+  })
+
+  it("tolerates a sparse payload", () => {
+    const s = mapIssueSummary({ number: 7 })
+    expect(s.number).toBe(7)
+    expect(s.title).toBe("")
+    expect(s.author.login).toBe("unknown")
+    expect(s.labels).toEqual([])
+    expect(s.assignees).toEqual([])
   })
 })
 

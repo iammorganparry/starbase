@@ -2,6 +2,8 @@
 @import "tw-animate-css";
 /* Streamdown's animation keyframes (assistant markdown rendering). */
 @import "streamdown/styles.css";
+/* KaTeX styles for `$…$` / `$$…$$` math in agent markdown (see markdown.tsx). */
+@import "katex/dist/katex.min.css";
 
 /*
  * Starbase design system — One Dark Pro, on a shadcn/Tailwind v4 base.
@@ -449,4 +451,15 @@
   background: var(--sb-surface);
   color: var(--sb-text-bright);
   font-weight: 600;
+}
+/* KaTeX math: inherit our prose color, and let wide display equations scroll
+ * horizontally instead of overflowing the chat column. */
+.sb-md .katex {
+  color: var(--sb-text-body);
+  font-size: 1.05em;
+}
+.sb-md .katex-display {
+  margin: 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }

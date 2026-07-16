@@ -3,7 +3,11 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import type { CreateSessionFromPrInput, CreateSessionInput } from "@starbase/core"
+import type {
+  CreateSessionFromIssueInput,
+  CreateSessionFromPrInput,
+  CreateSessionInput
+} from "@starbase/core"
 import { GhService } from "./gh.js"
 import { GitService } from "./git.js"
 import { SessionStore } from "./sessions.js"
@@ -446,5 +450,89 @@ describe("SessionStore", () => {
     )
     expect(failureOf(exit)?._tag).toBe("GhError")
     expect(calls.some((c) => c.includes("--ignore-other-worktrees"))).toBe(false)
+  })
+
+  // `createFromIssue` forks a FRESH branch (like `create`) but keys the slug on
+  // the issue number, links the issue, seeds the task, and turns on automations.
+  // No GhService needed — it never touches the network.
+  const issueInput = (
+    over: Partial<CreateSessionFromIssueInput> = {}
+  ): CreateSessionFromIssueInput => ({
+    repoPath,
+    repoName: "trigify-app",
+    cli: "claude",
+    baseBranch: "main",
+    issue: {
+      number: 128,
+      title: "Refund route 500s on a stale token",
+      url: "https://github.com/acme/api/issues/128",
+      body: "Fix the refund route.",
+      labels: [{ name: "bug", color: "e06c75" }]
+    },
+    task: "",
+    automations: { progressComments: true, closeOnMerge: true },
+    ...over
+  })
+
+  it("createFromIssue forks a starbase/<n>-slug branch, links the issue, seeds the task", async () => {
+    const exit = await runExit(
+      SessionStore.createFromIssue(issueInput()).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const s = exit.value
+    expect(s.branch).toBe("starbase/128-refund-route-500s-on-a-stale-token")
+    expect(s.issueNumber).toBe(128)
+    expect(s.issueUrl).toBe("https://github.com/acme/api/issues/128")
+    expect(s.issueTitle).toBe("Refund route 500s on a stale token")
+    expect(s.issueLabels).toStrictEqual([{ name: "bug", color: "e06c75" }])
+    expect(s.automations).toStrictEqual({ progressComments: true, closeOnMerge: true })
+    // Title pinned from the issue; task falls back to title + body.
+    expect(s.title).toBe("Refund route 500s on a stale token")
+    expect(s.autoTitle).toBe(false)
+    expect(s.initialPrompt).toBe("Refund route 500s on a stale token\n\nFix the refund route.")
+    expect(s.prNumber).toBe(null)
+  })
+
+  it("createFromIssue prefers the edited task over the issue body", async () => {
+    const exit = await runExit(
+      SessionStore.createFromIssue(issueInput({ task: "Just fix the 401 retry guard." })).pipe(
+        Effect.provide(services)
+      ),
+      temp.layer
+    )
+    expect(exit._tag === "Success" && exit.value.initialPrompt).toBe("Just fix the 401 retry guard.")
+  })
+
+  it("createFromIssue refuses a second session for the same issue", async () => {
+    const twice = await runExit(
+      Effect.gen(function* () {
+        yield* SessionStore.createFromIssue(issueInput())
+        return yield* SessionStore.createFromIssue(issueInput())
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(failureOf(twice)?._tag).toBe("GitError")
+  })
+
+  it("setIssue links then unlinks; clearInitialPrompt drops the one-shot prompt", async () => {
+    const result = await runExit(
+      Effect.gen(function* () {
+        const s = yield* SessionStore.createFromIssue(issueInput())
+        yield* SessionStore.clearInitialPrompt(s.id)
+        const cleared = yield* SessionStore.get(s.id)
+        yield* SessionStore.setIssue(s.id, null)
+        const unlinked = yield* SessionStore.get(s.id)
+        return { cleared, unlinked }
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(result._tag).toBe("Success")
+    if (result._tag !== "Success") return
+    const { cleared, unlinked } = result.value
+    expect(cleared.initialPrompt).toBeUndefined()
+    expect(unlinked.issueNumber).toBeUndefined()
+    expect(unlinked.automations).toBeUndefined()
   })
 })

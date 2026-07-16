@@ -2,12 +2,14 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import type {
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
   GitConfig,
   GithubConfig,
   DiffStat,
+  IssueSummary,
   ModelOption,
   PrSummary,
   ProviderConfig,
@@ -89,10 +91,20 @@ export interface StarbaseAppProps {
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Changes tab — the Code Review view over the local worktree diff. */
   renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Issue tab — the rich linked-issue view. */
+  renderIssue?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the per-session terminal dock (desktop app's live TerminalDock). */
   renderTerminalDock?: (session: Session) => ReactNode
   /** Which edge the terminal dock attaches to (drives the content column's flow). */
   terminalDockSide?: DockSide
+  /** Render the embedded browser-preview dock (desktop app's BrowserPreviewView). */
+  renderBrowserDock?: (session: Session | null) => ReactNode
+  /** Which edge the browser dock attaches to. */
+  browserDockSide?: DockSide
+  /** Toggle the browser-preview pane (adds a control to the tab bar). */
+  onToggleBrowser?: () => void
+  /** Whether the browser-preview pane is currently open. */
+  browserActive?: boolean
   activeSessionId?: string | null
   patch?: string
   /**
@@ -127,6 +139,16 @@ export interface StarbaseAppProps {
   loadPrs?: (repoPath: string, opts: { mine: boolean; search: string }) => Promise<ReadonlyArray<PrSummary>>
   /** Create a session from an existing PR (checks out its head branch) and return it. */
   onCreateSessionFromPr?: (input: CreateSessionFromPrInput) => Promise<Session>
+  /**
+   * List open issues for a repo. Presence (with `onCreateSessionFromIssue`) wires
+   * the "From issue" mode; absent (GitHub not connected) hides it.
+   */
+  loadIssues?: (
+    repoPath: string,
+    opts: { mine: boolean; search: string }
+  ) => Promise<ReadonlyArray<IssueSummary>>
+  /** Create a session from a GitHub issue (forks a fresh branch, links it) and return it. */
+  onCreateSessionFromIssue?: (input: CreateSessionFromIssueInput) => Promise<Session>
   /** App version (from `__APP_VERSION__`), shown in the sidebar footer. */
   version?: string
 }
@@ -165,8 +187,13 @@ export function StarbaseApp({
   renderPullRequest,
   renderReview,
   renderCode,
+  renderIssue,
   renderTerminalDock,
   terminalDockSide,
+  renderBrowserDock,
+  browserDockSide,
+  onToggleBrowser,
+  browserActive,
   activeSessionId,
   patch = SEED_PATCH,
   renderConversation,
@@ -179,6 +206,8 @@ export function StarbaseApp({
   onDeleteSession,
   loadPrs,
   onCreateSessionFromPr,
+  loadIssues,
+  onCreateSessionFromIssue,
   version
 }: StarbaseAppProps) {
   const [selected, setSelected] = useState<string | null>(
@@ -287,6 +316,15 @@ export function StarbaseApp({
     [onCreateSessionFromPr]
   )
 
+  const handleCreateFromIssue = useCallback(
+    async (input: CreateSessionFromIssueInput) => {
+      if (!onCreateSessionFromIssue) return
+      const session = await onCreateSessionFromIssue(input)
+      setSelected(session.id)
+    },
+    [onCreateSessionFromIssue]
+  )
+
   return (
     <AppShell title="Starbase">
       <SessionConversation
@@ -335,8 +373,13 @@ export function StarbaseApp({
         renderPullRequest={renderPullRequest}
         renderReview={renderReview}
         renderCode={renderCode}
+        renderIssue={renderIssue}
         renderTerminalDock={renderTerminalDock}
         terminalDockSide={terminalDockSide}
+        renderBrowserDock={renderBrowserDock}
+        browserDockSide={browserDockSide}
+        onToggleBrowser={onToggleBrowser}
+        browserActive={browserActive}
         version={version}
       />
       {onCreateSession && (
@@ -352,6 +395,8 @@ export function StarbaseApp({
           onCreate={handleCreate}
           loadPrs={loadPrs}
           onCreateFromPr={onCreateSessionFromPr ? handleCreateFromPr : undefined}
+          loadIssues={loadIssues}
+          onCreateFromIssue={onCreateSessionFromIssue ? handleCreateFromIssue : undefined}
         />
       )}
       {onLoadUsage && (

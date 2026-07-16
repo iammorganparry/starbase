@@ -9,14 +9,19 @@ import type {
   Attachment,
   AuthProvider,
   AuthSession,
+  BrowserBounds,
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GateDecision,
   GhStatus,
   GitConfig,
   GithubConfig,
+  Issue,
+  IssueAutomations,
+  IssueSummary,
   Message,
   ModelOption,
   PermissionMode,
@@ -106,6 +111,17 @@ export const rpc = {
     run((c) => c.Sessions.create(input)),
   sessionsCreateFromPr: (input: CreateSessionFromPrInput): Promise<Session> =>
     run((c) => c.Sessions.createFromPr(input)),
+  sessionsCreateFromIssue: (input: CreateSessionFromIssueInput): Promise<Session> =>
+    run((c) => c.Sessions.createFromIssue(input)),
+  sessionsLinkIssue: (
+    sessionId: string,
+    issue: IssueSummary,
+    automations: IssueAutomations
+  ): Promise<Session> => run((c) => c.Sessions.linkIssue({ sessionId, issue, automations })),
+  sessionsUnlinkIssue: (sessionId: string): Promise<Session> =>
+    run((c) => c.Sessions.unlinkIssue({ sessionId })),
+  sessionsClearInitialPrompt: (sessionId: string): Promise<Session> =>
+    run((c) => c.Sessions.clearInitialPrompt({ sessionId })),
   sessionsArchive: (sessionId: string, reason: ArchiveReason): Promise<Session> =>
     run((c) => c.Sessions.archive({ sessionId, reason })),
   sessionsRestore: (sessionId: string): Promise<Session> =>
@@ -174,6 +190,15 @@ export const rpc = {
     opts: { mine: boolean; search: string }
   ): Promise<ReadonlyArray<PrSummary>> =>
     run((c) => c.Github.listPrs({ repoPath, mine: opts.mine, search: opts.search })),
+  githubListIssues: (
+    repoPath: string,
+    opts: { mine: boolean; search: string }
+  ): Promise<ReadonlyArray<IssueSummary>> =>
+    run((c) => c.Github.listIssues({ repoPath, mine: opts.mine, search: opts.search })),
+  githubCloseIssue: (sessionId: string): Promise<void> =>
+    run((c) => c.Github.closeIssue({ sessionId })),
+  githubIssue: (sessionId: string): Promise<Issue | null> =>
+    run((c) => c.Github.issue({ sessionId })),
   githubFiles: (sessionId: string): Promise<ReadonlyArray<PrFileChange>> =>
     run((c) => c.Github.files({ sessionId })),
   githubDiff: (sessionId: string): Promise<string> =>
@@ -263,6 +288,21 @@ export const rpc = {
   /** List a session's live terminals (rebuild the tab strip on mount). */
   terminalList: (sessionId: string): Promise<ReadonlyArray<TerminalInfo>> =>
     run((c) => c.Terminal.list({ sessionId })),
+
+  // ── Browser preview ────────────────────────────────────────────────────────
+  /** Show the preview view and load `url` at `bounds` (rejects non-http(s)). */
+  browserPreviewOpen: (url: string, bounds: BrowserBounds): Promise<void> =>
+    run((c) => c.BrowserPreview.open({ url, bounds })),
+  /** Keep the native view aligned with the pane's on-screen rect. */
+  browserPreviewSetBounds: (bounds: BrowserBounds): Promise<void> =>
+    run((c) => c.BrowserPreview.setBounds({ bounds })),
+  /** Navigate the open preview to a new URL (rejects non-http(s)). */
+  browserPreviewNavigate: (url: string): Promise<void> =>
+    run((c) => c.BrowserPreview.navigate({ url })),
+  /** Reload the current preview page. */
+  browserPreviewReload: (): Promise<void> => run((c) => c.BrowserPreview.reload()),
+  /** Hide + destroy the preview view (pane closed / session switched). */
+  browserPreviewClose: (): Promise<void> => run((c) => c.BrowserPreview.close()),
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   /** The current authenticated session, or null when signed out. */

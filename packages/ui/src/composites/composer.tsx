@@ -72,11 +72,14 @@ export function Composer({
   paused = false,
   busy = false,
   placeholder = "Message Claude…",
+  initialValue,
   className
 }: {
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
+  /** Seed the draft once on mount (e.g. a task prefilled from a linked issue). */
+  initialValue?: string
   /** Current harness model id (shown in the model chip). */
   model?: string
   /** Models the harness supports (the model chip's menu). */
@@ -98,7 +101,8 @@ export function Composer({
 }) {
   const modeOptions = allowPlan ? [...MODE_OPTIONS, PLAN_OPTION] : MODE_OPTIONS
   const accent = modeAccent[mode]
-  const [value, setValue] = useState("")
+  // Seed once from `initialValue` (a linked-issue task); later edits are local.
+  const [value, setValue] = useState(() => initialValue ?? "")
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
   const [attachments, setAttachments] = useState<ReadonlyArray<Attachment>>([])

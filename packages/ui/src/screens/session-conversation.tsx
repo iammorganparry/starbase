@@ -81,6 +81,8 @@ export interface SessionConversationProps {
   renderReview?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Changes tab — the Code Review view over the local worktree diff. */
   renderCode?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
+  /** Render the Issue tab — the rich linked-issue view (shown when one is linked). */
+  renderIssue?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /**
    * Render the per-session terminal dock (the desktop app's live TerminalDock).
    * Docked to the main content column beside/below the tab body — never shown in
@@ -89,6 +91,17 @@ export interface SessionConversationProps {
   renderTerminalDock?: (session: Session) => ReactNode
   /** Which edge the terminal dock attaches to — drives the content column's flow. */
   terminalDockSide?: DockSide
+  /**
+   * Render the embedded browser-preview dock (desktop app's BrowserPreviewView).
+   * Docked beside/below the tab body like the terminal dock; absent in stories.
+   */
+  renderBrowserDock?: (session: Session | null) => ReactNode
+  /** Which edge the browser dock attaches to. */
+  browserDockSide?: DockSide
+  /** Toggle the browser-preview pane (shows a control in the tab bar). */
+  onToggleBrowser?: () => void
+  /** Whether the browser-preview pane is currently open. */
+  browserActive?: boolean
   /** App version, shown in the sidebar footer. */
   version?: string
 }
@@ -103,6 +116,8 @@ const visibleTabs = (
   planSessions?: ReadonlySet<string>
 ): ReadonlyArray<TabKey> => {
   const tabs: TabKey[] = ["conversation"]
+  // A linked GitHub issue gets its own rich Issue tab, right after Conversation.
+  if (active?.issueNumber != null) tabs.push("issue")
   if (active && planSessions?.has(active.id)) tabs.push("plan")
   if (active?.prNumber != null) tabs.push("pr", "review")
   // No PR yet: the local worktree diff gets its own Changes tab (Code Review
@@ -124,6 +139,24 @@ export function SessionConversation(props: SessionConversationProps) {
   const activeStatus = (active && props.liveStatus?.[active.id]) ?? active?.status
   // The live terminal dock for the active session (desktop app only).
   const dock = active && props.renderTerminalDock ? props.renderTerminalDock(active) : null
+  // The embedded browser-preview dock — session-agnostic (localhost), so it shows
+  // even without an active session. Each dock hides itself (display:none) when its
+  // pane is closed, so rendering both is layout-free until opened.
+  const browserDock = props.renderBrowserDock ? props.renderBrowserDock(active) : null
+  const termSide = props.terminalDockSide ?? "bottom"
+  const browserSide = props.browserDockSide ?? "right"
+  const rightDocks = (
+    <>
+      {termSide === "right" ? dock : null}
+      {browserSide === "right" ? browserDock : null}
+    </>
+  )
+  const bottomDocks = (
+    <>
+      {termSide === "bottom" ? dock : null}
+      {browserSide === "bottom" ? browserDock : null}
+    </>
+  )
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -173,14 +206,18 @@ export function SessionConversation(props: SessionConversationProps) {
                     ? { label: "Needs input", tone: "blue" }
                     : undefined
               }
+              onToggleBrowser={props.renderBrowserDock ? props.onToggleBrowser : undefined}
+              browserActive={props.browserActive}
             />
 
-            <div
-              className={cn(
-                "flex min-h-0 min-w-0 flex-1",
-                dock && props.terminalDockSide === "right" ? "flex-row" : "flex-col"
-              )}
-            >
+            {/*
+              Dock area: any RIGHT-docked panes sit beside the content column (a
+              flex-row), and any BOTTOM-docked panes stack beneath that row. Each
+              dock CSS-hides itself when closed, so this holds for 0, 1, or 2 open
+              docks on independent sides (terminal + browser preview).
+            */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-row">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {/*
                   The Conversation + Plan tabs share ONE persistent pane (same
@@ -204,7 +241,11 @@ export function SessionConversation(props: SessionConversationProps) {
                   )
                 ) : (
                   <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
-                    {activeTab === "pr" && active ? (
+                    {activeTab === "issue" && active ? (
+                      (props.renderIssue?.(active, { onConnectGithub: connectGithub }) ?? (
+                        <StubScreen tab="issue" />
+                      ))
+                    ) : activeTab === "pr" && active ? (
                       (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
                         <StubScreen tab="pr" />
                       ))
@@ -220,7 +261,9 @@ export function SessionConversation(props: SessionConversationProps) {
                   </div>
                 )}
               </div>
-              {dock}
+                {rightDocks}
+              </div>
+              {bottomDocks}
             </div>
           </>
         )}

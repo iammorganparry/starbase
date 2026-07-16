@@ -1,5 +1,7 @@
 import type {
   GhStatus,
+  Issue,
+  IssueSummary,
   PrCheck,
   PrCheckStatus,
   PrFileChange,
@@ -335,6 +337,75 @@ const PR_LIST_FIELDS = [
   "updatedAt"
 ].join(",")
 
+/**
+ * Map a raw `gh issue list --json …` item into the lightweight `IssueSummary`
+ * used by the "new session from an issue" picker + attach dialog. Pure +
+ * defensive — the unit-test target.
+ */
+export const mapIssueSummary = (raw: unknown): IssueSummary => {
+  const j = rec(raw)
+  return {
+    number: num(j.number) ?? 0,
+    title: str(j.title) ?? "",
+    url: str(j.url) ?? "",
+    body: str(j.body) ?? "",
+    labels: arr(j.labels).map((l) => ({ name: str(rec(l).name) ?? "", color: str(rec(l).color) })),
+    author: { login: str(rec(j.author).login) ?? "unknown", avatarUrl: null },
+    assignees: arr(j.assignees).map((a) => ({ login: str(rec(a).login) ?? "", avatarUrl: null })),
+    updatedAt: str(j.updatedAt) ?? ""
+  }
+}
+
+/**
+ * Map a raw `gh issue view --json …` payload into the full `Issue` view model
+ * for the Issue tab (title, body, labels, assignees, comments). Pure + defensive.
+ */
+export const mapIssue = (raw: unknown): Issue => {
+  const j = rec(raw)
+  return {
+    number: num(j.number) ?? 0,
+    title: str(j.title) ?? "",
+    url: str(j.url) ?? "",
+    state: str(j.state)?.toUpperCase() === "CLOSED" ? "closed" : "open",
+    body: str(j.body) ?? "",
+    author: { login: str(rec(j.author).login) ?? "unknown", avatarUrl: null },
+    assignees: arr(j.assignees).map((a) => ({ login: str(rec(a).login) ?? "", avatarUrl: null })),
+    labels: arr(j.labels).map((l) => ({ name: str(rec(l).name) ?? "", color: str(rec(l).color) })),
+    createdAt: str(j.createdAt) ?? "",
+    comments: arr(j.comments).map((c) => ({
+      author: { login: str(rec(rec(c).author).login) ?? "unknown", avatarUrl: null },
+      body: str(rec(c).body) ?? "",
+      createdAt: str(rec(c).createdAt) ?? ""
+    }))
+  }
+}
+
+/** The `--json` field set requested from `gh issue view` (drives `mapIssue`). */
+const ISSUE_VIEW_FIELDS = [
+  "number",
+  "title",
+  "url",
+  "state",
+  "body",
+  "author",
+  "assignees",
+  "labels",
+  "createdAt",
+  "comments"
+].join(",")
+
+/** The `--json` field set requested from `gh issue list` (drives `mapIssueSummary`). */
+const ISSUE_LIST_FIELDS = [
+  "number",
+  "title",
+  "labels",
+  "author",
+  "assignees",
+  "updatedAt",
+  "url",
+  "body"
+].join(",")
+
 /** Map `gh pr review` submit kind → the corresponding gh flag. */
 const REVIEW_FLAG: Record<ReviewSubmitKind, string> = {
   comment: "--comment",
@@ -438,6 +509,36 @@ export class GhService extends Effect.Service<GhService>()(
             ]
           )
         ).pipe(Effect.map((raw) => arr(raw).map(mapPrSummary))),
+
+      /**
+       * List open issues for the repo at `cwd`, for the "new session from an
+       * issue" picker + attach dialog. `mine` filters to issues assigned to the
+       * authenticated user (`--assignee @me`); `search` passes free text through
+       * `--search`. Never fails — folds to an empty list.
+       */
+      listIssues: (
+        cwd: string,
+        opts: { mine: boolean; search: string }
+      ): Effect.Effect<ReadonlyArray<IssueSummary>, never, CommandExecutor.CommandExecutor> =>
+        ghJson(
+          cwd,
+          ghArgs(
+            ["issue", "list", "--state", "open", "--json", ISSUE_LIST_FIELDS, "--limit", "50"],
+            [
+              ["--assignee", opts.mine && "@me"],
+              ["--search", opts.search.trim()]
+            ]
+          )
+        ).pipe(Effect.map((raw) => arr(raw).map(mapIssueSummary))),
+
+      /** The full `Issue` view model for `number` (Issue tab), or null on failure. */
+      issueView: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<Issue | null, never, CommandExecutor.CommandExecutor> =>
+        ghJson(cwd, ["issue", "view", String(number), "--json", ISSUE_VIEW_FIELDS]).pipe(
+          Effect.map((raw) => (raw === null ? null : mapIssue(raw)))
+        ),
 
       /**
        * The lifecycle state of PR `number` — cheap check (`gh pr view --json
@@ -586,7 +687,24 @@ export class GhService extends Effect.Service<GhService>()(
         cwd: string,
         number: number
       ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
-        runGh(cwd, ["pr", "ready", String(number)]).pipe(Effect.asVoid)
+        runGh(cwd, ["pr", "ready", String(number)]).pipe(Effect.asVoid),
+
+      // ── Issue writes (surface GhError) ─────────────────────────────────────
+
+      /** Post a comment on issue `number` (progress-comment automation). */
+      issueComment: (
+        cwd: string,
+        number: number,
+        body: string
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["issue", "comment", String(number), "--body", body]).pipe(Effect.asVoid),
+
+      /** Close issue `number` (close-on-merge automation). */
+      closeIssue: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["issue", "close", String(number)]).pipe(Effect.asVoid)
     })
   }
 ) {}

@@ -108,11 +108,18 @@ export const formatQuestionAnswer = (
   return `The user answered your question(s):\n${lines.join("\n")}\n\nUse these answers and continue — do not ask again.`
 }
 
+/**
+ * Tools that spawn a watch-only sub-agent. Claude Code has surfaced this as
+ * `Task` and (in newer builds) `Agent`; treat both as a sub-agent spawn so each
+ * gets its own readable tab.
+ */
+const SUBAGENT_TOOLS = new Set(["Task", "Agent"])
+
 const toolTarget = (name: string, input: Record<string, unknown>): string | null => {
   if (name === "Bash") return strOf(input.command)
   if (name === "Grep" || name === "Glob") return strOf(input.pattern)
-  // A `Task` spawns a sub-agent — its target is the one-line task description.
-  if (name === "Task") return strOf(input.description)
+  // A sub-agent spawn's target is its one-line task description.
+  if (SUBAGENT_TOOLS.has(name)) return strOf(input.description)
   return strOf(input.file_path) ?? strOf(input.path) ?? strOf(input.notebook_path) ?? strOf(input.url)
 }
 
@@ -322,7 +329,7 @@ export const streamEventsFor = (
           // tab keyed by this tool_use id (its children arrive stamped with it).
           // Nested Tasks (spawned by a sub-agent, so `agentId` is set) stay as
           // ordinary tool cards — one level of nesting for MVP.
-          if (name === "Task" && agentId === undefined) {
+          if (SUBAGENT_TOOLS.has(name) && agentId === undefined) {
             out.push({
               _tag: "SubagentStarted",
               id,
@@ -354,7 +361,7 @@ export const streamEventsFor = (
         const memo = tools.get(id)
         // A top-level `Task` completing closes its sub-agent tab (tabs are
         // live-only — the anchor card in the main turn keeps the summary).
-        if (memo?.name === "Task" && agentId === undefined) {
+        if (memo && SUBAGENT_TOOLS.has(memo.name) && agentId === undefined) {
           out.push({ _tag: "SubagentEnded", id, status: block.is_error === true ? "error" : "done" })
         }
         if (memo && SUPPRESSED_TOOLS.has(memo.name)) continue

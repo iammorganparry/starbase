@@ -3,6 +3,7 @@ import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
@@ -17,10 +18,13 @@ import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } f
 import { appMachine } from "./app-machine.js"
 import { authMachine } from "./auth-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
+import { IssuePane } from "./issue-pane.js"
 import { PullRequestPane } from "./pull-request-pane.js"
 import { ReviewPane } from "./review-pane.js"
 import { TerminalDockView } from "./terminal-dock-view.js"
 import { useTerminalDock } from "./use-terminal-dock.js"
+import { BrowserPreviewView } from "./browser-preview-view.js"
+import { useBrowserPreview } from "./use-browser-preview.js"
 import { useSessionStatuses } from "./session-status.js"
 import { useSessionDiffs } from "./diff-presence.js"
 import { usePlanSessions } from "./plan-presence.js"
@@ -60,6 +64,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const liveDiff = useSessionDiffs()
   const planSessions = usePlanSessions()
   const termDock = useTerminalDock()
+  const browserDock = useBrowserPreview()
   const qc = useQueryClient()
 
   // Renderer-side rpc reads, via react-query.
@@ -129,8 +134,24 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     send({ type: "SESSION_CREATED", session })
     return session
   }
+  const createSessionFromIssue = async (input: CreateSessionFromIssueInput) => {
+    const session = await rpc.sessionsCreateFromIssue(input)
+    void rememberLastRepo(input.repoPath)
+    send({ type: "SESSION_CREATED", session })
+    return session
+  }
   const onPrLinked = (sessionId: string, prNumber: number) =>
     send({ type: "SESSION_PR_LINKED", sessionId, prNumber })
+
+  const unlinkIssue = (sessionId: string) =>
+    void rpc.sessionsUnlinkIssue(sessionId).then((session) => send({ type: "SESSION_UPDATED", session }))
+
+  // The composer consumed the one-shot prompt: clear it (backend returns the
+  // updated session) so re-opening the session never re-seeds the draft.
+  const consumeInitialPrompt = (sessionId: string) =>
+    void rpc
+      .sessionsClearInitialPrompt(sessionId)
+      .then((session) => send({ type: "SESSION_UPDATED", session }))
 
   const restoreSession = async (sessionId: string) => {
     const session = await rpc.sessionsRestore(sessionId)
@@ -266,8 +287,16 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       if (archivedRef.current.has(id)) continue
       archivedRef.current.add(id)
       archiveMutation.mutate({ id, reason })
+      // Close-on-merge automation: when the linked PR MERGES (not just closes),
+      // close the session's linked issue too, if the user opted in. Best-effort.
+      if (reason === "merged") {
+        const s = sessions.find((x) => x.id === id)
+        if (s?.issueNumber != null && s.automations?.closeOnMerge) {
+          void rpc.githubCloseIssue(id).catch(() => {})
+        }
+      }
     }
-  }, [toArchive, archiveMutation])
+  }, [toArchive, archiveMutation, sessions])
 
   if (state.matches("loading") || state.matches("starting")) {
     return <LoadingScreen />
@@ -332,6 +361,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onDeleteSession={(id) => setPendingDelete(sessions.find((s) => s.id === id) ?? null)}
       loadPrs={connected ? rpc.githubListPrs : undefined}
       onCreateSessionFromPr={connected ? createSessionFromPr : undefined}
+      loadIssues={connected ? rpc.githubListIssues : undefined}
+      onCreateSessionFromIssue={connected ? createSessionFromIssue : undefined}
       planSessions={planSessions}
       renderConversation={(session: Session, view, ctx) => (
         <ConversationPane
@@ -340,6 +371,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onOpenPlanReview={ctx.onOpenPlanReview}
           onRestore={restoreSession}
           onDelete={deleteSession}
+          onInitialPromptConsumed={consumeInitialPrompt}
         />
       )}
       renderPullRequest={(session, ctx) => (
@@ -352,6 +384,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onPrLinked={onPrLinked}
         />
       )}
+      renderIssue={(session) => <IssuePane session={session} onUnlink={unlinkIssue} />}
       renderReview={(session, ctx) => (
         <ReviewPane session={session} connected={connected} onConnectGithub={ctx.onConnectGithub} />
       )}
@@ -366,6 +399,18 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onToggle={termDock.toggle}
           side={termDock.side}
           onSideChange={termDock.setSide}
+        />
+      )}
+      browserDockSide={browserDock.side}
+      browserActive={browserDock.visible}
+      onToggleBrowser={browserDock.toggle}
+      renderBrowserDock={(session) => (
+        <BrowserPreviewView
+          session={session}
+          visible={browserDock.visible}
+          onToggle={browserDock.toggle}
+          side={browserDock.side}
+          onSideChange={browserDock.setSide}
         />
       )}
       version={__APP_VERSION__}

@@ -81,6 +81,8 @@ export interface ConversationViewProps {
     onRestore?: () => void
     onDelete?: () => void
   }
+  /** One-shot draft to seed the composer with (task prefilled from an issue). */
+  initialDraft?: string
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
@@ -115,7 +117,8 @@ export function ConversationView({
   onApprovePlan,
   onResumePlan,
   onOpenPlanReview,
-  archived
+  archived,
+  initialDraft
 }: ConversationViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // Sticky-bottom: follow the newest content while the operator is parked at the
@@ -179,13 +182,6 @@ export function ConversationView({
             onDelete={archived.onDelete}
           />
         )}
-        {/* Live session analytics — elapsed + token consumption, Claude-Code style. */}
-        {!archived && (busy || runStartedAt !== null || tokens > 0) && (
-          <div className="flex h-8 flex-none items-center justify-end border-b border-hairline px-[30px]">
-            <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
-          </div>
-        )}
-
         <div
           ref={scrollRef}
           onScroll={onScroll}
@@ -228,6 +224,13 @@ export function ConversationView({
         {/* Same gutter + centered max-width as the transcript column above. */}
         <div className="flex-none px-[30px] pb-[18px] pt-[11px]">
           <div className="mx-auto w-full max-w-[760px]">
+          {/* Live session analytics — elapsed + token consumption, right above the
+              composer so the session's cost/time sits with where you type. */}
+          {!archived && (busy || runStartedAt !== null || tokens > 0) && (
+            <div className="mb-1.5 flex items-center justify-end">
+              <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
+            </div>
+          )}
           {archived ? (
             <div className="flex items-center gap-2.5 rounded-xl border border-line bg-sunken px-[14px] py-3 text-[12.5px] text-muted-foreground">
               <Lock size={14} className="flex-none text-dim" />
@@ -312,6 +315,7 @@ export function ConversationView({
                 onSetMode={onSetMode}
                 allowPlan={cli === "claude"}
                 onSend={onSend}
+                initialValue={initialDraft}
               />
             </>
           )}

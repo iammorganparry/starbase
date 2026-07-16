@@ -16,7 +16,8 @@ export function ConversationPane({
   view = "conversation",
   onOpenPlanReview,
   onRestore,
-  onDelete
+  onDelete,
+  onInitialPromptConsumed
 }: {
   session: Session
   /** Which face of the session to show — the transcript, or the Plan Review. */
@@ -27,8 +28,20 @@ export function ConversationPane({
   onRestore?: (sessionId: string) => void
   /** Permanently delete this session (the banner). */
   onDelete?: (sessionId: string) => void
+  /** Notify once the composer has consumed the one-shot initial prompt. */
+  onInitialPromptConsumed?: (sessionId: string) => void
 }) {
   const convo = useConversation(session)
+
+  // The prefilled task is one-shot, but we clear it (backend + app state) only
+  // once the user actually SENDS — not on mount. Clearing on mount lost the draft
+  // when the user visited the Issue tab first (that unmounts this pane, discarding
+  // the composer's seeded text; on return `initialPrompt` was already gone).
+  // Consuming on send keeps the seed alive across those unmounts until it's used.
+  const sendPrompt: typeof convo.sendPrompt = (...args) => {
+    if (session.initialPrompt) onInitialPromptConsumed?.(session.id)
+    return convo.sendPrompt(...args)
+  }
 
   // Which sub-agent tab is selected ("main" = the parent conversation). Declared
   // before the Plan Review early-return so hook order stays stable. We derive the
@@ -95,7 +108,7 @@ export function ConversationPane({
           model={convo.model}
           models={convo.models}
           onSetModel={convo.setModel}
-          onSend={convo.sendPrompt}
+          onSend={sendPrompt}
           onDecideGate={convo.decideGate}
           onSetMode={convo.setMode}
           question={convo.question}
@@ -103,6 +116,7 @@ export function ConversationPane({
           onApprovePlan={(id) => convo.approvePlan(id)}
           onResumePlan={(id) => convo.resumePlan(id)}
           onOpenPlanReview={onOpenPlanReview}
+          initialDraft={session.initialPrompt}
           archived={
             session.archived
               ? {

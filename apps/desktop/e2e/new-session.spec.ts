@@ -142,3 +142,106 @@ test("creating a session from a PR checks out its head branch and links the PR",
     repo: "widget"
   })
 })
+
+/**
+ * The "new session from a GitHub issue" flow, end to end against real git with a
+ * deterministic fake `gh issue list`: toggle to "From issue", pick an open issue,
+ * advance to the prefill step, create — and verify the session was forked onto a
+ * fresh `starbase/<n>-slug` branch, linked to the issue, with the task seeded from
+ * the issue and the automations persisted.
+ */
+test("creating a session from an issue forks a linked branch and seeds the task", async ({
+  launchApp
+}) => {
+  const { window, home, repoPath } = await launchApp({
+    configured: true,
+    withRepo: true,
+    gh: {
+      login: "e2e-user",
+      issues: [
+        {
+          number: 128,
+          title: "Refund route 500s on a stale token",
+          body: "Fix the refund route so a stale token triggers a refresh + retry.",
+          labels: [{ name: "bug", color: "e06c75" }],
+          author: { login: "mira" },
+          assignees: [{ login: "dan" }]
+        },
+        { number: 126, title: "Rate-limit the webhook ingest", author: { login: "mira" } }
+      ]
+    }
+  })
+
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  await window.locator('button[title="New session"]').click()
+  await expect(window.getByRole("heading", { name: "New session" })).toBeVisible()
+
+  const noHarness = await window.getByText("No harness available").count()
+  test.skip(noHarness > 0, "no coding CLI installed on this host")
+
+  // Toggle to "From issue" → the seeded open issues render.
+  await window.getByRole("tab", { name: "From issue" }).click()
+  await expect(window.getByPlaceholder("Search open issues…")).toBeVisible()
+  await expect(window.getByText("Refund route 500s on a stale token")).toBeVisible()
+  await expect(window.getByText("#128")).toBeVisible()
+
+  // Select issue #128 → advance to the prefill step ("Start on #128").
+  await window.getByText("Refund route 500s on a stale token").click()
+  const start = window.getByRole("button", { name: "Start on #128" })
+  await expect(start).toBeEnabled()
+  await start.click()
+
+  // The prefill step shows the editable task textarea, seeded from the issue.
+  await expect(window.getByRole("textbox")).toHaveValue(/Fix the refund route/)
+
+  // Create the session.
+  const create = window.getByRole("button", { name: "Create session" })
+  await expect(create).toBeEnabled()
+  await create.click()
+
+  // The dialog closes and the sidebar shows the linked-issue badge (◉ #128).
+  await expect(window.getByRole("heading", { name: "New session" })).toBeHidden()
+  await expect(window.getByText("◉ #128")).toBeVisible()
+
+  // The composer is prefilled (HITL) with the task derived from the issue.
+  await expect(window.getByPlaceholder("Message Claude…")).toHaveValue(/Fix the refund route/)
+
+  // The session gains an "Issue" tab → the rich issue view (title, body, state).
+  await window.getByRole("button", { name: "Issue" }).click()
+  await expect(
+    window.getByRole("heading", { name: /Refund route 500s on a stale token/ })
+  ).toBeVisible()
+  await expect(window.getByText(/triggers a refresh \+ retry/)).toBeVisible()
+  await expect(window.getByText("Open", { exact: true })).toBeVisible()
+
+  // Real outcome: a fresh `starbase/128-<slug>` worktree exists on that branch.
+  const worktreePath = join(
+    home,
+    "starbase",
+    "worktrees",
+    "widget",
+    "128-refund-route-500s-on-a-stale-token"
+  )
+  expect(existsSync(worktreePath)).toBe(true)
+  const branches = execFileSync("git", ["branch", "--format=%(refname:short)"], {
+    cwd: repoPath,
+    encoding: "utf-8"
+  })
+  expect(branches).toContain("starbase/128-refund-route-500s-on-a-stale-token")
+
+  // Real outcome: the session is persisted with the issue linked + task seeded.
+  const persisted = JSON.parse(readFileSync(join(home, "starbase", "sessions.json"), "utf-8"))
+  expect(persisted).toHaveLength(1)
+  expect(persisted[0]).toMatchObject({
+    title: "Refund route 500s on a stale token",
+    branch: "starbase/128-refund-route-500s-on-a-stale-token",
+    baseBranch: "main",
+    issueNumber: 128,
+    issueUrl: "https://github.com/acme/widget/issues/128",
+    repo: "widget",
+    automations: { progressComments: true, closeOnMerge: true }
+  })
+  // `initialPrompt` is one-shot: the composer consumed it (asserted above) and it
+  // was cleared from the persisted session so re-opening never re-seeds.
+  expect(persisted[0].initialPrompt).toBeUndefined()
+})

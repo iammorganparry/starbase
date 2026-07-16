@@ -26,6 +26,7 @@ import {
 import { NodeContext } from "@effect/platform-node"
 import { Layer, ManagedRuntime } from "effect"
 import { AppPathsLive } from "./app-paths.js"
+import { BrowserPreviewServiceLive } from "./browser-preview.js"
 import { DialogServiceLive } from "./dialog.js"
 import { RpcServerLive } from "./rpc.js"
 import { PlaintextSecretStoreLive, SecretStoreLive } from "./secret-store.js"
@@ -61,6 +62,7 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(GitService.Default),
   Layer.provide(HarnessCliAdapterLive),
   Layer.provide(DialogServiceLive),
+  Layer.provide(BrowserPreviewServiceLive),
   Layer.provide(AppPathsLive),
   // NodeContext bundles CommandExecutor + FileSystem + Path used by the git/gh/
   // discovery/config/workspace/session services.

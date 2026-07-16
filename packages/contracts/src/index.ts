@@ -3,14 +3,19 @@ import {
   Attachment,
   AuthProvider,
   AuthSession,
+  BrowserBounds,
   CliInfo,
   CliKind,
+  CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
   GateDecision,
   GhStatus,
   GitConfig,
   GithubConfig,
+  Issue,
+  IssueAutomations,
+  IssueSummary,
   Message,
   ModelOption,
   PermissionMode,
@@ -33,6 +38,7 @@ import {
 } from "@starbase/core"
 import {
   AuthError,
+  BrowserPreviewError,
   ConfigError,
   DiscoveryError,
   GhError,
@@ -134,6 +140,44 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: Session,
     error: Schema.Union(GitError, GhError),
     payload: CreateSessionFromPrInput
+  }),
+
+  /**
+   * Create a session from a GitHub issue: fork a fresh `<number>-<slug>` branch
+   * off base, link the issue + automations, seed the task from the issue.
+   */
+  Rpc.make("Sessions.createFromIssue", {
+    success: Session,
+    error: GitError,
+    payload: CreateSessionFromIssueInput
+  }),
+
+  /** Link a GitHub issue to a live session (attach flow); returns the updated session. */
+  Rpc.make("Sessions.linkIssue", {
+    success: Session,
+    error: Schema.Union(GitError, SessionNotFoundError),
+    payload: {
+      sessionId: Schema.String,
+      issue: IssueSummary,
+      automations: IssueAutomations
+    }
+  }),
+
+  /** Unlink the session's GitHub issue; returns the updated session. */
+  Rpc.make("Sessions.unlinkIssue", {
+    success: Session,
+    error: Schema.Union(GitError, SessionNotFoundError),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * Clear a session's one-shot `initialPrompt` once the composer has consumed
+   * it; returns the updated session so the client state stops re-seeding.
+   */
+  Rpc.make("Sessions.clearInitialPrompt", {
+    success: Session,
+    error: Schema.Union(GitError, SessionNotFoundError),
+    payload: { sessionId: Schema.String }
   }),
 
   /** Archive a session (its linked PR merged/closed) — read-only, kept. */
@@ -351,6 +395,33 @@ export class StarbaseRpcs extends RpcGroup.make(
     }
   }),
 
+  /**
+   * List open issues for a repo (for the "new session from an issue" picker +
+   * attach dialog). `mine` filters to issues assigned to you. Never errors —
+   * folds to an empty list.
+   */
+  Rpc.make("Github.listIssues", {
+    success: Schema.Array(IssueSummary),
+    payload: {
+      repoPath: Schema.String,
+      mine: Schema.Boolean,
+      search: Schema.String
+    }
+  }),
+
+  /** Close the session's linked issue (close-on-merge automation). */
+  Rpc.make("Github.closeIssue", {
+    error: GhError,
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** The full linked-issue view model for the session's Issue tab (null if none). */
+  Rpc.make("Github.issue", {
+    success: Schema.NullOr(Issue),
+    error: GhError,
+    payload: { sessionId: Schema.String }
+  }),
+
   /** The lifecycle state of a session's linked PR (for the archive sweep). */
   Rpc.make("Github.prState", {
     success: Schema.NullOr(PrState),
@@ -510,5 +581,38 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /** Sign out — revoke on the server (best effort) and clear the local token. */
-  Rpc.make("Auth.signOut", {})
+  Rpc.make("Auth.signOut", {}),
+
+  // ── Browser preview ──────────────────────────────────────────────────────────
+  // An embedded `WebContentsView` (main process) pointed at a localhost dev
+  // server. It renders OUTSIDE the renderer's DOM/CSP, so the renderer drives it
+  // through these procedures and streams the pane's on-screen bounds to keep the
+  // native view aligned. There is one preview view (the single window).
+
+  /**
+   * Show the preview view and load `url` at `bounds`. Only http/https URLs are
+   * accepted (fails with `BrowserPreviewError` otherwise). Idempotent — reuses
+   * the existing view if already open.
+   */
+  Rpc.make("BrowserPreview.open", {
+    error: BrowserPreviewError,
+    payload: { url: Schema.String, bounds: BrowserBounds }
+  }),
+
+  /** Reposition/resize the view to track the pane's rect (on layout/scroll). No-op if closed. */
+  Rpc.make("BrowserPreview.setBounds", {
+    payload: { bounds: BrowserBounds }
+  }),
+
+  /** Navigate the open view to a new URL. Fails with `BrowserPreviewError` for non-http(s). */
+  Rpc.make("BrowserPreview.navigate", {
+    error: BrowserPreviewError,
+    payload: { url: Schema.String }
+  }),
+
+  /** Reload the current page. No-op if closed. */
+  Rpc.make("BrowserPreview.reload", {}),
+
+  /** Hide + destroy the view (pane closed or session switched). Idempotent. */
+  Rpc.make("BrowserPreview.close", {})
 ) {}

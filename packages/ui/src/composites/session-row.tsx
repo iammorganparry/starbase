@@ -147,7 +147,11 @@ export function SessionRow({
   }
 
   const idle = status === "idle"
-  const hasMeta = session.prNumber !== null || session.diff.added > 0 || session.diff.removed > 0
+  const hasMeta =
+    session.prNumber !== null ||
+    session.issueNumber != null ||
+    session.diff.added > 0 ||
+    session.diff.removed > 0
   return withMenu(
     <div
       data-testid={`session-row-${session.id}`}
@@ -202,6 +206,11 @@ export function SessionRow({
       </div>
       {hasMeta && (
         <div className="flex items-center gap-1.5">
+          {session.issueNumber != null && (
+            <Badge tone="green" size="sm">
+              ◉ #{session.issueNumber}
+            </Badge>
+          )}
           {session.prNumber !== null && (
             <Badge tone="neutral" size="sm">
               ⑂ #{session.prNumber}
