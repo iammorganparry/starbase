@@ -131,8 +131,13 @@ export function IssueView({
         <IssueComment author={issue.author.login} createdAt={issue.createdAt} body={issue.body} opening />
 
         {/* Comment thread */}
-        {issue.comments.map((c, i) => (
-          <IssueComment key={i} author={c.author.login} createdAt={c.createdAt} body={c.body} />
+        {issue.comments.map((c) => (
+          <IssueComment
+            key={`${c.author.login}-${c.createdAt}`}
+            author={c.author.login}
+            createdAt={c.createdAt}
+            body={c.body}
+          />
         ))}
       </div>
     </div>

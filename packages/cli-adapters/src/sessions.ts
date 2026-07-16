@@ -247,6 +247,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       > =>
         Effect.gen(function* () {
           const now = yield* Effect.sync(() => new Date().toISOString())
+          const stamp = yield* Effect.sync(() => Date.now().toString(36))
           const slug = `${input.issue.number}-${kebab(input.issue.title)}`
           // Guard: one session per issue worktree (the slug is deterministic).
           const worktreePath = yield* GitService.worktreePathFor(input.repoName, slug)
@@ -270,7 +271,10 @@ export class SessionStore extends Effect.Service<SessionStore>()(
               .filter((s) => s.length > 0)
               .join("\n\n")
           const session: Session = {
-            id: `s_${slug}`,
+            // Stamp the id (like `createFromPr`) so a delete-then-recreate of the
+            // same issue can't collide with the old session's persisted data; the
+            // worktree slug stays deterministic for the one-session-per-issue guard.
+            id: `s_${slug}_${stamp}`,
             repo: input.repoName,
             branch: worktree.branch,
             // Seed (and pin) the title from the issue.

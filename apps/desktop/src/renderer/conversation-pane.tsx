@@ -5,7 +5,7 @@
  * lives here — above the Conversation ↔ Plan Review view switch — so switching to
  * the Plan tab does NOT unmount the agent stream (which would abort a parked plan).
  */
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { Session } from "@starbase/core"
 import { AgentTabBar, ConversationView, MAIN_AGENT, PlanReview, SubagentView } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
@@ -33,13 +33,15 @@ export function ConversationPane({
 }) {
   const convo = useConversation(session)
 
-  // The prefilled task is one-shot: the composer seeds from it on mount, then we
-  // clear it (backend + app state) so switching sessions never re-seeds.
-  useEffect(() => {
+  // The prefilled task is one-shot, but we clear it (backend + app state) only
+  // once the user actually SENDS — not on mount. Clearing on mount lost the draft
+  // when the user visited the Issue tab first (that unmounts this pane, discarding
+  // the composer's seeded text; on return `initialPrompt` was already gone).
+  // Consuming on send keeps the seed alive across those unmounts until it's used.
+  const sendPrompt: typeof convo.sendPrompt = (...args) => {
     if (session.initialPrompt) onInitialPromptConsumed?.(session.id)
-    // Only when this session first mounts with a prompt.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id])
+    return convo.sendPrompt(...args)
+  }
 
   // Which sub-agent tab is selected ("main" = the parent conversation). Declared
   // before the Plan Review early-return so hook order stays stable. We derive the
@@ -106,7 +108,7 @@ export function ConversationPane({
           model={convo.model}
           models={convo.models}
           onSetModel={convo.setModel}
-          onSend={convo.sendPrompt}
+          onSend={sendPrompt}
           onDecideGate={convo.decideGate}
           onSetMode={convo.setMode}
           question={convo.question}

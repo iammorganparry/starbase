@@ -377,7 +377,16 @@ export const newSessionMachine = setup({
     },
     SET_MODE: {
       actions: [
-        assign({ mode: ({ event }) => event.mode, issueStep: "list", error: null }),
+        // Reset the shared picker filters so switching PR ↔ issue gives a clean
+        // slate — `search`/`mine` are shared context and would otherwise carry a
+        // PR-mode query (e.g. "auth") straight into the issue picker.
+        assign({
+          mode: ({ event }) => event.mode,
+          issueStep: "list",
+          error: null,
+          search: "",
+          mine: false
+        }),
         raise({ type: "RELOAD_PRS" }),
         raise({ type: "RELOAD_ISSUES" })
       ]
