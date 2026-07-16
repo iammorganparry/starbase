@@ -7,6 +7,7 @@
  */
 import { useState } from "react"
 import type { Session } from "@starbase/core"
+import { agentChildren, agentPath } from "@starbase/core"
 import { AgentTabBar, ConversationView, MAIN_AGENT, PlanReview, SubagentView } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
 import { useConversation } from "./use-conversation.js"
@@ -51,6 +52,33 @@ export function ConversationPane({
   const activeSubagent = convo.subagents.find((s) => s.id === selectedAgent) ?? null
   const activeAgent = activeSubagent ? selectedAgent : MAIN_AGENT
 
+  // Sub-agents nest, so the bar shows one level at a time: `level` is the agent
+  // whose children are listed (MAIN_AGENT = the top level). Derived the same way
+  // as the selection — if the drilled-into agent is gone (the list resets on the
+  // next run) we fall back to the top level rather than stranding an empty bar.
+  const [level, setLevel] = useState<string>(MAIN_AGENT)
+  const effectiveLevel =
+    level !== MAIN_AGENT && convo.subagents.some((s) => s.id === level) ? level : MAIN_AGENT
+  const levelAgents = agentChildren(
+    convo.subagents,
+    effectiveLevel === MAIN_AGENT ? null : effectiveLevel
+  )
+  const trail =
+    effectiveLevel === MAIN_AGENT
+      ? []
+      : agentPath(convo.subagents, effectiveLevel).map((s) => ({ id: s.id, name: s.name }))
+
+  // Drilling into an agent shows its children AND its own transcript; a crumb
+  // jumps the level back up. Both keep the two states in step.
+  const goToAgent = (id: string) => {
+    setLevel(id)
+    setSelectedAgent(id)
+  }
+  const goToMain = () => {
+    setLevel(MAIN_AGENT)
+    setSelectedAgent(MAIN_AGENT)
+  }
+
   // Live agent status + Plan-tab presence are published by the conversation
   // registry (from the actor's own subscription), so they stay correct even
   // while this pane is unmounted for a background session. Nothing to do here.
@@ -79,14 +107,18 @@ export function ConversationPane({
     <div className="flex min-h-0 flex-1 flex-col">
       {convo.subagents.length > 0 && (
         <AgentTabBar
-          agents={convo.subagents.map((s) => ({
+          agents={levelAgents.map((s) => ({
             id: s.id,
             name: s.name,
             description: s.description,
-            status: s.status
+            status: s.status,
+            hasChildren: convo.subagents.some((c) => c.parentId === s.id)
           }))}
+          trail={trail}
           active={activeAgent}
           onChange={setSelectedAgent}
+          onDrill={goToAgent}
+          onNavigate={(id) => (id === MAIN_AGENT ? goToMain() : goToAgent(id))}
         />
       )}
       {activeSubagent ? (

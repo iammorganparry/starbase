@@ -320,6 +320,18 @@ export const streamEventsFor = (
 
   switch (msg.type) {
     case "system": {
+      // A task's terminal bookend, and the AUTHORITATIVE completion for a
+      // sub-agent. It is the only correct signal for a BACKGROUNDED Task, whose
+      // `tool_result` arrives ~150ms after the spawn carrying just an "Async
+      // agent launched successfully" ACK while the agent runs on for minutes.
+      // It fires for SYNCHRONOUS Tasks too (just before their tool_result), so
+      // settling here — rather than on the tool_result — is right either way.
+      if (msg.subtype === "task_notification") {
+        // Ambient/workflow tasks carry no tool_use_id: no tab to settle.
+        const id = strOf(msg.tool_use_id)
+        if (!id) return []
+        return [{ _tag: "SubagentEnded", id, status: msg.status === "completed" ? "done" : "error" }]
+      }
       if (msg.subtype !== "init") return []
       const model = strOf(msg.model)
       return [
@@ -353,21 +365,24 @@ export const streamEventsFor = (
           const name = String(block.name)
           const input = (block.input ?? {}) as Record<string, unknown>
           tools.set(id, { name, input })
-          // A `Task` spawned by the MAIN agent opens a live, watch-only sub-agent
-          // tab keyed by this tool_use id (its children arrive stamped with it).
-          // Nested Tasks (spawned by a sub-agent, so `agentId` is set) stay as
-          // ordinary tool cards — one level of nesting for MVP.
-          if (SUBAGENT_TOOLS.has(name) && agentId === undefined) {
+          // A `Task` opens a live, watch-only sub-agent tab keyed by this tool_use
+          // id (its children arrive stamped with it). This holds at ANY depth: a
+          // Task spawned BY a sub-agent (so `agentId` is set) opens a nested tab
+          // parented to it, since the SDK stamps the immediate parent.
+          if (SUBAGENT_TOOLS.has(name)) {
             out.push({
               _tag: "SubagentStarted",
               id,
               name: strOf(input.subagent_type) ?? "agent",
-              description: strOf(input.description) ?? ""
+              description: strOf(input.description) ?? "",
+              parentId: agentId ?? null
             })
           }
           if (SUPPRESSED_TOOLS.has(name)) continue
-          // The Task's own ToolStart is untagged (agentId undefined) so it anchors
-          // a summary card in the MAIN transcript alongside opening the tab.
+          // The Task's own ToolStart carries its SPAWNER's agentId (undefined for
+          // the main agent), so the summary card anchors in the transcript that
+          // made the call — the main turn, or the parent sub-agent's tab — while
+          // the tab opened above holds the spawned agent's own output.
           out.push({ _tag: "ToolStart", id, name, target: toolTarget(name, input), ...forAgent })
         }
       }
@@ -387,11 +402,10 @@ export const streamEventsFor = (
         if (block.type !== "tool_result") continue
         const id = String(block.tool_use_id)
         const memo = tools.get(id)
-        // A top-level `Task` completing closes its sub-agent tab (tabs are
-        // live-only — the anchor card in the main turn keeps the summary).
-        if (memo && SUBAGENT_TOOLS.has(memo.name) && agentId === undefined) {
-          out.push({ _tag: "SubagentEnded", id, status: block.is_error === true ? "error" : "done" })
-        }
+        // NOTE: a Task's tool_result deliberately does NOT settle its tab — for a
+        // backgrounded Task it's only a launch ACK, so settling here flipped the
+        // tab to "done" ~150ms in while the agent ran on for minutes. The tab is
+        // settled by the `task_notification` bookend (see the "system" case).
         if (memo && SUPPRESSED_TOOLS.has(memo.name)) continue
         const stats = memo && isEditTool(memo.name) ? editStats(memo.name, memo.input) : { diff: null, preview: null }
         out.push({

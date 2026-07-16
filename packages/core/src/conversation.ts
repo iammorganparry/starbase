@@ -362,6 +362,12 @@ export type SubagentStatus = Schema.Schema.Type<typeof SubagentStatus>
  * ordinary `applyStreamEvent` fold. A sub-agent's tab persists after it finishes
  * (its status flips to done/error) so its output stays readable; the list resets
  * when the next run starts. Not disk-persisted across app restarts.
+ *
+ * Sub-agents nest: one may itself spawn another. The list stays FLAT and models
+ * the tree with a `parentId` pointer rather than nesting `children` arrays —
+ * the SDK stamps `parent_tool_use_id` with the IMMEDIATE parent, so every agent
+ * (at any depth) already has a globally-unique id that events route to by a
+ * direct id match. The renderer derives the tree (see `agentChildren`).
  */
 export const Subagent = Schema.Struct({
   id: Schema.String,
@@ -369,6 +375,8 @@ export const Subagent = Schema.Struct({
   name: Schema.String,
   /** The short task description passed to the `Task` tool. */
   description: Schema.String,
+  /** The spawning sub-agent's id, or null when spawned by the main agent. */
+  parentId: Schema.NullOr(Schema.String),
   status: SubagentStatus,
   message: Message
 })
@@ -423,7 +431,12 @@ export const StreamEvent = Schema.Union(
   Schema.TaggedStruct("SubagentStarted", {
     id: Schema.String,
     name: Schema.String,
-    description: Schema.String
+    description: Schema.String,
+    /**
+     * The spawning sub-agent's id, or null when the main agent spawned it — i.e.
+     * the `parent_tool_use_id` of the message carrying the `Task` call.
+     */
+    parentId: Schema.NullOr(Schema.String)
   }),
   /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
   Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
@@ -669,12 +682,69 @@ export const isSubagentEvent = (event: StreamEvent): boolean =>
   ("agentId" in event && event.agentId != null)
 
 /**
+ * The direct children of `parentId` (null = the sub-agents the MAIN agent
+ * spawned), in spawn order. The sub-agent list is flat with `parentId` pointers,
+ * so the tree is derived on read — this is the one place the UI walks it.
+ */
+export const agentChildren = (
+  subagents: ReadonlyArray<Subagent>,
+  parentId: string | null
+): ReadonlyArray<Subagent> => subagents.filter((s) => s.parentId === parentId)
+
+/**
+ * The ancestor chain from the main agent down to `id` (inclusive) — the drill-down
+ * breadcrumb. Returns [] for an unknown id. Cycle-guarded: a malformed stream that
+ * pointed an agent at its own descendant would otherwise loop forever.
+ */
+export const agentPath = (
+  subagents: ReadonlyArray<Subagent>,
+  id: string
+): ReadonlyArray<Subagent> => {
+  const byId = new Map(subagents.map((s) => [s.id, s]))
+  const path: Subagent[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = id
+  while (cursor !== null && !seen.has(cursor)) {
+    seen.add(cursor)
+    const node: Subagent | undefined = byId.get(cursor)
+    if (node === undefined) break
+    path.unshift(node)
+    cursor = node.parentId
+  }
+  return path
+}
+
+/**
+ * Every descendant id beneath `rootId` (exclusive). Cycle-guarded like
+ * `agentPath`, so a self-referential parent pointer can't spin.
+ */
+const descendantIds = (
+  subagents: ReadonlyArray<Subagent>,
+  rootId: string
+): ReadonlySet<string> => {
+  const out = new Set<string>()
+  const queue = [rootId]
+  while (queue.length > 0) {
+    const current = queue.pop()!
+    for (const s of subagents) {
+      if (s.parentId === current && !out.has(s.id)) {
+        out.add(s.id)
+        queue.push(s.id)
+      }
+    }
+  }
+  return out
+}
+
+/**
  * Fold one sub-agent-scoped `StreamEvent` into the live sub-agent list, returning
- * a new list. `SubagentStarted` opens a fresh watch-only tab; `SubagentEnded`
- * removes it (transcripts are live-only); a content event tagged with `agentId`
- * accrues onto the matching sub-agent's rolling message via `applyStreamEvent`.
- * Events for an unknown id are ignored. Non-sub-agent events pass through
- * unchanged, so callers can route unconditionally.
+ * a new list. `SubagentStarted` opens a fresh watch-only tab (at any depth — it
+ * carries the `parentId` linking it to its spawner); `SubagentEnded` settles it
+ * (status + its rolling message) and any still-working descendants; a content
+ * event tagged with `agentId` accrues
+ * onto the matching sub-agent's rolling message via `applyStreamEvent`. Events for
+ * an unknown id are ignored. Non-sub-agent events pass through unchanged, so
+ * callers can route unconditionally.
  */
 export const applySubagentEvent = (
   subagents: ReadonlyArray<Subagent>,
@@ -688,20 +758,49 @@ export const applySubagentEvent = (
         id: event.id,
         name: event.name,
         description: event.description,
+        parentId: event.parentId,
         status: "working",
         message: assistantMessage(event.id, "")
       }
     ]
   }
   if (event._tag === "SubagentEnded") {
+    // Unknown id — leave the list untouched (same rationale as the content branch
+    // below: no re-render on an event we can't place). This is load-bearing now
+    // that the end signal is the harness's `task_notification`, which fires for
+    // EVERY task — including ambient/workflow ones whose tool_use_id belongs to
+    // some other tool and never opened a tab.
+    if (!subagents.some((s) => s.id === event.id)) return subagents
     // Keep the finished sub-agent (mark its status) so its tab + transcript stay
     // readable after it completes — the operator reviews each one's output.
-    return subagents.map((s) => (s.id === event.id ? { ...s, status: event.status } : s))
+    // A sub-agent cannot outlive the one that spawned it, so settle any still-
+    // working DESCENDANTS too: normally each nested agent gets its own
+    // `SubagentEnded` (from its own tool_result), but an ancestor that errors or
+    // aborts can leave children with no result of their own — without this they'd
+    // pulse "working" forever.
+    // Settle the rolling message too, or the tab pulses its "working" dots
+    // forever: a sub-agent's message is born `streaming: true` and only a `Done`
+    // event clears that — but `Done` is a MAIN-turn event (no agentId), so it
+    // never reaches a sub-agent. `SubagentEnded` is the only settle signal a
+    // sub-agent's message ever gets.
+    const ended = descendantIds(subagents, event.id)
+    const settle = (s: Subagent, status: SubagentStatus): Subagent => ({
+      ...s,
+      status,
+      message: settleStreaming(s.message)
+    })
+    return subagents.map((s) => {
+      if (s.id === event.id) return settle(s, event.status)
+      if (ended.has(s.id) && s.status === "working") return settle(s, event.status)
+      return s
+    })
   }
   if ("agentId" in event && event.agentId != null) {
     const agentId = event.agentId
-    // Unknown id (e.g. a nested sub-agent, unsupported in MVP) — leave the list
-    // untouched so the renderer doesn't re-render on an event it can't place.
+    // Unknown id — leave the list untouched so the renderer doesn't re-render on
+    // an event it can't place. Nested sub-agents DO resolve here: the SDK stamps
+    // the immediate parent, so a nested agent's own id is registered by its
+    // `SubagentStarted` and matches directly, at any depth.
     if (!subagents.some((s) => s.id === agentId)) return subagents
     return subagents.map((s) =>
       s.id === agentId ? { ...s, message: applyStreamEvent(s.message, event) } : s

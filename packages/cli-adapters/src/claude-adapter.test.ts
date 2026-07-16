@@ -254,7 +254,8 @@ describe("streamEventsFor — sub-agents", () => {
       tools
     )
     expect(events).toStrictEqual([
-      { _tag: "SubagentStarted", id: "task_1", name: "Explore", description: "Map the tab bar" },
+      // parentId null = spawned by the MAIN agent (a top-level tab).
+      { _tag: "SubagentStarted", id: "task_1", name: "Explore", description: "Map the tab bar", parentId: null },
       // The Task's own ToolStart is untagged so it anchors a card in the main turn.
       { _tag: "ToolStart", id: "task_1", name: "Task", target: "Map the tab bar" }
     ])
@@ -293,7 +294,7 @@ describe("streamEventsFor — sub-agents", () => {
     expect(events).toStrictEqual([{ _tag: "Assistant", text: "found it", agentId: "task_1" }])
   })
 
-  it("closes the tab (SubagentEnded) when the top-level Task result returns", () => {
+  it("does NOT settle the tab on the Task's tool_result (it may be a launch ACK)", () => {
     const tools = new Map<string, ToolMemo>([["task_1", { name: "Task", input: {} }]])
     const events = streamEventsFor(
       msg({
@@ -302,13 +303,52 @@ describe("streamEventsFor — sub-agents", () => {
       }),
       tools
     )
+    // A BACKGROUNDED Task's tool_result arrives ~150ms after the spawn carrying
+    // only "Async agent launched successfully" while the agent runs on for
+    // minutes — so the anchor card closes here, but the TAB does not.
     expect(events).toStrictEqual([
-      { _tag: "SubagentEnded", id: "task_1", status: "done" },
       { _tag: "ToolEnd", id: "task_1", status: "success", meta: null, diff: null, preview: null }
     ])
   })
 
-  it("does NOT open a tab for a NESTED Task (spawned by a sub-agent), keeping it a plain tagged card", () => {
+  it("settles the tab on the task_notification bookend (the real completion)", () => {
+    const events = streamEventsFor(
+      msg({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "task_1", status: "completed" }),
+      new Map()
+    )
+    expect(events).toStrictEqual([{ _tag: "SubagentEnded", id: "task_1", status: "done" }])
+  })
+
+  it("maps a failed/stopped task_notification onto an error status", () => {
+    for (const status of ["failed", "stopped"] as const) {
+      const events = streamEventsFor(
+        msg({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "task_1", status }),
+        new Map()
+      )
+      expect(events).toStrictEqual([{ _tag: "SubagentEnded", id: "task_1", status: "error" }])
+    }
+  })
+
+  it("ignores a task_notification with no tool_use_id (ambient/workflow tasks have no tab)", () => {
+    const events = streamEventsFor(
+      msg({ type: "system", subtype: "task_notification", task_id: "a1", status: "completed" }),
+      new Map()
+    )
+    expect(events).toStrictEqual([])
+  })
+
+  it("ignores other system subtypes (task_started/task_updated drive nothing here)", () => {
+    // SubagentStarted comes from the assistant tool_use block, which is the only
+    // message carrying `parent_tool_use_id` — i.e. the nesting parent.
+    expect(
+      streamEventsFor(
+        msg({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "task_1", description: "d" }),
+        new Map()
+      )
+    ).toStrictEqual([])
+  })
+
+  it("opens a NESTED tab for a Task spawned BY a sub-agent, parented to its spawner", () => {
     const events = streamEventsFor(
       msg({
         type: "assistant",
@@ -319,9 +359,48 @@ describe("streamEventsFor — sub-agents", () => {
       }),
       new Map()
     )
+    // The nested agent gets its own tab (parentId = its spawner), and the anchor
+    // card lands in the SPAWNER's transcript (agentId: task_1) — not the main turn.
     expect(events).toStrictEqual([
+      { _tag: "SubagentStarted", id: "task_2", name: "Explore", description: "nested", parentId: "task_1" },
       { _tag: "ToolStart", id: "task_2", name: "Task", target: "nested", agentId: "task_1" }
     ])
+  })
+
+  it("anchors a nested Task's ToolEnd in its spawner's tab, settling via the bookend", () => {
+    const tools = new Map<string, ToolMemo>([["task_2", { name: "Task", input: {} }]])
+    const events = streamEventsFor(
+      msg({
+        type: "user",
+        parent_tool_use_id: "task_1",
+        message: { content: [{ type: "tool_result", tool_use_id: "task_2", is_error: false, content: "nested report" }] }
+      }),
+      tools
+    )
+    // The card closes in the SPAWNER's transcript (agentId: task_1); the nested
+    // tab itself settles on task_2's own `task_notification`.
+    expect(events).toStrictEqual([
+      { _tag: "ToolEnd", id: "task_2", status: "success", meta: null, diff: null, preview: null, agentId: "task_1" }
+    ])
+    // The bookend is what settles the nested tab — and needs no parent context.
+    expect(
+      streamEventsFor(
+        msg({ type: "system", subtype: "task_notification", task_id: "a2", tool_use_id: "task_2", status: "completed" }),
+        new Map()
+      )
+    ).toStrictEqual([{ _tag: "SubagentEnded", id: "task_2", status: "done" }])
+  })
+
+  it("keeps a nested sub-agent's own output tagged with its own id (routes to its tab)", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "stream_event",
+        parent_tool_use_id: "task_2",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "deep" } }
+      }),
+      new Map()
+    )
+    expect(events).toStrictEqual([{ _tag: "Assistant", text: "deep", agentId: "task_2" }])
   })
 })
 
