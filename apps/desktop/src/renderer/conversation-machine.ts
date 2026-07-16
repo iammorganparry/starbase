@@ -17,11 +17,14 @@ import type {
   PlanComment,
   QuestionAnswer,
   Session,
+  SessionStatus,
   Skill,
   StreamEvent,
   Subagent
 } from "@starbase/core"
 import {
+  activityOf,
+  activityStatus,
   addPlanComment,
   applyStreamEvent,
   applySubagentEvent,
@@ -73,6 +76,12 @@ export interface ConversationContext {
   readonly tokens: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   readonly runStartedAt: number | null
+  /**
+   * The last lifecycle status written back to the store, so a settling turn only
+   * hits the disk when the status actually CHANGED (sessions.json is rewritten
+   * whole on every write).
+   */
+  readonly persistedStatus: SessionStatus
 }
 
 /** A prompt held in the queue while the agent is busy (text + any attachments). */
@@ -360,6 +369,24 @@ export const conversationMachine = setup({
       void rpc.agentSetModel(context.session.id, event.model)
       return { model: event.model }
     }),
+    /**
+     * Record the SETTLED lifecycle status, so a session the operator hasn't opened
+     * this run still reports whether it's idle or blocked on them (the sidebar
+     * falls back to this when there's no live activity).
+     *
+     * Only ever a settled status — never "thinking"/"running". A run lives in the
+     * main process and dies with the app, so persisting a busy status would leave
+     * the session reading "thinking" forever after a restart, for a run that no
+     * longer exists. Entering `awaitingInput` from `loading` also repairs any
+     * status already stale from an earlier crash.
+     */
+    persistSettledStatus: assign(({ context }) => {
+      const activity = activityOf(context.messages, "idle")
+      const status: SessionStatus = activity ? activityStatus(activity.kind) : "idle"
+      if (status === context.persistedStatus) return {}
+      void rpc.sessionsSetStatus(context.session.id, status)
+      return { persistedStatus: status }
+    }),
     callStop: ({ context }) => {
       void rpc.agentStop(context.session.id)
     }
@@ -382,7 +409,8 @@ export const conversationMachine = setup({
     subagents: [],
     resumePlanId: null,
     tokens: 0,
-    runStartedAt: null
+    runStartedAt: null,
+    persistedStatus: input.session.status
   }),
   states: {
     loading: {
@@ -403,6 +431,9 @@ export const conversationMachine = setup({
       }
     },
     awaitingInput: {
+      // Nothing is running here — this is the one place the session's persisted
+      // status can be recorded truthfully.
+      entry: "persistSettledStatus",
       on: {
         SEND: { target: "running", actions: "appendTurns" },
         // Approve a stale plan (its original run is gone) → re-drive execution.

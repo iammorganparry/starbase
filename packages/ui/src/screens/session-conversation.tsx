@@ -1,5 +1,6 @@
 import { type ReactNode, useState } from "react"
-import type { CliInfo, DiffStat, Session, SessionStatus, User } from "@starbase/core"
+import type { ActivityKind, CliInfo, DiffStat, Session, SessionActivity, User } from "@starbase/core"
+import { activityLabel } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
@@ -8,6 +9,36 @@ import { ConversationView } from "../app/conversation-view.js"
 import { SEED_CONVERSATION } from "../seed.js"
 import { EmptyConversation } from "./empty-conversation.js"
 import { StubScreen } from "./stub-screen.js"
+
+/** The tab-bar pill's accent per activity — blue reads as "you're needed". */
+const ACTIVITY_TONE: Record<ActivityKind, "yellow" | "blue" | "green"> = {
+  thinking: "yellow",
+  reading: "yellow",
+  editing: "yellow",
+  running: "yellow",
+  monitoring: "blue",
+  web: "yellow",
+  delegating: "yellow",
+  "needs-input": "blue",
+  "needs-approval": "blue",
+  idle: "green"
+}
+
+/**
+ * What the host hands the live conversation pane so it can drive the Plan tab.
+ * There's no router here — this tiny ctx IS the app's plan-review navigation.
+ */
+export interface ConversationPaneCtx {
+  /**
+   * Switch to the Plan Review tab, optionally focused on a step (the Conversation
+   * progress rail deep-links; the inline plan card calls it bare).
+   */
+  onOpenPlanReview: (stepId?: string) => void
+  /** The step Plan Review should open at, until the user picks another. */
+  planStepId?: string | null
+  /** Plan Review's selection moved — retires a spent `planStepId`. */
+  onPlanStepSelected?: () => void
+}
 
 export interface SessionConversationProps {
   sessions: ReadonlyArray<Session>
@@ -33,10 +64,7 @@ export interface SessionConversationProps {
    * Plan tabs from the same machine (so switching to Plan never aborts a parked
    * plan run). `view` selects the face; `ctx.onOpenPlanReview` switches the tab.
    */
-  renderConversationPane?: (
-    view: "conversation" | "plan",
-    ctx: { onOpenPlanReview: () => void }
-  ) => ReactNode
+  renderConversationPane?: (view: "conversation" | "plan", ctx: ConversationPaneCtx) => ReactNode
   /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
   planSessions?: ReadonlySet<string>
   /**
@@ -46,8 +74,8 @@ export interface SessionConversationProps {
   showEmpty?: boolean
   /** Unified-diff patch for the Changes rail (fallback demo only). */
   patch?: string
-  /** Live per-session agent status, overriding the persisted status. */
-  liveStatus?: Record<string, SessionStatus>
+  /** What each session's agent is doing right now, keyed by id (live). */
+  liveActivity?: Record<string, SessionActivity>
   /** Live per-session worktree diff totals, for the Changes tab badge. */
   liveDiff?: Record<string, DiffStat>
   /** Open the New Session dialog. */
@@ -129,14 +157,18 @@ const visibleTabs = (
 /** Screen 01 — the primary session workspace. */
 export function SessionConversation(props: SessionConversationProps) {
   const [tab, setTab] = useState<TabKey>("conversation")
+  // A pending deep link into Plan Review (set when the Conversation rail jumps to
+  // a step). One-shot: Plan Review reports its own selection back and we drop it,
+  // so a later manual pick isn't overridden by a stale target.
+  const [planStepTarget, setPlanStepTarget] = useState<string | null>(null)
   const active = props.sessions.find((s) => s.id === props.activeSessionId) ?? null
 
   const tabs = visibleTabs(active, props.planSessions)
   // Never leave a hidden tab selected (e.g. after switching to a PR-less session).
   const activeTab = tabs.includes(tab) ? tab : "conversation"
   const connectGithub = props.onOpenSettings ?? (() => {})
-  // The active session's live status (running agent) overrides its persisted one.
-  const activeStatus = (active && props.liveStatus?.[active.id]) ?? active?.status
+  // What the active session's agent is doing — drives the tab bar's pill.
+  const activeActivity = (active && props.liveActivity?.[active.id]) ?? null
   // The live terminal dock for the active session (desktop app only).
   const dock = active && props.renderTerminalDock ? props.renderTerminalDock(active) : null
   // The embedded browser-preview dock — session-agnostic (localhost), so it shows
@@ -168,7 +200,7 @@ export function SessionConversation(props: SessionConversationProps) {
         onArchive={props.onArchiveSession}
         onRestore={props.onRestoreSession}
         onDelete={props.onDeleteSession}
-        liveStatus={props.liveStatus}
+        liveActivity={props.liveActivity}
         onNewSession={props.onNewSession}
         user={props.user}
         onOpenUsage={props.onOpenUsage}
@@ -200,11 +232,9 @@ export function SessionConversation(props: SessionConversationProps) {
               prNumber={active?.prNumber ?? null}
               changes={(active && props.liveDiff?.[active.id]) ?? null}
               status={
-                activeStatus === "thinking"
-                  ? { label: "Thinking", tone: "yellow" }
-                  : activeStatus === "needs-input"
-                    ? { label: "Needs input", tone: "blue" }
-                    : undefined
+                activeActivity
+                  ? { label: activityLabel(activeActivity), tone: ACTIVITY_TONE[activeActivity.kind] }
+                  : undefined
               }
               onToggleBrowser={props.renderBrowserDock ? props.onToggleBrowser : undefined}
               browserActive={props.browserActive}
@@ -230,7 +260,12 @@ export function SessionConversation(props: SessionConversationProps) {
                 {activeTab === "conversation" || activeTab === "plan" ? (
                   props.renderConversationPane ? (
                     props.renderConversationPane(activeTab === "plan" ? "plan" : "conversation", {
-                      onOpenPlanReview: () => setTab("plan")
+                      onOpenPlanReview: (stepId) => {
+                        setPlanStepTarget(stepId ?? null)
+                        setTab("plan")
+                      },
+                      planStepId: planStepTarget,
+                      onPlanStepSelected: () => setPlanStepTarget(null)
                     })
                   ) : (
                     <div key="conversation" className="flex min-h-0 min-w-0 flex-1">

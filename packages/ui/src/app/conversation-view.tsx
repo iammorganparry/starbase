@@ -6,6 +6,7 @@ import type {
   Message,
   ModelOption,
   PermissionMode,
+  Plan,
   QuestionAnswer,
   QuestionRequest,
   Skill
@@ -16,6 +17,8 @@ import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
+import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
+import { PlanProgressRail } from "../composites/plan-progress-rail.js"
 import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
@@ -68,8 +71,16 @@ export interface ConversationViewProps {
   onApprovePlan?: (planId: string) => void
   /** Approve a stale plan inline (re-drives execution after a restart). */
   onResumePlan?: (planId: string) => void
-  /** Open the full Plan Review view (from a transcript plan card). */
-  onOpenPlanReview?: () => void
+  /**
+   * Open the full Plan Review view — bare from a transcript plan card, or with a
+   * step id from the progress rail.
+   */
+  onOpenPlanReview?: (stepId?: string) => void
+  /**
+   * The session's live plan. When set, a step-progress rail shows beside the
+   * transcript so execution is legible without leaving the Conversation.
+   */
+  plan?: Plan | null
   /**
    * When set, the session is archived (its PR merged/closed): a banner is shown,
    * the transcript dims to read-only, and the composer is replaced by a locked bar.
@@ -83,6 +94,14 @@ export interface ConversationViewProps {
   }
   /** One-shot draft to seed the composer with (task prefilled from an issue). */
   initialDraft?: string
+  /**
+   * Lift the composer's draft out of the view, so it survives the session-keyed
+   * unmount. Omit for the uncontrolled composer (stories).
+   */
+  draft?: string
+  onDraftChange?: (value: string) => void
+  draftAttachments?: ReadonlyArray<Attachment>
+  onDraftAttachmentsChange?: (attachments: ReadonlyArray<Attachment>) => void
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
@@ -117,6 +136,11 @@ export function ConversationView({
   onApprovePlan,
   onResumePlan,
   onOpenPlanReview,
+  plan = null,
+  draft,
+  onDraftChange,
+  draftAttachments,
+  onDraftAttachmentsChange,
   archived,
   initialDraft
 }: ConversationViewProps) {
@@ -169,6 +193,9 @@ export function ConversationView({
     if (!el) return
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }, [])
+
+  // Declared unconditionally (hook order) even when there's no plan to show.
+  const rail = useResizableWidth({ storageKey: "sb.plan.rail", initial: 260, min: 200, max: 400 })
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -316,12 +343,33 @@ export function ConversationView({
                 allowPlan={cli === "claude"}
                 onSend={onSend}
                 initialValue={initialDraft}
+                value={draft}
+                onValueChange={onDraftChange}
+                attachments={draftAttachments}
+                onAttachmentsChange={onDraftAttachmentsChange}
               />
             </>
           )}
           </div>
         </div>
       </div>
+
+      {/*
+        The plan's step progress, beside the transcript. Only mounts once the
+        session HAS a plan, so a plain conversation is untouched. Kept outside the
+        scrolling column so the virtualizer measures against a stable width.
+      */}
+      {plan && plan.steps.length > 0 && (
+        <>
+          <ResizeHandle aria-label="Resize plan steps" onResize={(dx) => rail.adjust(-dx)} />
+          <div
+            style={{ width: rail.width }}
+            className="flex min-h-0 flex-none flex-col overflow-hidden border-l border-hairline"
+          >
+            <PlanProgressRail plan={plan} onSelect={(stepId) => onOpenPlanReview?.(stepId)} />
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import * as React from "react"
-import type { Session, SessionStatus, User } from "@starbase/core"
+import type { Session, SessionActivity, SessionStatus, User } from "@starbase/core"
+import { activityStatus } from "@starbase/core"
 import { Archive, ChevronRight, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
@@ -48,7 +49,8 @@ export interface SessionSidebarProps {
   /** Permanently delete a session from its row quick-actions (caller confirms). */
   onDelete?: (id: string) => void
   /** Live per-session agent status, overriding the persisted status. */
-  liveStatus?: Record<string, SessionStatus>
+  /** What each session's agent is doing right now, keyed by id (live). */
+  liveActivity?: Record<string, SessionActivity>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
   /** The signed-in user, shown in the footer account menu. */
@@ -85,7 +87,7 @@ export function SessionSidebar({
   onArchive,
   onRestore,
   onDelete,
-  liveStatus,
+  liveActivity,
   onNewSession,
   user,
   onOpenUsage,
@@ -114,9 +116,14 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
+  // A live activity rolls up to a coarse status for grouping; otherwise the
+  // persisted one stands in.
   const statusOf = React.useCallback(
-    (s: Session): SessionStatus => liveStatus?.[s.id] ?? s.status,
-    [liveStatus]
+    (s: Session): SessionStatus => {
+      const activity = liveActivity?.[s.id]
+      return activity ? activityStatus(activity.kind) : s.status
+    },
+    [liveActivity]
   )
 
   const filtered = React.useMemo(() => {
@@ -293,7 +300,7 @@ export function SessionSidebar({
                     <SessionRow
                       key={s.id}
                       session={s}
-                      status={liveStatus?.[s.id]}
+                      activity={liveActivity?.[s.id]}
                       active={s.id === activeSessionId}
                       onSelect={onSelect}
                       onRename={onRename}

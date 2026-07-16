@@ -17,7 +17,8 @@ const h = vi.hoisted(() => ({
   streamCb: null as null | ((event: unknown) => void),
   agentRunCalls: [] as Array<{ sessionId: string; text: string; images: unknown }>,
   diffValue: "diff-0",
-  diffCalls: 0
+  diffCalls: 0,
+  statusWrites: [] as Array<string>
 }))
 
 vi.mock("./rpc-client.js", () => ({
@@ -44,7 +45,10 @@ vi.mock("./rpc-client.js", () => ({
     agentCommentPlanStep: async () => {},
     agentRevisePlan: async () => {},
     agentApprovePlan: async () => {},
-    agentStop: async () => {}
+    agentStop: async () => {},
+    sessionsSetStatus: async (_id: string, status: string) => {
+      h.statusWrites.push(status)
+    }
   }
 }))
 
@@ -53,7 +57,8 @@ const session = {
   cli: "claude",
   worktreePath: "/tmp/wt",
   mode: "accept-edits",
-  model: null
+  model: null,
+  status: "idle"
 } as unknown as Session
 
 const emit = (event: StreamEvent) => h.streamCb?.(event)
@@ -65,6 +70,7 @@ beforeEach(() => {
   h.agentRunCalls.length = 0
   h.diffValue = "diff-0"
   h.diffCalls = 0
+  h.statusWrites.length = 0
 })
 
 describe("conversationMachine — queue while busy", () => {
@@ -186,6 +192,92 @@ describe("conversationMachine — image attachments", () => {
     expect(h.agentRunCalls[0]!.images).toEqual([image])
     const user = actor.getSnapshot().context.messages.find((m) => m.role === "user")!
     expect(user.parts.some((p) => p._tag === "Image" && p.attachment.id === "i1")).toBe(true)
+    actor.stop()
+  })
+})
+
+/**
+ * The persisted `Session.status` is what the sidebar falls back to for a session
+ * the operator hasn't opened this run. It used to be written once at creation and
+ * never updated, so every unopened session read "idle" — even one blocked on an
+ * approval. These assert it now tracks reality, and — critically — that a BUSY
+ * status is never written: a run dies with the app, so persisting "thinking"
+ * would strand the session in it forever after a restart.
+ */
+describe("conversationMachine — persisted status", () => {
+  it("does not write on load when the status already matches", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    expect(h.statusWrites).toStrictEqual([])
+    actor.stop()
+  })
+
+  it("never persists a busy status while the agent runs", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "Assistant", text: "working" })
+
+    expect(h.statusWrites).toStrictEqual([])
+    actor.stop()
+  })
+
+  it("records needs-input when a turn settles on a pending gate", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({
+      _tag: "GateRequested",
+      gate: {
+        id: "g1",
+        kind: "command",
+        title: "run a command",
+        detail: "Not in your allowlist.",
+        command: "npm test",
+        allowLabel: "npm test",
+        status: "pending"
+      }
+    })
+    emit({ _tag: "Done", costUsd: 0, tokens: 1 })
+    await waitFor(actor, (s) => s.matches(idle))
+
+    expect(h.statusWrites).toStrictEqual(["needs-input"])
+    actor.stop()
+  })
+
+  it("returns to idle once the gate is decided, and never re-writes the same status", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({
+      _tag: "GateRequested",
+      gate: {
+        id: "g1",
+        kind: "command",
+        title: "run a command",
+        detail: "d",
+        command: "npm test",
+        allowLabel: "npm test",
+        status: "pending"
+      }
+    })
+    emit({ _tag: "Done", costUsd: 0, tokens: 1 })
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "DECIDE_GATE", gateId: "g1", decision: "allow" })
+    actor.send({ type: "SEND", text: "again" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "Done", costUsd: 0, tokens: 1 })
+    await waitFor(actor, (s) => s.matches(idle))
+
+    // needs-input → idle, and no duplicate writes of an unchanged status.
+    expect(h.statusWrites).toStrictEqual(["needs-input", "idle"])
     actor.stop()
   })
 })

@@ -39,6 +39,30 @@ export const App: Story = {
   )
 }
 
+/**
+ * Live agent activity in the sidebar + tab bar. Every one of these used to read
+ * "thinking…" — the whole point is that a glance now tells you WHAT each agent is
+ * doing, and which of them actually want you.
+ */
+export const LiveActivity: Story = {
+  render: () => (
+    <div className="h-screen w-full">
+      <StarbaseApp
+        clis={clis}
+        sessions={sessions}
+        activeSessionId="s1"
+        liveActivity={{
+          s1: { kind: "running", verb: "Running", target: "pnpm test -- auth" },
+          s2: { kind: "monitoring", verb: "Monitoring PR", target: "#482" },
+          s3: { kind: "needs-approval", verb: "Needs approval", target: null }
+        }}
+        user={{ id: "u1", name: "Morgan Parry", email: "morgan@trigify.io", image: null }}
+        onSignOut={noop}
+      />
+    </div>
+  )
+}
+
 const loginProps = {
   onGithub: noop,
   onGoogle: noop,

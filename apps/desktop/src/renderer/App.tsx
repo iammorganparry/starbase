@@ -11,7 +11,7 @@ import type {
   GithubConfig,
   ProviderConfig,
   Session,
-  SessionStatus,
+  SessionActivity,
   User
 } from "@starbase/core"
 import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
@@ -25,10 +25,11 @@ import { TerminalDockView } from "./terminal-dock-view.js"
 import { useTerminalDock } from "./use-terminal-dock.js"
 import { BrowserPreviewView } from "./browser-preview-view.js"
 import { useBrowserPreview } from "./use-browser-preview.js"
-import { useSessionStatuses } from "./session-status.js"
+import { useSessionActivities } from "./session-activity.js"
 import { useSessionDiffs } from "./diff-presence.js"
 import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
+import { clearDraft } from "./draft-store.js"
 import { completedSessionIds } from "./pr-refresh.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
@@ -60,7 +61,7 @@ const PR_STATE_STALE_MS = 5 * 60_000
 function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void }) {
   const [state, send] = useMachine(appMachine)
   const { clis, repos, reposDir, sessions } = state.context
-  const liveStatus = useSessionStatuses()
+  const liveActivity = useSessionActivities()
   const liveDiff = useSessionDiffs()
   const planSessions = usePlanSessions()
   const termDock = useTerminalDock()
@@ -174,6 +175,9 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     // Stop the persistent conversation actor for a deleted session (it's kept
     // running across session switches, so it won't be torn down by unmount).
     disposeConversationActor(sessionId)
+    // Same reasoning for the composer draft — it outlives the pane by design, so
+    // nothing else would ever collect it (and it's persisted).
+    clearDraft(sessionId)
     send({ type: "SESSION_DELETED", sessionId })
   }
 
@@ -202,11 +206,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   //  2. Re-check GitHub (the agent may have opened AND merged its own PR this run):
   //     the once-per-session detectedRef guard can't catch a mid-run PR, and the
   //     60s poll would lag — so re-detect the link + invalidate the cached pr-state.
-  const prevLiveRef = useRef<Record<string, SessionStatus>>({})
+  const prevLiveRef = useRef<Record<string, SessionActivity>>({})
   useEffect(() => {
     const prev = prevLiveRef.current
-    prevLiveRef.current = liveStatus
-    const completed = completedSessionIds(prev, liveStatus, sessions)
+    prevLiveRef.current = liveActivity
+    const completed = completedSessionIds(prev, liveActivity, sessions)
     for (const id of completed) {
       // Only auto-named sessions retitle; skip pinned/legacy ones (autoTitle not
       // explicitly true) to avoid a needless RPC. The handler guards too.
@@ -229,7 +233,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       // Partial key (id only) — matches regardless of the linked PR number.
       void qc.invalidateQueries({ queryKey: ["pr-state", id] })
     }
-  }, [liveStatus, sessions, autoDetect, send, qc])
+  }, [liveActivity, sessions, autoDetect, send, qc])
 
   // Retitle a session as soon as it has a PLAN — a run that plans then executes
   // stays "present" (thinking/needs-input) throughout, so the on-completion
@@ -383,7 +387,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onToggleCollapsed={toggleCollapsed}
       defaultRepoPath={lastRepoPath}
       ghStatus={ghStatus}
-      liveStatus={liveStatus}
+      liveActivity={liveActivity}
       liveDiff={liveDiff}
       usage={usage}
       onLoadUsage={loadUsage}
@@ -411,6 +415,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           session={session}
           view={view}
           onOpenPlanReview={ctx.onOpenPlanReview}
+          planStepId={ctx.planStepId}
+          onPlanStepSelected={ctx.onPlanStepSelected}
           onRestore={restoreSession}
           onDelete={deleteSession}
           onInitialPromptConsumed={consumeInitialPrompt}

@@ -18,10 +18,10 @@
  */
 import type { ActorRefFrom, SnapshotFrom } from "xstate"
 import { createActor } from "xstate"
-import type { Session, SessionStatus } from "@starbase/core"
-import { latestPlan, pendingPlan, pendingQuestion } from "@starbase/core"
+import type { ActivityPhase, Session, SessionActivity } from "@starbase/core"
+import { activityOf, latestPlan } from "@starbase/core"
 import { conversationMachine } from "./conversation-machine.js"
-import { setSessionStatus } from "./session-status.js"
+import { setSessionActivity } from "./session-activity.js"
 import { setPlanPresent } from "./plan-presence.js"
 import { clearSessionDiff, diffCounts, setSessionDiff } from "./diff-presence.js"
 
@@ -30,17 +30,21 @@ type ConversationSnapshot = SnapshotFrom<typeof conversationMachine>
 
 const registry = new Map<string, ConversationActor>()
 
-/** Derive the live status the sidebar/tab bar show from a machine snapshot. */
-const statusOf = (snap: ConversationSnapshot): SessionStatus | null => {
-  const messages = snap.context.messages
-  const last = messages[messages.length - 1]
-  const paused =
-    last?.role === "assistant" &&
-    last.parts.some((p) => p._tag === "Gate" && p.gate.status === "pending")
-  const needsInput = paused || pendingQuestion(messages) !== null || pendingPlan(messages) !== null
-  if (needsInput) return "needs-input"
-  return snap.matches("running") || snap.matches("refreshingDiff") ? "thinking" : null
+/** Where the machine is, in the terms `activityOf` reasons about. */
+const phaseOf = (snap: ConversationSnapshot): ActivityPhase => {
+  if (snap.matches("running")) return "running"
+  // The turn is over; we're only re-reading the worktree diff.
+  if (snap.matches("refreshingDiff")) return "settling"
+  return "idle"
 }
+
+/**
+ * Derive the live activity the sidebar/tab bar show from a machine snapshot.
+ * The interesting part lives in `activityOf` (pure, and tested in core) — this
+ * only translates machine states into a phase.
+ */
+const activityFor = (snap: ConversationSnapshot): SessionActivity | null =>
+  activityOf(snap.context.messages, phaseOf(snap))
 
 /**
  * Get (creating + starting on first use) the persistent actor for a session.
@@ -56,11 +60,11 @@ export const getConversationActor = (session: Session): ConversationActor => {
     // Deferred so the very first (synchronous) notification from `start()` — which
     // can happen while a component is rendering, since the actor is created inside
     // `useMemo` — doesn't notify the status/plan stores mid-render.
-    const status = statusOf(snap)
+    const activity = activityFor(snap)
     const planPresent = latestPlan(snap.context.messages) !== null
     const diff = diffCounts(snap.context.patch)
     queueMicrotask(() => {
-      setSessionStatus(session.id, status)
+      setSessionActivity(session.id, activity)
       setPlanPresent(session.id, planPresent)
       setSessionDiff(session.id, diff)
     })
@@ -76,7 +80,7 @@ export const disposeConversationActor = (sessionId: string): void => {
   if (!actor) return
   actor.stop()
   registry.delete(sessionId)
-  setSessionStatus(sessionId, null)
+  setSessionActivity(sessionId, null)
   setPlanPresent(sessionId, false)
   clearSessionDiff(sessionId)
 }

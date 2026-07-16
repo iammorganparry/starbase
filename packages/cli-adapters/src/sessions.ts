@@ -4,7 +4,8 @@ import type {
   CreateSessionInput,
   IssueAutomations,
   PermissionMode,
-  Session
+  Session,
+  SessionStatus
 } from "@starbase/core"
 import { GhError, GitError, SessionNotFoundError, UNTITLED_SESSION } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
@@ -329,6 +330,14 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       const renameTitle = (id: string, title: string) =>
         update(id, (s) => ({ ...s, title, autoTitle: false }))
 
+      /**
+       * Record the session's lifecycle status as a turn settles. An archived
+       * session is terminal — never drag it back to idle/needs-input, or the
+       * sidebar would show a merged session as if it still wanted attention.
+       */
+      const setStatus = (id: string, status: SessionStatus) =>
+        update(id, (s) => (s.archived ? s : { ...s, status }))
+
       /** Add a command to the session's "always allow" list (deduped). */
       const addAllowlist = (id: string, label: string) =>
         update(id, (s) => ({
@@ -428,6 +437,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         setResumeId,
         setTitle,
         renameTitle,
+        setStatus,
         addAllowlist,
         setPrNumber,
         setIssue,

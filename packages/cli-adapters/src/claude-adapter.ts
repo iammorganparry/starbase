@@ -3,7 +3,7 @@ import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
-import { parsePlan, planModeInstructions } from "./plan-parse.js"
+import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
 /**
  * Real Claude harness, driven by `@anthropic-ai/claude-agent-sdk`'s `query()`.
@@ -67,6 +67,19 @@ const READ_ONLY_DISALLOWED: ReadonlyArray<string> = [
  */
 export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
   mode === "accept-edits" ? "acceptEdits" : mode === "plan" ? "plan" : "default"
+
+/**
+ * Handed back when a plan arrives without its ` ```plan ` fence. Starbase renders
+ * plans from that block, so a fence-less plan has no steps to review — we ask for
+ * one reformat before falling back to showing the raw markdown.
+ */
+export const PLAN_REFORMAT = [
+  "Your plan is missing the required ```plan block, so Starbase cannot render it as a reviewable plan.",
+  "Re-call ExitPlanMode with the SAME plan, but put a fenced ```plan block at the top of it:",
+  "a `summary:` line, then each step as `01 Step title` with two-space-indented",
+  "`intent:` / `approach:` / `files:` / `guards:` fields. Keep your human-readable markdown below the block.",
+  "Do not change the substance of the plan — only its format."
+].join(" ")
 
 /**
  * The gate request for a tool the SDK asked about, or null for read-only tools
@@ -464,6 +477,10 @@ export const runClaude = (
         let planQuery: Query | null = null
         let planCount = 0
         let qn = 0
+        // Whether we've already bounced a fence-less plan back for a reformat on
+        // this run. Exactly one retry: a model that still won't comply degrades to
+        // the raw fallback instead of ping-ponging forever.
+        let planReformatAsked = false
 
         const canUseTool = async (
           toolName: string,
@@ -473,8 +490,18 @@ export const runClaude = (
           // Plan mode: the SDK routes ExitPlanMode approval here. Turn the plan
           // into a structured, reviewable Plan and honour the operator's verdict.
           if (toolName === "ExitPlanMode") {
+            const raw = strOf(input.plan) ?? ""
+            // `planModeInstructions` documents the ` ```plan ` fence, but a model
+            // can still skip it — and then the operator gets a plan with no
+            // reviewable steps. Bounce the FIRST offender back through the same
+            // deny.message channel a revision uses; it re-calls ExitPlanMode with
+            // the fence and nobody sees the broken version.
+            if (!hasPlanBlock(raw) && !planReformatAsked) {
+              planReformatAsked = true
+              return { behavior: "deny", message: PLAN_REFORMAT }
+            }
             planCount += 1
-            const plan = parsePlan(strOf(input.plan) ?? "", `plan_${sessionId}_${planCount}`)
+            const plan = parsePlan(raw, `plan_${sessionId}_${planCount}`)
             const decision = await runP(ctx.proposePlan(plan))
             if (decision._tag === "Approve") {
               // Exit plan mode via "default" — the same mode every non-plan run
