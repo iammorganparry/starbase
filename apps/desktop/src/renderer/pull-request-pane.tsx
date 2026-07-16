@@ -37,6 +37,8 @@ export function PullRequestPane({
     submitReview,
     sendEntryToAgent,
     sentEntryIds,
+    resolveThread,
+    replyToThread,
     openOnGithub
   } = usePullRequest(session, { connected, autoDetect, onPrLinked })
 
@@ -59,6 +61,8 @@ export function PullRequestPane({
       onSubmitReview={submitReview}
       onSendEntryToAgent={sendEntryToAgent}
       sentEntryIds={sentEntryIds}
+      onResolveThread={resolveThread}
+      onReplyToThread={replyToThread}
       onOpenOnGithub={openOnGithub}
     />
   )
