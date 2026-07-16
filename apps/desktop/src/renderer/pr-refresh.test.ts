@@ -1,4 +1,4 @@
-import type { Session, SessionStatus } from "@starbase/core"
+import type { ActivityKind, Session, SessionActivity } from "@starbase/core"
 import { describe, expect, it } from "vitest"
 import { completedSessionIds } from "./pr-refresh.js"
 
@@ -12,7 +12,11 @@ import { completedSessionIds } from "./pr-refresh.js"
 const session = (id: string, worktree = true): Session =>
   ({ id, worktreePath: worktree ? `/tmp/wt/${id}` : null }) as unknown as Session
 
-const status = (m: Record<string, SessionStatus>): Record<string, SessionStatus> => m
+/** Build an activity map from a shorthand of kinds — only presence is load-bearing. */
+const status = (m: Record<string, ActivityKind>): Record<string, SessionActivity> =>
+  Object.fromEntries(
+    Object.entries(m).map(([id, kind]) => [id, { kind, verb: kind, target: null }])
+  )
 
 describe("completedSessionIds", () => {
   const sessions = [session("a"), session("b"), session("c")]
@@ -27,6 +31,15 @@ describe("completedSessionIds", () => {
     const prev = status({ a: "thinking" })
     const next = status({ a: "needs-input" })
     expect(completedSessionIds(prev, next, sessions)).toStrictEqual([])
+  })
+
+  it("ignores the activity churn of a live run (reading → running → delegating)", () => {
+    // Activities flip far more often than the old coarse status did; only the
+    // present → absent EDGE may count as completion, never a change of activity.
+    expect(completedSessionIds(status({ a: "reading" }), status({ a: "running" }), sessions)).toStrictEqual([])
+    expect(
+      completedSessionIds(status({ a: "running" }), status({ a: "delegating" }), sessions)
+    ).toStrictEqual([])
   })
 
   it("ignores a session that was already idle (no transition)", () => {

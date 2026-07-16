@@ -39,7 +39,8 @@ import type {
   IssueAutomations,
   IssueSummary,
   PrMergeMethod,
-  ReviewSubmitKind
+  ReviewSubmitKind,
+  SettledSessionStatus
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
@@ -271,6 +272,17 @@ export const restoreSession = (sessionId: string) =>
 export const renameSession = (sessionId: string, title: string) =>
   Effect.gen(function* () {
     yield* SessionStore.renameTitle(sessionId, title)
+    return yield* SessionStore.get(sessionId)
+  }).pipe(
+    Effect.catchTag("SessionNotFoundError", () =>
+      Effect.fail(new GitError({ message: "Session not found" }))
+    )
+  )
+
+/** `Sessions.setStatus` handler — record a settled turn's lifecycle status. */
+export const setSessionStatus = (sessionId: string, status: SettledSessionStatus) =>
+  Effect.gen(function* () {
+    yield* SessionStore.setStatus(sessionId, status)
     return yield* SessionStore.get(sessionId)
   }).pipe(
     Effect.catchTag("SessionNotFoundError", () =>
@@ -518,6 +530,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
   "Sessions.retitle": ({ sessionId }) => retitleSession(sessionId, claudeTitleGenerator),
   "Sessions.rename": ({ sessionId, title }) => renameSession(sessionId, title),
+  "Sessions.setStatus": ({ sessionId, status }) => setSessionStatus(sessionId, status),
   // Drop the stored review too, else ~/starbase/reviews/<id>.json outlives its
   // session forever (and a recycled id would read a stranger's findings).
   "Sessions.delete": ({ sessionId }) =>

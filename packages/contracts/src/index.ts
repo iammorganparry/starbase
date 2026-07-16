@@ -31,6 +31,7 @@ import {
   Repo,
   ReviewSubmitKind,
   Session,
+  SettledSessionStatus,
   Skill,
   StreamEvent,
   TerminalChunk,
@@ -209,6 +210,17 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: Session,
     error: GitError,
     payload: { sessionId: Schema.String, title: Schema.String }
+  }),
+
+  /**
+   * Record a session's lifecycle status when its turn settles. Live activity is
+   * renderer-only, but this persists so a session the operator hasn't OPENED this
+   * run still reports whether it's idle or blocked on them.
+   */
+  Rpc.make("Sessions.setStatus", {
+    success: Session,
+    error: GitError,
+    payload: { sessionId: Schema.String, status: SettledSessionStatus }
   }),
 
   /** Permanently delete a session and remove its worktree. Irreversible. */

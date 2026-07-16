@@ -19,11 +19,14 @@ import type {
   QuestionAnswer,
   ReviewPhase,
   Session,
+  SessionStatus,
+  SettledSessionStatus,
   Skill,
   StreamEvent,
   Subagent
 } from "@starbase/core"
 import {
+  activityOf,
   addPlanComment,
   applyReviewEvent,
   applyStreamEvent,
@@ -41,6 +44,7 @@ import {
 } from "@starbase/core"
 import { assign, fromCallback, fromPromise, setup } from "xstate"
 import { rpc } from "./rpc-client.js"
+import { publishSessionUpdate } from "./session-updates.js"
 
 export interface ConversationContext {
   readonly session: Session
@@ -82,6 +86,19 @@ export interface ConversationContext {
   readonly tokens: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   readonly runStartedAt: number | null
+  /**
+   * The last lifecycle status known to be in the store, so a settling turn only
+   * hits the disk when the status actually CHANGED (sessions.json is rewritten
+   * whole on every write). Seeded from the loaded session, so it's the full
+   * `SessionStatus`; only a `SettledSessionStatus` is ever written.
+   */
+  readonly persistedStatus: SessionStatus
+  /**
+   * Whether the transcript actually loaded. False after a load failure, where
+   * `messages` is empty through no fault of the session — status must not be
+   * derived from it (see `persistSettledStatus`).
+   */
+  readonly loaded: boolean
   /**
    * The adversarial reviewer, surfaced as a tab in the same bar as the harness's
    * sub-agents. Null until a review runs. It lives here rather than in `subagents`
@@ -472,6 +489,40 @@ export const conversationMachine = setup({
             : (context.reviewStartedAt ?? Date.now())
       }
     }),
+    /**
+     * Record the SETTLED lifecycle status, so a session the operator hasn't opened
+     * this run still reports whether it's idle or blocked on them (the sidebar
+     * falls back to this when there's no live activity).
+     *
+     * Only ever a settled status — never "thinking"/"running". A run lives in the
+     * main process and dies with the app, so persisting a busy status would leave
+     * the session reading "thinking" forever after a restart, for a run that no
+     * longer exists. Entering `awaitingInput` from `loading` also repairs any
+     * status already stale from an earlier crash.
+     */
+    persistSettledStatus: assign(({ context }) => {
+      // A failed transcript load also lands in `awaitingInput`, but with an empty
+      // `messages` — which derives "idle" and would ERASE a truthful persisted
+      // "needs-input" for a session genuinely blocked on the operator. Only a
+      // transcript we actually read can be trusted to repair the status.
+      if (!context.loaded) return {}
+      // At the "idle" phase `activityOf` only ever reports a blocked-on-the-
+      // operator activity (or nothing) — so the settled status falls straight out
+      // of it, and a busy status is unrepresentable rather than merely avoided.
+      const activity = activityOf(context.messages, "idle")
+      const status: SettledSessionStatus = activity ? "needs-input" : "idle"
+      if (status === context.persistedStatus) return {}
+      // The machine writes this on its own, far from App.tsx — announce the
+      // returned record so `appMachine`'s session list (the sidebar's fallback)
+      // doesn't keep serving the pre-write status until the next restart.
+      void rpc
+        .sessionsSetStatus(context.session.id, status)
+        .then(publishSessionUpdate)
+        .catch(() => {
+          /* best-effort: a failed status write must never break the turn */
+        })
+      return { persistedStatus: status }
+    }),
     callStop: ({ context }) => {
       void rpc.agentStop(context.session.id)
     }
@@ -506,6 +557,8 @@ export const conversationMachine = setup({
     resumePlanId: null,
     tokens: 0,
     runStartedAt: null,
+    persistedStatus: input.session.status,
+    loaded: false,
     reviewer: null,
     reviewPhase: "starting",
     reviewStartedAt: null
@@ -521,13 +574,19 @@ export const conversationMachine = setup({
             messages: event.output.transcript,
             skills: event.output.skills,
             files: event.output.files,
-            patch: event.output.patch
+            patch: event.output.patch,
+            loaded: true
           }))
         },
+        // `loaded` stays false — the empty `messages` here says nothing about the
+        // session, so the status write is skipped rather than clobbering it.
         onError: { target: "awaitingInput" }
       }
     },
     awaitingInput: {
+      // Nothing is running here — this is the one place the session's persisted
+      // status can be recorded truthfully.
+      entry: "persistSettledStatus",
       on: {
         SEND: { target: "running", actions: "appendTurns" },
         // Approve a stale plan (its original run is gone) → re-drive execution.

@@ -1,8 +1,11 @@
 import { useState } from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import type { Plan, PlanComment } from "@starbase/core"
+import { ConversationView } from "../app/conversation-view.js"
+import { SEED_CONVERSATION } from "../seed.js"
 import { PlanReview } from "../screens/plan-review.js"
 import { PlanCard } from "./plan-card.js"
+import { PlanProgressRail } from "./plan-progress-rail.js"
 import { PlanStepDetail } from "./plan-step-detail.js"
 
 /**
@@ -38,6 +41,7 @@ const basePlan = (over: Partial<Plan> = {}): Plan => ({
   id: "plan_seed",
   summary: "Refactor auth flow",
   status: "proposed",
+  structured: true,
   raw: "# Refactor auth flow\n\nMove session token handling into a dedicated `TokenStore`, add a guarded 401-retry refresh path, update the tests, and open a PR.",
   comments: [
     { id: "c1", stepId: "s_4a", body: "The 401 retry should fire once — guard against a refresh loop on repeat failures.", author: "user", createdAt: "2026-07-12T10:00:00.000Z", routed: true },
@@ -176,6 +180,89 @@ export const Empty: Story = {
   render: () => (
     <div className="flex h-[480px] w-full bg-editor">
       <PlanReview plan={null} />
+    </div>
+  )
+}
+
+/** The rail on its own — checks, dots, branch arms, and the done/total meter. */
+export const ProgressRail: Story = {
+  render: () => (
+    <div className="flex h-[560px] w-[280px] border-r border-hairline bg-editor">
+      <PlanProgressRail plan={basePlan({ status: "approved" })} selectedId="s_03" />
+    </div>
+  )
+}
+
+/**
+ * The rail in situ, beside the live transcript — this is the Conversation view
+ * during execution. Clicking a step deep-links into Plan Review.
+ */
+export const ConversationWithPlanRail: Story = {
+  render: () => (
+    <div className="flex h-[620px] w-full bg-editor">
+      <ConversationView
+        messages={SEED_CONVERSATION}
+        mode="accept-edits"
+        plan={basePlan({ status: "approved" })}
+        onOpenPlanReview={(stepId) => console.log("open plan review at", stepId)}
+      />
+    </div>
+  )
+}
+
+const UNSTRUCTURED_RAW = `# Refactor auth flow
+
+I'll move session token handling into a dedicated \`TokenStore\`:
+
+1. Audit \`src/auth/session.ts\` to see how tokens are read today.
+2. Extract a \`TokenStore\` service with \`get\` / \`refresh\`.
+3. Add a guarded 401-retry path so a stale token refreshes exactly once.
+4. Update the tests and open a PR.
+
+\`\`\`ts
+export class TokenStore {
+  refresh(session: Session) { /* … */ }
+}
+\`\`\``
+
+/**
+ * The agent ignored the ` ```plan ` fence (even after being asked to reformat), so
+ * there are no steps to review. The raw markdown MUST still render — this used to
+ * drop the plan's entire contents on the floor.
+ */
+export const Unstructured: Story = {
+  render: () => (
+    <div className="flex h-[600px] w-full bg-editor">
+      <PlanReview
+        plan={basePlan({
+          structured: false,
+          summary: "Refactor auth flow",
+          raw: UNSTRUCTURED_RAW,
+          graph: null,
+          comments: [],
+          steps: [
+            {
+              id: "s_01",
+              number: "01",
+              title: "Refactor auth flow",
+              intent: "The agent didn't use the structured plan format — its full plan is below.",
+              approach: [],
+              kind: "step",
+              condition: null,
+              parentId: null,
+              dependsOn: [],
+              blocks: [],
+              files: [],
+              guards: [],
+              code: null,
+              graph: null,
+              diff: null,
+              status: "proposed",
+              flagged: false
+            }
+          ]
+        })}
+      />
     </div>
   )
 }

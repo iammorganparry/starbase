@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { parseFlow, parsePlan, parseStepCode, parseStepFlows, planModeInstructions } from "./plan-parse.js"
+import {
+  hasPlanBlock,
+  parseFlow,
+  parsePlan,
+  parseStepCode,
+  parseStepFlows,
+  planModeInstructions
+} from "./plan-parse.js"
 
 /**
  * `parsePlan` turns the free-form plan text Claude emits via ExitPlanMode into a
@@ -217,6 +224,49 @@ const x = 1
       lang: "ts",
       body: "export class TokenStore {}"
     })
+  })
+})
+
+describe("hasPlanBlock", () => {
+  it("detects the fence, with or without an info string", () => {
+    expect(hasPlanBlock("```plan\nsummary: x\n01 Step\n```")).toBe(true)
+    expect(hasPlanBlock("prose first\n\n```plan\nsummary: x\n```\n\nmore prose")).toBe(true)
+  })
+
+  it("ignores a fence whose info string merely STARTS with 'plan'", () => {
+    // A prefix match would parse ```planning as the plan spec and skip the
+    // reformat bounce. (```plaintext is safe either way — it's "plai", not "plan".)
+    expect(hasPlanBlock("```planning\nsummary: x\n```")).toBe(false)
+    expect(hasPlanBlock("```plaintext\nsome output\n```")).toBe(false)
+    // A trailing space after the language is still a plan block.
+    expect(hasPlanBlock("```plan \nsummary: x\n```")).toBe(true)
+  })
+
+  it("is false for a plan that skipped the fence", () => {
+    expect(hasPlanBlock("## My plan\n\n1. Do a thing\n2. Do another")).toBe(false)
+    // A plan carrying OTHER fences but not `plan` still counts as non-compliant.
+    expect(hasPlanBlock("```ts\nconst x = 1\n```")).toBe(false)
+    expect(hasPlanBlock("")).toBe(false)
+  })
+})
+
+describe("parsePlan — the unstructured fallback", () => {
+  const RAW_UNSTRUCTURED = "# Refactor auth\n\nFirst I'll extract the adapter, then migrate."
+
+  it("flags the plan as unstructured and PRESERVES the raw markdown", () => {
+    const plan = parsePlan(RAW_UNSTRUCTURED, "plan_1")
+    // `raw` is the only surviving copy of the agent's work — the UI renders it.
+    expect(plan.structured).toBe(false)
+    expect(plan.raw).toBe(RAW_UNSTRUCTURED)
+    expect(plan.summary).toBe("Refactor auth")
+    expect(plan.steps).toHaveLength(1)
+  })
+
+  it("marks a properly fenced plan as structured", () => {
+    const plan = parsePlan("```plan\nsummary: Do it\n01 First step\n  intent: because\n```", "plan_1")
+    expect(plan.structured).toBe(true)
+    expect(plan.steps).toHaveLength(1)
+    expect(plan.steps[0]!.title).toBe("First step")
   })
 })
 

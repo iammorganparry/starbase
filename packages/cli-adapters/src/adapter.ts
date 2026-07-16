@@ -175,6 +175,7 @@ const refreshFlow: NonNullable<Plan["steps"][number]["graph"]> = {
 export const scriptedPlan = (sessionId: string, rev: number): Plan => ({
   id: `plan_${sessionId}_${rev}`,
   summary: rev > 1 ? "Refactor auth flow (revised)" : "Refactor auth flow",
+  structured: true,
   graph: null,
   steps: [
     { id: "s_01", number: "01", title: "Audit session middleware", intent: "See how sessions read tokens today.", approach: ["Read session.ts", "Trace the token path"], kind: "step", condition: null, parentId: null, dependsOn: [], blocks: [], files: [{ path: "src/auth/memory-store.ts", change: "M", added: 0, removed: 0 }], guards: [], code: null, diff: null, status: "proposed", flagged: false },

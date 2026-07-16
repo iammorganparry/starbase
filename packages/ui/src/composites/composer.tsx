@@ -75,6 +75,10 @@ export function Composer({
   busy = false,
   placeholder,
   initialValue,
+  value: controlledValue,
+  onValueChange,
+  attachments: controlledAttachments,
+  onAttachmentsChange,
   className
 }: {
   skills?: ReadonlyArray<Skill>
@@ -82,6 +86,17 @@ export function Composer({
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
   /** Seed the draft once on mount (e.g. a task prefilled from a linked issue). */
   initialValue?: string
+  /**
+   * Lift the draft text out of this component. The app passes this so a draft
+   * survives a session switch — which UNMOUNTS the composer (the pane is keyed by
+   * session id), destroying any local state. Omit it and the composer stays
+   * happily uncontrolled (stories, Storybook).
+   */
+  value?: string
+  onValueChange?: (value: string) => void
+  /** Lift the attachments out too — same reasoning as `value`. */
+  attachments?: ReadonlyArray<Attachment>
+  onAttachmentsChange?: (attachments: ReadonlyArray<Attachment>) => void
   /** The session's current harness (which section of the menu is checked). */
   cli?: CliKind
   /** Current harness model id (shown in the model chip). */
@@ -132,11 +147,45 @@ export function Composer({
   // Follows the harness — the prompt used to be hardwired to "Message Claude…",
   // which now visibly lies the moment the operator switches provider.
   const prompt = placeholder ?? `Message ${PROVIDER_LABEL[cli ?? "claude"]}…`
-  // Seed once from `initialValue` (a linked-issue task); later edits are local.
-  const [value, setValue] = useState(() => initialValue ?? "")
+
+  // Controlled when the host passes `value`/`attachments` (the app, so drafts
+  // outlive the pane's unmount); otherwise these locals own the draft. Seeded once
+  // from `initialValue` — note that only ever applies in the UNCONTROLLED case, so
+  // the lazy initializer can't go stale under a controlled host.
+  const [internalValue, setInternalValue] = useState(() => initialValue ?? "")
+  const [internalAttachments, setInternalAttachments] = useState<ReadonlyArray<Attachment>>([])
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [attachments, setAttachments] = useState<ReadonlyArray<Attachment>>([])
+
+  // Shims, so every call site below reads/writes exactly as it did when this was
+  // plain local state — including the `setAttachments(prev => …)` updater form.
+  const value = controlledValue ?? internalValue
+  const attachments = controlledAttachments ?? internalAttachments
+
+  // An updater must see the LATEST draft, not the one captured when this render
+  // ran — two `addFiles` in flight at once (paste, paste again before the first
+  // FileReader resolves) would otherwise both merge into the same stale array and
+  // the first batch would vanish. These refs are written through on every set, so
+  // calls that land in the same tick chain instead of racing.
+  const valueRef = useRef(value)
+  const attachmentsRef = useRef(attachments)
+  valueRef.current = value
+  attachmentsRef.current = attachments
+
+  const setValue = (next: string | ((prev: string) => string)) => {
+    const resolved = typeof next === "function" ? next(valueRef.current) : next
+    valueRef.current = resolved
+    if (controlledValue === undefined) setInternalValue(resolved)
+    onValueChange?.(resolved)
+  }
+  const setAttachments = (
+    next: ReadonlyArray<Attachment> | ((prev: ReadonlyArray<Attachment>) => ReadonlyArray<Attachment>)
+  ) => {
+    const resolved = typeof next === "function" ? next(attachmentsRef.current) : next
+    attachmentsRef.current = resolved
+    if (controlledAttachments === undefined) setInternalAttachments(resolved)
+    onAttachmentsChange?.(resolved)
+  }
   const [dragging, setDragging] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)

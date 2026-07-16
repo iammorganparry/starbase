@@ -1,5 +1,6 @@
 import * as React from "react"
-import type { Session, SessionStatus, User } from "@starbase/core"
+import type { Session, SessionActivity, SessionStatus, User } from "@starbase/core"
+import { activityStatus } from "@starbase/core"
 import { Archive, ChevronRight, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
@@ -19,18 +20,17 @@ type GroupBy = "repo" | "status"
  */
 export const ARCHIVED_GROUP_KEY = "__archived__"
 
-/** Status groups render in this order (most-active first). */
-const STATUS_ORDER: ReadonlyArray<SessionStatus> = [
-  "needs-input",
-  "thinking",
-  "running",
-  "idle",
-  "done"
-]
+/**
+ * Status groups render in this order (most-active first). "thinking" is absent:
+ * `statusOf` folds it into "running" so a session doesn't hop groups every time a
+ * tool starts — see there.
+ */
+const STATUS_ORDER: ReadonlyArray<SessionStatus> = ["needs-input", "running", "idle", "done"]
 const STATUS_LABEL: Record<SessionStatus, string> = {
   "needs-input": "Needs input",
   thinking: "Thinking",
-  running: "Running",
+  // Covers thinking AND every kind of tool work — the row says which.
+  running: "Working",
   idle: "Idle",
   done: "Done"
 }
@@ -48,7 +48,8 @@ export interface SessionSidebarProps {
   /** Permanently delete a session from its row quick-actions (caller confirms). */
   onDelete?: (id: string) => void
   /** Live per-session agent status, overriding the persisted status. */
-  liveStatus?: Record<string, SessionStatus>
+  /** What each session's agent is doing right now, keyed by id (live). */
+  liveActivity?: Record<string, SessionActivity>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
   /** The signed-in user, shown in the footer account menu. */
@@ -85,7 +86,7 @@ export function SessionSidebar({
   onArchive,
   onRestore,
   onDelete,
-  liveStatus,
+  liveActivity,
   onNewSession,
   user,
   onOpenUsage,
@@ -114,9 +115,17 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
+  // The GROUP a session sits in. Coarser than its row label on purpose: an
+  // activity distinguishes thinking from running moment to moment, so grouping on
+  // that directly would reorder the list every few seconds as tools start and
+  // stop. Both collapse to one "Working" group and the row keeps the fine detail.
   const statusOf = React.useCallback(
-    (s: Session): SessionStatus => liveStatus?.[s.id] ?? s.status,
-    [liveStatus]
+    (s: Session): SessionStatus => {
+      const activity = liveActivity?.[s.id]
+      const status = activity ? activityStatus(activity.kind) : s.status
+      return status === "thinking" ? "running" : status
+    },
+    [liveActivity]
   )
 
   const filtered = React.useMemo(() => {
@@ -293,7 +302,7 @@ export function SessionSidebar({
                     <SessionRow
                       key={s.id}
                       session={s}
-                      status={liveStatus?.[s.id]}
+                      activity={liveActivity?.[s.id]}
                       active={s.id === activeSessionId}
                       onSelect={onSelect}
                       onRename={onRename}

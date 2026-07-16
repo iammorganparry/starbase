@@ -5,17 +5,20 @@
  * lives here — above the Conversation ↔ Plan Review view switch — so switching to
  * the Plan tab does NOT unmount the agent stream (which would abort a parked plan).
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { Session } from "@starbase/core"
 import { agentChildren, agentPath } from "@starbase/core"
 import { AgentTabBar, ConversationView, MAIN_AGENT, PlanReview, SubagentView } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
+import { clearDraft, getDraft, seedDraftOnce, setDraft, useDraft } from "./draft-store.js"
 import { useConversation } from "./use-conversation.js"
 
 export function ConversationPane({
   session,
   view = "conversation",
   onOpenPlanReview,
+  planStepId,
+  onPlanStepSelected,
   onRestore,
   onDelete,
   onInitialPromptConsumed
@@ -23,8 +26,15 @@ export function ConversationPane({
   session: Session
   /** Which face of the session to show — the transcript, or the Plan Review. */
   view?: "conversation" | "plan"
-  /** Switch the pane to the Plan Review view (from the inline plan card). */
-  onOpenPlanReview?: () => void
+  /**
+   * Switch the pane to the Plan Review view — bare from the inline plan card, or
+   * with a step id from the Conversation progress rail (a deep link).
+   */
+  onOpenPlanReview?: (stepId?: string) => void
+  /** The step Plan Review should open at (a pending deep link from the rail). */
+  planStepId?: string | null
+  /** Plan Review's selection moved — lets the host retire a spent deep link. */
+  onPlanStepSelected?: () => void
   /** Restore this session from archived (the banner + locked composer). */
   onRestore?: (sessionId: string) => void
   /** Permanently delete this session (the banner). */
@@ -34,13 +44,26 @@ export function ConversationPane({
 }) {
   const convo = useConversation(session)
 
+  // The composer's draft lives in the store, not the composer — this pane is
+  // mounted keyed by session id, so switching sessions unmounts it and any local
+  // state goes with it. See `draft-store`.
+  const draft = useDraft(session.id)
+
   // The prefilled task is one-shot, but we clear it (backend + app state) only
   // once the user actually SENDS — not on mount. Clearing on mount lost the draft
   // when the user visited the Issue tab first (that unmounts this pane, discarding
   // the composer's seeded text; on return `initialPrompt` was already gone).
   // Consuming on send keeps the seed alive across those unmounts until it's used.
+  // It now seeds the DRAFT STORE (once ever, never over existing text), so the
+  // prefill survives the same unmounts the store was built for.
+  useEffect(() => {
+    if (session.initialPrompt) seedDraftOnce(session.id, session.initialPrompt)
+  }, [session.id, session.initialPrompt])
+
   const sendPrompt: typeof convo.sendPrompt = (...args) => {
     if (session.initialPrompt) onInitialPromptConsumed?.(session.id)
+    // The turn is on its way to the agent — the draft has served its purpose.
+    clearDraft(session.id)
     return convo.sendPrompt(...args)
   }
 
@@ -101,6 +124,8 @@ export function ConversationPane({
       <PlanReview
         plan={convo.plan}
         patch={convo.patch}
+        selectedStepId={planStepId}
+        onSelectStep={onPlanStepSelected}
         onApprove={() => planId && convo.approvePlan(planId)}
         onResume={() => planId && convo.resumePlan(planId)}
         onRevise={() => planId && convo.revisePlan(planId)}
@@ -159,7 +184,16 @@ export function ConversationPane({
           onApprovePlan={(id) => convo.approvePlan(id)}
           onResumePlan={(id) => convo.resumePlan(id)}
           onOpenPlanReview={onOpenPlanReview}
-          initialDraft={session.initialPrompt}
+          plan={convo.plan}
+          draft={draft.text}
+          // Merge against the LIVE draft, never the render-time `draft` closure:
+          // on send the composer fires onSend → setValue("") → setAttachments([])
+          // in one go, so a stale spread would resurrect the text it just sent.
+          onDraftChange={(text) => setDraft(session.id, { ...getDraft(session.id), text })}
+          draftAttachments={draft.attachments}
+          onDraftAttachmentsChange={(attachments) =>
+            setDraft(session.id, { ...getDraft(session.id), attachments })
+          }
           archived={
             session.archived
               ? {

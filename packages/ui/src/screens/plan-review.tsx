@@ -29,6 +29,8 @@ const branchCount = (plan: Plan): number => plan.steps.filter((s) => s.kind === 
 export function PlanReview({
   plan,
   patch = "",
+  selectedStepId,
+  onSelectStep,
   onApprove,
   onResume,
   onRevise,
@@ -37,12 +39,22 @@ export function PlanReview({
   plan: Plan | null
   /** The session worktree's live unified diff, sliced per-step into the changes rail. */
   patch?: string
+  /**
+   * Open at a specific step (a deep link from the Conversation view's progress
+   * rail). Takes precedence over the local pick, so the host MUST clear it on
+   * `onSelectStep` or the user would be snapped back to it on every click.
+   */
+  selectedStepId?: string | null
+  /** A step was picked here — lets the host drop a spent deep link. */
+  onSelectStep?: (stepId: string) => void
   onApprove?: () => void
   /** Approve a STALE plan (its original run is gone, e.g. after a restart) — re-drives execution. */
   onResume?: () => void
   onRevise?: () => void
   onComment?: (stepId: string, body: string) => void
 }) {
+  // Uncontrolled by default (Storybook, and the plain Plan tab); `selectedStepId`
+  // layers a deep link on top without forcing every caller to own the selection.
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const list = useResizableWidth({ storageKey: "sb.plan.list", initial: 280, min: 220, max: 420 })
   const changes = useResizableWidth({ storageKey: "sb.plan.changes", initial: 380, min: 280, max: 560 })
@@ -63,8 +75,17 @@ export function PlanReview({
   // first step that carries a flow, so a diagram is visible immediately; if no
   // step has one, fall through to the pick-a-step prompt.
   const firstFlowStepId = plan.steps.find((s) => s.graph != null)?.id ?? null
-  const effectiveId = selectedId ?? firstFlowStepId
+  // ...except with a single step there's nothing TO pick — prompting to choose the
+  // only row is a dead end. This is the unstructured fallback's exact shape (one
+  // step wrapping the raw markdown), where not auto-opening hid the plan entirely.
+  const soleStepId = plan.steps.length === 1 ? (plan.steps[0]?.id ?? null) : null
+  // Precedence: an explicit deep link, then the local pick, then the auto-open.
+  const effectiveId = selectedStepId ?? selectedId ?? firstFlowStepId ?? soleStepId
   const selected = plan.steps.find((s) => s.id === effectiveId) ?? null
+  const select = (id: string) => {
+    setSelectedId(id)
+    onSelectStep?.(id)
+  }
   const statusPill = STATUS_PILL[plan.status]
   const openComments = plan.comments.filter((c) => !c.routed && c.author === "user").length
   const branches = branchCount(plan)
@@ -126,18 +147,13 @@ export function PlanReview({
           style={{ width: list.width }}
           className="flex min-h-0 flex-none flex-col overflow-auto border-r border-hairline bg-panel"
         >
-          <PlanStepList plan={plan} selectedId={effectiveId} onSelect={setSelectedId} />
+          <PlanStepList plan={plan} selectedId={effectiveId} onSelect={select} />
         </div>
         <ResizeHandle aria-label="Resize step list" onResize={list.adjust} />
 
         <div className="flex min-h-0 min-w-0 flex-1">
           {selected ? (
-            <PlanStepDetail
-              plan={plan}
-              step={selected}
-              onSelect={setSelectedId}
-              onComment={onComment}
-            />
+            <PlanStepDetail plan={plan} step={selected} onSelect={select} onComment={onComment} />
           ) : (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-editor text-center">
               <MousePointerClick className="size-8 text-line-strong" />

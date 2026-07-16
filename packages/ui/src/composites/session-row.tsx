@@ -1,6 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import type { Session, SessionStatus } from "@starbase/core"
+import type { Session, SessionActivity } from "@starbase/core"
+import { activityLabel, activityStatus } from "@starbase/core"
 import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { relativeTime } from "../lib/relative-time.js"
@@ -14,7 +15,7 @@ import { statusLabel, statusTextClass } from "../tokens.js"
 /** A session row for the sidebar list. Active state gets the blue ring. */
 export function SessionRow({
   session,
-  status: statusOverride,
+  activity,
   active = false,
   onSelect,
   onRename,
@@ -24,8 +25,11 @@ export function SessionRow({
   className
 }: {
   session: Session
-  /** Live status while the agent runs; falls back to the persisted status. */
-  status?: SessionStatus
+  /**
+   * What the agent is doing right now ("Running npm test"). Absent → the row
+   * falls back to the persisted `session.status`.
+   */
+  activity?: SessionActivity
   active?: boolean
   onSelect?: (id: string) => void
   /** Manual rename (double-click the title) — pins the auto-generated name. */
@@ -38,7 +42,10 @@ export function SessionRow({
   onDelete?: (id: string) => void
   className?: string
 }) {
-  const status = statusOverride ?? session.status
+  // A live activity rolls up to a status (for the dot's colour) but keeps its own
+  // richer label — "Running npm test" rather than a bare "thinking…".
+  const status = activity ? activityStatus(activity.kind) : session.status
+  const label = activity ? activityLabel(activity) : statusLabel[status]
   const [draft, setDraft] = useState<string | null>(null)
 
   // Quick actions — archive/restore + delete — surfaced on hover and via a
@@ -200,9 +207,21 @@ export function SessionRow({
         <ProviderIcon cli={session.cli} size={13} />
       </div>
       <div className="flex items-center gap-[7px] font-mono text-[10.5px] text-muted-foreground">
-        <span className={cn(active ? "text-blue" : "text-muted-foreground")}>{session.branch}</span>
+        <span className={cn("min-w-0 truncate", active ? "text-blue" : "text-muted-foreground")}>
+          {session.branch}
+        </span>
         <div className="flex-1" />
-        <span className={statusTextClass[status]}>{statusLabel[status]}</span>
+        {/*
+          An activity label carries a target ("Running npm test -- auth"), so cap
+          it and ellipsize rather than shoving the branch out of the row. The full
+          text stays available on hover.
+        */}
+        <span
+          title={label}
+          className={cn("max-w-[62%] flex-none truncate", statusTextClass[status])}
+        >
+          {label}
+        </span>
       </div>
       {hasMeta && (
         <div className="flex items-center gap-1.5">

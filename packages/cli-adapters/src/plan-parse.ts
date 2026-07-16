@@ -96,12 +96,27 @@ const GUARD_STATUS: Record<string, PlanGuard["status"]> = {
   review: "under-review"
 }
 
-/** Extract the first fenced block with the given language tag, or null. */
+/**
+ * Extract the first fenced block whose info string is EXACTLY `lang`, or null.
+ *
+ * The info string must be the language alone (trailing spaces are fine) — a
+ * prefix match would let a ` ```planning ` block masquerade as the plan spec:
+ * the reformat bounce would be skipped and its contents parsed as steps.
+ */
 const fenced = (raw: string, lang: string): string | null => {
-  const re = new RegExp("```" + lang + "[^\\n]*\\n([\\s\\S]*?)```", "i")
+  const re = new RegExp("```" + lang + "[ \\t]*\\r?\\n([\\s\\S]*?)```", "i")
   const m = re.exec(raw)
   return m ? m[1]!.replace(/\s+$/, "") : null
 }
+
+/**
+ * Whether the agent actually emitted the ` ```plan ` fence we asked for.
+ *
+ * `planModeInstructions` documents the format, but prompt compliance is never
+ * guaranteed — the adapter uses this to bounce a fence-less plan back for one
+ * reformat rather than degrading straight to the raw fallback.
+ */
+export const hasPlanBlock = (raw: string): boolean => fenced(raw, "plan") !== null
 
 /** Numeric-only ordinals pad to two digits ("4" → "04"); arms ("4a") stay as-is. */
 const normNum = (n: string): string => (/^\d+$/.test(n) ? n.padStart(2, "0") : n)
@@ -367,19 +382,21 @@ export const parsePlan = (raw: string, id: string): Plan => {
 
   if (parsed.steps.length === 0) {
     // Fallback: no structured block — surface the first heading as the summary and
-    // keep one step so the tab/badge still work; the card renders `raw` markdown.
+    // keep one step so the tab/badge still work. `structured: false` is what tells
+    // the UI to render `raw`; without it the plan's actual content is invisible.
     const firstLine = raw.split("\n").map((l) => l.replace(/^#+\s*/, "").trim()).find((l) => l.length > 0)
     const summary = parsed.summary || firstLine || "Proposed plan"
     return {
       id,
       summary,
+      structured: false,
       graph,
       steps: [
         {
           id: "s_01",
           number: "01",
           title: summary,
-          intent: "The agent's full plan is shown below.",
+          intent: "The agent didn't use the structured plan format — its full plan is below.",
           approach: [],
           kind: "step",
           condition: null,
@@ -406,6 +423,7 @@ export const parsePlan = (raw: string, id: string): Plan => {
   return {
     id,
     summary: parsed.summary || parsed.steps[0]!.title,
+    structured: true,
     graph,
     // Attach any per-step code sample + per-step flow, keyed by the step's
     // normalized number.

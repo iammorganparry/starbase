@@ -130,6 +130,17 @@ export function PlanStepDetail({
           </Section>
         )}
 
+        {/*
+          The agent skipped the ```plan fence (even after being asked to reformat),
+          so there are no steps to review — show what it actually wrote. Without
+          this the plan's entire content is invisible.
+        */}
+        {!plan.structured && plan.raw && (
+          <Section title="Plan">
+            <Markdown>{plan.raw}</Markdown>
+          </Section>
+        )}
+
         {step.approach.length > 0 && (
           <Section title="Approach">
             <ol className="m-0 flex list-none flex-col gap-1.5 p-0">
@@ -149,7 +160,9 @@ export function PlanStepDetail({
                 real height — without it the canvas collapses to 0 and the box
                 paints empty. */}
             <div className="flex h-[300px] flex-col overflow-hidden rounded-md border border-hairline bg-editor">
-              <PlanFlow graph={step.graph} selectedId={step.id} embedded />
+              {/* `onSelect` was missing here, so nodes linking to another step were
+                  dead clicks — the canvas has always supported the jump. */}
+              <PlanFlow graph={step.graph} selectedId={step.id} onSelect={onSelect} embedded />
             </div>
           </Section>
         )}

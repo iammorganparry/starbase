@@ -3,7 +3,12 @@ import { Check, GitBranch, MessageSquareText } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
 
-const STATUS_TONE: Record<PlanStepStatus, string> = {
+/**
+ * A step's dot colour. Exported because the Conversation progress rail shows the
+ * same steps and must read identically — two private copies would drift the first
+ * time a tone changed.
+ */
+export const STEP_STATUS_TONE: Record<PlanStepStatus, string> = {
   proposed: "bg-line-strong",
   current: "bg-blue",
   revising: "bg-yellow",
@@ -79,7 +84,7 @@ function Row({
         <Check className="size-3.5 flex-none text-green" strokeWidth={2.5} />
       ) : (
         <StatusDot
-          tone={STATUS_TONE[step.status]}
+          tone={STEP_STATUS_TONE[step.status]}
           size={7}
           pulse={step.status === "revising"}
           glow={step.status === "current"}

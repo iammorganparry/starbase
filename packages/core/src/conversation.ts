@@ -1,5 +1,6 @@
 import { Match, Schema } from "effect"
 import { DiffStat } from "./domain.js"
+import type { SessionStatus } from "./domain.js"
 
 /**
  * Conversation domain — the transcript model plus the normalized `StreamEvent`
@@ -260,6 +261,13 @@ export const Plan = Schema.Struct({
   steps: Schema.Array(PlanStep),
   comments: Schema.Array(PlanComment),
   status: PlanStatus,
+  /**
+   * False when the agent gave us no parseable ` ```plan ` block and `steps` is
+   * just the one wrapping the whole markdown. The UI keys off this to render
+   * `raw` instead of an empty spec — without it a non-compliant plan is silently
+   * DROPPED. Defaults true so transcripts persisted before this flag still decode.
+   */
+  structured: Schema.optionalWith(Schema.Boolean, { default: () => true }),
   raw: Schema.String
 })
 export type Plan = Schema.Schema.Type<typeof Plan>
@@ -947,6 +955,171 @@ export const latestPlan = (messages: ReadonlyArray<Message>): Plan | null => {
   }
   return null
 }
+
+// ── Live session activity ────────────────────────────────────────────────────
+
+/**
+ * What a session's agent is doing RIGHT NOW.
+ *
+ * Distinct from `SessionStatus` (the coarse, persisted lifecycle) and
+ * deliberately NOT a Schema: it's derived on the renderer from the live
+ * transcript, never persisted and never crosses the RPC boundary. `SessionStatus`
+ * can only say "thinking" for a whole run — this says *what kind* of work, and on
+ * what.
+ */
+/**
+ * No "idle" member: an idle session has NO activity, which `activityOf` says by
+ * returning null. A kind nothing can construct is just a branch every reader has
+ * to rule out.
+ */
+export type ActivityKind =
+  | "thinking"
+  | "reading"
+  | "editing"
+  | "running"
+  | "monitoring"
+  | "watching"
+  | "web"
+  | "delegating"
+  | "needs-input"
+  | "needs-approval"
+
+export interface SessionActivity {
+  readonly kind: ActivityKind
+  /** The verb alone, for tight spots — e.g. "Running", "Monitoring PR". */
+  readonly verb: string
+  /** What it's acting on ("npm test", "session.ts", "#482"), or null. */
+  readonly target: string | null
+}
+
+/** Where the conversation machine is — the renderer maps its state onto this. */
+export type ActivityPhase = "running" | "settling" | "idle"
+
+const READ_TOOLS = new Set(["Read", "Grep", "Glob", "NotebookRead", "LS"])
+const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"])
+const WEB_TOOLS = new Set(["WebFetch", "WebSearch"])
+const SUBAGENT_TOOLS = new Set(["Task", "Agent"])
+
+/**
+ * A `gh` command that BLOCKS watching a PR's CI. Deliberately narrow: it must be
+ * an actual watch, not any `gh pr`/`gh run` subcommand. `gh pr create` and
+ * `gh run list` are things agents do constantly and that return in seconds —
+ * labelling those "Monitoring PR" would be a lie, and (being an attention tone)
+ * a costly one.
+ */
+const PR_WATCH_RE = /\bgh\s+pr\s+checks\b(?=[^\n]*--watch\b)|\bgh\s+run\s+watch\b/
+
+/**
+ * Any other long-lived watcher (`vitest --watch`, `tsc --watch`). Reported as
+ * "Watching" rather than "Running" for the same reason — it won't return — but
+ * it has nothing to do with a PR.
+ */
+const WATCH_RE = /--watch\b/
+
+/** The PR number a watch command refers to, as "#482", or null. */
+const prRef = (command: string): string | null => {
+  const m = /\bgh\s+pr\s+\w+\s+(\d+)\b/.exec(command) ?? /#(\d+)\b/.exec(command)
+  return m ? `#${m[1]}` : null
+}
+
+/** Trim a path to its basename — the sidebar has no room for a repo-deep path. */
+const basename = (path: string): string => path.split("/").filter(Boolean).pop() ?? path
+
+/** Collapse a shell command to something readable: first line, whitespace-normalised. */
+const shortCommand = (command: string): string =>
+  command.split("\n")[0]!.replace(/\s+/g, " ").trim()
+
+/** The tool call still in flight (the LAST one marked running), or null. */
+const runningTool = (messages: ReadonlyArray<Message>): ToolCall | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]!.parts
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const part = parts[j]!
+      if (part._tag === "Tool" && part.tool.status === "running") return part.tool
+    }
+  }
+  return null
+}
+
+/** A pending approval gate on the last turn, if the agent is blocked on one. */
+const pendingGate = (messages: ReadonlyArray<Message>): boolean => {
+  const last = messages[messages.length - 1]
+  return (
+    last?.role === "assistant" &&
+    last.parts.some((p) => p._tag === "Gate" && p.gate.status === "pending")
+  )
+}
+
+/** Map an in-flight tool call onto an activity. */
+const toolActivity = (tool: ToolCall): SessionActivity => {
+  const target = tool.target
+  if (tool.name === "Bash" && target) {
+    const command = shortCommand(target)
+    if (PR_WATCH_RE.test(command)) {
+      return { kind: "monitoring", verb: "Monitoring PR", target: prRef(command) }
+    }
+    // A watcher that isn't about a PR — say so, rather than claiming either
+    // "Running" (it never returns) or "Monitoring PR" (it isn't one).
+    if (WATCH_RE.test(command)) return { kind: "watching", verb: "Watching", target: command }
+    return { kind: "running", verb: "Running", target: command }
+  }
+  if (SUBAGENT_TOOLS.has(tool.name)) return { kind: "delegating", verb: "Delegating", target }
+  if (READ_TOOLS.has(tool.name)) {
+    return { kind: "reading", verb: "Reading", target: target ? basename(target) : null }
+  }
+  if (EDIT_TOOLS.has(tool.name)) {
+    return { kind: "editing", verb: "Editing", target: target ? basename(target) : null }
+  }
+  if (WEB_TOOLS.has(tool.name)) return { kind: "web", verb: "Searching the web", target }
+  // An unknown tool (an MCP server's, say) still beats a bare "Thinking".
+  return { kind: "running", verb: tool.name, target }
+}
+
+/**
+ * What a session's agent is doing, from its transcript + machine phase.
+ *
+ * Blocked-on-the-operator wins over everything: a pending gate/question/plan is
+ * the only thing that needs them, even if a tool is technically still open. Then
+ * the in-flight tool. "Thinking" is the FALLBACK — the model reasoning with no
+ * tool running — not the catch-all it used to be.
+ */
+export const activityOf = (
+  messages: ReadonlyArray<Message>,
+  phase: ActivityPhase
+): SessionActivity | null => {
+  if (pendingGate(messages) || pendingQuestion(messages) !== null) {
+    return { kind: "needs-input", verb: "Needs input", target: null }
+  }
+  if (pendingPlan(messages) !== null) {
+    return { kind: "needs-approval", verb: "Needs approval", target: null }
+  }
+  if (phase === "idle") return null
+  if (phase === "settling") return { kind: "thinking", verb: "Wrapping up", target: null }
+
+  const tool = runningTool(messages)
+  return tool ? toolActivity(tool) : { kind: "thinking", verb: "Thinking", target: null }
+}
+
+/**
+ * The coarse `SessionStatus` an activity rolls up to — for grouping ("Group by:
+ * status") and the status dot's colour, which both predate activities. Doing real
+ * work reports "running"; only genuine model reasoning is "thinking".
+ */
+export const activityStatus = (kind: ActivityKind): SessionStatus => {
+  switch (kind) {
+    case "needs-input":
+    case "needs-approval":
+      return "needs-input"
+    case "thinking":
+      return "thinking"
+    default:
+      return "running"
+  }
+}
+
+/** The one-line label for an activity — "Running npm test", "Thinking". */
+export const activityLabel = (activity: SessionActivity): string =>
+  activity.target ? `${activity.verb} ${activity.target}` : activity.verb
 
 /**
  * The prompt that re-drives an approved plan as a fresh execution turn. Used when

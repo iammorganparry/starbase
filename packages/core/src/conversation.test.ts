@@ -7,6 +7,7 @@ import {
   Skill,
   StreamEvent,
   Subagent,
+  activityOf,
   REVIEWER_AGENT_ID,
   addPlanComment,
   applyReviewEvent,
@@ -474,6 +475,7 @@ describe("Plan flow", () => {
     steps: [step(), step({ id: "s2", number: "02", title: "Create TokenStore" })],
     comments: [],
     status: "proposed",
+    structured: true,
     raw: "# Refactor auth flow",
     ...over
   })
@@ -803,6 +805,144 @@ describe("sub-agents", () => {
       { id: "t1", name: "Explore", description: "one", parentId: null, status: "working", message: assistantMessage("t1", "") }
     ]
     expect(applySubagentEvent(subs, { _tag: "Done", costUsd: 1, tokens: 2 })).toBe(subs)
+  })
+})
+
+describe("activityOf", () => {
+  const turn = (...parts: ReadonlyArray<ContentPart>): Message => ({
+    id: "m1",
+    role: "assistant",
+    streaming: true,
+    createdAt: "2026-07-11T10:00:00.000Z",
+    parts
+  })
+
+  const tool = (name: string, target: string | null, status: "running" | "success" = "running") =>
+    ({
+      _tag: "Tool" as const,
+      tool: { id: `t_${name}`, name, target, status, meta: null, diff: null, preview: null }
+    })
+
+  it("is null when the session is idle", () => {
+    expect(activityOf([turn({ _tag: "Text", text: "done" })], "idle")).toBeNull()
+  })
+
+  it("only says 'Thinking' when NO tool is in flight", () => {
+    // The whole complaint: "thinking" used to cover every moment of a run.
+    expect(activityOf([turn({ _tag: "Text", text: "hm" })], "running")).toStrictEqual({
+      kind: "thinking",
+      verb: "Thinking",
+      target: null
+    })
+  })
+
+  it("reports the running command, not 'Thinking'", () => {
+    expect(activityOf([turn(tool("Bash", "npm test -- auth"))], "running")).toStrictEqual({
+      kind: "running",
+      verb: "Running",
+      target: "npm test -- auth"
+    })
+  })
+
+  it("calls a PR watch 'Monitoring PR' and pulls out the number", () => {
+    expect(activityOf([turn(tool("Bash", "gh pr checks 482 --watch"))], "running")).toStrictEqual({
+      kind: "monitoring",
+      verb: "Monitoring PR",
+      target: "#482"
+    })
+    // No number in the command — still monitoring, just unqualified.
+    expect(activityOf([turn(tool("Bash", "gh run watch"))], "running")?.kind).toBe("monitoring")
+  })
+
+  it("does NOT call routine gh commands 'Monitoring PR'", () => {
+    // These finish in seconds and agents run them constantly; labelling them
+    // "Monitoring PR" (an attention tone) would be a lie.
+    for (const cmd of ["gh pr create --fill", "gh pr view 482", "gh run list"]) {
+      expect(activityOf([turn(tool("Bash", cmd))], "running")).toStrictEqual({
+        kind: "running",
+        verb: "Running",
+        target: cmd
+      })
+    }
+  })
+
+  it("calls a non-gh watcher 'Watching', not 'Monitoring PR'", () => {
+    // `vitest --watch` never returns, so it isn't "Running" either — but it has
+    // nothing to do with a PR.
+    expect(activityOf([turn(tool("Bash", "vitest --watch"))], "running")).toStrictEqual({
+      kind: "watching",
+      verb: "Watching",
+      target: "vitest --watch"
+    })
+  })
+
+  it("reduces file tools to a basename", () => {
+    expect(activityOf([turn(tool("Read", "packages/core/src/conversation.ts"))], "running")).toStrictEqual(
+      { kind: "reading", verb: "Reading", target: "conversation.ts" }
+    )
+    expect(activityOf([turn(tool("Edit", "src/auth/session.ts"))], "running")?.kind).toBe("editing")
+  })
+
+  it("names sub-agent spawns as delegating", () => {
+    expect(activityOf([turn(tool("Task", "Explore the plan pane"))], "running")).toStrictEqual({
+      kind: "delegating",
+      verb: "Delegating",
+      target: "Explore the plan pane"
+    })
+  })
+
+  it("falls back to an unknown tool's own name rather than 'Thinking'", () => {
+    expect(activityOf([turn(tool("mcp__linear__list_issues", null))], "running")).toStrictEqual({
+      kind: "running",
+      verb: "mcp__linear__list_issues",
+      target: null
+    })
+  })
+
+  it("tracks the LAST running tool, ignoring finished ones", () => {
+    const msg = turn(tool("Read", "a.ts", "success"), tool("Bash", "pnpm build"))
+    expect(activityOf([msg], "running")?.target).toBe("pnpm build")
+  })
+
+  it("collapses a multi-line command to its first line", () => {
+    expect(activityOf([turn(tool("Bash", "set -e\nnpm test"))], "running")?.target).toBe("set -e")
+  })
+
+  it("blocked-on-the-operator beats any in-flight tool", () => {
+    const gate = turn(tool("Bash", "rm -rf /"), {
+      _tag: "Gate",
+      gate: {
+        id: "g1",
+        kind: "command",
+        title: "run a command",
+        detail: "Not in your allowlist.",
+        command: "rm -rf /",
+        allowLabel: "rm",
+        status: "pending"
+      }
+    })
+    expect(activityOf([gate], "running")).toStrictEqual({
+      kind: "needs-input",
+      verb: "Needs input",
+      target: null
+    })
+  })
+
+  it("surfaces needs-input / needs-approval even once the run has ENDED", () => {
+    // A finished session blocked on you must not read as plain "idle".
+    const gate = turn({
+      _tag: "Gate",
+      gate: {
+        id: "g1",
+        kind: "command",
+        title: "run a command",
+        detail: "Not in your allowlist.",
+        command: "ls",
+        allowLabel: "ls",
+        status: "pending"
+      }
+    })
+    expect(activityOf([gate], "idle")?.kind).toBe("needs-input")
   })
 })
 

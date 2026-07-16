@@ -6,6 +6,7 @@ import {
   buildPromptInput,
   editStats,
   formatQuestionAnswer,
+  PLAN_REFORMAT,
   mapPermissionMode,
   parseSdkQuestions,
   streamEventsFor,
@@ -38,6 +39,24 @@ describe("mapPermissionMode", () => {
     // auto-mode session would swallow every question the agent asks. Gating is
     // unaffected: `verdict()` in agent-runner already allows everything in auto.
     expect(mapPermissionMode("auto")).toBe("default")
+  })
+})
+
+describe("PLAN_REFORMAT", () => {
+  it("names the missing block and tells the agent how to re-submit", () => {
+    // Handed back through deny.message when a plan skips the fence — it's the only
+    // channel that reaches the agent, so it has to be self-contained.
+    expect(PLAN_REFORMAT).toContain("```plan")
+    expect(PLAN_REFORMAT).toContain("ExitPlanMode")
+    expect(PLAN_REFORMAT).toMatch(/summary/)
+    expect(PLAN_REFORMAT).toMatch(/intent/)
+  })
+
+  it("asks for a reformat, NOT a different plan", () => {
+    // A revision would restart the planning work; we only want the same plan back
+    // in the right shape.
+    expect(PLAN_REFORMAT.toLowerCase()).toContain("same plan")
+    expect(PLAN_REFORMAT.toLowerCase()).toContain("only its format")
   })
 })
 

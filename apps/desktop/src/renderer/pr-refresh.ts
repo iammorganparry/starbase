@@ -1,19 +1,20 @@
-import type { Session, SessionStatus } from "@starbase/core"
+import type { Session, SessionActivity } from "@starbase/core"
 
 /**
- * Session ids whose live agent run just COMPLETED between two `liveStatus`
- * snapshots — present in `prev` (running: "thinking"/"needs-input") and absent in
+ * Session ids whose live agent run just COMPLETED between two `liveActivity`
+ * snapshots — present in `prev` (the agent was doing something) and absent in
  * `next` (idle → the key is removed) — and that own a worktree.
  *
  * This is the trigger for App.tsx's on-completion GitHub re-check: the agent may
  * have opened AND merged its own PR during the run, which the once-per-session
- * link detection can't catch and the 60s archive poll only catches late. An
- * intermediate "thinking → needs-input" flip stays present → present and so does
- * NOT count as completion.
+ * link detection can't catch and the 60s archive poll only catches late. Only
+ * presence matters, never the activity itself — every intermediate flip
+ * ("Thinking" → "Running npm test" → "Needs input") stays present → present and
+ * so does NOT count as completion.
  */
 export const completedSessionIds = (
-  prev: Record<string, SessionStatus>,
-  next: Record<string, SessionStatus>,
+  prev: Record<string, SessionActivity>,
+  next: Record<string, SessionActivity>,
   sessions: ReadonlyArray<Session>
 ): ReadonlyArray<string> =>
   sessions

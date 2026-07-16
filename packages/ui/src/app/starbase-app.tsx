@@ -16,7 +16,7 @@ import type {
   ProvidersConfig,
   Repo,
   Session,
-  SessionStatus,
+  SessionActivity,
   Usage,
   User
 } from "@starbase/core"
@@ -25,7 +25,7 @@ import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
 import { SettingsView } from "../composites/settings-view.js"
-import { SessionConversation } from "../screens/session-conversation.js"
+import { type ConversationPaneCtx, SessionConversation } from "../screens/session-conversation.js"
 import { ARCHIVED_GROUP_KEY } from "./session-sidebar.js"
 import { SEED_PATCH } from "../seed.js"
 
@@ -61,8 +61,8 @@ export interface StarbaseAppProps {
   defaultRepoPath?: string | null
   /** GitHub CLI status for the harnesses strip. */
   ghStatus?: GhStatus
-  /** Live per-session agent status (thinking / needs-input) while running. */
-  liveStatus?: Record<string, SessionStatus>
+  /** What each session's agent is doing right now ("Running npm test"), keyed by id. */
+  liveActivity?: Record<string, SessionActivity>
   /** Live per-session worktree diff totals, for the Changes tab badge. */
   liveDiff?: Record<string, DiffStat>
   /** Provider usage snapshot for the Usage & limits modal. */
@@ -116,7 +116,7 @@ export interface StarbaseAppProps {
   renderConversation?: (
     session: Session,
     view: "conversation" | "plan",
-    ctx: { onOpenPlanReview: () => void }
+    ctx: ConversationPaneCtx
   ) => ReactNode
   /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
   planSessions?: ReadonlySet<string>
@@ -172,7 +172,7 @@ export function StarbaseApp({
   onToggleCollapsed,
   defaultRepoPath,
   ghStatus,
-  liveStatus,
+  liveActivity,
   liveDiff,
   usage,
   onLoadUsage,
@@ -275,7 +275,7 @@ export function StarbaseApp({
   // same pane serves both the Conversation and Plan tabs (see SessionConversation).
   const renderConversationPane =
     active && renderConversation
-      ? (view: "conversation" | "plan", ctx: { onOpenPlanReview: () => void }) => (
+      ? (view: "conversation" | "plan", ctx: ConversationPaneCtx) => (
           <div key={active.id} className="flex min-h-0 min-w-0 flex-1">
             {renderConversation(active, view, ctx)}
           </div>
@@ -340,7 +340,7 @@ export function StarbaseApp({
         planSessions={planSessions}
         showEmpty={showEmpty}
         patch={patch}
-        liveStatus={liveStatus}
+        liveActivity={liveActivity}
         liveDiff={liveDiff}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         user={user}
