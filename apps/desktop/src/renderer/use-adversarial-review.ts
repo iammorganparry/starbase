@@ -12,41 +12,9 @@ import type { AdversarialReview, ReviewFinding, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
 import { getConversationActor } from "./conversation-registry.js"
 import { markRouted, useRoutedEntries } from "./routed-store.js"
+import { resolveSentIds, routedKey } from "./review-routing.js"
 
 const reviewKey = (sessionId: string) => ["review", sessionId] as const
-
-/**
- * The routed-store key for a finding. Private to this hook — callers deal in
- * plain finding ids (see `sentFindingIds`).
- *
- * Namespaced by the reviewed head SHA because finding ids are only unique WITHIN
- * a review — they're positional (`f1`, `f2`, …). A bare id would make the next
- * review's `f1` render as already-sent the moment it arrived.
- */
-const routedKey = (headSha: string, findingId: string): string =>
-  `review:${headSha}:${findingId}`
-
-/** Stable empty set, so `sentFindingIds` keeps a stable identity when there's no review. */
-const EMPTY_IDS: ReadonlySet<string> = new Set()
-
-/**
- * The routed-store keys, resolved down to plain ids for `review`'s own findings.
- *
- * Pure + exported so the namespacing is actually covered (this repo tests the
- * renderer's pure seams, not its hooks). Note the two sets are both
- * `ReadonlySet<string>` — the compiler cannot tell a key set from an id set, so
- * handing the wrong one to the UI type-checks cleanly and silently breaks the
- * "Sent" state. That is exactly what happened once; keep them named apart.
- */
-export const resolveSentIds = (
-  review: AdversarialReview | null,
-  routedKeys: ReadonlySet<string>
-): ReadonlySet<string> =>
-  review === null
-    ? EMPTY_IDS
-    : new Set(
-        review.findings.filter((f) => routedKeys.has(routedKey(review.headSha, f.id))).map((f) => f.id)
-      )
 
 /** Format a finding as the instruction handed to the session's agent. */
 const findingPrompt = (finding: ReviewFinding): string => {

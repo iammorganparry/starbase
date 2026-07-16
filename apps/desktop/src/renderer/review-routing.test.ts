@@ -1,6 +1,6 @@
 import type { AdversarialReview, ReviewFinding } from "@starbase/core"
 import { describe, expect, it } from "vitest"
-import { resolveSentIds } from "./use-adversarial-review.js"
+import { resolveSentIds } from "./review-routing.js"
 
 /**
  * `resolveSentIds` is the pure seam behind the "Sent to agent" state. It turns
