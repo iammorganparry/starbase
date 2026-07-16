@@ -452,6 +452,42 @@
   color: var(--sb-text-bright);
   font-weight: 600;
 }
+/* Disclosure blocks. GitHub review bots (Greptile's "Prompt To Fix With AI")
+ * ship raw <details> in the comment body; the browser default marker is
+ * invisible against One Dark, so give it our own affordance. */
+.sb-md details {
+  margin: 0 0 12px;
+}
+.sb-md summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--sb-text-bright);
+  font-size: 13px;
+  user-select: none;
+}
+.sb-md summary::-webkit-details-marker {
+  display: none;
+}
+.sb-md summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  color: var(--sb-dim);
+  transition: transform 120ms ease;
+}
+.sb-md details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.sb-md details > :not(summary) {
+  margin-top: 10px;
+}
+/* Badge rows (`<img align="top">` severity / "Fix in …" chips) sit inline with
+ * the heading text rather than forcing a line break. */
+.sb-md img[align="top"] {
+  display: inline-block;
+  vertical-align: top;
+}
+
 /* KaTeX math: inherit our prose color, and let wide display equations scroll
  * horizontally instead of overflowing the chat column. */
 .sb-md .katex {
