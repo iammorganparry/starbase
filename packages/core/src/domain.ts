@@ -154,7 +154,17 @@ export const GithubConfig = Schema.Struct({
   /** Open a PR automatically once a session's branch has pushable commits. */
   autoCreatePr: Schema.Boolean,
   /** Auto-detect a PR already open on a session's branch and link it. */
-  autoDetectPr: Schema.Boolean
+  autoDetectPr: Schema.Boolean,
+  /**
+   * Run an adversarial review automatically when a PR is opened or its head
+   * advances. Off by default (a reviewer run costs real tokens); de-duped on the
+   * PR head SHA so a poll loop can fire it safely. Absent on older configs.
+   */
+  autoAdversarialReview: Schema.optional(Schema.Boolean),
+  /** Harness that runs the reviewer; absent = "claude". */
+  reviewCli: Schema.optional(CliKind),
+  /** Reviewer model id; absent = `DEFAULT_REVIEW_MODEL[reviewCli]` (Fable). */
+  reviewModel: Schema.optional(Schema.String)
 })
 export type GithubConfig = Schema.Schema.Type<typeof GithubConfig>
 
@@ -575,6 +585,67 @@ export const ReviewComment = Schema.Struct({
   side: Schema.optional(Schema.Literal("LEFT", "RIGHT"))
 })
 export type ReviewComment = Schema.Schema.Type<typeof ReviewComment>
+
+// ── Adversarial review ───────────────────────────────────────────────────────
+
+/**
+ * How bad a finding is, as argued by the reviewer. The reviewer is asked for
+ * COVERAGE (report everything, tag it honestly) rather than to self-filter —
+ * a model told "only report high-severity issues" silently drops findings it
+ * judges below the bar, which reads as a recall regression. Filtering is the
+ * UI's job, which is why this field exists.
+ */
+export const ReviewSeverity = Schema.Literal("critical", "major", "minor", "nit")
+export type ReviewSeverity = Schema.Schema.Type<typeof ReviewSeverity>
+
+/** One defect the adversarial reviewer argues for, anchored to file+line where it can be. */
+export const ReviewFinding = Schema.Struct({
+  /** Stable id within a review — the key for "already routed to the agent". */
+  id: Schema.String,
+  /** Repo-relative path, or null for a finding about the change as a whole. */
+  path: Schema.NullOr(Schema.String),
+  /** 1-indexed line in the file's NEW side, or null when not line-anchored. */
+  line: Schema.NullOr(Schema.Number),
+  /** End of a multi-line range, or null for a single line. */
+  endLine: Schema.NullOr(Schema.Number),
+  severity: ReviewSeverity,
+  /** One-sentence statement of the defect. */
+  title: Schema.String,
+  /** Why it's wrong — the concrete failure, not a style opinion. */
+  rationale: Schema.String,
+  /** A concrete fix, or null when the reviewer only raises the problem. */
+  suggestion: Schema.NullOr(Schema.String)
+})
+export type ReviewFinding = Schema.Schema.Type<typeof ReviewFinding>
+
+/**
+ * The result of one adversarial review run against a PR head, persisted per
+ * session under `~/starbase/reviews/<sessionId>.json` so it survives reloads.
+ */
+export const AdversarialReview = Schema.Struct({
+  sessionId: Schema.String,
+  prNumber: Schema.Number,
+  /**
+   * The PR head commit the review ran against — the de-dupe key. An auto-review
+   * whose head SHA matches the stored one is a no-op, which is what keeps the
+   * poll-driven trigger from re-spawning a reviewer on every tick.
+   */
+  headSha: Schema.String,
+  /** The harness that ran the reviewer. */
+  cli: CliKind,
+  /** The model the reviewer ran on (e.g. "claude-fable-5"). */
+  model: Schema.String,
+  /** ISO-8601 timestamp of the run. */
+  createdAt: Schema.String,
+  findings: Schema.Array(ReviewFinding),
+  /**
+   * Set when the reviewer ran but emitted no parseable findings block — a
+   * refusal, a "looks good to me", or malformed output. Carries the raw text so
+   * the user sees *something* rather than an empty list that looks like success.
+   */
+  note: Schema.NullOr(Schema.String)
+})
+export type AdversarialReview = Schema.Schema.Type<typeof AdversarialReview>
 
 /** Parameters for creating a new session (and its isolated worktree). */
 export const CreateSessionInput = Schema.Struct({

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react"
-import type { PrFileChange } from "@starbase/core"
+import type { AdversarialReview, PrFileChange, ReviewFinding } from "@starbase/core"
 import { Undo2 } from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
@@ -9,6 +9,7 @@ import { SegmentedControl } from "../components/segmented-control.js"
 import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
 import { ReviewDiff } from "./review-diff.js"
 import { ReviewFileRow } from "./review-file-row.js"
+import { ReviewFindingRow, rankFindings } from "./review-findings.js"
 import { ReviewTray, type ReviewDraft } from "./review-tray.js"
 
 /** Which diff the Code Review is showing — the PR, or the worktree's own changes. */
@@ -44,6 +45,15 @@ export interface CodeReviewViewProps {
   onRevertLines?: (range: { path: string; startLine: number; endLine: number }) => void
   /** Revert a whole file's uncommitted changes — the local source only. */
   onRevertFile?: (path: string) => void
+  /**
+   * The last adversarial review. Its findings render anchored to their file
+   * (above that file's diff), with anything unanchored — or pointing at a file
+   * not in this diff — collected into a "General" group at the top.
+   */
+  review?: AdversarialReview | null
+  onSendFindingToAgent?: (findingId: string) => void
+  /** Ids of findings already sent to the agent — their action stays "Sent". */
+  sentFindingIds?: ReadonlySet<string>
 }
 
 /**
@@ -69,7 +79,10 @@ export function CodeReviewView({
   onFinishReview,
   onConnectGithub,
   onRevertLines,
-  onRevertFile
+  onRevertFile,
+  review,
+  onSendFindingToAgent,
+  sentFindingIds
 }: CodeReviewViewProps) {
   const added = files.reduce((sum, f) => sum + f.additions, 0)
   const removed = files.reduce((sum, f) => sum + f.deletions, 0)
@@ -80,6 +93,33 @@ export function CodeReviewView({
     () => new Map(fileDiffs.map((d) => [d.path, d.diff])),
     [fileDiffs]
   )
+
+  // Findings are shown against the PR they were argued about. On the local
+  // (uncommitted) diff they'd be anchored to the wrong thing entirely.
+  const activeReview = source === "pr" ? (review ?? null) : null
+
+  /**
+   * Findings grouped by file, plus the ones that belong nowhere in particular.
+   *
+   * A finding whose `path` is absent from this diff goes to `general` rather
+   * than being dropped — the reviewer may name a file it read for context, and
+   * silently swallowing its verdict is worse than showing it unanchored.
+   */
+  const { byFile, general } = useMemo(() => {
+    const findings = rankFindings(activeReview?.findings ?? [])
+    const paths = new Set(files.map((f) => f.path))
+    const byFile = new Map<string, ReviewFinding[]>()
+    const general: ReviewFinding[] = []
+    for (const finding of findings) {
+      if (finding.path !== null && paths.has(finding.path)) {
+        byFile.set(finding.path, [...(byFile.get(finding.path) ?? []), finding])
+      } else {
+        general.push(finding)
+      }
+    }
+    return { byFile, general }
+  }, [activeReview, files])
+
 
   // The continuous diff scroller and one anchor per file section, so scrolling can
   // track the current file and clicking a file can jump to its section.
@@ -222,6 +262,26 @@ export function CodeReviewView({
           onScroll={handleScroll}
           className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor"
         >
+          {/* Findings the reviewer didn't anchor to a file in this diff. Shown
+              rather than dropped — an unanchored verdict still tells you
+              something, and silently swallowing it is the worse failure. */}
+          {general.length > 0 && (
+            <div className="flex flex-col gap-2 border-b border-hairline bg-panel/40 p-4">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.4px] text-dim">
+                Review · general
+              </span>
+              {general.map((finding) => (
+                <ReviewFindingRow
+                  key={finding.id}
+                  finding={finding}
+                  sent={sentFindingIds?.has(finding.id) ?? false}
+                  canRoute={routeTargetSession !== null}
+                  onSendToAgent={onSendFindingToAgent}
+                />
+              ))}
+            </div>
+          )}
+
           {files.length === 0 ? (
             <div className="flex flex-1 items-center justify-center text-[13px] text-dim">
               No changes to review.
@@ -271,6 +331,21 @@ export function CodeReviewView({
                       </button>
                     )}
                 </div>
+                {/* This file's findings, worst-first, directly above its diff —
+                    each carrying its own line reference. */}
+                {(byFile.get(file.path)?.length ?? 0) > 0 && (
+                  <div className="flex flex-col gap-2 border-b border-hairline bg-panel/40 px-4 py-3">
+                    {byFile.get(file.path)!.map((finding) => (
+                      <ReviewFindingRow
+                        key={finding.id}
+                        finding={finding}
+                        sent={sentFindingIds?.has(finding.id) ?? false}
+                        canRoute={routeTargetSession !== null}
+                        onSendToAgent={onSendFindingToAgent}
+                      />
+                    ))}
+                  </div>
+                )}
                 <ReviewDiff
                   path={file.path}
                   diff={diffByPath.get(file.path) ?? ""}

@@ -1,6 +1,12 @@
 import { Either, Schema } from "effect"
 import { describe, expect, it } from "vitest"
-import { FALLBACK_MODELS, ModelOption, defaultModel } from "./models.js"
+import {
+  DEFAULT_REVIEW_MODEL,
+  FALLBACK_MODELS,
+  ModelOption,
+  defaultModel,
+  reviewModelFor
+} from "./models.js"
 
 /**
  * Model options cross the RPC boundary (the composer's model chip). What matters:
@@ -30,5 +36,39 @@ describe("FALLBACK_MODELS / defaultModel", () => {
     expect(defaultModel("claude")).toBe(FALLBACK_MODELS.claude[0]!.id)
     expect(defaultModel("claude")).toBe("opus")
     expect(defaultModel("codex")).toBe(FALLBACK_MODELS.codex[0]!.id)
+  })
+})
+
+describe("DEFAULT_REVIEW_MODEL / reviewModelFor", () => {
+  it("reviews with Fable on the Claude harness", () => {
+    expect(DEFAULT_REVIEW_MODEL.claude).toBe("claude-fable-5")
+  })
+
+  // The reviewer's default is deliberately NOT the session's default: reviewing
+  // a diff with the same model that wrote it defeats the point. This asserts the
+  // two stay decoupled — adding Fable to the fallback list must never promote it
+  // to index 0, where `defaultModel` would put every new session on it.
+  it("keeps the review default distinct from the session default", () => {
+    expect(DEFAULT_REVIEW_MODEL.claude).not.toBe(defaultModel("claude"))
+  })
+
+  it("offers Fable in the Claude fallback list without making it the session default", () => {
+    expect(FALLBACK_MODELS.claude.map((m) => m.id)).toContain("claude-fable-5")
+    expect(FALLBACK_MODELS.claude[0]!.id).not.toBe("claude-fable-5")
+  })
+
+  it("gives every harness a review model", () => {
+    expect(reviewModelFor("claude")).toBe("claude-fable-5")
+    expect(reviewModelFor("codex")).toBe("gpt-5-codex")
+    expect(reviewModelFor("cursor")).toBe("auto")
+  })
+
+  it("honours a configured override", () => {
+    expect(reviewModelFor("claude", "claude-opus-4-8")).toBe("claude-opus-4-8")
+  })
+
+  it("falls back when the override is empty", () => {
+    expect(reviewModelFor("claude", "")).toBe("claude-fable-5")
+    expect(reviewModelFor("claude", undefined)).toBe("claude-fable-5")
   })
 })

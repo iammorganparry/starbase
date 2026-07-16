@@ -6,6 +6,7 @@
 import type { Session } from "@starbase/core"
 import { PullRequestView } from "@starbase/ui"
 import { usePullRequest } from "./use-pull-request.js"
+import { useAdversarialReview } from "./use-adversarial-review.js"
 
 export function PullRequestPane({
   session,
@@ -42,6 +43,15 @@ export function PullRequestPane({
     openOnGithub
   } = usePullRequest(session, { connected, autoDetect, onPrLinked })
 
+  const {
+    review,
+    running: reviewRunning,
+    error: reviewError,
+    runReview,
+    sendFindingToAgent,
+    sentFindingIds
+  } = useAdversarialReview(session, { connected })
+
   return (
     <PullRequestView
       pr={pr}
@@ -64,6 +74,14 @@ export function PullRequestPane({
       onResolveThread={resolveThread}
       onReplyToThread={replyToThread}
       onOpenOnGithub={openOnGithub}
+      review={{
+        review,
+        running: reviewRunning,
+        error: reviewError,
+        onRun: runReview,
+        onSendFindingToAgent: sendFindingToAgent,
+        sentFindingIds
+      }}
     />
   )
 }

@@ -643,6 +643,20 @@ export class GhService extends Effect.Service<GhService>()(
           })
         ),
 
+      /**
+       * The head commit SHA of PR `number` (`gh pr view --json headRefOid`), or
+       * null on any failure. Cheap single-field read, deliberately kept out of
+       * `PR_VIEW_FIELDS` — the adversarial-review de-dupe polls this on its own
+       * cadence and has no use for the rest of the view model.
+       */
+      prHeadSha: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<string | null, never, CommandExecutor.CommandExecutor> =>
+        ghJson(cwd, ["pr", "view", String(number), "--json", "headRefOid"]).pipe(
+          Effect.map((raw) => str(rec(raw).headRefOid) ?? null)
+        ),
+
       /** The full `PullRequest` view model for `number`, or null on any failure. */
       prView: (
         cwd: string,

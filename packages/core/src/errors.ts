@@ -88,6 +88,24 @@ export class GhError extends Schema.TaggedError<GhError>()(
 ) {}
 
 /**
+ * Raised when an adversarial review cannot run — no linked PR, no worktree, an
+ * unresolvable PR head, or the reviewer harness failing to start. A
+ * `Schema.TaggedError` so it crosses the RPC boundary as the `Review.run` error
+ * channel.
+ *
+ * Note what is NOT an error here: a reviewer that runs but emits unparseable
+ * output (a refusal, prose instead of JSON) succeeds with `note` set and no
+ * findings. Only a review that could not *happen* fails.
+ */
+export class ReviewError extends Schema.TaggedError<ReviewError>()(
+  "ReviewError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}
+
+/**
  * Raised when a PTY-backed terminal cannot be spawned (bad cwd, shell missing,
  * fork failure). A `Schema.TaggedError` — it is the `Terminal.create` error
  * channel. Write/resize/kill/attach never fail (they no-op on an unknown id).

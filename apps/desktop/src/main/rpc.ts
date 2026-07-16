@@ -21,6 +21,8 @@ import {
   GhService,
   ModelsService,
   retitleSession,
+  ReviewService,
+  ReviewStore,
   SessionStore,
   SkillsService,
   TerminalService,
@@ -29,7 +31,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { GhError, GitError } from "@starbase/core"
+import { GhError, GitError, ReviewError, reviewModelFor } from "@starbase/core"
 import type {
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
@@ -292,6 +294,66 @@ export const githubDiff = (sessionId: string) =>
     return yield* GhService.prDiff(session.worktreePath, session.prNumber)
   })
 
+/** `Review.get` handler — the last stored adversarial review, or null. */
+export const reviewGet = (sessionId: string) => ReviewStore.get(sessionId)
+
+/**
+ * `Review.run` handler — run an adversarial review of the session's linked PR.
+ *
+ * The head-SHA short-circuit is the load-bearing part: it means an unchanged PR
+ * costs one cheap `gh pr view` instead of an agent run. That is what lets the
+ * auto-review trigger fire naively off the renderer's poll loop without needing
+ * a client-side guard of its own — a duplicate effect is simply a no-op.
+ *
+ * Exported for tests.
+ */
+export const reviewRun = (sessionId: string, force: boolean) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(sessionId).pipe(
+      Effect.catchAll(() => Effect.succeed(null))
+    )
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(
+        new ReviewError({ message: "This session has no linked pull request to review." })
+      )
+    }
+
+    const headSha = yield* GhService.prHeadSha(session.worktreePath, session.prNumber)
+    if (headSha === null) {
+      return yield* Effect.fail(
+        new ReviewError({ message: "Could not resolve the pull request's head commit." })
+      )
+    }
+
+    // The de-dupe. Note it runs BEFORE the diff read and the agent spawn — the
+    // whole point is that an unchanged head is nearly free.
+    const prior = yield* ReviewStore.get(sessionId)
+    if (!force && prior !== null && prior.headSha === headSha) return prior
+
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const cli = config?.github?.reviewCli ?? "claude"
+    const model = reviewModelFor(cli, config?.github?.reviewModel)
+
+    const diff = yield* GhService.prDiff(session.worktreePath, session.prNumber)
+
+    const review = yield* ReviewService.run({
+      sessionId,
+      prNumber: session.prNumber,
+      headSha,
+      cwd: session.worktreePath,
+      repo: session.repo,
+      branch: session.branch,
+      baseBranch: session.baseBranch ?? null,
+      cli,
+      model,
+      diff
+    })
+    // Persist best-effort: a review the user can see now matters more than one
+    // we can re-read later, and a failed write must not fail the run.
+    yield* ReviewStore.set(sessionId, review).pipe(Effect.ignore)
+    return review
+  })
+
 /**
  * `Github.detectPr` handler. Looks up a PR open on the session's branch and, when
  * found, links it (persists `prNumber`). Returns the number, or null. Exported for tests.
@@ -456,7 +518,10 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.restore": ({ sessionId }) => restoreSession(sessionId),
   "Sessions.retitle": ({ sessionId }) => retitleSession(sessionId, claudeTitleGenerator),
   "Sessions.rename": ({ sessionId, title }) => renameSession(sessionId, title),
-  "Sessions.delete": ({ sessionId }) => SessionStore.remove(sessionId),
+  // Drop the stored review too, else ~/starbase/reviews/<id>.json outlives its
+  // session forever (and a recycled id would read a stranger's findings).
+  "Sessions.delete": ({ sessionId }) =>
+    SessionStore.remove(sessionId).pipe(Effect.tap(() => ReviewStore.clear(sessionId))),
   "Sessions.transcript": ({ id }) => TranscriptStore.list(id),
   "Sessions.diff": ({ id }) => sessionDiff(id),
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
@@ -501,6 +566,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
+  "Review.run": ({ sessionId, force }) => reviewRun(sessionId, force),
+  "Review.get": ({ sessionId }) => reviewGet(sessionId),
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),

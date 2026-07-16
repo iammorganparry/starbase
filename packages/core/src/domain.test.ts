@@ -1,8 +1,10 @@
 import { Either, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import {
+  AdversarialReview,
   CreateSessionInput,
   GhStatus,
+  GithubConfig,
   Repo,
   Session,
   WorkspaceConfig
@@ -47,6 +49,110 @@ describe("WorkspaceConfig", () => {
       Schema.encodeSync(WorkspaceConfig)(config)
     )
     expect(roundTripped).toStrictEqual(config)
+  })
+})
+
+describe("GithubConfig", () => {
+  // The review fields are optional precisely so this keeps passing: every
+  // config.json written before the adversarial reviewer existed lacks them, and
+  // a required field would make the whole workspace config fail to decode on
+  // upgrade — i.e. the app would boot as if it had never been set up.
+  it("decodes a config written before the review fields existed", () => {
+    const result = decode(GithubConfig, {
+      enabled: true,
+      autoCreatePr: false,
+      autoDetectPr: true
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
+
+  it("decodes a config carrying the review fields", () => {
+    const result = decode(GithubConfig, {
+      enabled: true,
+      autoCreatePr: false,
+      autoDetectPr: true,
+      autoAdversarialReview: true,
+      reviewCli: "claude",
+      reviewModel: "claude-fable-5"
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
+
+  it("rejects a reviewCli that is not a known harness", () => {
+    const result = decode(GithubConfig, {
+      enabled: true,
+      autoCreatePr: false,
+      autoDetectPr: true,
+      reviewCli: "gemini"
+    })
+    expect(Either.isLeft(result)).toBe(true)
+  })
+
+  it("still decodes inside a WorkspaceConfig with a legacy github block", () => {
+    const result = decode(WorkspaceConfig, {
+      reposDir: "/repos",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      github: { enabled: true, autoCreatePr: false, autoDetectPr: true }
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
+})
+
+describe("AdversarialReview", () => {
+  const review: AdversarialReview = {
+    sessionId: "s1",
+    prNumber: 42,
+    headSha: "abc123",
+    cli: "claude",
+    model: "claude-fable-5",
+    createdAt: "2026-07-16T10:00:00.000Z",
+    findings: [
+      {
+        id: "f1",
+        path: "src/auth.ts",
+        line: 12,
+        endLine: null,
+        severity: "critical",
+        title: "Token compared with ==",
+        rationale: "Timing-unsafe comparison lets an attacker probe the token byte by byte.",
+        suggestion: "Use timingSafeEqual."
+      }
+    ],
+    note: null
+  }
+
+  it("round-trips through encode → decode unchanged", () => {
+    const roundTripped = Schema.decodeUnknownSync(AdversarialReview)(
+      Schema.encodeSync(AdversarialReview)(review)
+    )
+    expect(roundTripped).toStrictEqual(review)
+  })
+
+  // A reviewer that refuses or emits prose still produces a review — findings
+  // empty, note set. That is a success, not an error.
+  it("decodes a review with no findings and a note", () => {
+    const result = decode(AdversarialReview, {
+      ...review,
+      findings: [],
+      note: "I could not review this diff."
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
+
+  it("accepts a finding not anchored to a file", () => {
+    const result = decode(AdversarialReview, {
+      ...review,
+      findings: [{ ...review.findings[0], path: null, line: null, suggestion: null }]
+    })
+    expect(Either.isRight(result)).toBe(true)
+  })
+
+  it("rejects a severity outside the known set", () => {
+    const result = decode(AdversarialReview, {
+      ...review,
+      findings: [{ ...review.findings[0], severity: "blocker" }]
+    })
+    expect(Either.isLeft(result)).toBe(true)
   })
 })
 

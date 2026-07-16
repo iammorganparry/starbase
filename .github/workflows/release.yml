@@ -90,6 +90,14 @@ jobs:
           - os: windows-latest
             args: "--win --x64"
     runs-on: ${{ matrix.os }}
+    # Lifted to job level so the step below can test it in `if:`. The `secrets`
+    # context is NOT available to `if:` (only to `env:`/`with:`/`run:`), and
+    # referencing it there is a workflow VALIDATION error — which GitHub reports
+    # by failing this workflow on every push to every branch, even though it only
+    # ever runs on workflow_dispatch. Step-level `env:` isn't visible to its own
+    # step's `if:` either, hence job level.
+    env:
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,10 +115,10 @@ jobs:
       # secret. Skipped (and the build stays unsigned) when the secret is absent.
       - name: Stage Apple API key (macOS)
         id: asc
-        if: runner.os == 'macOS' && secrets.APPLE_API_KEY_P8 != ''
+        if: runner.os == 'macOS' && env.APPLE_API_KEY_P8 != ''
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
-          echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
+          echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
           echo "path=$RUNNER_TEMP/asc/AuthKey.p8" >> "$GITHUB_OUTPUT"
 
       - name: Build (electron-vite)

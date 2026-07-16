@@ -1,6 +1,8 @@
 /**
- * Test-only helpers for the cli-adapters suites. Not part of the package's public
- * barrel — imported directly by `*.test.ts`. Two testing strategies live here:
+ * Test-only helpers for the cli-adapters suites. Deliberately kept OUT of the
+ * package barrel (`index.ts`) so it never reaches app code; reachable from other
+ * packages' tests via the explicit `@starbase/cli-adapters/test-support`
+ * subpath. Two testing strategies live here:
  *
  *  1. **Real outcomes** — `withTempRoot` + `initGitRepo` run the FS/git services
  *     against a real temp `~/starbase` and real `git`, so a config actually
@@ -32,12 +34,18 @@ export interface TempRoot {
   readonly cleanup: () => void
 }
 
-const appPathsFor = (root: string): AppPathsShape => ({
+/**
+ * The `~/starbase` layout for a test root. Exported so suites that need their own
+ * root don't hand-roll the literal — adding a path to `AppPathsShape` should be
+ * one edit here, not one per test file (adding `reviewsDir` was three).
+ */
+export const appPathsFor = (root: string): AppPathsShape => ({
   root,
   configFile: join(root, "config.json"),
   sessionsFile: join(root, "sessions.json"),
   worktreesDir: join(root, "worktrees"),
   transcriptsDir: join(root, "transcripts"),
+  reviewsDir: join(root, "reviews"),
   plansDir: join(root, ".starbase"),
   authFile: join(root, "auth.enc")
 })
