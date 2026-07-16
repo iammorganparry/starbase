@@ -96,9 +96,15 @@ const GUARD_STATUS: Record<string, PlanGuard["status"]> = {
   review: "under-review"
 }
 
-/** Extract the first fenced block with the given language tag, or null. */
+/**
+ * Extract the first fenced block whose info string is EXACTLY `lang`, or null.
+ *
+ * The info string must be the language alone (trailing spaces are fine) — a
+ * prefix match would let a ` ```planning ` block masquerade as the plan spec:
+ * the reformat bounce would be skipped and its contents parsed as steps.
+ */
 const fenced = (raw: string, lang: string): string | null => {
-  const re = new RegExp("```" + lang + "[^\\n]*\\n([\\s\\S]*?)```", "i")
+  const re = new RegExp("```" + lang + "[ \\t]*\\r?\\n([\\s\\S]*?)```", "i")
   const m = re.exec(raw)
   return m ? m[1]!.replace(/\s+$/, "") : null
 }

@@ -40,7 +40,7 @@ import type {
   IssueSummary,
   PrMergeMethod,
   ReviewSubmitKind,
-  SessionStatus
+  SettledSessionStatus
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcServer } from "@effect/rpc"
@@ -280,7 +280,7 @@ export const renameSession = (sessionId: string, title: string) =>
   )
 
 /** `Sessions.setStatus` handler — record a settled turn's lifecycle status. */
-export const setSessionStatus = (sessionId: string, status: SessionStatus) =>
+export const setSessionStatus = (sessionId: string, status: SettledSessionStatus) =>
   Effect.gen(function* () {
     yield* SessionStore.setStatus(sessionId, status)
     return yield* SessionStore.get(sessionId)

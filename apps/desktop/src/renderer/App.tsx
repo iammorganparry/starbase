@@ -30,6 +30,7 @@ import { useSessionDiffs } from "./diff-presence.js"
 import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
 import { clearDraft } from "./draft-store.js"
+import { onSessionUpdate } from "./session-updates.js"
 import { completedSessionIds } from "./pr-refresh.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
@@ -61,6 +62,12 @@ const PR_STATE_STALE_MS = 5 * 60_000
 function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void }) {
   const [state, send] = useMachine(appMachine)
   const { clis, repos, reposDir, sessions } = state.context
+
+  // The conversation machine persists a session's settled status by itself, with
+  // no route back here. Fold those records into the list, or the sidebar keeps
+  // rendering the pre-write status (its fallback when a session has no live
+  // activity) until the next restart.
+  useEffect(() => onSessionUpdate((session) => send({ type: "SESSION_UPDATED", session })), [send])
   const liveActivity = useSessionActivities()
   const liveDiff = useSessionDiffs()
   const planSessions = usePlanSessions()

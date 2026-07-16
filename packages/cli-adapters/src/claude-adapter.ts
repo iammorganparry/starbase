@@ -78,7 +78,11 @@ export const PLAN_REFORMAT = [
   "Re-call ExitPlanMode with the SAME plan, but put a fenced ```plan block at the top of it:",
   "a `summary:` line, then each step as `01 Step title` with two-space-indented",
   "`intent:` / `approach:` / `files:` / `guards:` fields. Keep your human-readable markdown below the block.",
-  "Do not change the substance of the plan — only its format."
+  "Do not change the substance of the plan — only its format.",
+  // Without this the model can "comply" by printing the reformatted plan as prose
+  // and ending the turn, which leaves no plan artifact at all. Calling the tool is
+  // the only thing that produces one.
+  "You MUST call the ExitPlanMode tool again — printing the plan as a message does not submit it."
 ].join(" ")
 
 /**

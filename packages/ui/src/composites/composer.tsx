@@ -161,15 +161,28 @@ export function Composer({
   // plain local state — including the `setAttachments(prev => …)` updater form.
   const value = controlledValue ?? internalValue
   const attachments = controlledAttachments ?? internalAttachments
+
+  // An updater must see the LATEST draft, not the one captured when this render
+  // ran — two `addFiles` in flight at once (paste, paste again before the first
+  // FileReader resolves) would otherwise both merge into the same stale array and
+  // the first batch would vanish. These refs are written through on every set, so
+  // calls that land in the same tick chain instead of racing.
+  const valueRef = useRef(value)
+  const attachmentsRef = useRef(attachments)
+  valueRef.current = value
+  attachmentsRef.current = attachments
+
   const setValue = (next: string | ((prev: string) => string)) => {
-    const resolved = typeof next === "function" ? next(value) : next
+    const resolved = typeof next === "function" ? next(valueRef.current) : next
+    valueRef.current = resolved
     if (controlledValue === undefined) setInternalValue(resolved)
     onValueChange?.(resolved)
   }
   const setAttachments = (
     next: ReadonlyArray<Attachment> | ((prev: ReadonlyArray<Attachment>) => ReadonlyArray<Attachment>)
   ) => {
-    const resolved = typeof next === "function" ? next(attachments) : next
+    const resolved = typeof next === "function" ? next(attachmentsRef.current) : next
+    attachmentsRef.current = resolved
     if (controlledAttachments === undefined) setInternalAttachments(resolved)
     onAttachmentsChange?.(resolved)
   }

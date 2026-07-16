@@ -1,15 +1,8 @@
-import type { Plan, PlanStep, PlanStepStatus } from "@starbase/core"
+import type { Plan, PlanStep } from "@starbase/core"
 import { Check, GitBranch } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
-
-/** Mirrors `PlanStepList`'s tones so a step reads identically in both places. */
-const STATUS_TONE: Record<PlanStepStatus, string> = {
-  proposed: "bg-line-strong",
-  current: "bg-blue",
-  revising: "bg-yellow",
-  done: "bg-green"
-}
+import { STEP_STATUS_TONE } from "./plan-step-list.js"
 
 const doneCount = (plan: Plan): number => plan.steps.filter((s) => s.status === "done").length
 
@@ -95,7 +88,7 @@ function Row({
         <Check className="size-3 flex-none text-green" strokeWidth={2.5} />
       ) : (
         <StatusDot
-          tone={STATUS_TONE[step.status]}
+          tone={STEP_STATUS_TONE[step.status]}
           size={6}
           pulse={step.status === "revising"}
           glow={step.status === "current"}

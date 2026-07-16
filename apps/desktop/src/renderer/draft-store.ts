@@ -35,6 +35,8 @@ const notify = (): void => {
   for (const listener of listeners) listener()
 }
 
+const isEmpty = (draft: Draft): boolean => draft.text === "" && draft.attachments.length === 0
+
 /** Read a persisted draft, tolerating absent/garbage/unavailable storage. */
 const read = (sessionId: string): Draft => {
   try {
@@ -43,16 +45,19 @@ const read = (sessionId: string): Draft => {
     const parsed = JSON.parse(raw) as Partial<Draft>
     // Never trust what's on disk — a shape change would otherwise crash the pane.
     if (typeof parsed?.text !== "string") return EMPTY_DRAFT
-    return {
+    const draft: Draft = {
       text: parsed.text,
       attachments: Array.isArray(parsed.attachments) ? parsed.attachments : []
     }
+    // Collapse an empty record back to the shared reference, so the "no draft"
+    // state has exactly one representation however it got persisted.
+    return isEmpty(draft) ? EMPTY_DRAFT : draft
   } catch {
     return EMPTY_DRAFT
   }
 }
 
-const write = (sessionId: string, draft: Draft): void => {
+const writeNow = (sessionId: string, draft: Draft): void => {
   try {
     localStorage.setItem(storageKey(sessionId), JSON.stringify(draft))
   } catch {
@@ -60,12 +65,51 @@ const write = (sessionId: string, draft: Draft): void => {
     // TEXT over an image: retry without attachments. If even that fails (or
     // there's no storage at all) the in-memory copy still carries the draft
     // across session switches — only a reload would drop it.
+    if (draft.text === "") return // nothing worth saving without the attachments
     try {
       localStorage.setItem(storageKey(sessionId), JSON.stringify({ ...draft, attachments: [] }))
     } catch {
       /* memory-only — degraded, but the draft is still live this session */
     }
   }
+}
+
+/**
+ * How long typing must pause before the draft hits disk. Memory is updated
+ * synchronously either way, so a session switch (which reads memory) never waits
+ * on this — only a reload could lose the last few hundred ms of typing.
+ */
+const PERSIST_DEBOUNCE_MS = 400
+
+/** The latest un-persisted draft per session, keyed by id. */
+const pending = new Map<string, Draft>()
+let timer: ReturnType<typeof setTimeout> | null = null
+
+/** Write every pending draft now, and cancel the timer. */
+const flushAll = (): void => {
+  if (timer !== null) {
+    clearTimeout(timer)
+    timer = null
+  }
+  for (const [sessionId, draft] of pending) writeNow(sessionId, draft)
+  pending.clear()
+}
+
+/**
+ * Persist on a trailing debounce. `setItem` is SYNCHRONOUS and stringifying a
+ * draft means stringifying its base64 attachments — doing that per keystroke is
+ * a multi-MB serialize + blocking write on the app's main typing path.
+ */
+const write = (sessionId: string, draft: Draft): void => {
+  pending.set(sessionId, draft)
+  if (timer === null) timer = setTimeout(flushAll, PERSIST_DEBOUNCE_MS)
+}
+
+// Memory is always current, so a session switch never waits on the debounce —
+// but a reload inside the window would drop the last keystrokes. Flush on the way
+// out. `pagehide` (not `beforeunload`) is the one that fires reliably here.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushAll)
 }
 
 /** The current draft, hydrating from storage on first read. Stable reference. */
@@ -87,7 +131,7 @@ const subscribe = (listener: () => void): (() => void) => {
 export const setDraft = (sessionId: string, draft: Draft): void => {
   // An empty draft IS no draft — normalising here keeps storage tidy and keeps
   // `getDraft` returning the shared EMPTY_DRAFT reference.
-  if (draft.text === "" && draft.attachments.length === 0) return clearDraft(sessionId)
+  if (isEmpty(draft)) return clearDraft(sessionId)
   hydrated.add(sessionId)
   drafts = { ...drafts, [sessionId]: draft }
   write(sessionId, draft)
@@ -99,6 +143,9 @@ export const clearDraft = (sessionId: string): void => {
   hydrated.add(sessionId)
   const { [sessionId]: _gone, ...rest } = drafts
   drafts = rest
+  // Drop any debounced write first, or it would land AFTER this and resurrect
+  // the draft we just cleared.
+  pending.delete(sessionId)
   try {
     localStorage.removeItem(storageKey(sessionId))
   } catch {
@@ -122,8 +169,11 @@ export const getDraft = (sessionId: string): Draft => snapshot(sessionId)
 export const seedDraftOnce = (sessionId: string, text: string): void => {
   if (seeded.has(sessionId)) return
   seeded.add(sessionId)
-  if (snapshot(sessionId).text !== "") return
-  setDraft(sessionId, { text, attachments: [] })
+  const current = snapshot(sessionId)
+  if (current.text !== "") return
+  // Only the TEXT is empty — carry any attachments through. A draft can hold
+  // images with no words yet, and the seed must not eat them.
+  setDraft(sessionId, { text, attachments: current.attachments })
 }
 
 /** A session's live draft (reactive). */
@@ -139,4 +189,12 @@ export const __resetDrafts = (): void => {
   drafts = {}
   hydrated.clear()
   seeded.clear()
+  if (timer !== null) {
+    clearTimeout(timer)
+    timer = null
+  }
+  pending.clear()
 }
+
+/** Test-only: run any debounced persistence now, instead of waiting it out. */
+export const __flushDrafts = (): void => flushAll()

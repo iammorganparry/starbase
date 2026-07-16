@@ -7,6 +7,7 @@ import type {
   ProviderModels,
   PermissionMode,
   Plan,
+  PlanStatus,
   QuestionAnswer,
   QuestionRequest,
   Skill
@@ -24,6 +25,13 @@ import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { ArchivedBanner } from "../composites/archived-banner.js"
 import { RunStats } from "../composites/run-stats.js"
+
+/**
+ * Plan statuses the progress rail is FOR — an approved plan being executed, or a
+ * stale one whose run died mid-flight (its progress so far is still the truth).
+ * A proposed/revising plan belongs to the inline card; a rejected one is over.
+ */
+const EXECUTING: ReadonlySet<PlanStatus> = new Set<PlanStatus>(["approved", "stale"])
 
 /**
  * Shift+Tab cycles through the HITL modes, Claude-Code style. Plan mode is
@@ -356,11 +364,14 @@ export function ConversationView({
       </div>
 
       {/*
-        The plan's step progress, beside the transcript. Only mounts once the
-        session HAS a plan, so a plain conversation is untouched. Kept outside the
-        scrolling column so the virtualizer measures against a stable width.
+        The plan's step progress, beside the transcript. Only mounts for a plan
+        that's actually BEING EXECUTED — a plain conversation is untouched, a
+        rejected plan doesn't leave a dead 0/N meter, and while a plan is still
+        proposed the inline card already carries this (the rail would just repeat
+        it). Kept outside the scrolling column so the virtualizer measures against
+        a stable width.
       */}
-      {plan && plan.steps.length > 0 && (
+      {plan && EXECUTING.has(plan.status) && plan.steps.length > 0 && (
         <>
           <ResizeHandle aria-label="Resize plan steps" onResize={(dx) => rail.adjust(-dx)} />
           <div

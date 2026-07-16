@@ -967,17 +967,22 @@ export const latestPlan = (messages: ReadonlyArray<Message>): Plan | null => {
  * can only say "thinking" for a whole run — this says *what kind* of work, and on
  * what.
  */
+/**
+ * No "idle" member: an idle session has NO activity, which `activityOf` says by
+ * returning null. A kind nothing can construct is just a branch every reader has
+ * to rule out.
+ */
 export type ActivityKind =
   | "thinking"
   | "reading"
   | "editing"
   | "running"
   | "monitoring"
+  | "watching"
   | "web"
   | "delegating"
   | "needs-input"
   | "needs-approval"
-  | "idle"
 
 export interface SessionActivity {
   readonly kind: ActivityKind
@@ -996,13 +1001,22 @@ const WEB_TOOLS = new Set(["WebFetch", "WebSearch"])
 const SUBAGENT_TOOLS = new Set(["Task", "Agent"])
 
 /**
- * A `gh`/CI command whose whole point is to WATCH something — these run long, so
- * reporting "Running gh pr checks…" for minutes reads as a hang. Called out as
- * "Monitoring" instead, since that's what the operator actually cares about.
+ * A `gh` command that BLOCKS watching a PR's CI. Deliberately narrow: it must be
+ * an actual watch, not any `gh pr`/`gh run` subcommand. `gh pr create` and
+ * `gh run list` are things agents do constantly and that return in seconds —
+ * labelling those "Monitoring PR" would be a lie, and (being an attention tone)
+ * a costly one.
  */
-const MONITOR_RE = /\bgh\s+(pr|run|workflow)\b|\bpr\s+checks\b|--watch\b/
+const PR_WATCH_RE = /\bgh\s+pr\s+checks\b(?=[^\n]*--watch\b)|\bgh\s+run\s+watch\b/
 
-/** The PR number a monitoring command refers to, as "#482", or null. */
+/**
+ * Any other long-lived watcher (`vitest --watch`, `tsc --watch`). Reported as
+ * "Watching" rather than "Running" for the same reason — it won't return — but
+ * it has nothing to do with a PR.
+ */
+const WATCH_RE = /--watch\b/
+
+/** The PR number a watch command refers to, as "#482", or null. */
 const prRef = (command: string): string | null => {
   const m = /\bgh\s+pr\s+\w+\s+(\d+)\b/.exec(command) ?? /#(\d+)\b/.exec(command)
   return m ? `#${m[1]}` : null
@@ -1041,9 +1055,13 @@ const toolActivity = (tool: ToolCall): SessionActivity => {
   const target = tool.target
   if (tool.name === "Bash" && target) {
     const command = shortCommand(target)
-    return MONITOR_RE.test(command)
-      ? { kind: "monitoring", verb: "Monitoring PR", target: prRef(command) }
-      : { kind: "running", verb: "Running", target: command }
+    if (PR_WATCH_RE.test(command)) {
+      return { kind: "monitoring", verb: "Monitoring PR", target: prRef(command) }
+    }
+    // A watcher that isn't about a PR — say so, rather than claiming either
+    // "Running" (it never returns) or "Monitoring PR" (it isn't one).
+    if (WATCH_RE.test(command)) return { kind: "watching", verb: "Watching", target: command }
+    return { kind: "running", verb: "Running", target: command }
   }
   if (SUBAGENT_TOOLS.has(tool.name)) return { kind: "delegating", verb: "Delegating", target }
   if (READ_TOOLS.has(tool.name)) {
@@ -1094,8 +1112,6 @@ export const activityStatus = (kind: ActivityKind): SessionStatus => {
       return "needs-input"
     case "thinking":
       return "thinking"
-    case "idle":
-      return "idle"
     default:
       return "running"
   }

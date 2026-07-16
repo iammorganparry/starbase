@@ -854,6 +854,28 @@ describe("activityOf", () => {
     expect(activityOf([turn(tool("Bash", "gh run watch"))], "running")?.kind).toBe("monitoring")
   })
 
+  it("does NOT call routine gh commands 'Monitoring PR'", () => {
+    // These finish in seconds and agents run them constantly; labelling them
+    // "Monitoring PR" (an attention tone) would be a lie.
+    for (const cmd of ["gh pr create --fill", "gh pr view 482", "gh run list"]) {
+      expect(activityOf([turn(tool("Bash", cmd))], "running")).toStrictEqual({
+        kind: "running",
+        verb: "Running",
+        target: cmd
+      })
+    }
+  })
+
+  it("calls a non-gh watcher 'Watching', not 'Monitoring PR'", () => {
+    // `vitest --watch` never returns, so it isn't "Running" either — but it has
+    // nothing to do with a PR.
+    expect(activityOf([turn(tool("Bash", "vitest --watch"))], "running")).toStrictEqual({
+      kind: "watching",
+      verb: "Watching",
+      target: "vitest --watch"
+    })
+  })
+
   it("reduces file tools to a basename", () => {
     expect(activityOf([turn(tool("Read", "packages/core/src/conversation.ts"))], "running")).toStrictEqual(
       { kind: "reading", verb: "Reading", target: "conversation.ts" }

@@ -233,6 +233,15 @@ describe("hasPlanBlock", () => {
     expect(hasPlanBlock("prose first\n\n```plan\nsummary: x\n```\n\nmore prose")).toBe(true)
   })
 
+  it("ignores a fence whose info string merely STARTS with 'plan'", () => {
+    // A prefix match would parse ```planning as the plan spec and skip the
+    // reformat bounce. (```plaintext is safe either way — it's "plai", not "plan".)
+    expect(hasPlanBlock("```planning\nsummary: x\n```")).toBe(false)
+    expect(hasPlanBlock("```plaintext\nsome output\n```")).toBe(false)
+    // A trailing space after the language is still a plan block.
+    expect(hasPlanBlock("```plan \nsummary: x\n```")).toBe(true)
+  })
+
   it("is false for a plan that skipped the fence", () => {
     expect(hasPlanBlock("## My plan\n\n1. Do a thing\n2. Do another")).toBe(false)
     // A plan carrying OTHER fences but not `plan` still counts as non-compliant.

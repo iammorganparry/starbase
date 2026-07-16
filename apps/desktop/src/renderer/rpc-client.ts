@@ -37,7 +37,7 @@ import type {
   Repo,
   ReviewSubmitKind,
   Session,
-  SessionStatus,
+  SettledSessionStatus,
   Skill,
   StreamEvent,
   TerminalChunk,
@@ -133,7 +133,7 @@ export const rpc = {
     run((c) => c.Sessions.retitle({ sessionId })),
   sessionsRename: (sessionId: string, title: string): Promise<Session> =>
     run((c) => c.Sessions.rename({ sessionId, title })),
-  sessionsSetStatus: (sessionId: string, status: SessionStatus): Promise<Session> =>
+  sessionsSetStatus: (sessionId: string, status: SettledSessionStatus): Promise<Session> =>
     run((c) => c.Sessions.setStatus({ sessionId, status })),
   sessionsDelete: (sessionId: string): Promise<void> =>
     run((c) => c.Sessions.delete({ sessionId })),

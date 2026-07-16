@@ -31,7 +31,7 @@ import {
   Repo,
   ReviewSubmitKind,
   Session,
-  SessionStatus,
+  SettledSessionStatus,
   Skill,
   StreamEvent,
   TerminalChunk,
@@ -220,7 +220,7 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Sessions.setStatus", {
     success: Session,
     error: GitError,
-    payload: { sessionId: Schema.String, status: SessionStatus }
+    payload: { sessionId: Schema.String, status: SettledSessionStatus }
   }),
 
   /** Permanently delete a session and remove its worktree. Irreversible. */

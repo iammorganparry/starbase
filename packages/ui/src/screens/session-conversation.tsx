@@ -10,18 +10,23 @@ import { SEED_CONVERSATION } from "../seed.js"
 import { EmptyConversation } from "./empty-conversation.js"
 import { StubScreen } from "./stub-screen.js"
 
-/** The tab-bar pill's accent per activity — blue reads as "you're needed". */
+/**
+ * The tab-bar pill's accent per activity. Blue means "you're needed" and is
+ * reserved for exactly that — anything the agent is doing under its own steam is
+ * yellow, however long it takes. (Monitoring a PR is still the agent's work, not
+ * yours; tinting it blue would dilute the one signal that should pull an eye.)
+ */
 const ACTIVITY_TONE: Record<ActivityKind, "yellow" | "blue" | "green"> = {
   thinking: "yellow",
   reading: "yellow",
   editing: "yellow",
   running: "yellow",
-  monitoring: "blue",
+  monitoring: "yellow",
+  watching: "yellow",
   web: "yellow",
   delegating: "yellow",
   "needs-input": "blue",
-  "needs-approval": "blue",
-  idle: "green"
+  "needs-approval": "blue"
 }
 
 /**
@@ -160,7 +165,13 @@ export function SessionConversation(props: SessionConversationProps) {
   // A pending deep link into Plan Review (set when the Conversation rail jumps to
   // a step). One-shot: Plan Review reports its own selection back and we drop it,
   // so a later manual pick isn't overridden by a stale target.
-  const [planStepTarget, setPlanStepTarget] = useState<string | null>(null)
+  //
+  // Tagged with the session it belongs to, and read back only for THAT session —
+  // this component isn't keyed by session, and step ids are per-plan ordinals
+  // (s_01, s_02…) that collide across sessions. Untagged, deep-linking in session
+  // A would snap session B's Plan tab to an unrelated same-numbered step.
+  const [target, setTarget] = useState<{ sessionId: string; stepId: string } | null>(null)
+  const planStepTarget = target?.sessionId === props.activeSessionId ? target.stepId : null
   const active = props.sessions.find((s) => s.id === props.activeSessionId) ?? null
 
   const tabs = visibleTabs(active, props.planSessions)
@@ -261,11 +272,15 @@ export function SessionConversation(props: SessionConversationProps) {
                   props.renderConversationPane ? (
                     props.renderConversationPane(activeTab === "plan" ? "plan" : "conversation", {
                       onOpenPlanReview: (stepId) => {
-                        setPlanStepTarget(stepId ?? null)
+                        setTarget(
+                          stepId && props.activeSessionId
+                            ? { sessionId: props.activeSessionId, stepId }
+                            : null
+                        )
                         setTab("plan")
                       },
                       planStepId: planStepTarget,
-                      onPlanStepSelected: () => setPlanStepTarget(null)
+                      onPlanStepSelected: () => setTarget(null)
                     })
                   ) : (
                     <div key="conversation" className="flex min-h-0 min-w-0 flex-1">

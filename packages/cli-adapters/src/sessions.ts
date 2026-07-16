@@ -6,7 +6,7 @@ import type {
   IssueAutomations,
   PermissionMode,
   Session,
-  SessionStatus
+  SettledSessionStatus
 } from "@starbase/core"
 import { GhError, GitError, SessionNotFoundError, UNTITLED_SESSION } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
@@ -362,7 +362,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
        * session is terminal — never drag it back to idle/needs-input, or the
        * sidebar would show a merged session as if it still wanted attention.
        */
-      const setStatus = (id: string, status: SessionStatus) =>
+      const setStatus = (id: string, status: SettledSessionStatus) =>
         update(id, (s) => (s.archived ? s : { ...s, status }))
 
       /** Add a command to the session's "always allow" list (deduped). */

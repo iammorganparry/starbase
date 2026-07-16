@@ -20,18 +20,17 @@ type GroupBy = "repo" | "status"
  */
 export const ARCHIVED_GROUP_KEY = "__archived__"
 
-/** Status groups render in this order (most-active first). */
-const STATUS_ORDER: ReadonlyArray<SessionStatus> = [
-  "needs-input",
-  "thinking",
-  "running",
-  "idle",
-  "done"
-]
+/**
+ * Status groups render in this order (most-active first). "thinking" is absent:
+ * `statusOf` folds it into "running" so a session doesn't hop groups every time a
+ * tool starts — see there.
+ */
+const STATUS_ORDER: ReadonlyArray<SessionStatus> = ["needs-input", "running", "idle", "done"]
 const STATUS_LABEL: Record<SessionStatus, string> = {
   "needs-input": "Needs input",
   thinking: "Thinking",
-  running: "Running",
+  // Covers thinking AND every kind of tool work — the row says which.
+  running: "Working",
   idle: "Idle",
   done: "Done"
 }
@@ -116,12 +115,15 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  // A live activity rolls up to a coarse status for grouping; otherwise the
-  // persisted one stands in.
+  // The GROUP a session sits in. Coarser than its row label on purpose: an
+  // activity distinguishes thinking from running moment to moment, so grouping on
+  // that directly would reorder the list every few seconds as tools start and
+  // stop. Both collapse to one "Working" group and the row keeps the fine detail.
   const statusOf = React.useCallback(
     (s: Session): SessionStatus => {
       const activity = liveActivity?.[s.id]
-      return activity ? activityStatus(activity.kind) : s.status
+      const status = activity ? activityStatus(activity.kind) : s.status
+      return status === "thinking" ? "running" : status
     },
     [liveActivity]
   )

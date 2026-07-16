@@ -37,6 +37,18 @@ export const SessionStatus = Schema.Literal(
 )
 export type SessionStatus = Schema.Schema.Type<typeof SessionStatus>
 
+/**
+ * The subset of `SessionStatus` that may be WRITTEN BACK to the store.
+ *
+ * A run lives in the main process and dies with the app, so persisting a busy
+ * status ("thinking"/"running") would strand the session in it forever after a
+ * restart — reporting work for a run that no longer exists. Keeping the invariant
+ * in the type means the boundary enforces it, rather than every caller having to
+ * remember. Live, in-flight state is `SessionActivity`, which is never persisted.
+ */
+export const SettledSessionStatus = Schema.Literal("idle", "needs-input")
+export type SettledSessionStatus = Schema.Schema.Type<typeof SettledSessionStatus>
+
 /** Added / removed line counts for a session's working diff. */
 export const DiffStat = Schema.Struct({
   added: Schema.Number,

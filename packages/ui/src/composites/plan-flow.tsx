@@ -228,7 +228,14 @@ export function PlanFlow({
       <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-editor", className)}>
         {!embedded && <FlowHeader graph={graph} onExpand={() => setExpanded(true)} />}
         <div className="relative min-h-0 flex-1">
-          <FlowCanvas graph={graph} selectedId={selectedId} onSelect={onSelect} minimap={!embedded} />
+          {/*
+            Dropped while the modal is up: it's fully covered, and leaving it
+            mounted would run two ReactFlow instances and two dagre passes at once
+            — for exactly the large graphs the modal exists to handle.
+          */}
+          {!expanded && (
+            <FlowCanvas graph={graph} selectedId={selectedId} onSelect={onSelect} minimap={!embedded} />
+          )}
           {/* Embedded has no header to host the control — float it over the canvas.
               `z-10` clears react-flow's own panes; top-right dodges the Controls. */}
           {embedded && (
