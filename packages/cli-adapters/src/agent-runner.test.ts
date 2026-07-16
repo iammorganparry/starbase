@@ -114,7 +114,13 @@ describe("AgentRunner sub-agents", () => {
       run: (_sessionId, _spec, ctx) =>
         Effect.gen(function* () {
           yield* ctx.emit({ _tag: "Assistant", text: "main output" })
-          yield* ctx.emit({ _tag: "SubagentStarted", id: "task_1", name: "Explore", description: "sub task" })
+          yield* ctx.emit({
+            _tag: "SubagentStarted",
+            id: "task_1",
+            name: "Explore",
+            description: "sub task",
+            parentId: null
+          })
           yield* ctx.emit({ _tag: "Assistant", text: "SUBTEXT", agentId: "task_1" })
           yield* ctx.emit({ _tag: "ToolStart", id: "r1", name: "Read", target: "a.ts", agentId: "task_1" })
           yield* ctx.emit({ _tag: "SubagentEnded", id: "task_1", status: "done" })

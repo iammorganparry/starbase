@@ -14,6 +14,8 @@ import {
   nextReviewPhase,
   markChangedSteps,
   applySubagentEvent,
+  agentChildren,
+  agentPath,
   assistantMessage,
   isSubagentEvent,
   latestPlan,
@@ -629,6 +631,7 @@ describe("sub-agents", () => {
           id: "t1",
           name: "Explore",
           description: "Map the tab bar",
+          parentId: null,
           status: "working",
           message: assistantMessage("t1", "")
         })
@@ -641,13 +644,14 @@ describe("sub-agents", () => {
           id: "t1",
           name: "Explore",
           description: "d",
+          parentId: null,
           status: "paused",
           message: assistantMessage("t1", "")
         })
       )
     ).toBe(false)
     expect(
-      Either.isRight(decode(StreamEvent, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "d" }))
+      Either.isRight(decode(StreamEvent, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "d", parentId: null }))
     ).toBe(true)
     expect(Either.isRight(decode(StreamEvent, { _tag: "SubagentEnded", id: "t1", status: "done" }))).toBe(true)
     // A content event may carry an optional agentId.
@@ -655,7 +659,7 @@ describe("sub-agents", () => {
   })
 
   it("isSubagentEvent flags lifecycle + agentId-tagged events, not main-turn events", () => {
-    expect(isSubagentEvent({ _tag: "SubagentStarted", id: "t1", name: "Explore", description: "d" })).toBe(true)
+    expect(isSubagentEvent({ _tag: "SubagentStarted", id: "t1", name: "Explore", description: "d", parentId: null })).toBe(true)
     expect(isSubagentEvent({ _tag: "SubagentEnded", id: "t1", status: "done" })).toBe(true)
     expect(isSubagentEvent({ _tag: "Assistant", text: "child", agentId: "t1" })).toBe(true)
     // Same tag WITHOUT agentId belongs to the main turn.
@@ -665,7 +669,7 @@ describe("sub-agents", () => {
 
   it("SubagentStarted opens a working tab; agentId events accrue onto its own message", () => {
     let subs: ReadonlyArray<Subagent> = []
-    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "Map it" })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "Map it", parentId: null })
     expect(subs).toHaveLength(1)
     expect(subs[0]).toMatchObject({ id: "t1", name: "Explore", status: "working" })
 
@@ -678,8 +682,8 @@ describe("sub-agents", () => {
 
   it("routes each child's output to its own tab and ignores unknown ids", () => {
     let subs: ReadonlyArray<Subagent> = []
-    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one" })
-    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t2", name: "Explore", description: "two" })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one", parentId: null })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t2", name: "Explore", description: "two", parentId: null })
     subs = applySubagentEvent(subs, { _tag: "Assistant", text: "for t2", agentId: "t2" })
     // An event for a sub-agent that never started is a no-op, not a crash.
     const unchanged = applySubagentEvent(subs, { _tag: "Assistant", text: "ghost", agentId: "nope" })
@@ -690,7 +694,7 @@ describe("sub-agents", () => {
 
   it("SubagentEnded keeps the tab (marks its status) so output stays readable", () => {
     let subs: ReadonlyArray<Subagent> = []
-    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one" })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one", parentId: null })
     expect(subs[0]?.status).toBe("working")
     subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "done" })
     expect(subs).toHaveLength(1)
@@ -700,9 +704,103 @@ describe("sub-agents", () => {
     expect(subs[0]?.status).toBe("error")
   })
 
+  it("ignores a SubagentEnded for an unknown id (ambient task_notifications)", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one", parentId: null })
+    // `task_notification` fires for EVERY task, including ambient/workflow ones
+    // whose tool_use_id never opened a tab — those must not churn the list.
+    const same = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "ambient_task", status: "done" })
+    expect(same).toBe(subs)
+  })
+
+  it("SubagentEnded settles the rolling message (no perpetual 'working' dots)", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one", parentId: null })
+    subs = applySubagentEvent(subs, { _tag: "Assistant", text: "found it", agentId: "t1" })
+    // A sub-agent's message is born streaming, and `Done` (which would clear it)
+    // is a MAIN-turn event that never reaches a sub-agent — so `SubagentEnded` is
+    // the only thing that can settle it. Without this the tab pulses forever.
+    expect(subs[0]?.message.streaming).toBe(true)
+    subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "done" })
+    expect(subs[0]?.message.streaming).toBe(false)
+    // The output itself is untouched — the tab stays readable after it settles.
+    expect(subs[0]?.message.parts).toHaveLength(1)
+  })
+
+  it("settles a still-streaming DESCENDANT's message when an ancestor ends", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    const start = (id: string, parentId: string | null) =>
+      applySubagentEvent(subs, { _tag: "SubagentStarted", id, name: id, description: "", parentId })
+    subs = start("t1", null)
+    subs = start("t1a", "t1")
+    subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "error" })
+    expect(subs.find((s) => s.id === "t1a")?.message.streaming).toBe(false)
+  })
+
+  it("opens a NESTED sub-agent's tab and routes its output to its own message", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one", parentId: null })
+    // t2 is spawned BY t1 — a second level.
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t2", name: "verify", description: "deep", parentId: "t1" })
+    expect(subs).toHaveLength(2)
+    expect(subs.find((s) => s.id === "t2")?.parentId).toBe("t1")
+
+    // The SDK stamps the IMMEDIATE parent, so the nested agent's own output is
+    // tagged with its own id and must land on its message, NOT its parent's.
+    subs = applySubagentEvent(subs, { _tag: "Assistant", text: "from t2", agentId: "t2" })
+    expect(subs.find((s) => s.id === "t1")?.message.parts).toHaveLength(0)
+    expect(subs.find((s) => s.id === "t2")?.message.parts).toHaveLength(1)
+  })
+
+  it("agentChildren derives one level of the tree; agentPath gives the breadcrumb", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    const start = (id: string, parentId: string | null) =>
+      applySubagentEvent(subs, { _tag: "SubagentStarted", id, name: id, description: "", parentId })
+    subs = start("t1", null)
+    subs = start("t2", null)
+    subs = start("t2a", "t2")
+    subs = start("t2a1", "t2a")
+
+    expect(agentChildren(subs, null).map((s) => s.id)).toStrictEqual(["t1", "t2"])
+    expect(agentChildren(subs, "t2").map((s) => s.id)).toStrictEqual(["t2a"])
+    expect(agentChildren(subs, "t1")).toStrictEqual([])
+    expect(agentPath(subs, "t2a1").map((s) => s.id)).toStrictEqual(["t2", "t2a", "t2a1"])
+    expect(agentPath(subs, "t1").map((s) => s.id)).toStrictEqual(["t1"])
+    expect(agentPath(subs, "nope")).toStrictEqual([])
+  })
+
+  it("agentPath does not spin on a cyclic parent pointer", () => {
+    // A malformed stream can't be ruled out at the type level — guard the walk.
+    const cyclic: ReadonlyArray<Subagent> = [
+      { id: "a", name: "a", description: "", parentId: "b", status: "working", message: assistantMessage("a", "") },
+      { id: "b", name: "b", description: "", parentId: "a", status: "working", message: assistantMessage("b", "") }
+    ]
+    expect(agentPath(cyclic, "a").map((s) => s.id)).toStrictEqual(["b", "a"])
+  })
+
+  it("an ancestor ending settles still-working descendants (no ghost 'working' tabs)", () => {
+    let subs: ReadonlyArray<Subagent> = []
+    const start = (id: string, parentId: string | null) =>
+      applySubagentEvent(subs, { _tag: "SubagentStarted", id, name: id, description: "", parentId })
+    subs = start("t1", null)
+    subs = start("t1a", "t1")
+    subs = start("t1a1", "t1a")
+    subs = start("t2", null)
+    subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1a1", status: "done" })
+
+    // t1 errors while t1a is still working — its whole subtree settles with it,
+    // but an already-settled descendant keeps its own outcome, and the unrelated
+    // t2 branch is untouched.
+    subs = applySubagentEvent(subs, { _tag: "SubagentEnded", id: "t1", status: "error" })
+    expect(subs.find((s) => s.id === "t1")?.status).toBe("error")
+    expect(subs.find((s) => s.id === "t1a")?.status).toBe("error")
+    expect(subs.find((s) => s.id === "t1a1")?.status).toBe("done")
+    expect(subs.find((s) => s.id === "t2")?.status).toBe("working")
+  })
+
   it("passes non-sub-agent events through untouched (callers can route unconditionally)", () => {
     const subs: ReadonlyArray<Subagent> = [
-      { id: "t1", name: "Explore", description: "one", status: "working", message: assistantMessage("t1", "") }
+      { id: "t1", name: "Explore", description: "one", parentId: null, status: "working", message: assistantMessage("t1", "") }
     ]
     expect(applySubagentEvent(subs, { _tag: "Done", costUsd: 1, tokens: 2 })).toBe(subs)
   })

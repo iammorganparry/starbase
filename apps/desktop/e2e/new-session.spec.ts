@@ -241,7 +241,22 @@ test("creating a session from an issue forks a linked branch and seeds the task"
     repo: "widget",
     automations: { progressComments: true, closeOnMerge: true }
   })
-  // `initialPrompt` is one-shot: the composer consumed it (asserted above) and it
-  // was cleared from the persisted session so re-opening never re-seeds.
-  expect(persisted[0].initialPrompt).toBeUndefined()
+  // `initialPrompt` is one-shot but survives until the operator actually SENDS —
+  // it is NOT cleared on mount. This test visits the Issue tab above, which is
+  // exactly the case that broke: unmounting the pane discarded the composer's
+  // seeded text, and a clear-on-mount left nothing to re-seed it from. So the seed
+  // is still persisted here, and the composer still shows it after coming back.
+  expect(persisted[0].initialPrompt).toContain("Fix the refund route")
+  await window.getByRole("button", { name: "Conversation" }).click()
+  await expect(window.getByPlaceholder("Message Claude…")).toHaveValue(/Fix the refund route/)
+
+  // Sending consumes it — only then is it cleared, so re-opening never re-seeds.
+  await window.getByPlaceholder("Message Claude…").press("Enter")
+  await expect
+    .poll(
+      () =>
+        JSON.parse(readFileSync(join(home, "starbase", "sessions.json"), "utf-8"))[0].initialPrompt,
+      { timeout: 15_000 }
+    )
+    .toBeUndefined()
 })
