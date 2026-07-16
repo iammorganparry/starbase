@@ -250,6 +250,23 @@ describe("mapReviewThreads", () => {
     expect(thread?.comments[1]).toMatchObject({ author: "iammorganparry", isBot: false, association: "OWNER" })
   })
 
+  it("folds an unknown or absent authorAssociation to null rather than throwing", () => {
+    const withAssoc = (authorAssociation: unknown) => {
+      const base = structuredClone(RAW_THREADS)
+      Object.assign(base.data.repository.pullRequest.reviewThreads.nodes[0]!.comments.nodes[0]!, {
+        authorAssociation
+      })
+      return mapReviewThreads(base)[0]?.comments[0]?.association
+    }
+    // A value from a future API revision must degrade, not blow up the tab.
+    expect(withAssoc("SOMETHING_NEW")).toBeNull()
+    expect(withAssoc(undefined)).toBeNull()
+    expect(withAssoc(null)).toBeNull()
+    expect(withAssoc(42)).toBeNull()
+    // …and a real one still decodes, case-insensitively.
+    expect(withAssoc("owner")).toBe("OWNER")
+  })
+
   it("keeps only reactions anyone actually used", () => {
     const [thread] = mapReviewThreads(RAW_THREADS)
     expect(thread?.comments[0]?.reactions).toStrictEqual([])

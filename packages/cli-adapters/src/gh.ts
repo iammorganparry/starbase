@@ -7,7 +7,6 @@ import type {
   PrFileChange,
   PrLabel,
   PrMergeMethod,
-  PrAuthorAssociation,
   PrReviewer,
   PrReviewKind,
   PrReviewThread,
@@ -18,10 +17,10 @@ import type {
   PullRequest,
   ReviewSubmitKind
 } from "@starbase/core"
-import { GhError } from "@starbase/core"
+import { GhError, PrAuthorAssociation } from "@starbase/core"
 import { Command } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
-import { Effect, Stream } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
 import { runGh, runString, which } from "./command.js"
 
 const UNAVAILABLE: GhStatus = {
@@ -292,23 +291,14 @@ const UNRESOLVE_THREAD_MUTATION = `mutation($id:ID!){
   unresolveReviewThread(input:{threadId:$id}){ thread{ id isResolved } }
 }`
 
-const ASSOCIATIONS = new Set<PrAuthorAssociation>([
-  "OWNER",
-  "MEMBER",
-  "COLLABORATOR",
-  "CONTRIBUTOR",
-  "FIRST_TIME_CONTRIBUTOR",
-  "FIRST_TIMER",
-  "MANNEQUIN",
-  "NONE"
-])
-
-const associationOf = (v: unknown): PrAuthorAssociation | null => {
-  const s = str(v)?.toUpperCase()
-  return s !== undefined && s !== null && ASSOCIATIONS.has(s as PrAuthorAssociation)
-    ? (s as PrAuthorAssociation)
-    : null
-}
+/**
+ * Narrow GitHub's `authorAssociation` through the schema itself, so the accepted
+ * values live in exactly one place (`packages/core`) and an unknown value from a
+ * future API revision degrades to null rather than throwing.
+ */
+const decodeAssociation = Schema.decodeUnknownOption(PrAuthorAssociation)
+const associationOf = (v: unknown): PrAuthorAssociation | null =>
+  Option.getOrNull(decodeAssociation(str(v)?.toUpperCase()))
 
 const mapThreadComment = (c: Json): PrThreadComment => {
   const author = rec(c.author)

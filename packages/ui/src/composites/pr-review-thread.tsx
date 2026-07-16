@@ -239,7 +239,7 @@ export function PrReviewThreadView({
                 {thread.isResolved ? "Unresolve conversation" : "Resolve conversation"}
               </AsyncButton>
               {thread.isResolved && thread.resolvedBy && (
-                <span className={cn("text-[12px] text-dim")}>
+                <span className="text-[12px] text-dim">
                   <span className="text-muted-foreground">{thread.resolvedBy}</span> marked this
                   conversation as resolved.
                 </span>
