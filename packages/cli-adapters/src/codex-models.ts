@@ -80,11 +80,19 @@ export const fetchCodexModels = (binPath?: string | null): Promise<ReadonlyArray
     // A missing binary surfaces here rather than as a throw from spawn().
     child.on("error", () => finish(null))
     child.on("exit", () => finish(null))
+    // Writing to the stdin of a child that has already exited fails ASYNCHRONOUSLY
+    // — the EPIPE arrives as an 'error' event on the pipe, which `send`'s
+    // try/catch cannot see. With no listener that becomes an unhandled exception
+    // and takes the whole process down. A broken pipe just means the child is
+    // gone, which is exactly what `finish(null)` is for.
+    child.stdin?.on("error", () => finish(null))
 
     const send = (id: number, method: string, params: unknown) => {
       try {
         child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
       } catch {
+        // Only catches a synchronous throw (e.g. the stream already destroyed);
+        // the async path is handled by the 'error' listener above.
         finish(null)
       }
     }
