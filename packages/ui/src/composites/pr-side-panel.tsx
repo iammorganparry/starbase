@@ -7,6 +7,7 @@ import { Callout } from "../components/callout.js"
 import { Eyebrow } from "../components/eyebrow.js"
 import { Spinner } from "../components/loading.js"
 import { PrCheckRow } from "./pr-check-row.js"
+import { ReviewFindings, type ReviewFindingsProps } from "./review-findings.js"
 
 /** Reviewer state → Badge tone + label. */
 const reviewerBadge: Record<PrReviewKind, { tone: BadgeProps["tone"]; label: string }> = {
@@ -38,16 +39,7 @@ function ReviewerRow({ reviewer }: { reviewer: PrReviewer }) {
  * The Pull Request right rail — reviewers, CI checks, and the merge box. Read-only
  * except for the merge action (enabled only when connected and unblocked).
  */
-export function PrSidePanel({
-  pr,
-  connected,
-  onMerge,
-  merging = false,
-  mergeError,
-  onMarkReady,
-  markingReady = false,
-  markReadyError
-}: {
+export interface PrSidePanelProps {
   pr: PullRequest
   connected: boolean
   onMerge?: () => void
@@ -56,7 +48,26 @@ export function PrSidePanel({
   onMarkReady?: () => void
   markingReady?: boolean
   markReadyError?: string | null
-}) {
+  /**
+   * The adversarial review panel's state + actions. Omitted in contexts that
+   * don't offer a review (e.g. a story showing the bare PR rail). `canRun` is
+   * derived here from the PR's own state, so callers can't offer a review of a
+   * merged/closed PR by accident.
+   */
+  review?: Omit<ReviewFindingsProps, "canRun">
+}
+
+export function PrSidePanel({
+  pr,
+  connected,
+  onMerge,
+  merging = false,
+  mergeError,
+  onMarkReady,
+  markingReady = false,
+  markReadyError,
+  review
+}: PrSidePanelProps) {
   const failing = pr.checks.filter((c) => c.status === "fail").length
   const blocked = pr.mergeBlockers.length > 0
   const merged = pr.state === "merged"
@@ -89,6 +100,24 @@ export function PrSidePanel({
           pr.checks.map((c) => <PrCheckRow key={c.name} check={c} />)
         )}
       </div>
+
+      {/* Adversarial review */}
+      {review && (
+        <div className="flex flex-col gap-3 border-b border-hairline p-4">
+          <div className="flex items-center gap-2">
+            <Eyebrow className="flex-1">Adversarial review</Eyebrow>
+            {review.review && review.review.findings.length > 0 && (
+              <span className="font-mono text-[10.5px] text-dim">
+                {review.review.findings.length}{" "}
+                {review.review.findings.length === 1 ? "finding" : "findings"}
+              </span>
+            )}
+          </div>
+          {/* A review needs a live PR to argue against — merged/closed PRs are
+              history, and re-reviewing them just burns tokens. */}
+          <ReviewFindings {...review} canRun={connected && !merged && !closed} />
+        </div>
+      )}
 
       {/* Merge box */}
       <div className="p-4">

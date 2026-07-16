@@ -32,6 +32,32 @@ export interface SessionSpec {
    * restart cleared the in-memory resume map.
    */
   readonly resumeId: string | null
+  /**
+   * Force a brand-new harness conversation, ignoring the adapter's in-memory
+   * resume map entirely (and not writing to it).
+   *
+   * `resumeId: null` is NOT enough on its own: the adapter prefers its live map
+   * over the spec, so a repeated run under the same key silently resumes the
+   * previous one. A one-shot run that must be a pure function of its prompt —
+   * the adversarial reviewer — sets this.
+   */
+  readonly fresh?: boolean
+  /**
+   * This run must not mutate anything — no edits, no shell commands. Enforced by
+   * the HARNESS, and each adapter says it in its own vocabulary (Claude: refuse
+   * the write tools; Codex: a read-only sandbox).
+   *
+   * `ctx.canUseTool` is not sufficient on its own, in two independent ways:
+   *  - it is a denylist over tool NAMES we recognise (`toPermissionRequest`
+   *    returns null → allowed ungated), so a write-capable tool we don't know
+   *    about is silently permitted; and
+   *  - the Codex adapter never calls it at all (its exec model has no per-tool
+   *    callback), so for Codex the callback is not a control surface whatsoever.
+   *
+   * Hence intent lives here rather than a list of Claude's tool names: a spec
+   * field only one adapter understands is a guarantee only one adapter keeps.
+   */
+  readonly readOnly?: boolean
 }
 
 /** What the agent is asking permission to do, surfaced before it acts. */

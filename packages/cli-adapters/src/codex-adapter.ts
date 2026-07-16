@@ -20,13 +20,22 @@ import type { AgentContext, SessionSpec } from "./adapter.js"
  * `never` (there is no interactive callback in exec mode); the mode instead
  * widens the sandbox — `auto` gets full access, otherwise edits/commands are
  * confined to the workspace.
+ *
+ * `readOnly` overrides the mode entirely. It has to be enforced HERE, in the
+ * sandbox, because this adapter never calls `ctx.canUseTool` — so a caller that
+ * denies every gated action (the adversarial reviewer) gets no protection at all
+ * from that callback, and would otherwise run `workspace-write` + approval
+ * `never`, i.e. free rein over the worktree it was told not to touch.
  */
 export const mapCodexPolicy = (
-  mode: PermissionMode
+  mode: PermissionMode,
+  readOnly = false
 ): { sandboxMode: SandboxMode; approvalPolicy: ApprovalMode } =>
-  mode === "auto"
-    ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
-    : { sandboxMode: "workspace-write", approvalPolicy: "never" }
+  readOnly
+    ? { sandboxMode: "read-only", approvalPolicy: "never" }
+    : mode === "auto"
+      ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
+      : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
 export const codexEventToStreamEvents = (
@@ -149,7 +158,7 @@ export const runCodex = (
           workingDirectory: spec.cwd || undefined,
           skipGitRepoCheck: true,
           ...(spec.model ? { model: spec.model } : {}),
-          ...mapCodexPolicy(spec.mode)
+          ...mapCodexPolicy(spec.mode, spec.readOnly ?? false)
         }
         // Prefer the live in-memory thread id (this launch), else the id persisted
         // on the session (survives an app restart), so "continue" resumes the

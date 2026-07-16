@@ -6,6 +6,7 @@
 import type { Session } from "@starbase/core"
 import { CodeReviewView } from "@starbase/ui"
 import { useReview } from "./use-review.js"
+import { useAdversarialReview } from "./use-adversarial-review.js"
 
 export function ReviewPane({
   session,
@@ -17,6 +18,9 @@ export function ReviewPane({
   onConnectGithub: () => void
 }) {
   const review = useReview(session)
+  // Read-only here: the adversarial review is *run* from the Pull Request tab.
+  // This tab renders whatever the last run produced, anchored to the diff.
+  const adversarial = useAdversarialReview(session, { connected })
 
   return (
     <CodeReviewView
@@ -38,6 +42,9 @@ export function ReviewPane({
       onConnectGithub={onConnectGithub}
       onRevertLines={review.revertLines}
       onRevertFile={review.revertFile}
+      review={adversarial.review}
+      onSendFindingToAgent={adversarial.sendFindingToAgent}
+      sentFindingIds={adversarial.sentFindingIds}
     />
   )
 }

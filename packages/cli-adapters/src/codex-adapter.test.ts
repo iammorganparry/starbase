@@ -16,6 +16,26 @@ describe("mapCodexPolicy", () => {
     expect(mapCodexPolicy("accept-edits")).toStrictEqual({ sandboxMode: "workspace-write", approvalPolicy: "never" })
     expect(mapCodexPolicy("ask")).toStrictEqual({ sandboxMode: "workspace-write", approvalPolicy: "never" })
   })
+
+  /**
+   * The sandbox is the ONLY thing standing between a read-only run and the
+   * worktree on this harness: `runCodex` never calls `ctx.canUseTool`, so a
+   * caller that denies every gated action (the adversarial reviewer) gets zero
+   * protection from that callback. Without this, a Codex review would run
+   * `workspace-write` + approval `never` over the branch it must not touch.
+   */
+  it("read-only overrides every mode, including auto", () => {
+    for (const mode of ["ask", "accept-edits", "plan", "auto"] as const) {
+      expect(mapCodexPolicy(mode, true)).toStrictEqual({
+        sandboxMode: "read-only",
+        approvalPolicy: "never"
+      })
+    }
+  })
+
+  it("defaults to not read-only, so ordinary sessions are unaffected", () => {
+    expect(mapCodexPolicy("ask")).toStrictEqual(mapCodexPolicy("ask", false))
+  })
 })
 
 describe("codexEventToStreamEvents", () => {

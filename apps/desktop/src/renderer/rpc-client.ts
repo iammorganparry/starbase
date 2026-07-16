@@ -5,6 +5,7 @@
  * `StarbaseRpcs` group. Callers get plain, typed Promises back.
  */
 import type {
+  AdversarialReview,
   ArchiveReason,
   Attachment,
   AuthProvider,
@@ -205,6 +206,15 @@ export const rpc = {
     run((c) => c.Github.diff({ sessionId })),
   githubDetectPr: (sessionId: string): Promise<number | null> =>
     run((c) => c.Github.detectPr({ sessionId })),
+  /**
+   * Run an adversarial review of the session's PR. Cheap and safe to call
+   * speculatively: the main process short-circuits on an unchanged PR head, so
+   * only `force` guarantees a fresh agent run.
+   */
+  reviewRun: (sessionId: string, force = false): Promise<AdversarialReview> =>
+    run((c) => c.Review.run({ sessionId, force })),
+  reviewGet: (sessionId: string): Promise<AdversarialReview | null> =>
+    run((c) => c.Review.get({ sessionId })),
   githubCreatePr: (input: {
     sessionId: string
     title: string

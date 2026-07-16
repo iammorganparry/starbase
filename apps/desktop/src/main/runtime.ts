@@ -16,6 +16,8 @@ import {
   HarnessCliAdapterLive,
   ModelsService,
   PlanStore,
+  ReviewService,
+  ReviewStore,
   SessionStore,
   SkillsService,
   TerminalService,
@@ -36,6 +38,25 @@ import { PlaintextSecretStoreLive, SecretStoreLive } from "./secret-store.js"
 const SecretStoreLayer =
   process.env.STARBASE_SECRET_STORE === "memory" ? PlaintextSecretStoreLive : SecretStoreLive
 
+/**
+ * The per-session JSON stores under `~/starbase`. Independent peers — each needs
+ * only FileSystem/Path/AppPaths — so they're merged into one `provide` rather
+ * than chained. (`pipe` tops out at 20 arguments; grouping peers keeps headroom.)
+ */
+const StoreLayers = Layer.mergeAll(
+  TranscriptStore.Default,
+  PlanStore.Default,
+  ReviewStore.Default
+)
+
+/**
+ * The two things that drive a CLI harness. `AgentRunner` owns the session's
+ * conversation; `ReviewService` drives the adapter itself so an adversarial
+ * review can run on its own model, read-only, without touching that
+ * conversation. Peers — neither depends on the other.
+ */
+const HarnessLayers = Layer.mergeAll(AgentRunner.Default, ReviewService.Default)
+
 // Later `Layer.provide`s satisfy the requirements of earlier ones, so the leaf
 // dependencies (paths, dialog, Node platform) come last.
 const AppLayer = RpcServerLive.pipe(
@@ -44,9 +65,8 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(AuthService.Default),
   Layer.provide(WorkspaceService.Default),
   Layer.provide(SessionStore.Default),
-  Layer.provide(TranscriptStore.Default),
-  Layer.provide(PlanStore.Default),
-  Layer.provide(AgentRunner.Default),
+  Layer.provide(StoreLayers),
+  Layer.provide(HarnessLayers),
   // provideMerge (not provide): the RPC handlers consume TerminalService AND the
   // runtime keeps it in context, so the `before-quit` kill-all can reach the very
   // same instance to reap PTYs.

@@ -3,13 +3,19 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   AppPaths,
+  CliAdapter,
   ConfigService,
+  DiscoveryService,
   GhService,
+  ReviewService,
+  ReviewStore,
   SessionStore,
   SkillsService,
   TerminalService,
   WorkspaceService
 } from "@starbase/cli-adapters"
+import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
+import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -20,6 +26,7 @@ import {
   createTerminal,
   githubDetectPr,
   githubPr,
+  reviewRun,
   sessionDiff,
   skillsList,
   workspaceRevertFile,
@@ -41,15 +48,7 @@ describe("RPC handlers", () => {
     root = join(dir, "starbase")
     base = Layer.mergeAll(
       ConfigService.Default,
-      Layer.succeed(AppPaths, {
-        root,
-        configFile: join(root, "config.json"),
-        sessionsFile: join(root, "sessions.json"),
-        worktreesDir: join(root, "worktrees"),
-        transcriptsDir: join(root, "transcripts"),
-        plansDir: join(root, ".starbase"),
-        authFile: join(root, "auth.enc")
-      }),
+      Layer.succeed(AppPaths, appPathsFor(root)),
       NodeContext.layer
     )
   })
@@ -194,6 +193,181 @@ describe("RPC handlers", () => {
       expect(pr).toBeNull()
       const detected = await Effect.runPromise(githubDetectPr("nope").pipe(Effect.provide(gh)))
       expect(detected).toBeNull()
+    })
+  })
+
+  /**
+   * The head-SHA short-circuit is what makes the auto-review trigger safe to
+   * fire off a poll loop: an unchanged PR must cost a cheap `gh pr view`, never
+   * an agent run. These tests count reviewer spawns to assert that as a fact
+   * rather than an intention.
+   */
+  describe("Review.run", () => {
+    /** Persist a session with a linked PR by writing the store's own file. */
+    const withSession = (over: Record<string, unknown> = {}) => {
+      mkdirSync(root, { recursive: true })
+      writeFileSync(
+        join(root, "sessions.json"),
+        JSON.stringify([
+          {
+            id: "s1",
+            repo: "widget",
+            branch: "feature",
+            title: "Feature",
+            status: "idle",
+            cli: "claude",
+            diff: { added: 0, removed: 0 },
+            prNumber: 42,
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: "2026-07-16T10:00:00.000Z",
+            worktreePath: join(root, "worktrees", "s1"),
+            baseBranch: "main",
+            ...over
+          }
+        ])
+      )
+    }
+
+    /**
+     * `gh` reporting a fixed head SHA + a non-empty diff, on a host where the
+     * `claude` binary resolves. The binary matters: with no binary the reviewer
+     * would be dispatched to the scripted stub, and ReviewService rejects that
+     * rather than pass stub prose off as a review.
+     */
+    const fakeGh = (headSha: string) =>
+      fakeCommandExecutor((cmd, args) => {
+        if (cmd === "which" || cmd === "where") {
+          return args[0] === "claude" ? { stdout: "/usr/local/bin/claude" } : { stdout: "" }
+        }
+        if (cmd !== "gh") return { stdout: "2.1.0" }
+        if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: headSha }) }
+        if (args[1] === "diff") return { stdout: "diff --git a/a.ts b/a.ts\n+x\n" }
+        return { stdout: "" }
+      })
+
+    /** A reviewer stub that counts its runs and always reports one finding. */
+    const countingAdapter = () => {
+      const spawns: SessionSpec[] = []
+      const layer = Layer.succeed(
+        CliAdapter,
+        CliAdapter.of({
+          run: ((_id: string, spec: SessionSpec, ctx: AgentContext) =>
+            Effect.gen(function* () {
+              spawns.push(spec)
+              yield* ctx.emit({
+                _tag: "Assistant",
+                text: '```json\n{"findings":[{"title":"A bug","severity":"major"}]}\n```'
+              })
+            })) as CliAdapterShape["run"],
+          stop: () => Effect.void
+        })
+      )
+      return { spawns, layer }
+    }
+
+    const envFor = (headSha: string, adapter: Layer.Layer<CliAdapter>) =>
+      Layer.mergeAll(
+        Layer.succeed(AppPaths, appPathsFor(root)),
+        NodeContext.layer,
+        fakeGh(headSha)
+      ).pipe(
+        (leaf) =>
+          Layer.mergeAll(
+            ConfigService.Default,
+            SessionStore.Default,
+            GhService.Default,
+            ReviewStore.Default,
+            ReviewService.Default,
+            DiscoveryService.Default,
+            adapter
+          ).pipe(Layer.provideMerge(leaf))
+      )
+
+    it("fails with ReviewError when the session has no linked PR", async () => {
+      withSession({ prNumber: null })
+      const { layer } = countingAdapter()
+      const exit = await Effect.runPromiseExit(
+        reviewRun("s1", false).pipe(Effect.provide(envFor("abc", layer)))
+      )
+      expect(exit._tag).toBe("Failure")
+    })
+
+    it("fails with ReviewError for an unknown session", async () => {
+      const { layer, spawns } = countingAdapter()
+      const exit = await Effect.runPromiseExit(
+        reviewRun("nope", false).pipe(Effect.provide(envFor("abc", layer)))
+      )
+      expect(exit._tag).toBe("Failure")
+      expect(spawns).toHaveLength(0)
+    })
+
+    it("runs the reviewer and stores the review against the PR head", async () => {
+      withSession()
+      const { layer, spawns } = countingAdapter()
+      const review = await Effect.runPromise(
+        reviewRun("s1", false).pipe(Effect.provide(envFor("sha-one", layer)))
+      )
+      expect(spawns).toHaveLength(1)
+      expect(review.headSha).toBe("sha-one")
+      expect(review.findings).toHaveLength(1)
+      // Fable is the default reviewer when nothing is configured.
+      expect(review.model).toBe("claude-fable-5")
+    })
+
+    it("re-running on an unchanged head returns the stored review WITHOUT spawning a reviewer", async () => {
+      withSession()
+      const { layer, spawns } = countingAdapter()
+      const env = envFor("sha-one", layer)
+      const first = await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+      const second = await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+      expect(spawns).toHaveLength(1)
+      expect(second.createdAt).toBe(first.createdAt)
+    })
+
+    it("force re-runs even on an unchanged head", async () => {
+      withSession()
+      const { layer, spawns } = countingAdapter()
+      const env = envFor("sha-one", layer)
+      await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+      await Effect.runPromise(reviewRun("s1", true).pipe(Effect.provide(env)))
+      expect(spawns).toHaveLength(2)
+    })
+
+    it("re-reviews once the PR head advances", async () => {
+      withSession()
+      const { layer, spawns } = countingAdapter()
+      await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(envFor("sha-one", layer))))
+      const second = await Effect.runPromise(
+        reviewRun("s1", false).pipe(Effect.provide(envFor("sha-two", layer)))
+      )
+      expect(spawns).toHaveLength(2)
+      expect(second.headSha).toBe("sha-two")
+    })
+
+    it("honours a configured review model", async () => {
+      withSession()
+      mkdirSync(root, { recursive: true })
+      writeFileSync(
+        join(root, "config.json"),
+        JSON.stringify({
+          reposDir: "/repos",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          github: {
+            enabled: true,
+            autoCreatePr: false,
+            autoDetectPr: true,
+            reviewCli: "claude",
+            reviewModel: "claude-opus-4-8"
+          }
+        })
+      )
+      const { layer, spawns } = countingAdapter()
+      const review = await Effect.runPromise(
+        reviewRun("s1", false).pipe(Effect.provide(envFor("sha-one", layer)))
+      )
+      expect(review.model).toBe("claude-opus-4-8")
+      expect(spawns[0]!.model).toBe("claude-opus-4-8")
     })
   })
 })

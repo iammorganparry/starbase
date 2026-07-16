@@ -1,4 +1,5 @@
 import {
+  AdversarialReview,
   ArchiveReason,
   Attachment,
   AuthProvider,
@@ -43,6 +44,7 @@ import {
   DiscoveryError,
   GhError,
   GitError,
+  ReviewError,
   SessionNotFoundError,
   TerminalError,
   WorkspaceNotConfiguredError
@@ -368,6 +370,27 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: WorkspaceConfig,
     error: ConfigError,
     payload: { cli: CliKind, provider: ProviderConfig }
+  }),
+
+  /**
+   * Run an adversarial review of the session's linked PR: a reviewer agent runs
+   * READ-ONLY in the session's worktree, on the configured review model (Fable by
+   * default), and argues against the diff.
+   *
+   * De-duped on the PR head SHA — a run whose head matches the stored review
+   * returns that review without spawning an agent, unless `force`. That is what
+   * lets the auto-review trigger fire off a poll loop safely.
+   */
+  Rpc.make("Review.run", {
+    success: AdversarialReview,
+    error: ReviewError,
+    payload: { sessionId: Schema.String, force: Schema.Boolean }
+  }),
+
+  /** The last stored adversarial review for a session, or null. Never errors. */
+  Rpc.make("Review.get", {
+    success: Schema.NullOr(AdversarialReview),
+    payload: { sessionId: Schema.String }
   }),
 
   /**

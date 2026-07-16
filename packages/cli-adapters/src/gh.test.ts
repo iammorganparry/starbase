@@ -240,6 +240,27 @@ describe("GhService pull-request reads", () => {
     expect(bad._tag === "Success" && bad.value).toBe(null)
   })
 
+  // The head SHA is the adversarial review's de-dupe key: a wrong-but-stable
+  // value would silently pin reviews to one commit forever, and a throw would
+  // break the PR tab — so it must read the real oid and fold failure to null.
+  it("prHeadSha reads headRefOid, folding a failure to null", async () => {
+    const ok = await providePr(GhService.prHeadSha("/wt", 482), (cmd, args) =>
+      cmd === "gh" && args[1] === "view"
+        ? { stdout: JSON.stringify({ headRefOid: "deadbeef123" }) }
+        : undefined
+    )
+    expect(ok._tag === "Success" && ok.value).toBe("deadbeef123")
+
+    const fail = await providePr(GhService.prHeadSha("/wt", 482), () => ({
+      exitCode: 1,
+      stderr: "no PR"
+    }))
+    expect(fail._tag === "Success" && fail.value).toBe(null)
+
+    const garbage = await providePr(GhService.prHeadSha("/wt", 482), () => ({ stdout: "not json" }))
+    expect(garbage._tag === "Success" && garbage.value).toBe(null)
+  })
+
   it("prView decodes and maps the PR, folding a non-zero exit to null", async () => {
     const ok = await providePr(GhService.prView("/wt", 482), (cmd, args) =>
       cmd === "gh" && args[1] === "view" ? { stdout: JSON.stringify(RAW_PR) } : undefined

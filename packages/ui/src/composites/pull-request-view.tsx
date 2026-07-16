@@ -9,7 +9,7 @@ import { Spinner } from "../components/loading.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { StatusDot } from "../components/status-dot.js"
 import { PrReviewComposer } from "./pr-review-composer.js"
-import { PrSidePanel } from "./pr-side-panel.js"
+import { PrSidePanel, type PrSidePanelProps } from "./pr-side-panel.js"
 import { PrTimelineEntry } from "./pr-timeline-entry.js"
 
 /** Per-state colouring for the header status lozenge. */
@@ -97,6 +97,8 @@ export interface PullRequestViewProps {
   markingReady?: boolean
   /** A failed `gh pr ready`, shown beneath the button. */
   markReadyError?: string | null
+  /** The adversarial review panel's state + actions (right rail). */
+  review?: PrSidePanelProps["review"]
 }
 
 /**
@@ -121,7 +123,8 @@ export function PullRequestView({
   mergeError,
   onMarkReady,
   markingReady = false,
-  markReadyError
+  markReadyError,
+  review
 }: PullRequestViewProps) {
   // Loading — avoid flashing the "Create PR" empty state before the PR resolves.
   if (pr === null && busy) {
@@ -256,6 +259,7 @@ export function PullRequestView({
         onMarkReady={onMarkReady}
         markingReady={markingReady}
         markReadyError={markReadyError}
+        review={review}
       />
     </div>
   )

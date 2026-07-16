@@ -18,6 +18,13 @@ export interface AppPathsShape {
   /** `~/starbase/transcripts` — parent of every session's persisted transcript. */
   readonly transcriptsDir: string
   /**
+   * `~/starbase/reviews` — the last adversarial review per session, at
+   * `<reviewsDir>/<sessionId>.json`. Kept out of `sessions.json` on purpose: a
+   * review carries an unbounded findings array, and bloating the session list
+   * would slow every sidebar read.
+   */
+  readonly reviewsDir: string
+  /**
    * `~/starbase/.starbase` — the plan library. Each session's plans live under
    * `<plansDir>/<worktree-slug>/<plan-name>.md`, so a plan can be picked back up
    * (read from disk) in a later turn or session on the same worktree.

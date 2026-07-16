@@ -274,6 +274,48 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
         return state === "merged" || state === "closed" ? [{ id: s.id, reason: state }] : []
       })
   })
+  // Auto adversarial review (opt-in). Polls `Review.run` on the same cadence as
+  // the archive sweep, which sounds expensive but isn't: the main process
+  // short-circuits on an unchanged PR head, so a tick with no new commits costs
+  // one `gh pr view` and spawns nothing. That server-side de-dupe is why this
+  // needs no client-side "already reviewed this SHA" guard of its own — the
+  // renderer can fire naively and stay correct.
+  // Gated on `enabled` as well as the toggle itself: turning PR features off must
+  // stop reviews too, and a config can carry autoAdversarialReview:true from
+  // before the master switch was flipped off. A review costs real tokens, so it
+  // fails closed.
+  const autoReview =
+    connected && (githubConfig?.enabled ?? false) && (githubConfig?.autoAdversarialReview ?? false)
+  const reviewTargets = useMemo(
+    () => (autoReview ? sweepTargets : []),
+    [autoReview, sweepTargets]
+  )
+  const autoReviews = useQueries({
+    queries: reviewTargets.map((s) => ({
+      queryKey: ["auto-review", s.id, s.prNumber] as const,
+      queryFn: () => rpc.reviewRun(s.id, false),
+      staleTime: PR_STATE_STALE_MS,
+      refetchInterval: ARCHIVE_POLL_MS,
+      refetchIntervalInBackground: true,
+      refetchOnWindowFocus: true,
+      // A reviewer that can't run (gh hiccup, harness missing) must never retry
+      // in a loop or surface anywhere — the manual button remains the recourse.
+      retry: false
+    })),
+    combine: (results) =>
+      reviewTargets.flatMap((s, i) => {
+        const review = results[i]?.data
+        return review ? [{ id: s.id, review }] : []
+      })
+  })
+  // Publish auto-review results into the cache the PR tab reads, so findings
+  // appear without the user having to click Review.
+  useEffect(() => {
+    for (const { id, review } of autoReviews) {
+      qc.setQueryData(["review", id], review)
+    }
+  }, [autoReviews, qc])
+
   const archiveMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: "merged" | "closed" }) =>
       rpc.sessionsArchive(id, reason),

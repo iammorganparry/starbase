@@ -31,6 +31,25 @@ export const isEditTool = (name: string): boolean => EDIT_TOOLS.has(name)
 const SUPPRESSED_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"])
 
 /** Map our HITL mode onto the SDK's permission mode. */
+/**
+ * How `spec.readOnly` is enforced on this harness: the SDK refuses these outright.
+ *
+ * Belt to `canUseTool`'s braces — that callback only fires for tool names
+ * `toPermissionRequest` maps, so anything unrecognised is allowed ungated. `Task`
+ * is included because a subagent is a second lever on the same worktree.
+ * Read/Grep/Glob are deliberately absent: a read-only run still needs to read.
+ */
+const READ_ONLY_DISALLOWED: ReadonlyArray<string> = [
+  "Bash",
+  "Edit",
+  "Write",
+  "MultiEdit",
+  "NotebookEdit",
+  "Update",
+  "Task",
+  "Agent"
+]
+
 export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
   mode === "auto"
     ? "bypassPermissions"
@@ -477,7 +496,12 @@ export const runClaude = (
         // Resume id: prefer the live in-memory id (this launch), else the id
         // persisted on the session (survives an app restart), so "continue" always
         // reloads the full conversation instead of starting the harness fresh.
-        const resumeId = resume.get(sessionId) ?? spec.resumeId ?? undefined
+        // `fresh` bypasses the map entirely — the map otherwise WINS over
+        // spec.resumeId, so a repeated run under the same key resumes the prior
+        // conversation even when the caller explicitly asked for a new one.
+        const resumeId = spec.fresh
+          ? undefined
+          : (resume.get(sessionId) ?? spec.resumeId ?? undefined)
 
         // With attached images this switches to the SDK's streaming-input form
         // (text + base64 image blocks); without images it stays the string prompt.
@@ -490,6 +514,7 @@ export const runClaude = (
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "auto" ? { allowDangerouslySkipPermissions: true } : {}),
             ...(spec.mode === "plan" ? { planModeInstructions } : {}),
+            ...(spec.readOnly ? { disallowedTools: [...READ_ONLY_DISALLOWED] } : {}),
             includePartialMessages: true,
             canUseTool,
             abortController: abort,
@@ -500,7 +525,11 @@ export const runClaude = (
 
         for await (const msg of iterator) {
           const sid = (msg as { session_id?: unknown }).session_id
-          if (typeof sid === "string" && sid.length > 0) resume.set(sessionId, sid)
+          // A `fresh` run must leave no trace in the map, or the NEXT run under
+          // this key would resume it.
+          if (!spec.fresh && typeof sid === "string" && sid.length > 0) {
+            resume.set(sessionId, sid)
+          }
           for (const event of streamEventsFor(msg, tools)) {
             await runP(ctx.emit(event))
           }
