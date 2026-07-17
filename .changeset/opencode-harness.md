@@ -1,0 +1,17 @@
+---
+"@starbase/cli-adapters": minor
+"@starbase/contracts": minor
+"@starbase/core": minor
+"@starbase/desktop": minor
+"@starbase/ui": minor
+---
+
+opencode as a harness — run OSS and gateway models (OpenRouter, opencode Zen, and anything else the user has configured) alongside Claude, Codex and Cursor.
+
+- **A real adapter, not a scripted stub.** opencode is driven through its SDK client against a server Starbase spawns itself — matching the SDK-driven idiom of the Claude and Codex adapters. Deliberately *not* the SDK's `createOpencodeServer`: it spawns a bare `opencode` off `PATH` with no executable override (contrast Claude's `pathToClaudeCodeExecutable` / Codex's `codexPathOverride`), which breaks Starbase's discovery model — and an Electron GUI app on macOS doesn't inherit the shell `PATH`, so a user whose opencode lives in `~/.opencode/bin` would silently get "not found". It also overwrites `OPENCODE_CONFIG_CONTENT`, clobbering our injection. So we spawn `<binPath> serve`, parse the URL it prints, and use the SDK purely as a typed client.
+- **Real per-tool HITL** — better than Codex's sandbox-only control, close to Claude's. opencode raises permission requests on an event bus and takes replies on a separate endpoint; the adapter bridges that asynchronous loop onto Starbase's promise-shaped `ctx.canUseTool`, so the session's own mode and allowlist decide. `readOnly` is still enforced at the harness (denied tools) rather than trusted to the callback, because a tool that never raises a permission would sail past it — the same reasoning as the Codex sandbox.
+- **BYOK, respected rather than replaced.** Starbase never owns an opencode credential: keys are written through opencode's *own* auth API, exactly as `opencode auth login` would. So a key added in Starbase works in a bare `opencode` shell, a key already added there works here, and `SecretStore` keeps holding exactly one thing — the Starbase bearer token. Settings · Providers shows where each credential came from (environment / signed in / `opencode.json` / built-in), so it's visible whose key is whose, and only offers to add one where there isn't one. **OpenRouter needs no special handling at all** — it's native to opencode via models.dev, so an `OPENROUTER_API_KEY` alone resolves ~342 models with zero config injection (contrast OpenRouter-for-Claude-Code, which needs an `ANTHROPIC_BASE_URL` override).
+- **The model catalogue is the user's, so we ask them for it.** opencode resolves providers from their own credentials — with none configured only Zen's free tier resolves — so the list comes live from the running binary rather than a table that would go stale. Ids stay provider-qualified and labels carry the provider, because the menu groups by *harness*: "Claude Opus 4.5" is ambiguous when the same model is reachable through both Zen and OpenRouter. `ProviderConfig.visibleModels` narrows the result, since a single OpenRouter key is not a usable flat menu.
+- **Gated to opencode ≥ 1.18.** The 1.0.x line lacks `--auto`/`--fork`/`--variant` and predates opencode's SQLite session store; supporting both regimes isn't worth it. A too-old binary reports unavailable *with a note* naming the version found and the fix, so it's distinguishable from a missing one. Starbase never bundles its own opencode: a bundled copy fights the user's install over their shared session database.
+
+Plan mode stays Claude-only — opencode's `plan` agent restricts tools but emits no plan for review, so there is nothing for the approve/revise contract to bind to.
