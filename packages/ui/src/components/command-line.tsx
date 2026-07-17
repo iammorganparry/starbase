@@ -10,6 +10,15 @@ import { cn } from "../lib/cn.js"
  *
  * Sub-commands count as part of the name: `pnpm build` and `git commit` read as
  * one unit, not a program plus an argument.
+ *
+ * This is deliberately NOT parseCommand: that resolves what RAN (peeling
+ * `pnpm --filter x test` down to the `test` script), which is the right answer
+ * for routing and the wrong one for display — the header should echo the command
+ * as typed, just with the leading noun brightened. So for `pnpm --filter x test`
+ * this brightens only `pnpm` and lets the rest recede, where the registry
+ * decides the script is `test`. The two intentionally diverge; keeping this a
+ * self-contained display rule also lets the atom render in Storybook with no
+ * parser dependency.
  */
 const SUBCOMMAND_HOSTS = new Set(["pnpm", "npm", "yarn", "bun", "git", "gh", "cargo", "go", "docker", "turbo"])
 

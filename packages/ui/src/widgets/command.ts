@@ -60,16 +60,50 @@ const EXEC_BINS = new Set(["npx", "pnpx", "bunx"])
 export const PKG_MANAGERS: ReadonlySet<string> = RUNNERS
 
 /**
- * Split on `&&`, `;`, `||` — but not inside quotes.
+ * Runner flags that take a SEPARATE value token — so `--filter web` is one unit
+ * and `web` isn't mistaken for the script. `--filter=web` needs no entry (the
+ * `=` keeps the value attached). Booleans like `-r`/`--silent` are absent by
+ * design: they consume nothing.
+ */
+const VALUE_FLAGS = new Set([
+  "--filter",
+  "-F",
+  "-C",
+  "--dir",
+  "--workspace",
+  "--prefix"
+  // Deliberately NOT `-w`: it's `--workspaces` (boolean) in yarn but takes a
+  // value in some pnpm forms — ambiguous across managers, so leave it to the
+  // bare-word fallback rather than guess wrong for one of them.
+])
+
+/** A command segment, and the operator that JOINED it to the previous one. */
+interface Segment {
+  text: string
+  /** `null` for the first segment; otherwise what preceded this one. */
+  op: "&&" | "||" | ";" | null
+}
+
+/**
+ * Split on `&&`, `;`, `||` — but not inside quotes — keeping each operator.
  *
  * A `git commit -m "fix; ship it"` must not split at that semicolon. Pipes are
  * NOT split on: `vitest | tee` is still a vitest command, and its output is the
- * pipeline's.
+ * pipeline's. The operator is retained because it decides which segment
+ * actually produced the output — `a && b` runs b, `a || b` runs b only if a
+ * failed.
  */
-const segments = (command: string): string[] => {
-  const out: string[] = []
+const segments = (command: string): Segment[] => {
+  const out: Segment[] = []
   let buf = ""
+  let op: Segment["op"] = null
   let quote: string | null = null
+  const push = (next: Segment["op"]) => {
+    const text = buf.trim()
+    if (text) out.push({ text, op })
+    buf = ""
+    op = next
+  }
   for (let i = 0; i < command.length; i++) {
     const c = command[i]!
     if (quote) {
@@ -84,20 +118,18 @@ const segments = (command: string): string[] => {
     }
     const two = command.slice(i, i + 2)
     if (two === "&&" || two === "||") {
-      out.push(buf)
-      buf = ""
+      push(two)
       i++
       continue
     }
     if (c === ";") {
-      out.push(buf)
-      buf = ""
+      push(";")
       continue
     }
     buf += c
   }
-  out.push(buf)
-  return out.map((s) => s.trim()).filter(Boolean)
+  push(null)
+  return out
 }
 
 /** `NODE_ENV=test pnpm vitest` → drop the assignment, keep the command. */
@@ -111,12 +143,33 @@ const stripEnv = (tokens: string[]): string[] => {
 const isBareWord = (t: string | undefined): t is string =>
   t !== undefined && /^[a-z][\w:.-]*$/i.test(t) && !t.startsWith("-")
 
+/**
+ * The segment whose output we're actually looking at.
+ *
+ * Walk from the end: the last segment ran unless it is an `||` arm, which runs
+ * ONLY if its left side failed. `vitest run || true` prints the vitest log and
+ * exits 0 via `true`; the output is vitest's, not `true`'s. So an `||` segment
+ * is skipped in favour of what precedes it — the opposite of `&&`/`;`, where the
+ * last segment is the one that ran. `cd x` is never the source: it only sets up.
+ */
+const primaryOf = (segs: Segment[]): string => {
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const seg = segs[i]!
+    if (/^cd\s/.test(seg.text)) continue
+    // This segment is the tail of an `||` chain — it only ran on failure, and
+    // the output we see is more likely the left side's. Keep looking left.
+    if (seg.op === "||") continue
+    return seg.text
+  }
+  return segs[segs.length - 1]?.text ?? ""
+}
+
 export const parseCommand = (raw: string): ParsedCommand => {
   const segs = segments(raw)
   // `cd apps/web && pnpm test` — a lone `cd` sets up the real command; it never
-  // produced the output we're rendering.
-  const meaningful = segs.filter((s) => !/^cd\s/.test(s))
-  const primary = (meaningful[meaningful.length - 1] ?? segs[segs.length - 1] ?? raw).trim()
+  // produced the output we're rendering. And `vitest || true` swallows the exit
+  // code without producing the log — see primaryOf.
+  const primary = (primaryOf(segs) || raw).trim()
 
   const tokens = stripEnv(primary.split(/\s+/).filter(Boolean))
   const bin = (tokens[0] ?? "").replace(/^.*\//, "") // ./node_modules/.bin/vitest → vitest
@@ -126,16 +179,22 @@ export const parseCommand = (raw: string): ParsedCommand => {
   let program = bin
   if (RUNNERS.has(bin)) {
     /*
-     * Find the script name by skipping everything that can't be one.
+     * Skip past the runner's own flags to the script name.
      *
-     * Not "skip flags and their values" — that needs a table of which flags take
-     * a value, and gets `pnpm --filter @starbase/ui test` wrong the moment a
-     * value isn't a bare word. Scanning forward to the first bare word handles
-     * flags, their values, and `-r`/`--silent` uniformly.
+     * A first-bare-word scan looks simpler, but it mistakes an unscoped flag
+     * VALUE for the script: `pnpm --filter web test` lands on `web`. So consume
+     * the flags that take a separate value (`--filter web`, `-C dir`) as a pair,
+     * and treat `--filter=web` / `-r` / `--silent` as self-contained.
      */
     const nextWord = (from: number) => {
       let i = from
-      while (i < rest.length && !isBareWord(rest[i])) i++
+      while (i < rest.length) {
+        const t = rest[i]!
+        if (!t.startsWith("-")) break
+        // `--flag=value` and boolean flags consume only themselves; a
+        // value-taking flag also swallows the next token.
+        i += !t.includes("=") && VALUE_FLAGS.has(t) ? 2 : 1
+      }
       return i
     }
     let i = nextWord(0)
@@ -204,12 +263,37 @@ export const scrapeDuration = (output: string | undefined): string | null => {
   return null
 }
 
+/** `exit 127` — an adapter reporting the real code, rather than us guessing one. */
+const REAL_EXIT = /^exit\s+\d+$/i
+
 /**
- * `exit 0` / `exit 1`, derived from status.
+ * How the command ended, claiming only what we actually know.
  *
- * The real exit code isn't in the model — only running/success/error — so this
- * is the most the footer can honestly claim. Null while running: a command that
- * hasn't finished has no exit code, and showing `exit 0` early would be a lie.
+ * Three tiers, in order of honesty:
+ *
+ *  1. The adapter told us the code (codex sends `meta: "exit 127"`). Use it.
+ *  2. It succeeded. `exit 0` is then a fact, not a guess — the harnesses report
+ *     a non-zero exit as an error result.
+ *  3. It failed and nobody said why. Say "failed".
+ *
+ * (3) is the point. This used to return `exit 1` for every error, which is
+ * simply wrong most of the time — `command not found` is 127, a signal is 130,
+ * tsc is 2 — and a fabricated code is worse than no code, because the operator
+ * debugging from the transcript has no reason to doubt it.
  */
-export const exitLabel = (status: "running" | "success" | "error"): string | null =>
-  status === "running" ? null : status === "success" ? "exit 0" : "exit 1"
+export const exitLabel = (status: "running" | "success" | "error", meta?: string | null): string | null => {
+  if (meta && REAL_EXIT.test(meta.trim())) return meta.trim().toLowerCase()
+  // A command that hasn't finished has no exit code; `exit 0` here would be a lie.
+  if (status === "running") return null
+  return status === "success" ? "exit 0" : "failed"
+}
+
+/**
+ * An adapter's `meta` that explains a result, as opposed to restating its code.
+ *
+ * `exit 127` is already rendered as the exit label, so repeating it would be
+ * noise; opencode's `permission denied` is the only account of the failure that
+ * exists and has nowhere else to go.
+ */
+export const explanatoryMeta = (meta: string | null | undefined): string | null =>
+  meta && !REAL_EXIT.test(meta.trim()) ? meta.trim() : null

@@ -32,6 +32,8 @@ export interface SuiteFailure {
 export interface TestRunProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   passed: number
   failed: number
   skipped: number
@@ -133,6 +135,24 @@ const failures = (out: string): SuiteFailure[] => {
   return found
 }
 
+/**
+ * A scoreboard summed from the per-file lines, for before the summary block
+ * lands. A passing file contributes its `(N tests)` count to `passed`; a failing
+ * file contributes its failed count (or 1, if it didn't say). `total` stays null
+ * — the run hasn't declared it — so the widget shows the tests seen so far
+ * without claiming a denominator it doesn't have.
+ */
+const countsFromFiles = (files: ReadonlyArray<SuiteFile>) => {
+  let passed = 0
+  let failed = 0
+  for (const f of files) {
+    const n = Number(f.count.split("/")[0]) || 0
+    if (f.status === "fail") failed += n || 1
+    else if (f.status === "pass") passed += n
+  }
+  return { passed, failed, skipped: 0, total: null }
+}
+
 export const parseTestRun = (ctx: ParseContext): TestRunProps | null => {
   const out = ctx.output
   // A suite that hasn't printed yet has no scoreboard to show. Fall back to the
@@ -145,16 +165,27 @@ export const parseTestRun = (ctx: ParseContext): TestRunProps | null => {
   // understand. Decline.
   if (!counts && files.length === 0) return null
 
-  const derived = counts ?? { passed: 0, failed: 0, skipped: 0, total: null }
+  /*
+   * Before the summary block exists (mid-run, or the whole log is per-file
+   * lines), aggregate the scoreboard from the files themselves — each passing
+   * file reports its test count. Without this the StatCounts read "0 passed"
+   * beside a ✓ list of files totalling 200 tests, which is what the streaming
+   * story advertises the widget does. The real summary always wins when present.
+   */
+  const derived = counts ?? countsFromFiles(files)
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     ...derived,
     fileCount: fileCountOf(out) ?? (files.length || null),
     files,
     failures: failures(out),
     duration: scrapeDuration(out),
-    watch: /watch/i.test(ctx.command.raw) || /press\s+\w\s+to/i.test(out)
+    // The FLAG as a token, not the substring: `vitest run src/watcher.test.ts`
+    // is a one-shot run, and claiming "watch mode · reruns on save" for it is a
+    // false statement about the process's lifetime.
+    watch: /(^|\s)--?watch(=|\s|$)/i.test(ctx.command.raw)
   }
 }
 
@@ -197,7 +228,7 @@ export function TestRunWidget(p: TestRunProps) {
           </span>
         ) : undefined
       }
-      footerMeta={exitLabel(p.status) ?? undefined}
+      footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
       <WidgetBody className="gap-[14px]">
         <div className="flex items-end gap-[22px]">

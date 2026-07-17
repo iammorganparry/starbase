@@ -29,6 +29,8 @@ export interface DiagnosticFile {
 export interface DiagnosticsProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   files: ReadonlyArray<DiagnosticFile>
   errorCount: number
   warningCount: number
@@ -166,6 +168,7 @@ export const parseDiagnostics = (ctx: ParseContext): DiagnosticsProps | null => 
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     files,
     errorCount: eslintTotal ? Number(eslintTotal[1]) : tscTotal ? Number(tscTotal[1]) : errors,
     warningCount: eslintTotal ? Number(eslintTotal[2]) : warnings
@@ -210,8 +213,8 @@ export function DiagnosticsWidget(p: DiagnosticsProps) {
         </span>
       }
       footerMeta={
-        exitLabel(p.status) ? (
-          <span className={p.status === "error" ? "text-red" : "text-dim"}>{exitLabel(p.status)}</span>
+        exitLabel(p.status, p.exit) ? (
+          <span className={p.status === "error" ? "text-red" : "text-dim"}>{exitLabel(p.status, p.exit)}</span>
         ) : undefined
       }
     >

@@ -6,7 +6,7 @@ import { parseTestRun } from "./test-runner.js"
 const ctx = (output: string | undefined, status: "running" | "success" | "error" = "success") => ({
   command: parseCommand("vitest run"),
   output,
-  status
+  status, meta: null
 })
 
 const VITEST = `

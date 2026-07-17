@@ -23,6 +23,8 @@ export interface InstalledPackage {
 export interface PackageInstallProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   resolved: number | null
   reused: number | null
   downloaded: number | null
@@ -138,6 +140,7 @@ export const parsePackageInstall = (ctx: ParseContext): PackageInstallProps | nu
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     resolved: progress?.resolved ?? npm?.audited ?? null,
     reused: progress?.reused ?? null,
     downloaded: progress?.downloaded ?? null,
@@ -191,7 +194,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
           )}
         </span>
       }
-      footerMeta={exitLabel(p.status) ?? undefined}
+      footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
       <WidgetBody>
         {progress.length > 0 && (

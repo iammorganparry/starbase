@@ -9,7 +9,7 @@ const ctx = (
 ) => ({
   command: parseCommand(command),
   output,
-  status
+  status, meta: null
 })
 
 /** `ciChecksWidget` isn't in the registry yet, so match on the spec itself. */
@@ -31,19 +31,25 @@ const HUMAN = `All checks were successful
 `
 
 describe("classify", () => {
-  it.each(["gh pr checks 482 --watch", "gh pr checks", "gh run watch", "gh run list", "gh run view 12"])(
-    "routes %j to the ci checks widget",
-    (cmd) => {
-      expect(matches(cmd)).toBe(true)
-    }
-  )
+  it.each(["gh pr checks 482 --watch", "gh pr checks"])("routes %j to the ci checks widget", (cmd) => {
+    expect(matches(cmd)).toBe(true)
+  })
 
-  it.each(["gh pr create", "gh pr view 482", "git status", "pnpm test", "gh run rerun"])(
-    "leaves %j to another widget",
-    (cmd) => {
-      expect(matches(cmd)).toBe(false)
-    }
-  )
+  it.each([
+    "gh pr create",
+    "gh pr view 482",
+    "git status",
+    "pnpm test",
+    // `gh run list/watch/view` print a DIFFERENT column layout than `gh pr
+    // checks`; parsing it as checks yields a board of garbage, so until those
+    // formats are read they belong on the generic card, not here.
+    "gh run watch",
+    "gh run list",
+    "gh run view 12",
+    "gh run rerun"
+  ])("leaves %j to another widget", (cmd) => {
+    expect(matches(cmd)).toBe(false)
+  })
 })
 
 describe("parseCiChecks", () => {

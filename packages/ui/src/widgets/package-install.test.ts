@@ -5,7 +5,7 @@ import { packageInstallWidget, parsePackageInstall } from "./package-install.js"
 const ctx = (output: string | undefined, status: "running" | "success" | "error" = "success", command = "pnpm install") => ({
   command: parseCommand(command),
   output,
-  status
+  status, meta: null
 })
 
 const PNPM = `

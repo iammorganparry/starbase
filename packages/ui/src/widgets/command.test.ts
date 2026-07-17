@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { exitLabel, parseCommand, scrapeDuration } from "./command.js"
+import { exitLabel, explanatoryMeta, parseCommand, scrapeDuration } from "./command.js"
 
 describe("parseCommand", () => {
   it("reads a plain invocation", () => {
@@ -69,8 +69,58 @@ describe("exitLabel", () => {
   it("has no exit code while still running", () => {
     expect(exitLabel("running")).toBeNull()
   })
-  it("derives the code from status", () => {
+  it("treats a clean run as exit 0 — a fact, since a non-zero exit is an error", () => {
     expect(exitLabel("success")).toBe("exit 0")
-    expect(exitLabel("error")).toBe("exit 1")
+  })
+  it("says 'failed', not a made-up 'exit 1', when the real code is unknown", () => {
+    // `command not found` is 127, a signal is 130, tsc is 2 — inventing 1 is
+    // wrong most of the time, and a wrong code the operator trusts is worse
+    // than no code.
+    expect(exitLabel("error")).toBe("failed")
+  })
+  it("prefers the adapter's real exit code when it gave one (codex sends it in meta)", () => {
+    expect(exitLabel("error", "exit 127")).toBe("exit 127")
+    expect(exitLabel("success", "exit 0")).toBe("exit 0")
+    // A non-code meta (opencode's error message) is not an exit label.
+    expect(exitLabel("error", "permission denied")).toBe("failed")
+  })
+})
+
+describe("explanatoryMeta", () => {
+  it("passes through a non-code explanation", () => {
+    expect(explanatoryMeta("permission denied")).toBe("permission denied")
+  })
+  it("suppresses a bare exit code, which is rendered as the exit label instead", () => {
+    expect(explanatoryMeta("exit 127")).toBeNull()
+    expect(explanatoryMeta(null)).toBeNull()
+  })
+})
+
+describe("|| and && attribution", () => {
+  it("keeps the left side of `||`, since the right only ran on failure", () => {
+    // `vitest run || true` prints the vitest log and exits 0 via `true`; the
+    // output is vitest's, not true's.
+    expect(parseCommand("vitest run || true").program).toBe("vitest")
+    expect(parseCommand("pnpm test || echo failed").sub).toBe("test")
+  })
+  it("takes the right side of `&&`, which only ran because the left succeeded", () => {
+    expect(parseCommand("pnpm i && pnpm build").sub).toBe("build")
+  })
+  it("still skips a leading cd", () => {
+    expect(parseCommand("cd apps/web && vitest run").program).toBe("vitest")
+  })
+})
+
+describe("runner flag values are not mistaken for the script", () => {
+  it("skips an unscoped --filter value", () => {
+    expect(parseCommand("pnpm --filter web test").sub).toBe("test")
+    expect(parseCommand("pnpm --filter web build").sub).toBe("build")
+  })
+  it("handles --filter=web (attached value) too", () => {
+    expect(parseCommand("pnpm --filter=web test").sub).toBe("test")
+  })
+  it("skips -C dir and --prefix", () => {
+    expect(parseCommand("pnpm -C packages/ui test").sub).toBe("test")
+    expect(parseCommand("pnpm --prefix apps/web build").sub).toBe("build")
   })
 })

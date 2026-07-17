@@ -8,7 +8,16 @@ import { defineWidget, type ParseContext } from "./types.js"
 
 /** W2 — a PR's checks: what's green, what's still going, what broke. */
 
-const RUN_SUBS = new Set(["watch", "list", "view"])
+/*
+ * Only `gh pr checks` — NOT `gh run list/watch/view`.
+ *
+ * The parser reads the columns of `gh pr checks` TSV (name, state, duration).
+ * `gh run list` prints a DIFFERENT layout — status, conclusion, title, workflow
+ * — so its conclusion column ("success") lands in our state slot and every run
+ * parses as a check literally named "completed" with the commit title where a
+ * duration should be: a plausible board of pure garbage rather than a decline.
+ * Until those formats are actually parsed, they belong on the generic card.
+ */
 
 export type CheckState = "pass" | "fail" | "running" | "queued" | "skipped" | "cancelled"
 
@@ -22,6 +31,8 @@ export interface PrCheck {
 export interface CiChecksProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   /** From the command's args. Null when `gh` defaulted to the current branch. */
   pr: string | null
   branch: string | null
@@ -69,6 +80,27 @@ const GLYPHS: Record<string, CheckState> = {
 const DURATION = /^\d[\dhms.]*$/
 
 /**
+ * The PR number in `gh pr checks 482 --interval 30`.
+ *
+ * A bare number that is NOT the value of a preceding option — otherwise the `30`
+ * in `--interval 30` reads as PR #30. Scans left to right, skipping any token an
+ * option consumes.
+ */
+const prNumber = (args: ReadonlyArray<string>): string | null => {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!
+    // `--flag=value` consumes nothing after it; a bare `--flag`/`-f` eats the
+    // next token as its value.
+    if (a.startsWith("-")) {
+      if (!a.includes("=") && args[i + 1] !== undefined && !args[i + 1]!.startsWith("-")) i++
+      continue
+    }
+    if (/^\d+$/.test(a)) return a
+  }
+  return null
+}
+
+/**
  * `build\tpass\t1m4s\thttps://…` — what `gh pr checks` prints without a tty.
  *
  * Columns are positional, so the tab split is the parse. Rows whose state word we
@@ -112,20 +144,38 @@ const humanChecks = (out: string): PrCheck[] => {
   return checks
 }
 
+/**
+ * Keep the LAST row per check name.
+ *
+ * `gh pr checks --watch` — the widget's headline case — reprints the whole table
+ * each time a check settles when its output is captured non-interactively. Every
+ * reprint is collected, so a check appears many times: the footer tallies
+ * multiply and `key={name}` collides in React. The last occurrence is the
+ * freshest state, so dedupe forward.
+ */
+const dedupeByName = (checks: PrCheck[]): PrCheck[] => {
+  const last = new Map<string, PrCheck>()
+  for (const c of checks) last.set(c.name, c)
+  return [...last.values()]
+}
+
 export const parseCiChecks = (ctx: ParseContext): CiChecksProps | null => {
   const out = ctx.output
   // `--watch` prints nothing until it settles. No rows, no scoreboard — decline.
   if (!out) return null
 
   const checks = tsvChecks(out)
-  const parsed = checks.length > 0 ? checks : humanChecks(out)
+  const parsed = dedupeByName(checks.length > 0 ? checks : humanChecks(out))
   if (parsed.length === 0) return null
 
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     // `gh pr checks 482`; absent when gh resolves the PR from the branch instead.
-    pr: ctx.command.args.find((a) => /^\d+$/.test(a)) ?? null,
+    // The number must not be a flag's value — `--interval 30` would read as PR
+    // #30. Only a bare number that doesn't follow an option.
+    pr: prNumber(ctx.command.args),
     /*
      * `gh pr checks` never prints the branch, and the command rarely names it. We
      * could ask git — the widget can't. Null, and the header simply omits it;
@@ -217,7 +267,7 @@ export function CiChecksWidget(p: CiChecksProps) {
        * is a fact about the PR that `gh pr checks` never tells us. Promising a merge
        * that may never come is worse than saying nothing.
        */
-      footerMeta={exitLabel(p.status) ?? undefined}
+      footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
       <WidgetBody className="gap-px px-2.5 py-2">
         {p.checks.map((c) => (
@@ -243,10 +293,7 @@ export function CiChecksWidget(p: CiChecksProps) {
 
 export const ciChecksWidget = defineWidget<CiChecksProps>({
   id: "ci-checks",
-  match: (c) =>
-    c.program === "gh" &&
-    ((c.sub === "pr" && c.args.includes("checks")) ||
-      (c.sub === "run" && c.args[1] !== undefined && RUN_SUBS.has(c.args[1]))),
+  match: (c) => c.program === "gh" && c.sub === "pr" && c.args.includes("checks"),
   parse: parseCiChecks,
   render: (p) => <CiChecksWidget {...p} />
 })

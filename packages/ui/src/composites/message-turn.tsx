@@ -87,9 +87,16 @@ function ToolCardView({ tool }: { tool: ToolCallModel }) {
   const widget = useMemo(
     () =>
       tool.name === "Bash" && tool.target
-        ? renderCommandWidget({ command: tool.target, output: bashOutput(tool), status: tool.status })
+        ? renderCommandWidget({
+            command: tool.target,
+            output: bashOutput(tool),
+            status: tool.status,
+            // codex sends the true exit code (and opencode a failed call's error)
+            // only here; without it the card fabricates `exit 1`.
+            meta: tool.meta
+          })
         : null,
-    [tool.name, tool.target, tool.output, tool.preview, tool.status]
+    [tool.name, tool.target, tool.output, tool.preview, tool.meta, tool.status]
   )
   const [expanded, setExpanded] = useState(false)
   const lines = tool.preview ? tool.preview.replace(/\n+$/, "").split("\n") : []

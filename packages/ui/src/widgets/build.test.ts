@@ -5,7 +5,7 @@ import { parseCommand } from "./command.js"
 const ctx = (output: string | undefined, status: "running" | "success" | "error" = "success") => ({
   command: parseCommand("pnpm build"),
   output,
-  status
+  status, meta: null
 })
 
 const VITE = `
@@ -108,7 +108,7 @@ describe("warning text", () => {
 (!) Some chunks are larger than 500 kB after minification. Consider:
 - Using dynamic import() to code-split the application
 ✓ built in 4.12s`
-    const p = parseBuild({ command: parseCommand("pnpm build"), output: out, status: "success" })!
+    const p = parseBuild({ command: parseCommand("pnpm build"), output: out, status: "success", meta: null })!
     expect(p.warnings[0]).toBe("Some chunks are larger than 500 kB after minification")
   })
 })

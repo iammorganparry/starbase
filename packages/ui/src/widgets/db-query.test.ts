@@ -7,13 +7,13 @@ const QUERY = `psql $DATABASE_URL -c "select plan, count(*) from users where act
 const ctx = (output: string | undefined, command = QUERY, status: "running" | "success" | "error" = "success") => ({
   command: parseCommand(command),
   output,
-  status
+  status, meta: null
 })
 
 const ALIGNED = `    plan    | count
 ------------+-------
  free       |  8214
- pro        |  1902
+ pro        |  19024
  team       |   486
  enterprise |    41
 (4 rows)
@@ -49,7 +49,7 @@ describe("parseDbQuery", () => {
     const p = parseDbQuery(ctx(ALIGNED))!
     expect(p.columns[0]!.numeric).toBe(false)
     expect(p.columns[1]!.numeric).toBe(true)
-    expect(p.rows[1]).toEqual(["pro", "1,902"])
+    expect(p.rows[1]).toEqual(["pro", "19,024"])
     expect(p.rows[3]).toEqual(["enterprise", "41"])
   })
 
@@ -86,11 +86,11 @@ describe("parseDbQuery", () => {
   })
 
   it("reads a tuples-only result, labelling the columns it was given no names for", () => {
-    const p = parseDbQuery(ctx(" free       |  8214\n pro        |  1902\n", `psql -t -c "select plan, count(*) from users"`))!
+    const p = parseDbQuery(ctx(" free       |  8214\n pro        |  19024\n", `psql -t -c "select plan, count(*) from users"`))!
     expect(p.columns.map((c) => c.key)).toEqual(["col1", "col2"])
     expect(p.rows).toEqual([
       ["free", "8,214"],
-      ["pro", "1,902"]
+      ["pro", "19,024"]
     ])
     expect(p.rowCount).toBeNull()
   })
@@ -141,9 +141,25 @@ describe("the header invocation", () => {
     const p = parseDbQuery({
       command: parseCommand(`psql $DATABASE_URL -c "select plan, count(*) from users;"`),
       output: " plan | count\n------+-------\n free |  8214\n(1 row)",
-      status: "success"
+      status: "success", meta: null
     })!
     expect(p.command).toBe("psql $DATABASE_URL")
     expect(p.sql).toBe("select plan, count(*) from users;")
+  })
+})
+
+describe("thousands grouping only where it can't misrepresent", () => {
+  const grid = (body: string) => parseDbQuery(ctx(body))!
+  it("groups a real count", () => {
+    const p = grid("  n\n-----\n 8214\n(1 row)")
+    expect(p.rows[0]).toEqual(["8,214"])
+  })
+  it("leaves a four-digit year alone", () => {
+    const p = grid("  year\n------\n 2026\n(1 row)")
+    expect(p.rows[0]).toEqual(["2026"])
+  })
+  it("leaves a leading-zero code alone", () => {
+    const p = grid("  zip\n-------\n 02134\n(1 row)")
+    expect(p.rows[0]).toEqual(["02134"])
   })
 })

@@ -5,7 +5,7 @@ import { diagnosticsWidget, parseDiagnostics } from "./diagnostics.js"
 const ctx = (output: string | undefined, status: "running" | "success" | "error" = "error") => ({
   command: parseCommand("tsc --noEmit"),
   output,
-  status
+  status, meta: null
 })
 
 const TSC = `

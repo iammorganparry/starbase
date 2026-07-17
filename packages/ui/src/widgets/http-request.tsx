@@ -9,7 +9,13 @@ import { defineWidget, type ParseContext } from "./types.js"
 
 /** W8 — a request: what went out, what came back, and what it weighed. */
 
-const CLIENTS = /^(curl|http|https|wget|xh)$/
+/*
+ * `wget` is deliberately absent. It prints a transfer LOG (resolving…, saving
+ * to 'file'), not the response — so the widget would render that log as a GET's
+ * body, size the log's bytes, and stamp it with the ✓-response glyph, every
+ * field about the wrong thing. Its log reads fine on the generic card.
+ */
+const CLIENTS = /^(curl|http|https|xh)$/
 
 export interface ResponseHeader {
   name: string
@@ -19,6 +25,8 @@ export interface ResponseHeader {
 export interface HttpRequestProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   method: string
   /** Empty when the command's URL isn't one we can pick out of the flags. */
   url: string
@@ -100,14 +108,25 @@ export const parseHttpRequest = (ctx: ParseContext): HttpRequestProps | null => 
   if (!out) return null
 
   const lines = out.replace(/\r/g, "").split("\n")
-  const statusLine = STATUS_LINE.exec(lines[0]?.trim() ?? "")
+  /*
+   * The LAST status line, not the first.
+   *
+   * `curl -i -L` prints one header block per hop, so a redirect chain starts
+   * with `301 Moved Permanently` and ends with the `200` whose body we show.
+   * Reading line 0 pairs the 301 (or a `100 Continue`) with the final body — a
+   * mismatched code/body presented as one response. The final block is the one
+   * that produced the body.
+   */
+  let statusIdx = -1
+  for (let i = 0; i < lines.length; i++) if (STATUS_LINE.test(lines[i]!.trim())) statusIdx = i
+  const statusLine = statusIdx >= 0 ? STATUS_LINE.exec(lines[statusIdx]!.trim()) : null
 
   let headers: ResponseHeader[] = []
   let body: string
   if (statusLine) {
-    const blank = lines.findIndex((l, i) => i > 0 && l.trim() === "")
+    const blank = lines.findIndex((l, i) => i > statusIdx && l.trim() === "")
     const end = blank === -1 ? lines.length : blank
-    headers = lines.slice(1, end).flatMap((l) => {
+    headers = lines.slice(statusIdx + 1, end).flatMap((l) => {
       const m = /^([\w-]+):\s*(.*)$/.exec(l)
       return m?.[1] ? [{ name: m[1].toLowerCase(), value: m[2]!.trim() }] : []
     })
@@ -133,6 +152,7 @@ export const parseHttpRequest = (ctx: ParseContext): HttpRequestProps | null => 
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     method: methodOf(ctx.command.primary),
     url: urlOf(ctx.command.tokens),
     code,
@@ -285,7 +305,7 @@ export function HttpRequestWidget(p: HttpRequestProps) {
       footer={
         p.status === "running" ? <span className="text-yellow">waiting…</span> : undefined
       }
-      footerMeta={exitLabel(p.status) ?? undefined}
+      footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
       <WidgetBody className="gap-2.5">
         <div className="flex items-center gap-2 font-mono text-[11.5px]">

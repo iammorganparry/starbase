@@ -7,7 +7,7 @@ const CURL = "curl -s -X POST https://api.trigify.io/v1/enrich"
 const ctx = (output: string | undefined, command = CURL, status: "running" | "success" | "error" = "success") => ({
   command: parseCommand(command),
   output,
-  status
+  status, meta: null
 })
 
 const WITH_HEADERS = `HTTP/2 200
@@ -21,14 +21,21 @@ const BODY_ONLY = `{"id":"cus_9f4a2b","matched":true,"confidence":0.94}`
 const matches = (command: string) => httpRequestWidget.match(parseCommand(command))
 
 describe("classify", () => {
-  it.each(["curl https://x.dev", "http POST x.dev", "xh get x.dev", "wget https://x.dev/a.tar", "cd api && curl -s localhost:9100/health"])(
+  it.each(["curl https://x.dev", "http POST x.dev", "xh get x.dev", "cd api && curl -s localhost:9100/health"])(
     "claims %j",
     (cmd) => {
       expect(matches(cmd)).toBe(true)
     }
   )
 
-  it.each(["vitest run", "psql -c 'select 1'", "git push"])("leaves %j to another widget", (cmd) => {
+  it.each([
+    "vitest run",
+    "psql -c 'select 1'",
+    "git push",
+    // wget prints a transfer LOG, not a response — rendering it as a body would
+    // make every field on the card about the wrong thing. Leave it to generic.
+    "wget https://x.dev/a.tar"
+  ])("leaves %j to another widget", (cmd) => {
     expect(matches(cmd)).toBe(false)
   })
 })

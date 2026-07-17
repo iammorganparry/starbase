@@ -5,7 +5,7 @@ import { devServerWidget, parseDevServer } from "./dev-server.js"
 const ctx = (output: string | undefined, status: "running" | "success" | "error" = "running") => ({
   command: parseCommand("pnpm dev"),
   output,
-  status
+  status, meta: null
 })
 
 /** `devServerWidget` isn't in the registry yet, so match on the spec itself. */

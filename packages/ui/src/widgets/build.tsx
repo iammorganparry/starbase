@@ -33,6 +33,8 @@ export interface BuildAsset {
 export interface BuildProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   tool: string | null
   toolVersion: string | null
   modules: number | null
@@ -112,6 +114,7 @@ export const parseBuild = (ctx: ParseContext): BuildProps | null => {
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     tool: banner?.[1] ?? null,
     toolVersion: banner?.[2] ?? null,
     modules: modules?.[1] ? Number(modules[1].replace(/,/g, "")) : null,
@@ -162,7 +165,7 @@ export function BuildWidget(p: BuildProps) {
           <span className="text-green">built in {p.duration}</span>
         ) : undefined
       }
-      footerMeta={exitLabel(p.status) ?? undefined}
+      footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
       <WidgetBody className="gap-2.5 font-mono text-[13px]">
         {p.tool && (

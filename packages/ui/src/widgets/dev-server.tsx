@@ -11,7 +11,10 @@ import { defineWidget, type ParseContext } from "./types.js"
 const DEV_PROGRAMS = /^(vite|next|nuxt|remix|astro|webpack-dev-server)$/
 /** `pnpm dev`, `pnpm dev:web`, `npm start` — the script name is the signal. */
 const DEV_SCRIPTS = /^(dev|serve|start|dev:[\w-]+)$/
-const PKG_MANAGERS = new Set(["pnpm", "npm", "yarn", "bun"])
+/* Local to this widget — NOT the exported PKG_MANAGERS from ./command.js,
+ * which also includes npx/pnpx/bunx/turbo. A dev script is only ever invoked
+ * by a real package manager (`pnpm dev`), so the wrapper bins would be noise. */
+const SCRIPT_HOSTS = new Set(["pnpm", "npm", "yarn", "bun"])
 
 export interface DevUrl {
   /** `Local`, `Network`, `External` — whatever the server called it. */
@@ -28,6 +31,8 @@ export interface DevLog {
 export interface DevServerProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   /** `VITE`, `Next.js`. Null when the banner wasn't recognised. */
   tool: string | null
   version: string | null
@@ -110,6 +115,7 @@ export const parseDevServer = (ctx: ParseContext): DevServerProps | null => {
   return {
     command: ctx.command.primary,
     status: ctx.status,
+    exit: ctx.meta,
     tool: b?.tool ?? null,
     version: b?.version ?? null,
     readyIn,
@@ -149,7 +155,7 @@ export function DevServerWidget(p: DevServerProps) {
        * nobody did — the ToolCall model carries no duration. "uptime 4m 12s" would
        * be a number we made up, so the footer offers the one thing that's true.
        */
-      footerMeta={listening ? <span className="text-dim">⌃C to stop</span> : (exitLabel(p.status) ?? undefined)}
+      footerMeta={listening ? <span className="text-dim">⌃C to stop</span> : (exitLabel(p.status, p.exit) ?? undefined)}
     >
       <WidgetBody className="gap-[9px]">
         {(p.tool || p.readyIn) && (
@@ -205,7 +211,7 @@ export const devServerWidget = defineWidget<DevServerProps>({
     invokes(c, DEV_PROGRAMS) ||
     // `npm run dev` promotes the script to `program`; `pnpm dev` leaves it as `sub`.
     DEV_SCRIPTS.test(c.program) ||
-    (c.sub !== null && (DEV_SCRIPTS.test(c.sub) || (PKG_MANAGERS.has(c.bin) && /\bdev\b/.test(c.sub)))),
+    (c.sub !== null && (DEV_SCRIPTS.test(c.sub) || (SCRIPT_HOSTS.has(c.bin) && /\bdev\b/.test(c.sub)))),
   parse: parseDevServer,
   render: (p) => <DevServerWidget {...p} />
 })

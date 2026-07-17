@@ -13,6 +13,8 @@ const CLIENTS = /^(psql|pgcli|mysql|sqlite3|duckdb)$/
 export interface DbQueryProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   /** Null for an interactive session or a heredoc — no inline SQL to echo. */
   sql: string | null
   columns: ReadonlyArray<DataColumn>
@@ -79,12 +81,23 @@ const NUMERIC = /^-?[\d,]+(?:\.\d+)?$/
 const isNumericColumn = (rows: ReadonlyArray<ReadonlyArray<string>>, i: number): boolean =>
   rows.length > 0 && rows.every((r) => r[i] !== undefined && NUMERIC.test(r[i]!))
 
-/** `8214` → `8,214`. Grouped by hand rather than via `Number`, so a wide id or a
- *  decimal comes back with exactly the digits the database printed. */
+/**
+ * `8214` → `8,214`, but only when grouping can't misrepresent the value.
+ *
+ * Thousands separators help a COUNT and mangle an IDENTIFIER. Two things a
+ * separator would corrupt, and how each is spotted:
+ *   - a code with a LEADING ZERO — `02134` (a zip) → `02,134`. Never group.
+ *   - a bare four-digit YEAR — `2026` → `2,026`. Left alone; five+ digits or a
+ *     decimal are counts, and a four-digit count (`8214`) still groups because
+ *     it's outside the 1900–2099 range we treat as a probable year.
+ */
+const YEAR = /^(?:19|20)\d\d$/
 const group = (n: string): string => {
   const [int = "", frac] = n.replace(/,/g, "").split(".")
   const sign = int.startsWith("-") ? "-" : ""
   const digits = sign ? int.slice(1) : int
+  const risky = digits.startsWith("0") || (frac === undefined && YEAR.test(digits))
+  if (risky) return n.replace(/,/g, "")
   const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
   return frac !== undefined ? `${sign}${grouped}.${frac}` : `${sign}${grouped}`
 }
@@ -146,6 +159,7 @@ export const parseDbQuery = (ctx: ParseContext): DbQueryProps | null => {
     // The invocation only — the SQL lives in the inset, not twice.
     command: invocationOf(ctx.command.primary),
     status: ctx.status,
+    exit: ctx.meta,
     sql: sqlOf(ctx.command.primary),
     columns: grid.columns,
     rows: grid.rows,
@@ -280,7 +294,7 @@ export function DbQueryWidget(p: DbQueryProps) {
           )}
         </span>
       }
-      footerMeta={<span className="text-dim">{p.tag ?? exitLabel(p.status)}</span>}
+      footerMeta={<span className="text-dim">{p.tag ?? exitLabel(p.status, p.exit)}</span>}
     >
       {p.sql && (
         <div className="px-[15px] pt-[13px]">
@@ -296,7 +310,14 @@ export function DbQueryWidget(p: DbQueryProps) {
 
 export const dbQueryWidget = defineWidget<DbQueryProps>({
   id: "db-query",
-  match: (c) => CLIENTS.test(c.program) || c.raw.includes("psql"),
+  /*
+   * A client binary as its own TOKEN — not a raw substring. `c.raw.includes
+   * ("psql")` claimed `grep -r psql docs/`, `cat notes/psql.md`, even `echo
+   * 'run psql later'`, and gridOf is permissive enough that any output with a
+   * `----` line then renders as a fabricated result grid. Matching a token also
+   * still catches `docker compose exec db psql …`, which `program` alone misses.
+   */
+  match: (c) => CLIENTS.test(c.program) || c.tokens.some((t) => CLIENTS.test(t.replace(/^.*\//, ""))),
   parse: parseDbQuery,
   render: (p) => <DbQueryWidget {...p} />
 })

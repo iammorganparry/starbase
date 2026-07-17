@@ -80,7 +80,7 @@ Done in 6.3s`
 const PSQL = `    plan    | count
 ------------+-------
  free       |  8214
- pro        |  1902
+ pro        |  12902
  team       |   486
  enterprise |    41
 (4 rows)`

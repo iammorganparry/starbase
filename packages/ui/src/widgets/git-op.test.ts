@@ -5,7 +5,7 @@ import { gitOpWidget, parseGitOp } from "./git-op.js"
 const ctx = (output: string | undefined, command = 'git commit -m "fix: guard webhook payload" && git push', status: "running" | "success" | "error" = "success") => ({
   command: parseCommand(command),
   output,
-  status
+  status, meta: null
 })
 
 const COMMIT = `[feat/oauth 3af12e9] fix: guard webhook payload

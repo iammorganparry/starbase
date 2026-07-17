@@ -34,6 +34,8 @@ export interface GitPush {
 export interface GitOpProps {
   command: string
   status: ToolCallStatus
+  /** The adapter-reported exit meta (codex\'s real code), or null. */
+  exit: string | null
   branch: string | null
   sha: string | null
   subject: string | null
@@ -147,6 +149,7 @@ export const parseGitOp = (ctx: ParseContext): GitOpProps | null => {
      */
     command: ctx.command.raw,
     status: ctx.status,
+    exit: ctx.meta,
     branch: commit?.[1] ?? ref?.[2] ?? null,
     sha: commit?.[2] ?? null,
     subject: commit?.[3]?.trim() || null,
@@ -179,11 +182,13 @@ export function GitOpWidget(p: GitOpProps) {
       }
       footerMeta={
         p.push && !failed ? (
-          /* Placeholder for a future "open PR" action — this pass has no handler
-             to give it, and a button that does nothing is worse than a label. */
-          <span className="text-blue">Open pull request →</span>
+          /* A dim label, NOT a link: text-blue with a trailing arrow is this
+             UI's link affordance (see the dev-server URL), and this pass has no
+             handler — a control that looks clickable and isn't is worse than a
+             plain note. Becomes a real action when there's something to open. */
+          <span className="text-dim">pushed — ready for PR</span>
         ) : (
-          (exitLabel(p.status) ?? undefined)
+          (exitLabel(p.status, p.exit) ?? undefined)
         )
       }
     >

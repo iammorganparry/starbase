@@ -50,6 +50,9 @@ export interface WidgetInput {
   command: string
   output: string | undefined
   status: ToolCallStatus
+  /** The adapter's own word on the result — codex's real `exit 127`, opencode's
+   *  error message. For codex bash calls it is the ONLY payload there is. */
+  meta?: string | null
 }
 
 export interface ResolvedWidget {
@@ -68,11 +71,11 @@ export interface ResolvedWidget {
  * alone the two are easy to confuse, and a widget silently degrading to the
  * fallback is exactly the regression worth catching.
  */
-export const renderCommandWidget = ({ command, output, status }: WidgetInput): ResolvedWidget | null => {
+export const renderCommandWidget = ({ command, output, status, meta = null }: WidgetInput): ResolvedWidget | null => {
   const parsed = parseCommand(command)
   for (const spec of SPECS) {
     if (!spec.match(parsed)) continue
-    const props = spec.parse({ command: parsed, output, status })
+    const props = spec.parse({ command: parsed, output, status, meta })
     if (props === null) continue // declined — try the next, ending at generic
     return { id: spec.id, node: spec.render(props) }
   }

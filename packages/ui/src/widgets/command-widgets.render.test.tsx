@@ -499,3 +499,45 @@ describe("every harness's bash call", () => {
     expect(screen.getByText("No output.")).toBeDefined()
   })
 })
+
+// ── The adapter's own word on the result (codex/opencode) ─────────────────────
+
+describe("meta: the real exit code and error message", () => {
+  /**
+   * codex sends NO output and NO preview for a bash call — only meta: "exit 127"
+   * with the true code. opencode puts a failed call's error message in meta.
+   * The widget path must surface both rather than fabricate "exit 1".
+   */
+  const codexBash = (target: string, status: ToolCallModel["status"], meta: string | null): Message => ({
+    id: "m1",
+    role: "assistant",
+    streaming: false,
+    createdAt: "2026-07-17T10:00:00.000Z",
+    parts: [{ _tag: "Tool", tool: { id: "t1", name: "Bash", target, status, meta, diff: null, preview: null } as ToolCallModel }]
+  })
+
+  it("renders codex's real exit code, not a fabricated exit 1", () => {
+    render(<MessageTurn message={codexBash("vitest run", "error", "exit 127")} />)
+    fireEvent.click(screen.getByRole("button", { expanded: false }))
+    expect(screen.getByText("exit 127")).toBeDefined()
+    expect(screen.queryByText("exit 1")).toBeNull()
+  })
+
+  it("says 'failed' when the adapter gave no code at all", () => {
+    render(<MessageTurn message={codexBash("./x.sh", "error", null)} />)
+    fireEvent.click(screen.getByRole("button", { expanded: false }))
+    expect(screen.getByText("failed")).toBeDefined()
+  })
+
+  it("surfaces an opencode failure's error message instead of 'No output.'", () => {
+    // meta carries the only explanation a failed opencode command ever gives.
+    const { container } = render(<MessageTurn message={codexBash("./deploy.sh", "error", "permission denied")} />)
+    expect(container.textContent).toContain("permission denied")
+    expect(container.textContent).not.toContain("No output.")
+  })
+
+  it("shows the real code in the collapsed summary too", () => {
+    const { container } = render(<MessageTurn message={codexBash("./x.sh", "error", "exit 130")} />)
+    expect(container.textContent).toContain("exit 130")
+  })
+})

@@ -16,6 +16,17 @@ export interface ParseContext {
    */
   output: string | undefined
   status: ToolCallStatus
+  /**
+   * What the adapter said about the result, if anything.
+   *
+   * For some harnesses this is the ONLY payload a bash call has: the codex
+   * adapter emits no output and no preview for `command_execution` — just
+   * `meta: "exit 127"` with the true exit code — and the opencode adapter puts
+   * a failed call's error message here. Ignoring it means fabricating an exit
+   * code while the real one sits unread, and losing the only explanation a
+   * failed opencode command ever gives.
+   */
+  meta: string | null
 }
 
 /**
