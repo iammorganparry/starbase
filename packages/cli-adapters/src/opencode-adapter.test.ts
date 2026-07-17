@@ -51,10 +51,9 @@ describe("splitModelId", () => {
 
 describe("mapOpencodePermission", () => {
   /**
-   * Anything the operator might want to gate must be `ask`, because `ask` is what
-   * routes an action onto opencode's permission bus and thus onto Starbase's own
-   * `canUseTool`. Marking these `allow` here would silently bypass the session's
-   * HITL mode entirely.
+   * `ask` is what routes an action onto opencode's permission bus and thus onto
+   * Starbase's own `canUseTool`. Marking a mutating tool `allow` here would
+   * bypass the session's HITL mode entirely.
    */
   it("routes mutating tools to the bus for every mode except auto", () => {
     for (const mode of ["ask", "accept-edits", "plan"] as const) {
@@ -64,6 +63,18 @@ describe("mapOpencodePermission", () => {
       // Reads are never gated — they can't change anything and gating them would
       // make every run a click-fest.
       expect(permission.read).toBe("allow")
+    }
+  })
+
+  /**
+   * Spawning a subagent isn't itself a mutation, and gating it buys nothing: the
+   * child session's own edits and commands raise their own permissions and gate
+   * under the same rules. Matches opencode's own default and Claude's adapter,
+   * which never gates a `Task` — so a given mode feels the same on both.
+   */
+  it("does not gate a subagent spawn, whose own actions gate instead", () => {
+    for (const mode of ["ask", "accept-edits", "plan", "auto"] as const) {
+      expect(mapOpencodePermission(mode).task).toBe("allow")
     }
   })
 
@@ -220,14 +231,46 @@ describe("permissionToRequest", () => {
   })
 
   /**
-   * Unknown permission kinds must gate as `edit` — the stricter of the two. A new
-   * upstream permission type should fail closed, not sail through ungated.
+   * `"edit"` is the LOOSER kind, not the stricter one: `verdict` auto-allows it
+   * under `accept-edits`, which is the default mode. So only opencode's own
+   * `edit` may map to it — mapping the unknown there auto-approved a new upstream
+   * permission kind for every default-mode session, without the operator ever
+   * seeing it. An allowlist fails closed.
    */
-  it("treats an unknown permission kind as an edit", () => {
+  it("gates an unknown permission kind rather than auto-allowing it", () => {
     const request = permissionToRequest({ id: "per_3", sessionID: "ses_1", permission: "something_new" })
-    expect(request.kind).toBe("edit")
+    expect(request.kind).toBe("command")
     expect(request.tool).toBe("something_new")
     expect(request.target).toBeNull()
+    // No command → the gate offers no "Always allow", so it asks every time.
+    expect(request.command).toBeNull()
+  })
+
+  /**
+   * The one with teeth. Trusting edits to your WORKTREE (what `accept-edits`
+   * means) is not trusting edits to your disk, so reaching outside it has to keep
+   * gating in the default mode.
+   */
+  it("gates external_directory even under accept-edits", () => {
+    const request = permissionToRequest({
+      id: "per_4",
+      sessionID: "ses_1",
+      permission: "external_directory",
+      patterns: ["/etc/hosts"],
+      metadata: { filepath: "/etc/hosts" }
+    })
+    expect(request.kind).toBe("command")
+    expect(request.target).toBe("/etc/hosts")
+    // A path must never become an "Always allow" token — `isAllowlisted` prefix
+    // matches, so one approval would whitelist a whole directory.
+    expect(request.command).toBeNull()
+  })
+
+  it("gates opencode's doom_loop guard", () => {
+    // Not in our config, so it keeps opencode's own `ask` default and lands here.
+    expect(permissionToRequest({ id: "per_5", sessionID: "ses_1", permission: "doom_loop" }).kind).toBe(
+      "command"
+    )
   })
 })
 

@@ -49,9 +49,15 @@ export const splitModelId = (id: string): { providerID: string; modelID: string 
  * opencode's permission config for a run. Values are `"ask" | "allow" | "deny"`.
  *
  * `ask` routes the action to opencode's permission bus, which we bridge onto
- * `ctx.canUseTool` — so Starbase's own HITL mode/allowlist decides. That means
- * the harness should ASK about anything the operator might want to gate, and the
- * bridge (not this config) does the actual allowing. `auto` skips the bus.
+ * `ctx.canUseTool` — so Starbase's own HITL mode/allowlist decides. `auto` skips
+ * the bus entirely.
+ *
+ * "Ask about everything the operator might want to gate" is NOT the rule: the
+ * bridge only understands two kinds of request, and what it does with them
+ * depends on the mode. Routing a kind it can't meaningfully classify to it just
+ * moves the decision somewhere that can't make it (see `permissionToRequest`).
+ * So a permission is only put on the bus when gating it actually means
+ * something.
  *
  * `readOnly` must be enforced HERE rather than trusted to the bridge: the
  * adversarial reviewer denies everything through `canUseTool`, but a tool that
@@ -60,7 +66,12 @@ export const splitModelId = (id: string): { providerID: string; modelID: string 
  *
  * `external_directory` is always pinned: it defaults to `ask` in opencode, and
  * an unanswered ask deadlocks a headless run the moment the agent looks outside
- * the worktree. We route it through the bridge like everything else.
+ * the worktree. We route it through the bridge like everything else — and unlike
+ * an in-worktree edit, it keeps gating under `accept-edits`, because trusting
+ * edits to your worktree is not the same as trusting edits to your disk.
+ *
+ * Anything NOT named here keeps opencode's own default — notably `doom_loop`,
+ * which defaults to `ask` and so reaches the bridge, where it gates.
  */
 export const mapOpencodePermission = (
   mode: PermissionMode,
@@ -90,7 +101,13 @@ export const mapOpencodePermission = (
     webfetch: "allow",
     edit: gate,
     bash: gate,
-    task: gate,
+    // Spawning a subagent is not itself a mutation, and gating it buys nothing:
+    // the subagent runs in a child session whose OWN edits and commands raise
+    // their own permissions and gate under the same rules (verified live). This
+    // matches both opencode's own default for `task` and Claude's adapter, which
+    // never gates a `Task` — so the two harnesses behave alike in a given mode
+    // rather than opencode nagging about work Claude does silently.
+    task: "allow",
     external_directory: gate
   }
 }
@@ -199,24 +216,42 @@ export const asPermissionAsked = (event: unknown): PermissionAsked | null => {
   return p as unknown as PermissionAsked
 }
 
-/** Map a `permission.asked` onto the request Starbase gates on. */
+/**
+ * Map a `permission.asked` onto the request Starbase gates on.
+ *
+ * The kind is an ALLOWLIST, and that is the whole point: only opencode's own
+ * `edit` maps to our `"edit"`.
+ *
+ * `"edit"` is not the stricter kind, it is the LOOSER one — `verdict` in
+ * `agent-runner` auto-allows it under `accept-edits`, which is the default mode
+ * (`EXEC_FALLBACK`, `DEFAULT_PROVIDER`). That is deliberate for real edits:
+ * "accept edits" means "I trust you to change files in my worktree". It is
+ * exactly wrong for anything else.
+ *
+ * So a denylist (`bash` → command, else edit) fails OPEN: `external_directory`
+ * — the agent reaching OUTSIDE the worktree — and any permission kind opencode
+ * adds upstream would be silently auto-approved for every default-mode session,
+ * never reaching the operator at all. Mapping the unknown to `"command"` makes
+ * it gate, so a new upstream kind fails closed and shows up as a prompt rather
+ * than as a thing that already happened.
+ */
 export const permissionToRequest = (asked: PermissionAsked): PermissionRequest => {
   const metadata = asked.metadata ?? {}
   const str = (key: string): string | null => {
     const value = metadata[key]
     return typeof value === "string" && value.length > 0 ? value : null
   }
-  // Anything shell-shaped is a command; everything else is an edit, which is the
-  // stricter of the two gates.
-  const kind = asked.permission === "bash" ? "command" : "edit"
   const command = str("command")
   return {
-    kind,
+    kind: asked.permission === "edit" ? "edit" : "command",
     tool: toolDisplayName(asked.permission),
     // There's no `title` on the real event, so build the subject from what's
     // there: the pattern it matched, else the concrete path/command.
     target: asked.patterns?.[0] ?? str("filepath") ?? str("filePath") ?? command,
-    command: kind === "command" ? command : null
+    // ONLY a real shell command may carry one. The gate offers "Always allow
+    // <first two words>" off this field and `isAllowlisted` PREFIX-matches it,
+    // so handing it a path would let one approval whitelist a whole directory.
+    command: asked.permission === "bash" ? command : null
   }
 }
 
