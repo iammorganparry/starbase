@@ -18,6 +18,7 @@ import {
   ConfigService,
   claudeTitleGenerator,
   DiscoveryService,
+  filterVisible,
   GhService,
   ModelsService,
   retitleSession,
@@ -33,6 +34,7 @@ import {
 import { homedir } from "node:os"
 import { GhError, GitError, ReviewError, reviewModelFor } from "@starbase/core"
 import type {
+  CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
@@ -134,6 +136,38 @@ export const createSession = (input: CreateSessionInput) =>
       defaultMode: provider?.defaultMode,
       defaultModel: provider?.defaultModel
     })
+  })
+
+/**
+ * The models a harness offers, narrowed to what the user chose to see.
+ *
+ * Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
+ * app has a threadbare PATH, so Codex's and opencode's own model lists are only
+ * reachable via the absolute path discovery found.
+ *
+ * Curation is applied HERE rather than inside `ModelsService` so that service
+ * stays free of a config dependency (and hermetically testable). It matters for
+ * opencode above all: its catalogue comes from the user's own credentials, and a
+ * single OpenRouter key resolves ~342 models. Exported for tests.
+ */
+export const modelsList = (cli: CliKind) =>
+  Effect.gen(function* () {
+    const clis = yield* DiscoveryService.list()
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const models = yield* ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
+    return filterVisible(models, config?.providers?.[cli]?.visibleModels)
+  })
+
+/** Every installed harness's models, each narrowed by its own curation. */
+export const modelsCatalog = () =>
+  Effect.gen(function* () {
+    const clis = yield* DiscoveryService.list()
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const catalog = yield* ModelsService.catalog(clis)
+    return catalog.map((section) => ({
+      ...section,
+      models: filterVisible(section.models, config?.providers?.[section.cli]?.visibleModels)
+    }))
   })
 
 /**
@@ -563,11 +597,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   // Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
   // app has a threadbare PATH, so Codex's own model list is only reachable via
   // the absolute path discovery found.
-  "Models.list": ({ cli }) =>
-    Effect.flatMap(DiscoveryService.list(), (clis) =>
-      ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
-    ),
-  "Models.catalog": () => Effect.flatMap(DiscoveryService.list(), (clis) => ModelsService.catalog(clis)),
+  "Models.list": ({ cli }) => modelsList(cli),
+  "Models.catalog": () => modelsCatalog(),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),

@@ -540,10 +540,16 @@ function StubSection({ label }: { label: string }) {
 const DEFAULT_GITHUB: GithubConfig = { enabled: false, autoCreatePr: false, autoDetectPr: true }
 const DEFAULT_GIT: GitConfig = { shareCheckedOutBranches: true }
 
-/** Harnesses that can run an adversarial review. Cursor has no headless path yet. */
+/**
+ * Harnesses that can run an adversarial review. Cursor has no headless path yet.
+ *
+ * NOT a `Record<CliKind, …>`, so adding a harness won't break the build here —
+ * a new kind must be added by hand or it silently never appears as a reviewer.
+ */
 const REVIEW_CLIS: ReadonlyArray<{ id: CliKind; label: string }> = [
   { id: "claude", label: "Claude" },
-  { id: "codex", label: "Codex" }
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "opencode" }
 ]
 
 function ToggleRow({

@@ -58,9 +58,62 @@ export const codexDefaultMode = (configToml: string): PermissionMode => {
 }
 
 /**
- * Read `~/.claude/settings.json` (claude/cursor) or `~/.codex/config.toml`
- * (codex) and resolve the user's default execution mode. Never fails — a missing
- * file resolves to `accept-edits`.
+ * Map opencode's `opencode.json` `permission` block onto our mode. It is either
+ * a blanket action (`"permission": "allow"`) or per-tool
+ * (`{ edit: "allow", bash: "ask" }`), where each value is `"ask" | "allow" |
+ * "deny"` — or an object of glob→action for finer rules.
+ *
+ * A glob object is deliberately NOT treated as a blanket grant: `{ bash: { "*":
+ * "ask", "git *": "allow" } }` means the user wants to be asked about most
+ * commands, so the mode that respects it is `ask`. Only an unconditional
+ * `"allow"` earns `auto`.
+ *
+ * `deny` maps to `ask` rather than anything stricter: we're picking the mode to
+ * *execute* under, and Starbase has no "refuse everything" execution mode — the
+ * gate will still ask, and the user can decline.
+ */
+export const opencodeDefaultMode = (configJson: string): PermissionMode => {
+  const permission = ((): unknown => {
+    try {
+      // opencode's config permits comments and trailing commas (its schema sets
+      // allowComments/allowTrailingCommas). `JSON.parse` rejects those, and a
+      // user's commented config then reads as "no config" → the fallback. That's
+      // the right failure: a wrong guess at their mode would be worse than the
+      // conservative default.
+      return (JSON.parse(configJson) as { permission?: unknown }).permission
+    } catch {
+      return undefined
+    }
+  })()
+  if (permission === undefined) return EXEC_FALLBACK
+
+  // Blanket form: `"permission": "allow"`.
+  if (typeof permission === "string") return permission === "allow" ? "auto" : "ask"
+  if (typeof permission !== "object" || permission === null) return EXEC_FALLBACK
+
+  const rules = permission as Record<string, unknown>
+  // Only a bare string is an unconditional action; an object is a glob ruleset.
+  const action = (value: unknown): string | undefined =>
+    typeof value === "string" ? value : undefined
+  const star = action(rules["*"])
+  const edit = action(rules.edit) ?? star
+  const bash = action(rules.bash) ?? star
+
+  if (edit === "allow" && bash === "allow") return "auto"
+  if (edit === "allow") return "accept-edits"
+  if (edit !== undefined || bash !== undefined) return "ask"
+  return EXEC_FALLBACK
+}
+
+/**
+ * Read the user's native CLI config and resolve their default execution mode:
+ * `~/.codex/config.toml` (codex), `~/.config/opencode/opencode.json` (opencode),
+ * or `~/.claude/settings.json` (claude/cursor). Never fails — a missing file
+ * resolves to `accept-edits`.
+ *
+ * opencode's config dir can be relocated with `OPENCODE_CONFIG_DIR`, and it also
+ * merges project-level and remote configs; we read the standard user path only,
+ * which is the one the setting actually reflects for the vast majority.
  */
 export const readDefaultMode = (
   cli: CliKind,
@@ -72,6 +125,10 @@ export const readDefaultMode = (
     if (cli === "codex") {
       const toml = yield* read(`${homeDir}/.codex/config.toml`)
       return toml.length > 0 ? codexDefaultMode(toml) : EXEC_FALLBACK
+    }
+    if (cli === "opencode") {
+      const json = yield* read(`${homeDir}/.config/opencode/opencode.json`)
+      return json.length > 0 ? opencodeDefaultMode(json) : EXEC_FALLBACK
     }
     const json = yield* read(`${homeDir}/.claude/settings.json`)
     return json.length > 0 ? claudeDefaultMode(json) : EXEC_FALLBACK

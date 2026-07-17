@@ -276,7 +276,8 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
         if (input.cli === "cursor") {
           return yield* Effect.fail(
             new ReviewError({
-              message: "Cursor can't run an adversarial review yet — choose Claude or Codex in Settings · GitHub."
+              message:
+                "Cursor can't run an adversarial review yet — choose Claude, Codex or opencode in Settings · GitHub."
             })
           )
         }

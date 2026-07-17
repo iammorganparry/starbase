@@ -2,6 +2,7 @@ import type { CliInfo, CliKind, ModelOption, ProviderModels } from "@starbase/co
 import { FALLBACK_MODELS } from "@starbase/core"
 import { Effect, Ref } from "effect"
 import { fetchCodexModels } from "./codex-models.js"
+import { fetchOpencodeModels } from "./opencode-models.js"
 
 /**
  * Live model discovery per harness, so the composer's chip stays current instead
@@ -13,6 +14,10 @@ import { fetchCodexModels } from "./codex-models.js"
  *  - **claude** — the Anthropic models API, when `ANTHROPIC_API_KEY` is set. The
  *    Claude CLI has no list command, and its fallback aliases (`opus`/`sonnet`/
  *    `haiku`) are valid and stable, so the fallback is a fine answer here.
+ *  - **opencode** — a short-lived opencode server (`/config/providers`). Live
+ *    discovery matters most here: opencode resolves providers from the user's
+ *    OWN credentials, so the catalogue is theirs, not ours. See
+ *    `opencode-models.ts`.
  *  - **cursor** — no discovery path; always the fallback.
  *
  * Anything that fails (offline, no credentials, protocol drift) degrades to
@@ -42,7 +47,32 @@ const fetchFor = (
     ? fetchAnthropic()
     : cli === "codex"
       ? fetchCodexModels(binPath)
-      : Promise.resolve(null)
+      : cli === "opencode"
+        ? fetchOpencodeModels(binPath)
+        : Promise.resolve(null)
+
+/**
+ * Narrow a harness's catalogue to the models the user chose to see
+ * (`ProviderConfig.visibleModels`).
+ *
+ * Curation exists because live discovery can be overwhelming rather than
+ * helpful: a single OpenRouter key resolves ~342 opencode models, which is not a
+ * menu anyone can use. An absent or empty list means "show everything" — the
+ * user hasn't curated, so we don't presume to.
+ *
+ * A curation that matches nothing (every id stale after an upstream rename)
+ * falls back to the full list. Showing everything is recoverable; showing an
+ * empty model menu looks like the harness is broken.
+ */
+export const filterVisible = (
+  models: ReadonlyArray<ModelOption>,
+  visible: ReadonlyArray<string> | undefined
+): ReadonlyArray<ModelOption> => {
+  if (visible === undefined || visible.length === 0) return models
+  const allowed = new Set(visible)
+  const filtered = models.filter((m) => allowed.has(m.id))
+  return filtered.length > 0 ? filtered : models
+}
 
 export class ModelsService extends Effect.Service<ModelsService>()("@starbase/ModelsService", {
   accessors: true,
