@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { ChevronDown, ChevronRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { StatusDot } from "../components/status-dot.js"
 import { FileIcon } from "../components/file-icon.js"
@@ -18,7 +19,42 @@ export interface ToolCallProps {
   /** Inline body under the header — e.g. a `DiffPeek` for an edit. */
   children?: ReactNode
   icon?: ReactNode
+  /**
+   * Make the header a toggle. The host owns the open state (so it can keep
+   * rendering the right body); given this, the whole header becomes a button.
+   */
+  expanded?: boolean
+  onToggle?: () => void
   className?: string
+}
+
+/**
+ * Split a path for display: the directory, and the file itself.
+ *
+ * These paths are absolute inside a session's worktree, so the first ~60
+ * characters are the same on every card and the only part anyone reads — the
+ * filename — sits at the END. A plain `truncate` ellipsises the tail, which
+ * throws away precisely that and leaves a row of identical prefixes.
+ */
+const splitPath = (path: string): { dir: string; base: string } => {
+  const cut = path.replace(/\/+$/, "").lastIndexOf("/")
+  return cut <= 0
+    ? { dir: "", base: path }
+    : { dir: path.slice(0, cut), base: path.slice(cut + 1) }
+}
+
+/** The target as a path: a directory that gives way, and a filename that never does. */
+function PathTarget({ path }: { path: string }) {
+  const { dir, base } = splitPath(path)
+  return (
+    <span className="flex min-w-0 flex-1 items-baseline">
+      {dir && <span className="truncate text-dim">{dir}/</span>}
+      {/* `flex-none` so the directory is what shrinks; the filename is the point
+          of the card. It still truncates if it alone can't fit — better a cut
+          filename than one pushed out of the row entirely. */}
+      <span className="max-w-full flex-none truncate text-text-bright">{base}</span>
+    </span>
+  )
 }
 
 /** A single agent tool invocation (success / running / error), with optional peek. */
@@ -30,8 +66,40 @@ export function ToolCall({
   filePath,
   children,
   icon,
+  expanded = false,
+  onToggle,
   className
 }: ToolCallProps) {
+  const header = (
+    <>
+      {status === "success" && <span className="text-green">✓</span>}
+      {status === "error" && <span className="text-red">✗</span>}
+      {status === "running" && <StatusDot tone="bg-yellow" size={8} pulse />}
+      <span className="text-muted-foreground">{name}</span>
+      {icon}
+      {filePath && <FileIcon path={filePath} />}
+      {filePath ? (
+        <PathTarget path={filePath} />
+      ) : (
+        <span className="flex-1 truncate text-left text-text-bright">{target}</span>
+      )}
+      {meta && (
+        <span className={cn("shrink-0", status === "error" ? "text-red" : "text-dim")}>{meta}</span>
+      )}
+      {onToggle &&
+        (expanded ? (
+          <ChevronDown className="size-3 shrink-0 text-line-strong" />
+        ) : (
+          <ChevronRight className="size-3 shrink-0 text-line-strong" />
+        ))}
+    </>
+  )
+  const headerClass = cn(
+    "flex w-full items-center gap-[9px] px-2.5 py-1.5 font-mono text-[11.5px]",
+    status === "running" && "bg-yellow/[0.08]",
+    status === "success" && "bg-surface",
+    onToggle && "cursor-pointer text-left transition-colors hover:bg-line/20"
+  )
   return (
     <div
       className={cn(
@@ -42,24 +110,18 @@ export function ToolCall({
         className
       )}
     >
-      <div
-        className={cn(
-          "flex items-center gap-[9px] px-2.5 py-1.5 font-mono text-[11.5px]",
-          status === "running" && "bg-yellow/[0.08]",
-          status === "success" && "bg-surface"
-        )}
-      >
-        {status === "success" && <span className="text-green">✓</span>}
-        {status === "error" && <span className="text-red">✗</span>}
-        {status === "running" && <StatusDot tone="bg-yellow" size={8} pulse />}
-        <span className="text-muted-foreground">{name}</span>
-        {icon}
-        {filePath && <FileIcon path={filePath} />}
-        <span className="flex-1 truncate text-text-bright">{target}</span>
-        {meta && (
-          <span className={cn("shrink-0", status === "error" ? "text-red" : "text-dim")}>{meta}</span>
-        )}
-      </div>
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          className={cn(headerClass, "outline-none focus-visible:ring-2 focus-visible:ring-ring")}
+        >
+          {header}
+        </button>
+      ) : (
+        <div className={headerClass}>{header}</div>
+      )}
       {/* While running with no peek yet, a shimmer bar signals live work. */}
       {status === "running" && children == null && (
         <div className="h-[22px] animate-shine bg-[length:220px_100%] bg-gradient-to-r from-white/[0.02] via-white/[0.07] to-white/[0.02]" />

@@ -36,7 +36,18 @@ export const ToolCall = Schema.Struct({
   /** Added/removed line counts, for edit-style tools. */
   diff: Schema.NullOr(DiffStat),
   /** A compact unified-diff snippet shown inline under the card (Edit). */
-  preview: Schema.NullOr(Schema.String)
+  preview: Schema.NullOr(Schema.String),
+  /**
+   * What the tool printed — the expanded body of a non-edit card (a Bash
+   * command's output, a Grep's hits). Capped upstream; edit tools use `preview`.
+   *
+   * OPTIONAL, not `NullOr`, and that is load-bearing: this schema decodes every
+   * transcript ever written, and a REQUIRED field rejects tool cards recorded
+   * before it existed. `TranscriptStore.readAll` turns a decode failure into an
+   * empty transcript, so requiring it would silently erase the history of every
+   * existing session the moment it was opened.
+   */
+  output: Schema.optional(Schema.String)
 })
 export type ToolCall = Schema.Schema.Type<typeof ToolCall>
 
@@ -427,6 +438,8 @@ export const StreamEvent = Schema.Union(
     meta: Schema.NullOr(Schema.String),
     diff: Schema.NullOr(DiffStat),
     preview: Schema.NullOr(Schema.String),
+    /** What the tool printed (capped upstream). Optional — see `ToolCall.output`. */
+    output: Schema.optional(Schema.String),
     agentId: AgentId
   }),
   Schema.TaggedStruct("GateRequested", { gate: ApprovalGate }),
@@ -636,7 +649,20 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       ...msg,
       parts: parts.map((p): ContentPart =>
         p._tag === "Tool" && p.tool.id === e.id
-          ? { _tag: "Tool", tool: { ...p.tool, status: e.status, meta: e.meta, diff: e.diff, preview: e.preview } }
+          ? {
+              _tag: "Tool",
+              tool: {
+                ...p.tool,
+                status: e.status,
+                meta: e.meta,
+                diff: e.diff,
+                preview: e.preview,
+                // Spread so an event without output leaves the key ABSENT rather
+                // than present-and-undefined — the field is optional, and an
+                // explicit `undefined` re-encodes differently from "not there".
+                ...(e.output !== undefined ? { output: e.output } : {})
+              }
+            }
           : p
       )
     })),
