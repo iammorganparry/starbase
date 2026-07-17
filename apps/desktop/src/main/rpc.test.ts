@@ -653,6 +653,40 @@ describe("RPC handlers", () => {
         const stamp = await Effect.runPromise(reviewMarkRouted("s1").pipe(Effect.provide(env())))
         expect(stamp).toBeNull()
       })
+
+      /**
+       * The end-to-end refutation of "a failed persist makes markRouted return
+       * null forever, so routing re-sends indefinitely".
+       *
+       * It can't. `ReviewStore.set` updates its in-memory mirror UNCONDITIONALLY
+       * (that write is the de-dupe's brake and provably cannot fail), and only
+       * the DISK write is best-effort. So a `reviewRun` whose reviews dir is
+       * unwritable still leaves the mirror holding the review — and
+       * `reviewMarkRouted`, which reads through the same process's mirror, stamps
+       * it just fine. The disk failure costs durability across a restart, not the
+       * stamp; and across a restart the renderer re-reads null too, so it never
+       * routes a review main has forgotten.
+       */
+      it("stamps a routedAt even when the reviews dir is unwritable", async () => {
+        withSession()
+        // A file where the reviews DIRECTORY should be → every write beneath it
+        // fails, exactly like a permissions/full-disk failure.
+        mkdirSync(root, { recursive: true })
+        writeFileSync(join(root, "reviews"), "not a directory")
+        // BOTH calls under ONE layer build, which is the whole point: production
+        // runs every RPC on a single `ManagedRuntime.make(AppLayer)`, so the
+        // ReviewStore — and its in-memory mirror — is a process singleton shared
+        // across reviewRun and reviewMarkRouted. Providing the layer per
+        // `runPromise` would build a fresh, empty mirror each time and prove
+        // nothing about the real code.
+        const stamp = await Effect.runPromise(
+          Effect.gen(function* () {
+            yield* reviewRun("s1", false)
+            return yield* reviewMarkRouted("s1")
+          }).pipe(Effect.provide(env()))
+        )
+        expect(stamp).not.toBeNull()
+      })
     })
   })
 })

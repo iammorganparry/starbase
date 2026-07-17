@@ -97,6 +97,21 @@ describe("routeReviewToAgent", () => {
     expect(sent).toHaveLength(1)
   })
 
+  /**
+   * The second, independent guard against the "markRouted returns null → re-send
+   * forever" worry. Even if the stamp came back null (it doesn't in production —
+   * the store's mirror keeps it non-null — but even so), a null return takes the
+   * success path, not the catch, so the claim is HELD. No re-send.
+   */
+  it("holds the claim and does not re-send when the stamp returns null", async () => {
+    markRoutedImpl = async () => null
+    const r = review({ headSha: "h-null" })
+    await routeReviewToAgent(session, r, qc)
+    await routeReviewToAgent(session, r, qc)
+    await routeReviewToAgent(session, { ...r }, qc)
+    expect(sent).toHaveLength(1)
+  })
+
   it("does not double-send when two callers fire in the same tick", async () => {
     const r = review({ headSha: "h-four" })
     await Promise.all([routeReviewToAgent(session, r, qc), routeReviewToAgent(session, r, qc)])
