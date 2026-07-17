@@ -1,4 +1,5 @@
 export * from "./command.js"
+export * from "./child-registry.js"
 export * from "./app-paths.js"
 export * from "./secret-store.js"
 export * from "./auth.js"

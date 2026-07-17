@@ -1,5 +1,6 @@
 import type { ModelOption } from "@starbase/core"
 import { spawn } from "node:child_process"
+import { trackChild } from "./child-registry.js"
 
 /**
  * Codex's model catalogue, read from the Codex CLI itself.
@@ -70,7 +71,9 @@ export const fetchCodexModels = (binPath?: string | null): Promise<ReadonlyArray
 
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(binPath || "codex", ["app-server"], { stdio: ["pipe", "pipe", "ignore"] })
+      // Tracked so app teardown reaps it if the process dies mid-probe, before
+      // `finish` gets to kill it.
+      child = trackChild(spawn(binPath || "codex", ["app-server"], { stdio: ["pipe", "pipe", "ignore"] }))
     } catch {
       clearTimeout(timer)
       resolve(null)

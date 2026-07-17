@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { trackChild } from "./child-registry.js"
 import { parseServerUrl } from "./opencode-adapter.js"
 
 /**
@@ -41,10 +42,15 @@ export const withOpencodeServer = async <A>(
   // `runOpencode`'s own spawn DOES pipe and drain stderr, because it puts the
   // text in its error message. This one has nowhere to put it: every failure
   // here resolves to null by design.
-  const proc = spawn(binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
-    stdio: ["ignore", "pipe", "ignore"],
-    env: process.env
-  })
+  // Tracked so app teardown reaps it: the `finally` kill below covers this
+  // helper returning, but not the main process dying mid-probe, which would
+  // orphan an `opencode serve` (PPID 1) that never exits on its own.
+  const proc = trackChild(
+    spawn(binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: process.env
+    })
+  )
   const kill = (): void => {
     if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM")
   }
