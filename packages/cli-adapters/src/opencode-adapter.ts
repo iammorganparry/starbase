@@ -493,7 +493,16 @@ const driveOpencode = async (
         }
         for (const se of mapper.apply(event)) await runP(ctx.emit(se))
       }
-    })()
+      // Observed HERE, at declaration — not at the `await pump` below.
+      //
+      // Anything that throws between this line and the inner `try` (a failed
+      // `session.create`, an id-less response, an emit that rejects) skips that
+      // await entirely. The outer `finally` then kills the server, which rejects
+      // this stream with nothing watching it — and an unhandled rejection takes
+      // the whole Electron main process down on Node >=15. The turn's outcome is
+      // driven by `session.prompt`, not by this loop, so swallowing here costs
+      // only streamed events on a run that is already failing.
+    })().catch(() => {})
 
     // Prefer the live in-memory id (this launch), else the one persisted on the
     // session (survives an app restart), so "continue" resumes the opencode
@@ -539,7 +548,8 @@ const driveOpencode = async (
       // and silence any permission still parked behind the operator.
       bridge.close()
       await events.stream.return(undefined).catch(() => {})
-      await pump.catch(() => {})
+      // `pump` can no longer reject — it's observed at declaration.
+      await pump
     }
 
     if (signal.aborted) {
