@@ -2,9 +2,8 @@ import type { DiffStat, PermissionMode, Question, QuestionAnswer, StreamEvent } 
 import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
-import { promises as fs } from "node:fs"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
-import { teeLogPath, teeRewrite } from "./bash-tee.js"
+import { startTeeStream, type TeeStream } from "./bash-tee.js"
 import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
@@ -532,37 +531,23 @@ export const runClaude = (
         // claude has no partial-output event, so an allowed Bash command is
         // rewritten to tee its output to a temp file we poll; each growth is a
         // ToolDelta on the SAME id as its ToolStart, so the card fills live.
-        // toolUseId → its running watcher; cleaned up when the command's ToolEnd
+        // toolUseId → its running stream; cleaned up when the command's ToolEnd
         // lands or the run ends.
-        const teeWatchers = new Map<string, { file: string; timer: ReturnType<typeof setInterval> }>()
+        const teeStreams = new Map<string, TeeStream>()
         const stopTee = (toolUseId: string): void => {
-          const w = teeWatchers.get(toolUseId)
-          if (w === undefined) return
-          clearInterval(w.timer)
-          teeWatchers.delete(toolUseId)
-          // Best-effort: a leftover temp file is harmless and we never block on it.
-          void fs.rm(w.file, { force: true }).catch(() => {})
+          teeStreams.get(toolUseId)?.stop()
+          teeStreams.delete(toolUseId)
         }
         /** Tee an allowed Bash command to a temp file, tail it as ToolDelta, and return the rewritten command. */
         const startTee = (toolUseId: string, command: string): string => {
-          const file = teeLogPath(toolUseId)
-          let lastLen = -1
-          const timer = setInterval(() => {
-            void fs
-              .readFile(file, "utf8")
-              .then((text) => {
-                // Only emit when the file actually grew — no point re-sending an
-                // unchanged snapshot. capOutput bounds a runaway log, as for final output.
-                if (text.length === lastLen) return
-                lastLen = text.length
-                return runP(ctx.emit({ _tag: "ToolDelta", id: toolUseId, output: capOutput(text) }))
-              })
-              .catch(() => {}) // ENOENT until tee first writes — ignore.
-          }, TEE_POLL_MS)
-          // Don't let a pending poll keep the process alive past a finished run.
-          timer.unref?.()
-          teeWatchers.set(toolUseId, { file, timer })
-          return teeRewrite(command, file)
+          const stream = startTeeStream(
+            toolUseId,
+            command,
+            (snapshot) => void runP(ctx.emit({ _tag: "ToolDelta", id: toolUseId, output: snapshot })),
+            { pollMs: TEE_POLL_MS }
+          )
+          teeStreams.set(toolUseId, stream)
+          return stream.command
         }
 
         // Set once `query()` returns, so `canUseTool` can flip the run out of plan
@@ -694,7 +679,7 @@ export const runClaude = (
           // End of run (or a throw / interrupt-driven iterator close): tear down
           // any watcher still open — a command whose ToolEnd never arrived, or the
           // operator stopping mid-command — so no timer or temp file outlives it.
-          for (const id of [...teeWatchers.keys()]) stopTee(id)
+          for (const id of [...teeStreams.keys()]) stopTee(id)
         }
       },
       catch: (cause) =>

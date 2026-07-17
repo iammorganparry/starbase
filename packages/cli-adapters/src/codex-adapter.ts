@@ -63,12 +63,17 @@ export const codexEventToStreamEvents = (
       return []
     }
 
-    // A running command reprints its aggregated stdout+stderr on every update.
-    // Stream it as live output so the command's card fills in as it runs, rather
-    // than staying blank until it exits. Snapshot semantics — `aggregated_output`
-    // is the whole output so far, not a chunk — match `ToolDelta`'s idempotent
-    // fold, so a skipped update never corrupts the text. Empty updates (the item
-    // changed but printed nothing yet) carry no card change, so drop them.
+    // When codex emits a mid-run update, it reprints the command's aggregated
+    // stdout+stderr so far — stream it as live output so the card fills as it runs
+    // rather than staying blank until exit. Snapshot semantics (`aggregated_output`
+    // is the whole output, not a chunk) match `ToolDelta`'s idempotent fold, so a
+    // skipped update never corrupts the text; empty updates carry no card change.
+    //
+    // NOTE: whether codex emits `item.updated` for a running command is
+    // VERSION-DEPENDENT — some CLI builds go straight from `item.started` to
+    // `item.completed` with nothing in between (observed live). This maps the
+    // updates when they DO arrive; when they don't, the card fills whole from the
+    // `ToolEnd.output` below. Either way no output is lost.
     case "item.updated": {
       const it = event.item
       if (it.type !== "command_execution" || it.aggregated_output.length === 0) return []

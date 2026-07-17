@@ -1,5 +1,7 @@
+import { promises as fs } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { capOutput } from "./output-cap.js"
 
 /**
  * Rewriting a Bash command so a copy of its output lands in a file we can watch —
@@ -48,3 +50,54 @@ export const teeLogPath = (toolUseId: string, dir: string = tmpdir()): string =>
  */
 export const teeRewrite = (command: string, logFile: string): string =>
   `{\n${command}\n} 2>&1 | tee ${shellQuote(logFile)}\n` + "( exit ${PIPESTATUS[0]} )"
+
+/** A running command's live-output tail: the command to run, the file being watched, and a stop. */
+export interface TeeStream {
+  /** The rewritten command to hand to the harness in place of the original. */
+  readonly command: string
+  /** The temp file the command tees to and this stream tails. */
+  readonly file: string
+  /** Stop polling and delete the temp file. Idempotent. */
+  readonly stop: () => void
+}
+
+/**
+ * Start tailing a Bash command's teed output, calling `onOutput` with the whole
+ * capped snapshot each time the file grows.
+ *
+ * Returns the rewritten `command` to actually run (via `teeRewrite`) plus a
+ * `stop`. Polling — not `fs.watch` — because the file is written by another
+ * process (the harness's shell), may not exist yet when we start, and lives on a
+ * temp dir where watch fidelity varies; a small poll is simpler and portable.
+ * Only a genuine growth fires `onOutput`, so an unchanged snapshot is never
+ * re-sent. The producer of the actual `ToolDelta` event wraps `onOutput`.
+ */
+export const startTeeStream = (
+  toolUseId: string,
+  command: string,
+  onOutput: (snapshot: string) => void,
+  opts: { dir?: string; pollMs?: number } = {}
+): TeeStream => {
+  const file = teeLogPath(toolUseId, opts.dir)
+  let lastLen = -1
+  let stopped = false
+  const timer = setInterval(() => {
+    void fs
+      .readFile(file, "utf8")
+      .then((text) => {
+        if (stopped || text.length === lastLen) return
+        lastLen = text.length
+        onOutput(capOutput(text))
+      })
+      .catch(() => {}) // ENOENT until tee first writes — ignore.
+  }, opts.pollMs ?? 150)
+  // Don't let a pending poll keep the process alive past a finished run.
+  timer.unref?.()
+  const stop = (): void => {
+    if (stopped) return
+    stopped = true
+    clearInterval(timer)
+    void fs.rm(file, { force: true }).catch(() => {})
+  }
+  return { command: teeRewrite(command, file), file, stop }
+}
