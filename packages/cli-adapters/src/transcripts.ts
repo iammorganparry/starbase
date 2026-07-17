@@ -80,7 +80,29 @@ export class TranscriptStore extends Effect.Service<TranscriptStore>()(
           yield* writeAll(sessionId, next)
         })
 
-      return { list, append, patchLast }
+      /**
+       * Replace the message with `messageId` via `fn`. A no-op when no message
+       * carries that id.
+       *
+       * `patchLast` can only reach the newest message, which is wrong for state
+       * that lives further back — notably a plan part, which stays in the message
+       * of the turn it was proposed in while execution continues across later
+       * turns.
+       */
+      const patchById = (
+        sessionId: string,
+        messageId: string,
+        fn: (msg: Message) => Message
+      ) =>
+        Effect.gen(function* () {
+          const existing = yield* readAll(sessionId)
+          const idx = existing.findIndex((m) => m.id === messageId)
+          if (idx === -1) return
+          const next = existing.map((m, i) => (i === idx ? fn(m) : m))
+          yield* writeAll(sessionId, next)
+        })
+
+      return { list, append, patchLast, patchById }
     }
   }
 ) {}

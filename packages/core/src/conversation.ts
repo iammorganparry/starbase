@@ -459,6 +459,17 @@ export const StreamEvent = Schema.Union(
 )
 export type StreamEvent = Schema.Schema.Type<typeof StreamEvent>
 
+/**
+ * What the transcript records when the operator halts a run.
+ *
+ * Shared because BOTH sides write it and they must agree: the runner emits it as
+ * the interrupted run's terminal event (persisting it), while the renderer folds
+ * the same note optimistically on STOP — it can't wait for the event, since it
+ * leaves `running` (and stops listening) the moment you hit Stop. Same string
+ * either way, so the live view and a reload show the same turn.
+ */
+export const STOPPED_NOTE = "Stopped."
+
 // ── Constructors & fold ──────────────────────────────────────────────────────
 
 /** A fresh user turn (already complete), optionally carrying attached images. */
@@ -951,6 +962,32 @@ export const latestPlan = (messages: ReadonlyArray<Message>): Plan | null => {
     for (let j = parts.length - 1; j >= 0; j--) {
       const part = parts[j]!
       if (part._tag === "Plan") return part.plan
+    }
+  }
+  return null
+}
+
+/**
+ * The newest APPROVED plan across a transcript, together with the id of the
+ * message holding it — or null when the session has no plan under execution.
+ *
+ * A plan part lives in the assistant message of the turn it was PROPOSED in, and
+ * stays there: later turns get their own messages. So anything reconciling
+ * execution back onto the plan (progress marking) must address the plan's own
+ * message rather than the newest one — hence the `messageId` alongside the plan.
+ * `latestPlan` deliberately can't serve this: it ignores status and drops the
+ * location.
+ */
+export const findApprovedPlan = (
+  messages: ReadonlyArray<Message>
+): { readonly plan: Plan; readonly messageId: string } | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!
+    for (let j = msg.parts.length - 1; j >= 0; j--) {
+      const part = msg.parts[j]!
+      if (part._tag === "Plan" && part.plan.status === "approved") {
+        return { plan: part.plan, messageId: msg.id }
+      }
     }
   }
   return null

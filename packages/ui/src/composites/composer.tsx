@@ -64,6 +64,7 @@ export function Composer({
   skills = [],
   files = [],
   onSend,
+  onStop,
   cli,
   model,
   catalog = [],
@@ -84,6 +85,8 @@ export function Composer({
   skills?: ReadonlyArray<Skill>
   files?: ReadonlyArray<string>
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
+  /** Halt the running agent. Given one, the button becomes Stop while `busy`. */
+  onStop?: () => void
   /** Seed the draft once on mount (e.g. a task prefilled from a linked issue). */
   initialValue?: string
   /**
@@ -420,6 +423,12 @@ export function Composer({
           <ChipMenu
             value={modelValue}
             groups={modelGroups}
+            /* The model list grows with every harness installed and every model
+               a provider ships — long enough to hunt through. The mode chip
+               below is four fixed options, so it stays plain. */
+            searchable
+            searchPlaceholder="Search models…"
+            emptyLabel="No models match"
             onSelect={(value) => {
               // Split on the FIRST colon only — the harness is one token, but a
               // model id could in principle contain one.
@@ -436,6 +445,15 @@ export function Composer({
             <Pill tone="yellow" dot>
               paused for approval
             </Pill>
+          ) : busy && onStop ? (
+            /* While the agent works, the button halts it. Queueing doesn't go
+               away — it moves to the keyboard: ↵ still queues a follow-up, which
+               is what the placeholder advertises. No "⎋" hint here: Escape only
+               fires while the composer is UNfocused, so it wouldn't work from
+               where the cursor is when you're reading this button. */
+            <Button variant="danger" size="sm" onClick={onStop}>
+              Stop
+            </Button>
           ) : (
             <Button variant="primary" size="sm" onClick={send}>
               {busy ? "Queue ↵" : "Send ↵"}

@@ -1,4 +1,5 @@
-import type { Session, StreamEvent } from "@starbase/core"
+import type { Plan, Session, StreamEvent } from "@starbase/core"
+import { latestPlan, STOPPED_NOTE } from "@starbase/core"
 import { createActor, waitFor } from "xstate"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { conversationMachine } from "./conversation-machine.js"
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
   diffCalls: 0,
   statusWrites: [] as Array<string>,
   skillsListCalls: 0,
+  stopCalls: [] as Array<string>,
   /** Push reviewer events into the machine, as ReviewService's stream would. */
   reviewCb: null as null | ((event: unknown) => void),
   // Lets a test hold the catalogue in flight to prove nothing waits on it.
@@ -69,7 +71,9 @@ vi.mock("./rpc-client.js", () => ({
     agentCommentPlanStep: async () => {},
     agentRevisePlan: async () => {},
     agentApprovePlan: async () => {},
-    agentStop: async () => {},
+    agentStop: async (sessionId: string) => {
+      h.stopCalls.push(sessionId)
+    },
     sessionsSetStatus: async (_id: string, status: string) => {
       h.statusWrites.push(status)
     }
@@ -96,6 +100,7 @@ beforeEach(() => {
   h.diffCalls = 0
   h.statusWrites.length = 0
   h.skillsListCalls = 0
+  h.stopCalls.length = 0
   h.setHarnessCalls.length = 0
   h.catalogGate = Promise.resolve()
   h.reviewCb = null
@@ -542,6 +547,98 @@ describe("conversationMachine — persisted status", () => {
 
     // needs-input → idle, and no duplicate writes of an unchanged status.
     expect(h.statusWrites).toStrictEqual(["needs-input", "idle"])
+    actor.stop()
+  })
+})
+
+describe("conversationMachine — PlanUpdated across turns", () => {
+  /** A minimal one-step plan; only the id/status/steps matter to the fold. */
+  const planFixture = (stepStatus: "proposed" | "done"): Plan =>
+    ({
+      id: "plan_1",
+      summary: "Refactor auth",
+      structured: true,
+      graph: null,
+      comments: [],
+      status: "approved",
+      raw: "# Refactor auth",
+      steps: [
+        {
+          id: "s_01",
+          number: "01",
+          title: "Create TokenStore",
+          intent: "A dedicated store.",
+          approach: [],
+          kind: "step",
+          condition: null,
+          parentId: null,
+          dependsOn: [],
+          blocks: [],
+          files: [{ path: "src/auth/token-store.ts", change: "A", added: 40, removed: 0 }],
+          guards: [],
+          code: null,
+          diff: null,
+          status: stepStatus,
+          flagged: false
+        }
+      ]
+    }) as unknown as Plan
+
+  it("applies a PlanUpdated to the plan's own message, not the latest one", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    // Turn 1: the plan lands in this turn's assistant message.
+    actor.send({ type: "SEND", text: "plan it" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "PlanProposed", plan: planFixture("proposed") })
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, (s) => s.matches(idle))
+
+    // Turn 2: a fresh assistant message — the plan part is now behind us, which
+    // is exactly when a patchLast fold would silently drop the update.
+    actor.send({ type: "SEND", text: "implement it" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "PlanUpdated", plan: planFixture("done") })
+
+    const plan = latestPlan(actor.getSnapshot().context.messages)
+    expect(plan?.steps[0]!.status).toBe("done")
+    actor.stop()
+  })
+})
+
+describe("conversationMachine — stop", () => {
+  it("settles the halted turn instead of leaving it streaming forever", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "Assistant", text: "working…" })
+    expect(actor.getSnapshot().context.messages.at(-1)!.streaming).toBe(true)
+
+    actor.send({ type: "STOP" })
+
+    // The runner's own terminal event can't help here: STOP leaves `running`,
+    // and STREAM_EVENT is only handled there. The machine must settle it itself.
+    const last = actor.getSnapshot().context.messages.at(-1)!
+    expect(last.streaming).toBe(false)
+    expect(last.parts.some((p) => p._tag === "Text" && p.text === STOPPED_NOTE)).toBe(true)
+    actor.stop()
+  })
+
+  it("asks the main process to stop the agent, and drops the queue", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+    actor.send({ type: "SEND", text: "queued" })
+    expect(actor.getSnapshot().context.queued).toHaveLength(1)
+
+    actor.send({ type: "STOP" })
+
+    expect(h.stopCalls).toContain("s1")
+    expect(actor.getSnapshot().context.queued).toEqual([])
     actor.stop()
   })
 })

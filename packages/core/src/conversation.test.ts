@@ -18,6 +18,7 @@ import {
   agentChildren,
   agentPath,
   assistantMessage,
+  findApprovedPlan,
   isSubagentEvent,
   latestPlan,
   resumePlanPrompt,
@@ -577,6 +578,28 @@ describe("Plan flow", () => {
     // latestPlan keeps the plan visible after approval (the Plan Review tab).
     expect(latestPlan([approved])?.id).toBe("plan_1")
     expect(latestPlan([approved])?.status).toBe("approved")
+  })
+
+  it("findApprovedPlan locates an approved plan and the message holding it", () => {
+    const proposed = applyStreamEvent(assistantMessage("a0", now), {
+      _tag: "PlanProposed",
+      plan: plan()
+    })
+    // Only an APPROVED plan is under execution — a proposed one isn't.
+    expect(findApprovedPlan([proposed])).toBe(null)
+
+    const approved = setPlanStatus(proposed, "plan_1", "approved")
+    // The plan stays in its own message while later turns append their own.
+    const later = [approved, assistantMessage("a1", now), assistantMessage("a2", now)]
+    const found = findApprovedPlan(later)
+    expect(found?.plan.id).toBe("plan_1")
+    // The message id is the point: it's what lets a later turn address the plan.
+    expect(found?.messageId).toBe("a0")
+  })
+
+  it("findApprovedPlan returns null when no plan is approved", () => {
+    expect(findApprovedPlan([])).toBe(null)
+    expect(findApprovedPlan([assistantMessage("a0", now)])).toBe(null)
   })
 
   it("resumePlanPrompt embeds the plan and instructs implementation (for a post-restart re-drive)", () => {

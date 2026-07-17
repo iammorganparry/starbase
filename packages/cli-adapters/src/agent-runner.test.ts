@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
-import type { GateDecision, Message, PermissionMode, Session, StreamEvent } from "@starbase/core"
-import { Effect, Layer, Stream } from "effect"
+import type { GateDecision, Message, PermissionMode, Plan, Session, StreamEvent } from "@starbase/core"
+import { findApprovedPlan, STOPPED_NOTE } from "@starbase/core"
+import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape } from "./adapter.js"
@@ -825,5 +826,239 @@ describe("AgentRunner resume across restarts", () => {
       }).pipe(Effect.provide(base))
     )
     expect(captured.resumeId).toBe("sdk-123")
+  })
+})
+
+describe("AgentRunner plan progress across turns", () => {
+  const WT_X = "/tmp/starbase/worktrees/starbase/crossturn"
+
+  const seedCrossTurnSession = () => {
+    const session: Session = {
+      id: SESSION,
+      repo: "acme/widget",
+      branch: "starbase/crossturn",
+      title: "Cross-turn session",
+      status: "idle",
+      cli: "claude",
+      diff: { added: 0, removed: 0 },
+      prNumber: null,
+      costUsd: 0,
+      tokens: 0,
+      updatedAt: "2026-07-11T10:00:00.000Z",
+      worktreePath: WT_X,
+      mode: "auto"
+    }
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(join(temp.root, "sessions.json"), JSON.stringify([session]))
+  }
+
+  /**
+   * Turn 1 proposes a plan and does NO work; turn 2 edits a file the plan
+   * declared. That's the shape of every real session — the plan is approved once
+   * and execution runs on across many later turns, each with its own assistant
+   * message. `edit` is the path the second turn writes.
+   */
+  const twoTurnAdapter = (edit: string, plan?: (p: Plan) => Plan): Layer.Layer<CliAdapter> => {
+    let turn = 0
+    return Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: (sessionId, _spec, ctx) =>
+          Effect.gen(function* () {
+            turn += 1
+            if (turn === 1) {
+              const base = scriptedPlan(sessionId, 1)
+              yield* ctx.proposePlan(plan ? plan(base) : base)
+              yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+              return
+            }
+            yield* ctx.emit({ _tag: "ToolStart", id: "x1", name: "Write", target: edit })
+            yield* ctx.emit({
+              _tag: "ToolEnd",
+              id: "x1",
+              status: "success",
+              meta: null,
+              diff: { added: 40, removed: 0 },
+              preview: null
+            })
+            yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+          }) as ReturnType<CliAdapterShape["run"]>,
+        stop: () => Effect.void
+      })
+    )
+  }
+
+  /** Turn 1: propose + approve. Turn 2: the edit lands. Returns the plan after. */
+  const runTwoTurns = (edit: string, plan?: (p: Plan) => Plan) => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      PlanStore.Default,
+      twoTurnAdapter(edit, plan),
+      DiscoveryService.Default,
+      temp.layer
+    )
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.prompt(SESSION, "plan the refactor").pipe(
+          Stream.tap((ev) =>
+            ev._tag === "PlanProposed" ? runner.approvePlan(SESSION, ev.plan.id) : Effect.void
+          ),
+          Stream.runDrain
+        )
+        // A FRESH assistant message: the plan part is now behind us.
+        yield* runner.prompt(SESSION, "now implement it").pipe(Stream.runDrain)
+        return findApprovedPlan(yield* TranscriptStore.list(SESSION))
+      }).pipe(Effect.provide(base))
+    )
+  }
+
+  const stepStatus = (
+    located: { readonly plan: Plan } | null,
+    id: string
+  ): string | undefined => located?.plan.steps.find((s) => s.id === id)?.status
+
+  it("marks a step done when the edit lands on a LATER turn than the plan", async () => {
+    seedCrossTurnSession()
+    // s_02 declares src/auth/token-store.ts.
+    const located = await runTwoTurns(`${WT_X}/src/auth/token-store.ts`)
+    expect(stepStatus(located, "s_02")).toBe("done")
+  })
+
+  it("leaves the plan's other steps untouched", async () => {
+    seedCrossTurnSession()
+    const located = await runTwoTurns(`${WT_X}/src/auth/token-store.ts`)
+    expect(stepStatus(located, "s_01")).toBe("proposed")
+    expect(stepStatus(located, "s_05")).toBe("proposed")
+  })
+
+  /** Point step s_01 at a bare filename — the shape that breaks a naive suffix match. */
+  const bareFilenameStep = (p: Plan): Plan => ({
+    ...p,
+    steps: p.steps.map((s) =>
+      s.id === "s_01"
+        ? { ...s, files: [{ path: "session.ts", change: "M" as const, added: 1, removed: 0 }] }
+        : s
+    )
+  })
+
+  it("does not tick a step on a bare-filename suffix collision", async () => {
+    seedCrossTurnSession()
+    // s_01 declares "session.ts"; the edit hits an unrelated "refund-session.ts".
+    // An unanchored endsWith matches those two and ticks a step that had nothing
+    // to do with the edit — a boundary-anchored match must not.
+    const located = await runTwoTurns(`${WT_X}/src/billing/refund-session.ts`, bareFilenameStep)
+    expect(stepStatus(located, "s_01")).not.toBe("done")
+  })
+
+  it("still ticks a bare-filename step on a genuine path match", async () => {
+    seedCrossTurnSession()
+    // The boundary anchor must not overshoot: "session.ts" still matches a real
+    // /…/session.ts edit.
+    const located = await runTwoTurns(`${WT_X}/src/auth/session.ts`, bareFilenameStep)
+    expect(stepStatus(located, "s_01")).toBe("done")
+  })
+})
+
+describe("AgentRunner stop", () => {
+  /**
+   * An agent that runs until something interrupts it. `started` fires once it's
+   * really going, and `interrupted` once it's torn down — mirroring the real
+   * Claude adapter, which aborts its CLI process in exactly such an `onInterrupt`
+   * finalizer. That finalizer is the ONLY route to the process: `CliAdapter.stop`
+   * is a no-op in every implementation.
+   */
+  const hangingAdapter = (
+    started: Deferred.Deferred<boolean>,
+    interrupted: Deferred.Deferred<boolean>,
+    gate?: { readonly wanted: boolean }
+  ): Layer.Layer<CliAdapter> =>
+    Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: (_sessionId, _spec, ctx) =>
+          Effect.gen(function* () {
+            yield* ctx.emit({ _tag: "Assistant", text: "working…" })
+            yield* Deferred.succeed(started, true)
+            // Optionally park on a gate, to cover the blocked-agent case.
+            if (gate?.wanted) {
+              yield* ctx.canUseTool({
+                kind: "command",
+                tool: "Bash",
+                command: "sleep 600",
+                target: null
+              })
+            }
+            yield* Effect.never
+          }).pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, true))) as ReturnType<
+            CliAdapterShape["run"]
+          >,
+        stop: () => Effect.void
+      })
+    )
+
+  /**
+   * Drive a run to the point where the agent is genuinely working, then stop it.
+   *
+   * We wait on `started` rather than sleeping: `prompt` does real I/O (session
+   * load, CLI discovery) before forking the run, so a fixed sleep races that
+   * setup and stops before there is anything to interrupt.
+   */
+  const runAndStop = (opts: { readonly gate?: { readonly wanted: boolean } } = {}) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<boolean>()
+      const interrupted = yield* Deferred.make<boolean>()
+      const base = Layer.mergeAll(
+        AgentRunner.Default,
+        SessionStore.Default,
+        TranscriptStore.Default,
+        PlanStore.Default,
+        hangingAdapter(started, interrupted, opts.gate),
+        DiscoveryService.Default,
+        temp.layer
+      )
+      return yield* Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "ask")
+        const events: Array<StreamEvent> = []
+        // Consume in a fiber: this run never ends on its own.
+        const consumer = yield* Effect.fork(
+          runner
+            .prompt(SESSION, "go")
+            .pipe(Stream.runForEach((ev) => Effect.sync(() => events.push(ev))))
+        )
+        yield* Deferred.await(started).pipe(Effect.timeout("5 seconds"))
+        yield* runner.stop(SESSION)
+        yield* Fiber.join(consumer).pipe(Effect.timeout("5 seconds"), Effect.ignore)
+        const wasInterrupted = yield* Deferred.await(interrupted).pipe(
+          Effect.timeoutTo({ duration: "2 seconds", onTimeout: () => false, onSuccess: () => true })
+        )
+        return { wasInterrupted, events, transcript: yield* TranscriptStore.list(SESSION) }
+      }).pipe(Effect.provide(base))
+    }).pipe(Effect.runPromise)
+
+  it("interrupts an agent that is mid-run and blocked on nothing", async () => {
+    // The case a stop button exists for: the agent is streaming, waiting on
+    // nobody. Denying pending gates — all `stop` used to do — is a no-op here.
+    const { wasInterrupted } = await runAndStop()
+    expect(wasInterrupted).toBe(true)
+  })
+
+  it("interrupts an agent parked on a gate", async () => {
+    const { wasInterrupted } = await runAndStop({ gate: { wanted: true } })
+    expect(wasInterrupted).toBe(true)
+  })
+
+  it("ends the stream and records the stop, rather than reporting a crash", async () => {
+    const { events, transcript } = await runAndStop()
+    // The stream must terminate — a consumer that never completes hangs the UI.
+    expect(events.some((e) => e._tag === "Failed" && e.message === STOPPED_NOTE)).toBe(true)
+    // The operator's own stop must not surface as "the agent run failed".
+    expect(events.some((e) => e._tag === "Failed" && e.message.includes("failed"))).toBe(false)
+    // And the turn settles, rather than streaming forever.
+    expect(transcript[transcript.length - 1]!.streaming).toBe(false)
   })
 })

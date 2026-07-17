@@ -40,6 +40,7 @@ import {
   setQuestionAnswers,
   settleLoaded,
   settleStreaming,
+  STOPPED_NOTE,
   userMessage
 } from "@starbase/core"
 import { assign, fromCallback, fromPromise, setup } from "xstate"
@@ -335,6 +336,20 @@ export const conversationMachine = setup({
       if (e._tag === "Usage") {
         return { tokens: Math.max(context.tokens, e.tokens) }
       }
+      // A `PlanUpdated` addresses a plan by id, and that plan part lives in the
+      // message of the turn it was PROPOSED in — which, once execution runs on
+      // into later turns, is not the last message. Folding it with `patchLast`
+      // targets a message holding no plan, so every cross-turn progress tick is
+      // silently dropped. Address the plan's own message instead.
+      if (e._tag === "PlanUpdated") {
+        return {
+          messages: context.messages.map((m) =>
+            m.parts.some((p) => p._tag === "Plan" && p.plan.id === e.plan.id)
+              ? applyStreamEvent(m, e)
+              : m
+          )
+        }
+      }
       const messages = patchLast(context.messages, (last) => applyStreamEvent(last, e))
       // A finished/failed turn KEEPS its sub-agents (their tabs stay readable) —
       // any still marked "working" (e.g. an interrupted run, or a sub-agent whose
@@ -525,7 +540,23 @@ export const conversationMachine = setup({
     }),
     callStop: ({ context }) => {
       void rpc.agentStop(context.session.id)
-    }
+    },
+    /**
+     * Close out the turn the operator just halted.
+     *
+     * We can't wait for the runner's own terminal event: STOP leaves `running`
+     * immediately, and `STREAM_EVENT` is only handled there — so that event
+     * arrives to a machine that has stopped listening. Without this the turn
+     * would spin forever (until a reload, where `settleLoaded` cleans it up).
+     * Folding the SAME note the runner persists keeps the live view and a
+     * reloaded transcript in agreement.
+     */
+    settleStoppedRun: assign(({ context }) => ({
+      messages: patchLast(context.messages, (last) =>
+        applyStreamEvent(last, { _tag: "Failed", message: STOPPED_NOTE })
+      ),
+      runStartedAt: null
+    }))
   }
 }).createMachine({
   id: "conversation",
@@ -621,7 +652,10 @@ export const conversationMachine = setup({
         // "Send now": interrupt the current turn and run the picked message next,
         // so the operator can steer mid-stream. Promote it to the head, stop the
         // run, and let refreshingDiff dequeue it (the rest of the queue follows).
-        SEND_NOW: { target: "refreshingDiff", actions: ["promoteQueued", "callStop"] },
+        SEND_NOW: {
+          target: "refreshingDiff",
+          actions: ["promoteQueued", "callStop", "settleStoppedRun"]
+        },
         DECIDE_GATE: { actions: "optimisticGate" },
         ANSWER_QUESTION: { actions: "optimisticAnswer" },
         COMMENT_PLAN_STEP: { actions: "optimisticPlanComment" },
@@ -632,7 +666,10 @@ export const conversationMachine = setup({
         SKILLS_LOADED: { actions: "applySkills" },
         // Stopping abandons the queue too — the operator asked the agent to halt.
         // Live sub-agent tabs go with it (no completion events will arrive).
-        STOP: { target: "refreshingDiff", actions: ["callStop", "clearQueue", "clearSubagents"] }
+        STOP: {
+          target: "refreshingDiff",
+          actions: ["callStop", "settleStoppedRun", "clearQueue", "clearSubagents"]
+        }
       }
     },
     // After a turn ends, re-read the worktree diff so the Changes rail reflects

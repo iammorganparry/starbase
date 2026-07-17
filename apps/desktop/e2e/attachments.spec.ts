@@ -80,16 +80,17 @@ test("a message sent while the agent is busy is queued, then processed", async (
   await composer.fill("[[plan]] refactor auth to a TokenStore")
   await composer.press("Enter")
 
-  // The plan card lands and the run is parked → the Send button reads "Queue" and
-  // the composer placeholder switches to its busy form (which we type into).
+  // The plan card lands and the run is parked → the button becomes "Stop" (the
+  // agent is working, so the primary action is to halt it) and the composer
+  // placeholder switches to its busy form, which we type into.
   await expect(window.getByRole("button", { name: /Approve plan & start/ }).first()).toBeVisible({
     timeout: 15_000
   })
-  await expect(window.getByRole("button", { name: /Queue/ })).toBeVisible()
+  await expect(window.getByRole("button", { name: /^Stop$/ })).toBeVisible()
   const busyComposer = window.getByPlaceholder("Queue a message while the agent works…")
   await expect(busyComposer).toBeVisible()
 
-  // Queue a follow-up while busy → it docks as a "Queued" chip above the composer.
+  // Queueing lives on ↵ while the button is Stop — the placeholder advertises it.
   await busyComposer.fill("and then open a PR")
   await busyComposer.press("Enter")
   await expect(window.getByText("Queued", { exact: true })).toBeVisible()
