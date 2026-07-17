@@ -82,6 +82,15 @@ interface PendingPlan {
   readonly deferred: Deferred.Deferred<PlanDecision>
 }
 
+/** An opaque per-run identity — object identity is the whole point. */
+type RunToken = Record<never, never>
+
+/** A session's in-flight run: the fiber to interrupt, and which run owns the slot. */
+interface RunFiber {
+  readonly fiber: Fiber.RuntimeFiber<void, never>
+  readonly token: RunToken
+}
+
 /**
  * Live handles onto the in-flight run for a session, so the out-of-band plan RPCs
  * (comment / revise / approve) can read + mutate the plan part in the current
@@ -218,7 +227,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     // gets there — `CliAdapter.stop` is a no-op in every implementation, and a
     // client hanging up its stream does NOT tear the run down (verified: the run
     // survives its consumer). Without this handle a "stopped" agent keeps running.
-    const fibers = yield* Ref.make(new Map<string, Fiber.RuntimeFiber<void, never>>())
+    const fibers = yield* Ref.make(new Map<string, RunFiber>())
     // Monotonic id source — deterministic (no Date.now/random) for stable tests.
     const counter = yield* Ref.make(0)
     const nextId = Ref.updateAndGet(counter, (n) => n + 1)
@@ -445,8 +454,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         // always something to interrupt; a session flag can't fix it, since a
         // stop arriving with no run in flight is indistinguishable from a stale
         // one, and acting on it would kill the operator's NEXT turn instead.
-        const fiber = (yield* Ref.get(fibers)).get(sessionId)
-        if (fiber !== undefined) yield* Fiber.interrupt(fiber)
+        const running = (yield* Ref.get(fibers)).get(sessionId)
+        if (running !== undefined) yield* Fiber.interrupt(running.fiber)
       })
 
     const prompt = (
@@ -730,6 +739,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // torn down when the run ends so out-of-band calls become no-ops.
           yield* Ref.update(active, (m) => new Map(m).set(sessionId, { readPlan, applyPlan }))
 
+          /** Identifies THIS run, so its cleanup can't evict a successor's fiber. */
+          const token: RunToken = {}
+
           const run = adapter.run(sessionId, spec, { emit, canUseTool, askQuestion, proposePlan }).pipe(
             // An operator stop arrives as an interruption. Record it as the turn's
             // terminal event so the message settles (and the transcript says why)
@@ -751,7 +763,24 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               })
             ),
             Effect.ensuring(
+              // Deregister THIS run only. A session's slot can already belong to a
+              // NEWER run by the time this one finishes: "send now" interrupts the
+              // current turn and starts the next without waiting for the stop to
+              // land (the renderer fires it and moves on), so the two overlap.
+              // Deleting by session id alone would evict the new run's fiber, and
+              // the next stop would find nothing and quietly do nothing — leaving
+              // a turn nobody can halt. The token is in scope here; the fiber
+              // doesn't exist yet.
+              //
+              // Untested, deliberately: the obvious test can't reach this. This
+              // finalizer runs BEFORE `out.end`, and a consumer only returns once
+              // the stream ends — so any test that awaits run 1 before starting
+              // run 2 has already missed the overlap, and passes with or without
+              // the guard. Reproducing it needs run 1 still unwinding while run 2
+              // registers, which is a timing construction, not a fact about the
+              // code. Reviewed rather than pinned.
               Ref.update(fibers, (m) => {
+                if (m.get(sessionId)?.token !== token) return m
                 const nextMap = new Map(m)
                 nextMap.delete(sessionId)
                 return nextMap
@@ -760,7 +789,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             Effect.ensuring(out.end)
           )
           const fiber = yield* Effect.forkScoped(run)
-          yield* Ref.update(fibers, (m) => new Map(m).set(sessionId, fiber))
+          yield* Ref.update(fibers, (m) => new Map(m).set(sessionId, { fiber, token }))
           return Mailbox.toStream(out)
         })
       )

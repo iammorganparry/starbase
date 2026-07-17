@@ -294,6 +294,32 @@ describe("streamEventsFor", () => {
     expect(output).toMatch(/characters omitted/)
   })
 
+  it("names the skill on a Skill call, so the card isn't just \"Skill\"", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "s1", name: "Skill", input: { skill: "babysit-pr", args: "46" } }
+          ]
+        }
+      }),
+      new Map()
+    )
+    expect(events[0]).toMatchObject({ _tag: "ToolStart", name: "Skill", target: "babysit-pr 46" })
+  })
+
+  it("names a skill invoked without arguments", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "s1", name: "Skill", input: { skill: "verify" } }] }
+      }),
+      new Map()
+    )
+    expect(events[0]).toMatchObject({ _tag: "ToolStart", target: "verify" })
+  })
+
   it("maps the result message to Done with cost + total tokens", () => {
     const events = streamEventsFor(
       msg({ type: "result", subtype: "success", total_cost_usd: 0.42, usage: { input_tokens: 100, output_tokens: 40 } }),

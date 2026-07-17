@@ -165,6 +165,16 @@ const toolTarget = (name: string, input: Record<string, unknown>): string | null
   if (name === "Grep" || name === "Glob") return strOf(input.pattern)
   // A sub-agent spawn's target is its one-line task description.
   if (SUBAGENT_TOOLS.has(name)) return strOf(input.description)
+  // Invoking a skill: WHICH skill is the entire content of the card. Without
+  // this the input's `skill`/`args` match nothing below, the target comes out
+  // null, and the transcript shows a bare "Skill" — the one thing it needed to
+  // say, missing.
+  if (name === "Skill") {
+    const skill = strOf(input.skill)
+    if (skill === null) return null
+    const args = strOf(input.args)
+    return args ? `${skill} ${args}` : skill
+  }
   return strOf(input.file_path) ?? strOf(input.path) ?? strOf(input.notebook_path) ?? strOf(input.url)
 }
 

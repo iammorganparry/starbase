@@ -80,7 +80,13 @@ export function ChipMenu<T extends string>({
     return () => cancelAnimationFrame(id)
   }, [open, searchable])
 
-  const sections: ReadonlyArray<ChipGroup<T>> = groups ?? [{ label: "", options: options ?? [] }]
+  // Memoised on the inputs themselves: rebuilding this array every render gives
+  // `visible` a new dependency each time, so its own memo never hits and the
+  // whole list is re-filtered on every keystroke.
+  const sections: ReadonlyArray<ChipGroup<T>> = useMemo(
+    () => groups ?? [{ label: "", options: options ?? [] }],
+    [groups, options]
+  )
   // A lone section needs no header — with one harness installed, labelling it
   // would just be noise above a plain model list. Decided on the FULL list, not
   // the filtered one, so headings don't pop in and out as you type (and so a
