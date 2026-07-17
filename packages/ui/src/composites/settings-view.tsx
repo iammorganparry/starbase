@@ -157,6 +157,11 @@ function OpencodeProviders({
   const [editing, setEditing] = React.useState<string | null>(null)
   const [key, setKey] = React.useState("")
   const [saving, setSaving] = React.useState(false)
+  /**
+   * Why a save didn't land, or null. Keeps the key in the box so it can be
+   * retried — the write failing is the one case the row itself can't show.
+   */
+  const [saveError, setSaveError] = React.useState<string | null>(null)
   /** Whether the rest of opencode's registry is open for browsing. */
   const [browsing, setBrowsing] = React.useState(false)
   const [filter, setFilter] = React.useState("")
@@ -175,13 +180,27 @@ function OpencodeProviders({
 
   const save = async (providerId: string) => {
     setSaving(true)
+    setSaveError(null)
     try {
-      await onSetAuth(providerId, key.trim())
+      // The write can fail (opencode unreachable, its credential store
+      // unwritable). Closing the form on `false` would tell the operator their
+      // key landed when it didn't — they'd go hunting for a provider that never
+      // got configured. Keep the input open, with what they typed still in it,
+      // and say so.
+      const ok = await onSetAuth(providerId, key.trim())
+      if (!ok) {
+        setSaveError("opencode didn't store the key. Check that it runs in your terminal.")
+        return
+      }
       setEditing(null)
       setKey("")
       // Re-read rather than patch local state: only opencode can say whether the
-      // key actually resolved the provider (and how many models it unlocked).
+      // key actually RESOLVED the provider (and how many models it unlocked) —
+      // it doesn't validate on write, so a stored key is not yet a working one.
+      // The row's source badge and model count are the honest answer.
       refresh()
+    } catch {
+      setSaveError("Couldn't reach opencode to store the key.")
     } finally {
       setSaving(false)
     }
@@ -214,6 +233,7 @@ function OpencodeProviders({
           onClick={() => {
             setEditing(editing === p.id ? null : p.id)
             setKey("")
+            setSaveError(null)
           }}
           className={cn(
             "rounded border border-hairline px-1.5 py-px text-[10.5px] text-muted-foreground hover:text-text-bright",
@@ -233,24 +253,36 @@ function OpencodeProviders({
         <span className="font-mono text-[10px] text-dim">or export {p.env.join(" / ")}</span>
       )}
       {editing === p.id && (
-        <div className="flex items-center gap-1.5">
-          <input
-            type="password"
-            value={key}
-            autoFocus
-            onChange={(e) => setKey(e.target.value)}
-            placeholder={`${p.id} API key`}
-            className="min-w-0 flex-1 rounded border border-hairline bg-black/20 px-2 py-1 font-mono text-[11px] text-text-bright outline-none focus:border-line-strong"
-          />
-          <button
-            type="button"
-            disabled={key.trim().length === 0 || saving}
-            onClick={() => void save(p.id)}
-            className="rounded bg-blue/20 px-2 py-1 text-[10.5px] text-blue disabled:opacity-40"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
+        <>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="password"
+              value={key}
+              autoFocus
+              onChange={(e) => {
+                setKey(e.target.value)
+                // Editing is the retry — don't keep shouting about the last attempt.
+                setSaveError(null)
+              }}
+              placeholder={`${p.id} API key`}
+              className={cn(
+                "min-w-0 flex-1 rounded border bg-black/20 px-2 py-1 font-mono text-[11px] text-text-bright outline-none",
+                saveError === null
+                  ? "border-hairline focus:border-line-strong"
+                  : "border-red/50 focus:border-red"
+              )}
+            />
+            <button
+              type="button"
+              disabled={key.trim().length === 0 || saving}
+              onClick={() => void save(p.id)}
+              className="rounded bg-blue/20 px-2 py-1 text-[10.5px] text-blue disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+          {saveError !== null && <span className="text-[10.5px] text-red">{saveError}</span>}
+        </>
       )}
     </div>
   )

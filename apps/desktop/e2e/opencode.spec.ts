@@ -181,6 +181,45 @@ test("a key can be added for a provider that isn't configured yet", async ({ lau
 })
 
 /**
+ * A key that didn't store must not look like one that did. Discarding the
+ * write's result closes the form and clears the input, leaving the operator to
+ * hunt for a provider that was never configured — the failure is invisible at
+ * exactly the moment it matters.
+ */
+test("a key that fails to store says so, and keeps what was typed", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    opencode: {
+      ...READY,
+      authFails: true,
+      providers: [
+        ...READY.providers!,
+        { id: "anthropic", name: "Anthropic", env: ["ANTHROPIC_API_KEY"], models: [] }
+      ]
+    }
+  })
+  await openOpencodeProvider(window)
+
+  await window.getByRole("button", { name: /Add a provider/ }).click()
+  await window.getByPlaceholder("Search providers…").fill("anthro")
+  await window.getByRole("button", { name: "Add key" }).click()
+  const input = window.getByPlaceholder("anthropic API key")
+  await input.fill("sk-ant-does-not-store")
+  await input.locator("..").getByRole("button", { name: "Save" }).click()
+
+  // Said so…
+  await expect(window.getByText(/didn't store the key/)).toBeVisible()
+  // …and the key is still there to retry, rather than silently discarded.
+  await expect(input).toHaveValue("sk-ant-does-not-store")
+
+  // Typing again is the retry — the error clears rather than nagging.
+  await input.fill("sk-ant-second-go")
+  await expect(window.getByText(/didn't store the key/)).toHaveCount(0)
+})
+
+/**
  * opencode knows ~167 providers. Rendering that list helps nobody — searching
  * it does — so the browse list is capped and says what it's hiding rather than
  * pretending it's showing everything.

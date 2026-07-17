@@ -70,6 +70,8 @@ export interface LaunchOptions {
   readonly opencode?: {
     /** What `--version` reports. Below 1.18 the version gate must reject it. */
     readonly version?: string
+    /** Make storing a key fail, to drive the UI's failure path. */
+    readonly authFails?: boolean
     /** Providers `/config/providers` reports, mirroring the real response. */
     readonly providers?: ReadonlyArray<{
       readonly id: string
@@ -201,6 +203,14 @@ if (argv[0] === "serve") {
           process.env.STARBASE_E2E_OPENCODE_AUTH_LOG,
           JSON.stringify({ id, body: JSON.parse(body || "{}") }) + "\\n"
         )
+        // Refusing the write is a state a real server reaches (its credential
+        // store unwritable) and the one the row itself can't show — the UI has
+        // to say so rather than close as though the key landed.
+        if (process.env.STARBASE_E2E_OPENCODE_AUTH_FAILS === "1") {
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: "cannot write auth.json" }))
+          return
+        }
         res.end("true")
       })
       return
@@ -225,7 +235,8 @@ process.exit(0)
   return {
     STARBASE_E2E_OPENCODE_VERSION: opencode.version ?? "1.18.0",
     STARBASE_E2E_OPENCODE_PROVIDERS: JSON.stringify(providers),
-    STARBASE_E2E_OPENCODE_AUTH_LOG: join(binDir, "auth-writes.jsonl")
+    STARBASE_E2E_OPENCODE_AUTH_LOG: join(binDir, "auth-writes.jsonl"),
+    STARBASE_E2E_OPENCODE_AUTH_FAILS: opencode.authFails === true ? "1" : "0"
   }
 }
 
