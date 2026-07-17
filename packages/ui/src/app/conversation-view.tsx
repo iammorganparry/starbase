@@ -55,6 +55,8 @@ export interface ConversationViewProps {
   catalog?: ReadonlyArray<ProviderModels>
   onSetHarness?: (cli: CliKind, model: string) => void
   onSend?: (text: string, images?: ReadonlyArray<Attachment>) => void
+  /** Halt the running agent — the Stop button, and Escape outside the composer. */
+  onStop?: () => void
   /** The agent is producing a turn — the composer queues messages instead of blocking. */
   busy?: boolean
   /** Cumulative tokens for the current/last run (live analytics readout). */
@@ -131,6 +133,7 @@ export function ConversationView({
   catalog = [],
   onSetHarness,
   onSend,
+  onStop,
   busy = false,
   tokens = 0,
   runStartedAt = null,
@@ -168,6 +171,18 @@ export function ConversationView({
     },
     { enableOnFormTags: true, preventDefault: true },
     [mode, onSetMode, cycle]
+  )
+
+  // Escape halts a running agent. Deliberately NOT `enableOnFormTags` (unlike
+  // Shift+Tab above): the composer owns Escape while you're typing, where it
+  // closes the / and @ autocomplete menus — so binding it there would both
+  // dismiss the menu and kill the run on one keypress. Escape therefore only
+  // fires with focus outside the composer, and only while there's a run to stop.
+  useHotkeys(
+    "esc",
+    () => onStop?.(),
+    { enabled: busy && !archived && onStop !== undefined },
+    [busy, archived, onStop]
   )
 
   // Virtualize the transcript so large sessions stay fast. Heights are dynamic
@@ -351,6 +366,7 @@ export function ConversationView({
                 onSetMode={onSetMode}
                 allowPlan={cli === "claude"}
                 onSend={onSend}
+                onStop={onStop}
                 initialValue={initialDraft}
                 value={draft}
                 onValueChange={onDraftChange}

@@ -165,6 +165,16 @@ const toolTarget = (name: string, input: Record<string, unknown>): string | null
   if (name === "Grep" || name === "Glob") return strOf(input.pattern)
   // A sub-agent spawn's target is its one-line task description.
   if (SUBAGENT_TOOLS.has(name)) return strOf(input.description)
+  // Invoking a skill: WHICH skill is the entire content of the card. Without
+  // this the input's `skill`/`args` match nothing below, the target comes out
+  // null, and the transcript shows a bare "Skill" — the one thing it needed to
+  // say, missing.
+  if (name === "Skill") {
+    const skill = strOf(input.skill)
+    if (skill === null) return null
+    const args = strOf(input.args)
+    return args ? `${skill} ${args}` : skill
+  }
   return strOf(input.file_path) ?? strOf(input.path) ?? strOf(input.notebook_path) ?? strOf(input.url)
 }
 
@@ -298,15 +308,69 @@ const contentBlocks = (message: unknown): ReadonlyArray<Record<string, unknown>>
   return Array.isArray(content) ? (content as Array<Record<string, unknown>>) : []
 }
 
+/** The text a `tool_result` carries, whether it arrived bare or in a block list. */
+const toolResultText = (content: unknown): string | null => {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return null
+  return strOf(
+    (content.find((b) => (b as { type?: unknown }).type === "text") as { text?: unknown } | undefined)?.text
+  )
+}
+
 const toolResultMeta = (name: string | undefined, content: unknown): string | null => {
   if (name !== "Read") return null
-  const text =
-    typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? strOf((content.find((b) => (b as { type?: unknown }).type === "text") as { text?: unknown } | undefined)?.text)
-        : null
+  const text = toolResultText(content)
   return text ? `${lineCount(text)} lines` : null
+}
+
+/**
+ * How much of a tool's output we keep. It rides the RPC to the renderer AND is
+ * persisted into the session's transcript.json, so an uncapped `pnpm test` log
+ * would bloat the file every future read pays for.
+ */
+const OUTPUT_CAP = 6_000
+/** Kept from the front when capping — enough to see what the command started doing. */
+const OUTPUT_HEAD = 3_600
+
+/**
+ * Cap a tool's output, keeping BOTH ends.
+ *
+ * Which end matters depends on the command: a compile error lists its first
+ * failures at the top, while a test run puts the summary that explains it at the
+ * very bottom. Keeping only one end reliably hides the answer for half of them,
+ * so we keep the head and the tail and say what went missing — a silent cut
+ * reads as "that's all it printed".
+ */
+const capOutput = (text: string): string => {
+  if (text.length <= OUTPUT_CAP) return text
+  const head = text.slice(0, OUTPUT_HEAD)
+  const tail = text.slice(text.length - (OUTPUT_CAP - OUTPUT_HEAD))
+  const dropped = text.length - OUTPUT_HEAD - (OUTPUT_CAP - OUTPUT_HEAD)
+  return `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
+}
+
+/**
+ * Tools whose `tool_result` is an acknowledgement rather than output.
+ *
+ * A backgrounded Task's result lands ~150ms after the spawn saying only "Async
+ * agent launched successfully", while the agent itself runs on for minutes and
+ * reports into its own tab. Showing that ACK as the call's "output" would state
+ * the opposite of what's happening. (Same reason its tool_result doesn't settle
+ * the tab — see the `SUPPRESSED_TOOLS` note and the bookend below.)
+ */
+const ACK_ONLY_TOOLS = new Set(["Task"])
+
+/**
+ * What a tool printed, for the card's expanded body.
+ *
+ * Edit tools are excluded: their result is a bare confirmation, and the card
+ * already shows the real change as a diff peek built from the tool's INPUT — so
+ * storing "ok" would cost transcript size on every edit and add nothing.
+ */
+const toolResultOutput = (name: string | undefined, content: unknown): string | undefined => {
+  if (name !== undefined && (isEditTool(name) || ACK_ONLY_TOOLS.has(name))) return undefined
+  const text = toolResultText(content)?.trim()
+  return text ? capOutput(text) : undefined
 }
 
 const totalTokens = (usage: unknown): number => {
@@ -425,6 +489,7 @@ export const streamEventsFor = (
         // settled by the `task_notification` bookend (see the "system" case).
         if (memo && SUPPRESSED_TOOLS.has(memo.name)) continue
         const stats = memo && isEditTool(memo.name) ? editStats(memo.name, memo.input) : { diff: null, preview: null }
+        const output = toolResultOutput(memo?.name, block.content)
         out.push({
           _tag: "ToolEnd",
           id,
@@ -432,6 +497,9 @@ export const streamEventsFor = (
           meta: toolResultMeta(memo?.name, block.content),
           diff: stats.diff,
           preview: stats.preview,
+          // Omit the key entirely when there's nothing to show, so a tool with no
+          // output doesn't persist an empty field into every transcript.
+          ...(output !== undefined ? { output } : {}),
           ...forAgent
         })
       }

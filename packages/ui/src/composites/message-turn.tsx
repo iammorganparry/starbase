@@ -29,6 +29,24 @@ const IMAGE_THUMB = "h-[80px] w-[132px]"
 const toolMeta = (tool: ToolCallModel): string | undefined =>
   tool.meta ?? (tool.diff ? `+${tool.diff.added} −${tool.diff.removed}` : undefined)
 
+/**
+ * Tools whose `target` is a file path, and so get a file glyph and the
+ * filename-preserving layout. Everything else targets a query or a command
+ * (Bash, Grep, Glob), where the useful part is the START of the string and a
+ * file icon would be a lie.
+ */
+const PATH_TOOLS: ReadonlySet<string> = new Set([
+  "Read",
+  "Write",
+  "Edit",
+  "Update",
+  "MultiEdit",
+  "NotebookEdit"
+])
+
+const pathOf = (tool: ToolCallModel): string | null =>
+  tool.target && PATH_TOOLS.has(tool.name) ? tool.target : null
+
 /** A pulsing dots indicator shown while an assistant turn is still streaming. */
 function Working() {
   return (
@@ -48,15 +66,42 @@ function ToolCardView({ tool }: { tool: ToolCallModel }) {
   const lines = tool.preview ? tool.preview.replace(/\n+$/, "").split("\n") : []
   const clipped = lines.length > HUNK_PREVIEW_LINES && !expanded
   const shown = clipped ? lines.slice(0, HUNK_PREVIEW_LINES).join("\n") : tool.preview
+  // An edit's change is already spelled out by its diff peek, so its header stays
+  // inert and the existing "Show all N lines" control owns that body. Everything
+  // else — a command and what it printed — only fits once opened.
+  const openable = !tool.preview && (tool.output !== undefined || (tool.target?.length ?? 0) > 0)
+  const path = pathOf(tool)
   return (
     <ToolCall
       status={tool.status}
       name={tool.name}
       target={tool.target ?? undefined}
-      filePath={tool.target}
+      filePath={path}
       meta={toolMeta(tool)}
+      expanded={expanded}
+      onToggle={openable ? () => setExpanded((v) => !v) : undefined}
       className={WIDTH}
     >
+      {openable && expanded && (
+        <div className="border-t border-line bg-editor">
+          {/* The header truncates a long command to one line; this is where you
+              read the whole thing. */}
+          {tool.target && (
+            <pre className="overflow-x-auto px-3 py-2 font-mono text-[11px] leading-[1.5] text-text-bright">
+              {tool.target}
+            </pre>
+          )}
+          {tool.output === undefined ? (
+            <div className="px-3 pb-2 font-mono text-[11px] text-dim">
+              {tool.status === "running" ? "Running…" : "No output."}
+            </div>
+          ) : (
+            <pre className="max-h-[320px] overflow-auto border-t border-line/60 px-3 py-2 font-mono text-[11px] leading-[1.5] text-muted-foreground">
+              {tool.output}
+            </pre>
+          )}
+        </div>
+      )}
       {tool.preview && shown && (
         <div>
           <DiffPeek preview={shown} />

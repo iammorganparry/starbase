@@ -283,3 +283,82 @@ describe("planModeInstructions", () => {
     expect(planModeInstructions.toLowerCase()).toContain("code sample")
   })
 })
+
+/**
+ * A step is only worth reviewing if it survives the parser intact. These use the
+ * shapes `planModeInstructions` actually tells the agent to emit — the older
+ * fixture above quietly avoided them (no commas; relations on separate lines),
+ * which is exactly how the corruption below went unnoticed.
+ */
+describe("parsePlan — fidelity of what the agent wrote", () => {
+  const step = (fields: string) =>
+    parsePlan(
+      ["```plan", "summary: Support opencode", "01 Gate on version", fields, "```"].join("\n"),
+      "p1"
+    ).steps[0]!
+
+  it("keeps a comma inside an approach step, rather than splitting there", () => {
+    // The field is semicolon-separated BECAUSE its values are prose and code.
+    // Splitting on commas too cuts a call signature in half.
+    const s = step("  approach: Add CLI_SPECS.opencode; parse it through meetsMinVersion(raw, min); never bundle a binary")
+    expect(s.approach).toStrictEqual([
+      "Add CLI_SPECS.opencode",
+      "parse it through meetsMinVersion(raw, min)",
+      "never bundle a binary"
+    ])
+  })
+
+  it("keeps a comma inside a guard", () => {
+    const s = step("  guards: Refresh fires at most once, even on repeated 401s; absent binary stays unavailable")
+    expect(s.guards.map((g) => g.text)).toStrictEqual([
+      "Refresh fires at most once, even on repeated 401s",
+      "absent binary stays unavailable"
+    ])
+  })
+
+  it("still reads a guard's status marker after the comma fix", () => {
+    const s = step("  guards: Concurrent requests share one refresh, even under load (warn)")
+    expect(s.guards).toStrictEqual([
+      { text: "Concurrent requests share one refresh, even under load", status: "warn" }
+    ])
+  })
+
+  it("reads both relations when written on one line, as the format specifies", () => {
+    // `depends: 01; blocks: 03` is the documented shape. Parsed as a single
+    // field, `blocks` is lost and `dependsOn` gains a junk "blocks: 03".
+    const s = step("  depends: 01; blocks: 03")
+    expect(s.dependsOn).toStrictEqual(["01"])
+    expect(s.blocks).toStrictEqual(["03"])
+  })
+
+  it("reads several ordinals per relation on one line", () => {
+    const s = step("  depends: 02; 03; blocks: 05; 06")
+    expect(s.dependsOn).toStrictEqual(["02", "03"])
+    expect(s.blocks).toStrictEqual(["05", "06"])
+  })
+
+  it("still reads relations written on their own lines", () => {
+    const s = step("  depends: 03\n  blocks: 05")
+    expect(s.dependsOn).toStrictEqual(["03"])
+    expect(s.blocks).toStrictEqual(["05"])
+  })
+
+  it("accepts comma-separated ordinals, where a comma can't be part of a value", () => {
+    const s = step("  depends: 01, 02")
+    expect(s.dependsOn).toStrictEqual(["01", "02"])
+  })
+
+  it("leaves prose containing a relation-looking phrase alone", () => {
+    // Only relation fields get peeled apart, so intent/approach prose is safe.
+    const s = step("  intent: Refuse 1.0.x; blocks: nothing ships until it's gated")
+    expect(s.intent).toBe("Refuse 1.0.x; blocks: nothing ships until it's gated")
+    expect(s.blocks).toStrictEqual([])
+  })
+
+  it("keeps a comma in a file path", () => {
+    const s = step("  files: M packages/cli-adapters/src/discovery.ts +14 -1")
+    expect(s.files).toStrictEqual([
+      { path: "packages/cli-adapters/src/discovery.ts", change: "M", added: 14, removed: 1 }
+    ])
+  })
+})

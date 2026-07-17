@@ -18,6 +18,7 @@ import {
   agentChildren,
   agentPath,
   assistantMessage,
+  findApprovedPlan,
   isSubagentEvent,
   latestPlan,
   resumePlanPrompt,
@@ -579,6 +580,28 @@ describe("Plan flow", () => {
     expect(latestPlan([approved])?.status).toBe("approved")
   })
 
+  it("findApprovedPlan locates an approved plan and the message holding it", () => {
+    const proposed = applyStreamEvent(assistantMessage("a0", now), {
+      _tag: "PlanProposed",
+      plan: plan()
+    })
+    // Only an APPROVED plan is under execution — a proposed one isn't.
+    expect(findApprovedPlan([proposed])).toBe(null)
+
+    const approved = setPlanStatus(proposed, "plan_1", "approved")
+    // The plan stays in its own message while later turns append their own.
+    const later = [approved, assistantMessage("a1", now), assistantMessage("a2", now)]
+    const found = findApprovedPlan(later)
+    expect(found?.plan.id).toBe("plan_1")
+    // The message id is the point: it's what lets a later turn address the plan.
+    expect(found?.messageId).toBe("a0")
+  })
+
+  it("findApprovedPlan returns null when no plan is approved", () => {
+    expect(findApprovedPlan([])).toBe(null)
+    expect(findApprovedPlan([assistantMessage("a0", now)])).toBe(null)
+  })
+
   it("resumePlanPrompt embeds the plan and instructs implementation (for a post-restart re-drive)", () => {
     const p = plan()
     const prompt = resumePlanPrompt(p)
@@ -1020,5 +1043,65 @@ describe("nextReviewPhase", () => {
 
   it("ignores events that say nothing about progress", () => {
     expect(nextReviewPhase("reading", { _tag: "Usage", tokens: 10 })).toBe("reading")
+  })
+})
+
+describe("ToolCall.output — added without erasing history", () => {
+  /** A transcript recorded before `output` existed: the tool has no such key. */
+  const oldTranscript = [
+    {
+      id: "a0",
+      role: "assistant",
+      streaming: false,
+      createdAt: "2026-07-11T10:00:00.000Z",
+      parts: [
+        {
+          _tag: "Tool",
+          tool: {
+            id: "t1",
+            name: "Bash",
+            target: "pnpm test",
+            status: "success",
+            meta: null,
+            diff: null,
+            preview: null
+          }
+        }
+      ]
+    }
+  ]
+
+  it("still decodes a transcript written before the field existed", () => {
+    // This is not a nicety. `TranscriptStore.readAll` turns a decode failure into
+    // an EMPTY transcript, so a required `output` would silently erase the whole
+    // history of every existing session the first time it was opened.
+    const result = decode(Schema.Array(Message), oldTranscript)
+    expect(Either.isRight(result)).toBe(true)
+  })
+
+  it("carries output from ToolEnd onto the card", () => {
+    const msg = [
+      { _tag: "ToolStart", id: "t1", name: "Bash", target: "pnpm test" } as StreamEvent,
+      {
+        _tag: "ToolEnd",
+        id: "t1",
+        status: "success",
+        meta: null,
+        diff: null,
+        preview: null,
+        output: "2 passed"
+      } as StreamEvent
+    ].reduce(applyStreamEvent, assistantMessage("m1", "2026-07-11T10:00:00.000Z"))
+    const part = msg.parts.find((p) => p._tag === "Tool")
+    expect(part && part._tag === "Tool" && part.tool.output).toBe("2 passed")
+  })
+
+  it("leaves the key absent when a tool printed nothing, rather than storing undefined", () => {
+    const msg = [
+      { _tag: "ToolStart", id: "t1", name: "Read", target: "a.ts" } as StreamEvent,
+      { _tag: "ToolEnd", id: "t1", status: "success", meta: null, diff: null, preview: null } as StreamEvent
+    ].reduce(applyStreamEvent, assistantMessage("m1", "2026-07-11T10:00:00.000Z"))
+    const part = msg.parts.find((p) => p._tag === "Tool")
+    expect(part && part._tag === "Tool" && "output" in part.tool).toBe(false)
   })
 })

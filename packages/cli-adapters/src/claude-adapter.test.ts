@@ -244,6 +244,82 @@ describe("streamEventsFor", () => {
     expect(events[0]).toMatchObject({ _tag: "ToolEnd", id: "x", status: "error" })
   })
 
+  it("keeps what a command printed, so the card can show it", () => {
+    const tools = new Map<string, ToolMemo>([["tu_1", { name: "Bash", input: { command: "pnpm test" } }]])
+    const events = streamEventsFor(
+      msg({
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "tu_1", is_error: false, content: "2 passed\nDone in 2.6s" }
+          ]
+        }
+      }),
+      tools
+    )
+    expect(events[0]).toMatchObject({ _tag: "ToolEnd", id: "tu_1", output: "2 passed\nDone in 2.6s" })
+  })
+
+  it("leaves an edit's result out — its card already shows the diff", () => {
+    const tools = new Map<string, ToolMemo>([["tu_1", { name: "Edit", input: { old_string: "a", new_string: "b" } }]])
+    const events = streamEventsFor(
+      msg({
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: false, content: "ok" }] }
+      }),
+      tools
+    )
+    // Storing the "ok" ack would add nothing and cost transcript size on every edit.
+    expect(events[0]).not.toHaveProperty("output")
+  })
+
+  it("caps a huge output, keeping BOTH ends and saying what it dropped", () => {
+    // Output rides the RPC and is persisted, so a big test log can't go in whole.
+    // Which end matters depends on the command — a compile error leads with its
+    // failures, a test run closes with the summary — so both survive.
+    const huge = `FIRST_LINE\n${"x".repeat(50_000)}\nLAST_LINE`
+    const tools = new Map<string, ToolMemo>([["tu_1", { name: "Bash", input: {} }]])
+    const events = streamEventsFor(
+      msg({
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: false, content: huge }] }
+      }),
+      tools
+    )
+    const output = (events[0] as { output?: string }).output!
+    expect(output.length).toBeLessThan(huge.length)
+    expect(output).toContain("FIRST_LINE")
+    expect(output).toContain("LAST_LINE")
+    // A silent cut would read as "that is all it printed".
+    expect(output).toMatch(/characters omitted/)
+  })
+
+  it("names the skill on a Skill call, so the card isn't just \"Skill\"", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "s1", name: "Skill", input: { skill: "babysit-pr", args: "46" } }
+          ]
+        }
+      }),
+      new Map()
+    )
+    expect(events[0]).toMatchObject({ _tag: "ToolStart", name: "Skill", target: "babysit-pr 46" })
+  })
+
+  it("names a skill invoked without arguments", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "s1", name: "Skill", input: { skill: "verify" } }] }
+      }),
+      new Map()
+    )
+    expect(events[0]).toMatchObject({ _tag: "ToolStart", target: "verify" })
+  })
+
   it("maps the result message to Done with cost + total tokens", () => {
     const events = streamEventsFor(
       msg({ type: "result", subtype: "success", total_cost_usd: 0.42, usage: { input_tokens: 100, output_tokens: 40 } }),
