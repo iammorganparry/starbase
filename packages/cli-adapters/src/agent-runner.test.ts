@@ -963,6 +963,20 @@ describe("AgentRunner plan progress across turns", () => {
   })
 })
 
+/**
+ * No harness discovered.
+ *
+ * The real DiscoveryService shells out (`which claude`, filesystem probes) as
+ * part of every `prompt` setup. These tests wait on the run actually starting, so
+ * that probe sits inside the window they measure — and under load it blew the
+ * budget and made them flake. The runner doesn't need a real binary here: the
+ * adapter is injected.
+ */
+const noHarnesses: Layer.Layer<DiscoveryService> = Layer.succeed(
+  DiscoveryService,
+  new DiscoveryService({ list: () => Effect.succeed([]) })
+)
+
 describe("AgentRunner stop", () => {
   /**
    * An agent that runs until something interrupts it. `started` fires once it's
@@ -1017,7 +1031,7 @@ describe("AgentRunner stop", () => {
         TranscriptStore.Default,
         PlanStore.Default,
         hangingAdapter(started, interrupted, opts.gate),
-        DiscoveryService.Default,
+        noHarnesses,
         temp.layer
       )
       return yield* Effect.gen(function* () {
