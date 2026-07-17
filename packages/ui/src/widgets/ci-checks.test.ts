@@ -108,6 +108,18 @@ describe("parseCiChecks", () => {
     expect(parseCiChecks(ctx(TSV, "success", "gh pr checks --watch"))!.pr).toBeNull()
   })
 
+  it("finds the pr number even when a boolean flag precedes it", () => {
+    // `--watch` takes no value, so the 482 after it is still the PR — not the
+    // flag's argument.
+    expect(parseCiChecks(ctx(TSV, "success", "gh pr checks --watch 482"))!.pr).toBe("482")
+  })
+
+  it("does not read a value-flag's argument as the pr number", () => {
+    // `--interval 30` — the 30 is the interval, not PR #30.
+    expect(parseCiChecks(ctx(TSV, "success", "gh pr checks --interval 30"))!.pr).toBeNull()
+    expect(parseCiChecks(ctx(TSV, "success", "gh pr checks 482 --interval 30"))!.pr).toBe("482")
+  })
+
   it("never claims a branch, because the output never names one", () => {
     expect(parseCiChecks(ctx(TSV))!.branch).toBeNull()
   })

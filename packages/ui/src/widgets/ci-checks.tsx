@@ -80,19 +80,27 @@ const GLYPHS: Record<string, CheckState> = {
 const DURATION = /^\d[\dhms.]*$/
 
 /**
- * The PR number in `gh pr checks 482 --interval 30`.
+ * `gh pr checks` flags that take a SEPARATE value token.
  *
- * A bare number that is NOT the value of a preceding option — otherwise the `30`
- * in `--interval 30` reads as PR #30. Scans left to right, skipping any token an
- * option consumes.
+ * Only these consume the next token — every other flag (`--watch`, `--required`,
+ * `--fail-fast`, `--web`) is boolean. Assuming ANY bare flag takes a value was
+ * the bug: `gh pr checks --watch 482` then read `482` as `--watch`'s value and
+ * dropped the `#482` badge. `--flag=value` needs no entry (the `=` attaches it).
+ */
+const GH_VALUE_FLAGS = new Set(["-i", "--interval", "--json", "-q", "--jq", "-t", "--template", "-b", "--branch", "-R", "--repo"])
+
+/**
+ * The PR number in `gh pr checks 482 --interval 30` (or `--watch 482`).
+ *
+ * The PR selector is a positional numeric token; the trick is not mistaking a
+ * value-flag's argument (`--interval 30`) for it. Skip only the flags that
+ * genuinely take a value; treat the rest as boolean.
  */
 const prNumber = (args: ReadonlyArray<string>): string | null => {
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!
-    // `--flag=value` consumes nothing after it; a bare `--flag`/`-f` eats the
-    // next token as its value.
     if (a.startsWith("-")) {
-      if (!a.includes("=") && args[i + 1] !== undefined && !args[i + 1]!.startsWith("-")) i++
+      if (!a.includes("=") && GH_VALUE_FLAGS.has(a)) i++ // this flag eats the next token
       continue
     }
     if (/^\d+$/.test(a)) return a
