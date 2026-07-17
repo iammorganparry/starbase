@@ -253,10 +253,15 @@ export const totalTokens = (tokens: {
  *    an assistant-allowlist: `message.updated` for the *user* arrives before its
  *    parts, but for the *assistant* it arrives AFTER them — an allowlist would
  *    drop the reply.
+ *  - The `task` tool runs its subagent in a CHILD session, so that work arrives
+ *    under an id that is not the run's. We track the lineage from
+ *    `session.created` and attribute it, rather than filtering by session id —
+ *    which would render a subagent's entire contribution invisible.
  *
  * `Done` is NOT emitted from `session.idle`: that fires after `session.prompt`
  * has already resolved, so the turn is over before it lands. The prompt's own
  * response carries the authoritative cost/tokens instead (see `driveOpencode`).
+ * A CHILD's idle is a different thing entirely — that subagent finishing.
  */
 export interface OpencodeMapper {
   readonly apply: (event: Event) => ReadonlyArray<StreamEvent>
@@ -269,7 +274,26 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
   const started = new Set<string>()
   /** messageIDs known to be the operator's — their parts are not the agent talking. */
   const userMessages = new Set<string>()
+  /**
+   * Sub-session id → the session that spawned it. opencode's `task` tool runs a
+   * subagent in a CHILD session with its own id, so its work arrives under an id
+   * that isn't the run's. Tracked from `session.created`, which carries the
+   * lineage (`parentID`) and the agent's identity (`agent`, `title`).
+   */
+  const subagents = new Map<string, string>()
   let tokens = 0
+
+  /**
+   * Which agent a session's output belongs to — undefined for the run itself,
+   * else the sub-session's own id, used verbatim as the `agentId`.
+   *
+   * Session id plays the role Claude's `tool_use id` plays in its adapter: a
+   * stable, unique handle for one agent's output at any depth. An id we haven't
+   * been introduced to falls back to the main transcript — the server is private
+   * to this run, so it IS ours, and showing it unattributed beats dropping it.
+   */
+  const agentOf = (sessionID: string): string | undefined =>
+    sessionID !== opencodeSessionId() && subagents.has(sessionID) ? sessionID : undefined
 
   /** The unsent tail of a streaming text/reasoning part. */
   const suffix = (partId: string, full: string): string => {
@@ -280,13 +304,17 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
   }
 
   const forPart = (part: Part): ReadonlyArray<StreamEvent> => {
+    // Stamp every content event with the agent that produced it, so a subagent's
+    // work lands in its own tab rather than being spliced into the main turn.
+    const agentId = agentOf(part.sessionID)
+    const forAgent = agentId === undefined ? {} : { agentId }
     switch (part.type) {
       case "text": {
         // `synthetic` parts are opencode's own scaffolding (e.g. injected
         // context), not the model talking — showing them would confuse.
         if (part.synthetic === true || part.ignored === true) return []
         const text = suffix(part.id, part.text)
-        return text.length === 0 ? [] : [{ _tag: "Assistant", text }]
+        return text.length === 0 ? [] : [{ _tag: "Assistant", text, ...forAgent }]
       }
 
       case "reasoning": {
@@ -297,7 +325,7 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
         if (text.length === 0 && !done) return []
         const seconds =
           part.time.end === undefined ? null : Math.round((part.time.end - part.time.start) / 1000)
-        return [{ _tag: "Thinking", text, seconds, done }]
+        return [{ _tag: "Thinking", text, seconds, done, ...forAgent }]
       }
 
       case "tool": {
@@ -311,7 +339,8 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
               _tag: "ToolStart",
               id: part.callID,
               name,
-              target: toolTarget(part.tool, state.input as Record<string, unknown>)
+              target: toolTarget(part.tool, state.input as Record<string, unknown>),
+              ...forAgent
             })
           }
           if (state.status === "completed") {
@@ -323,7 +352,8 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
               diff: null,
               // opencode returns tool output as a plain string; the transcript
               // renders it as the collapsed preview.
-              preview: state.output.length > 0 ? state.output : null
+              preview: state.output.length > 0 ? state.output : null,
+              ...forAgent
             })
           }
           if (state.status === "error") {
@@ -333,7 +363,8 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
               status: "error",
               meta: state.error,
               diff: null,
-              preview: null
+              preview: null,
+              ...forAgent
             })
           }
           return events
@@ -343,7 +374,10 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
 
       case "step-finish": {
         // A live, growing count for the UI mid-turn; the FINAL total comes from
-        // the prompt response, not from here.
+        // the prompt response, not from here. Only the RUN's own steps count —
+        // the readout is the turn's, and a subagent's usage rolls up into the
+        // parent's total anyway (Claude's adapter draws the same line).
+        if (agentId !== undefined) return []
         tokens += totalTokens(part.tokens)
         return [{ _tag: "Usage", tokens }]
       }
@@ -362,19 +396,68 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
           return []
         }
 
+        /**
+         * A `task` tool runs its subagent in a CHILD session. Opening a tab for
+         * it here — rather than off the `task` tool call — is what lets its work
+         * be attributed at all: the child's parts carry only its session id, and
+         * this is the one event that ties that id to a parent, a name and a
+         * description.
+         *
+         * `parentID` gives nesting for free: a subagent that spawns another
+         * parents to it, exactly as Claude's tabs nest by `tool_use` id.
+         */
+        case "session.created": {
+          const info = event.properties.info as {
+            id?: string
+            parentID?: string
+            agent?: string
+            title?: string
+          }
+          const run = opencodeSessionId()
+          if (info.id === undefined || info.parentID === undefined) return []
+          // Only sessions descended from THIS run — the server is private, but a
+          // resumed run can have older children on it whose sessions it did not
+          // just spawn.
+          if (info.parentID !== run && !subagents.has(info.parentID)) return []
+          subagents.set(info.id, info.parentID)
+          return [
+            {
+              _tag: "SubagentStarted",
+              id: info.id,
+              name: info.agent ?? "agent",
+              description: info.title ?? "",
+              // Null when the RUN spawned it; otherwise the sub-agent that did.
+              parentId: info.parentID === run ? null : info.parentID
+            }
+          ]
+        }
+
+        case "session.idle": {
+          // The run's own idle is not a turn end (`session.prompt` resolving is
+          // — see `driveOpencode`), but a CHILD's idle is that subagent finishing.
+          const id = event.properties.sessionID
+          return subagents.has(id) ? [{ _tag: "SubagentEnded", id, status: "done" }] : []
+        }
+
         case "message.part.updated": {
-          // The bus is server-wide: other sessions' parts arrive here too.
-          const current = opencodeSessionId()
           const part = event.properties.part
-          if (current !== null && part.sessionID !== current) return []
           if (userMessages.has(part.messageID)) return []
+          // NOT filtered by session: a subagent's parts arrive under the CHILD's
+          // id, and dropping them made its work invisible. `forPart` attributes
+          // them instead. The server is private to this run, so everything on
+          // this bus is ours to show.
           return forPart(part)
         }
 
         case "session.error": {
-          const current = opencodeSessionId()
+          const run = opencodeSessionId()
           const errored = event.properties.sessionID
-          if (current !== null && errored !== undefined && errored !== current) return []
+          // A subagent's failure ends ITS tab; only the run's own error fails the
+          // turn.
+          if (errored !== undefined && subagents.has(errored)) {
+            return [{ _tag: "SubagentEnded", id: errored, status: "error" }]
+          }
+          if (run !== null && errored !== undefined && errored !== run) return []
           const error = event.properties.error
           const message =
             error === undefined
@@ -485,7 +568,21 @@ const driveOpencode = async (
         if (signal.aborted) return
         const asked = asPermissionAsked(event)
         if (asked !== null) {
-          if (opencodeSessionId !== null && asked.sessionID !== opencodeSessionId) continue
+          // EVERY permission this server raises gets answered — deliberately not
+          // just the run's own session.
+          //
+          // The `task` tool runs its subagent in a CHILD session with its own id,
+          // and the subagent's gated actions raise permissions under THAT id.
+          // Matching on the run's session id therefore dropped them: nobody ever
+          // replied, opencode waited forever, and `session.prompt` never resolved
+          // — a silently hung turn the operator could only cancel. Verified live:
+          // a `task` that writes a file deadlocks under the old filter.
+          //
+          // Answering everything is right rather than merely expedient: this
+          // server is spawned by this run, on a random loopback port, for this
+          // run alone. There is no other session on it whose permissions could
+          // arrive here.
+          //
           // Don't await: the operator may sit on this for minutes, and the pump
           // must keep draining or the events around it never arrive.
           void bridge.handle(asked)

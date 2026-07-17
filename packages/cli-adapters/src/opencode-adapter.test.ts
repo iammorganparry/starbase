@@ -280,18 +280,122 @@ describe("createOpencodeMapper", () => {
     ).toStrictEqual([])
   })
 
-  it("ignores parts belonging to another session on the shared bus", () => {
-    const m = mapper()
-    expect(
-      m.apply(
-        ev({
-          type: "message.part.updated",
-          properties: {
-            part: { sessionID: "ses_other", id: "prt_x", messageID: "msg_x", type: "text", text: "hi" }
-          }
-        })
+  /**
+   * opencode's `task` tool runs its subagent in a CHILD session with its own id,
+   * so everything it does arrives under an id that isn't the run's. Filtering on
+   * the run's session made the subagent's entire contribution invisible.
+   *
+   * Fixtures below are verbatim from a live 1.18 server.
+   */
+  describe("subagents (task → child session)", () => {
+    const CHILD = "ses_child"
+    const created = (id: string, parentID: string, agent = "general", title = "Do a thing") =>
+      ev({ type: "session.created", properties: { info: { id, parentID, agent, title } } })
+
+    const childPart = (p: Record<string, unknown>) =>
+      ev({ type: "message.part.updated", properties: { part: { sessionID: CHILD, ...p } } })
+
+    it("opens a tab when the run spawns a subagent", () => {
+      const m = mapper()
+      expect(m.apply(created(CHILD, SESSION))).toStrictEqual([
+        {
+          _tag: "SubagentStarted",
+          id: CHILD,
+          name: "general",
+          description: "Do a thing",
+          // Spawned by the RUN itself, so it's a top-level tab.
+          parentId: null
+        }
+      ])
+    })
+
+    /** The bug: a subagent's work arrived under the child id and was dropped. */
+    it("attributes the subagent's work to it rather than dropping it", () => {
+      const m = mapper()
+      m.apply(created(CHILD, SESSION))
+      expect(
+        m.apply(childPart({ id: "prt_c", messageID: "msg_c", type: "text", text: "done" }))
+      ).toStrictEqual([{ _tag: "Assistant", text: "done", agentId: CHILD }])
+
+      expect(
+        m.apply(
+          childPart({
+            id: "prt_t",
+            messageID: "msg_c",
+            type: "tool",
+            callID: "call_c",
+            tool: "write",
+            state: { status: "running", input: { filePath: "/tmp/sub.txt" }, time: { start: 1 } }
+          })
+        )
+      ).toStrictEqual([
+        { _tag: "ToolStart", id: "call_c", name: "Write", target: "/tmp/sub.txt", agentId: CHILD }
+      ])
+    })
+
+    it("nests a subagent spawned BY a subagent under it", () => {
+      const m = mapper()
+      m.apply(created(CHILD, SESSION))
+      expect(m.apply(created("ses_grandchild", CHILD))).toStrictEqual([
+        {
+          _tag: "SubagentStarted",
+          id: "ses_grandchild",
+          name: "general",
+          description: "Do a thing",
+          // Parented to the sub-agent that spawned it, not the run.
+          parentId: CHILD
+        }
+      ])
+    })
+
+    /** A child's idle IS its end — unlike the run's, which is not the turn's. */
+    it("closes the tab when the subagent goes idle", () => {
+      const m = mapper()
+      m.apply(created(CHILD, SESSION))
+      expect(m.apply(ev({ type: "session.idle", properties: { sessionID: CHILD } }))).toStrictEqual([
+        { _tag: "SubagentEnded", id: CHILD, status: "done" }
+      ])
+      // …while the run's own idle still says nothing (Done comes from the prompt).
+      expect(m.apply(ev({ type: "session.idle", properties: { sessionID: SESSION } }))).toStrictEqual(
+        []
       )
-    ).toStrictEqual([])
+    })
+
+    it("ends the subagent's tab on its error, rather than failing the turn", () => {
+      const m = mapper()
+      m.apply(created(CHILD, SESSION))
+      expect(
+        m.apply(
+          ev({
+            type: "session.error",
+            properties: { sessionID: CHILD, error: { name: "UnknownError" } }
+          })
+        )
+      ).toStrictEqual([{ _tag: "SubagentEnded", id: CHILD, status: "error" }])
+    })
+
+    /** The readout is the TURN's; a subagent's steps roll up into the parent. */
+    it("counts only the run's own tokens", () => {
+      const m = mapper()
+      m.apply(created(CHILD, SESSION))
+      expect(
+        m.apply(
+          childPart({
+            id: "prt_s",
+            messageID: "msg_c",
+            type: "step-finish",
+            reason: "stop",
+            cost: 1,
+            tokens: { total: 999, input: 999, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+          })
+        )
+      ).toStrictEqual([])
+    })
+
+    it("ignores a session that didn't descend from this run", () => {
+      const m = mapper()
+      expect(m.apply(created("ses_stranger", "ses_unrelated"))).toStrictEqual([])
+    })
   })
 
   it("streams reasoning as Thinking and closes it when the part completes", () => {
