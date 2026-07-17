@@ -1076,3 +1076,58 @@ describe("AgentRunner stop", () => {
     expect(transcript[transcript.length - 1]!.streaming).toBe(false)
   })
 })
+
+describe("AgentRunner live tool output", () => {
+  /** A harness that streams a running command's stdout, then settles with no output of its own. */
+  const deltaAdapter = Layer.succeed(CliAdapter, {
+    run: (_sessionId, _spec, { emit }) =>
+      Effect.gen(function* () {
+        yield* emit({ _tag: "Started", sessionId: "harness-1" })
+        yield* emit({ _tag: "ToolStart", id: "bash-1", name: "Bash", target: "pnpm test" })
+        yield* emit({ _tag: "ToolDelta", id: "bash-1", output: "RUN v2\n" })
+        yield* emit({ _tag: "ToolDelta", id: "bash-1", output: "RUN v2\n ✓ 3 passed\n" })
+        // Settle WITHOUT re-stating the output — so the only way the tool could
+        // carry text in the transcript is if a delta had been persisted.
+        yield* emit({ _tag: "ToolEnd", id: "bash-1", status: "success", meta: null, diff: null, preview: null })
+        yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+      }),
+    stop: () => Effect.void
+  })
+
+  it("streams ToolDelta to the consumer but never persists it to the transcript", async () => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      PlanStore.Default,
+      deltaAdapter,
+      DiscoveryService.Default,
+      temp.layer
+    )
+    const { events, transcript } = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        const collected: Array<StreamEvent> = []
+        yield* runner
+          .prompt(SESSION, "run the tests")
+          .pipe(Stream.runForEach((ev) => Effect.sync(() => collected.push(ev))))
+        return { events: collected, transcript: yield* TranscriptStore.list(SESSION) }
+      }).pipe(Effect.provide(base))
+    )
+
+    // The live snapshots reach the consumer — that's what the renderer folds into
+    // the running card so a widget can light up mid-run.
+    expect(events.filter((e) => e._tag === "ToolDelta")).toHaveLength(2)
+
+    // But the persisted card carries NO output, because ToolEnd stated none and
+    // the deltas were stream-only. If a delta had been folded into transcript.json,
+    // this would be the delta's text instead of undefined — the assertion that pins
+    // the "never persist a per-tick full-file rewrite" contract.
+    const toolPart = transcript
+      .flatMap((m) => m.parts)
+      .find((p) => p._tag === "Tool" && p.tool.id === "bash-1")
+    expect(toolPart && toolPart._tag === "Tool" && toolPart.tool.status).toBe("success")
+    expect(toolPart && toolPart._tag === "Tool" && toolPart.tool.output).toBeUndefined()
+  })
+})
