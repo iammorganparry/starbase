@@ -19,6 +19,38 @@ export interface ClaudeCapabilities {
 export const NO_CAPABILITIES: ClaudeCapabilities = { commands: [], skills: [] }
 
 /**
+ * What the SCRIPTED harness says it can do (`STARBASE_SCRIPTED_AGENT`).
+ *
+ * Probing means spawning the real CLI — with the operator's real login — which
+ * the scripted switch exists precisely to prevent. So under it we answer for the
+ * fake harness instead, exactly as `scriptedRun` answers for the real agent.
+ *
+ * These are Claude's actual built-ins, not an invention: the list mirrors what a
+ * real `system/init` announces, so the `/` menu under test is the menu users get.
+ * Skills found on disk are added to this by the caller — a real CLI reports those
+ * alongside its built-ins, so the fake must too.
+ */
+export const SCRIPTED_COMMANDS: ReadonlyArray<string> = [
+  "agents",
+  "clear",
+  "compact",
+  "config",
+  "context",
+  "doctor",
+  "effort",
+  "goal",
+  "init",
+  "insights",
+  "mcp",
+  "model",
+  "plan",
+  "recap",
+  "rename",
+  "security-review",
+  "usage"
+]
+
+/**
  * Commands the CLI reports but nobody should be offered — internal plumbing that
  * would only be noise in the `/` menu.
  */

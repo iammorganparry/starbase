@@ -84,3 +84,56 @@ describe("SkillsService", () => {
     expect(skills).toStrictEqual([])
   })
 })
+
+/**
+ * `STARBASE_SCRIPTED_AGENT` means "no real harness" — it is what makes the e2e
+ * suite hermetic. The command probe missed that memo: it spawned the operator's
+ * real `claude`, with their real login, on every launch. Slow, non-reproducible,
+ * and dependent on which CLIs the host happens to have.
+ *
+ * These run with `binPath` SET, which is the whole point: the probe would
+ * otherwise fire. A bogus path proves the guarantee — spawning it could only
+ * fail, which would empty the menu of built-ins.
+ */
+describe("SkillsService — under the scripted harness", () => {
+  const NOWHERE = "/nonexistent/claude"
+
+  beforeEach(() => {
+    process.env.STARBASE_SCRIPTED_AGENT = "1"
+  })
+  afterEach(() => {
+    delete process.env.STARBASE_SCRIPTED_AGENT
+  })
+
+  it("answers for the fake harness instead of spawning the real one", async () => {
+    const skills = await run(
+      SkillsService.list({
+        cli: "claude",
+        homeDir: home.dir,
+        worktreePath: repo.dir,
+        binPath: NOWHERE
+      })
+    )
+    // Probing `/nonexistent/claude` could only have failed, which would leave the
+    // menu empty — so a built-in here proves we never tried.
+    expect(skills.map((s) => s.name)).toContain("/plan")
+    expect(skills.find((s) => s.name === "/plan")?.source).toBe("command")
+  })
+
+  it("still reports the skills on disk, as a real harness would", async () => {
+    writeSkill(repo.dir, "deploy", "Ship it")
+    const skills = await run(
+      SkillsService.list({
+        cli: "claude",
+        homeDir: home.dir,
+        worktreePath: repo.dir,
+        binPath: NOWHERE
+      })
+    )
+    // A real CLI announces file-based skills alongside its built-ins; the fake
+    // has to as well, or the `/` menu loses every project skill under test.
+    const deploy = skills.find((s) => s.name === "/deploy")
+    expect(deploy).toStrictEqual({ name: "/deploy", description: "Ship it", source: "skill" })
+    expect(skills.map((s) => s.name)).toContain("/compact")
+  })
+})

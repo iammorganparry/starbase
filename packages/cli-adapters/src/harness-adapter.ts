@@ -4,9 +4,7 @@ import { CliAdapter, scriptedRun } from "./adapter.js"
 import { runClaude } from "./claude-adapter.js"
 import { runCodex } from "./codex-adapter.js"
 import { runOpencode } from "./opencode-adapter.js"
-
-/** When set (e2e / tests), force the deterministic scripted adapter. */
-const SCRIPTED_ENV = "STARBASE_SCRIPTED_AGENT"
+import { isScriptedEnv } from "./scripted.js"
 
 /**
  * Which adapter handles a spec. Pure so the routing is unit-tested without
@@ -25,9 +23,6 @@ export const selectHarness = (
   if (cli === "opencode") return "opencode"
   return "scripted"
 }
-
-const isScriptedEnv = (): boolean =>
-  process.env[SCRIPTED_ENV] === "1" || process.env[SCRIPTED_ENV] === "true"
 
 /**
  * The `CliAdapter` the app runs: dispatches each turn to the real harness
