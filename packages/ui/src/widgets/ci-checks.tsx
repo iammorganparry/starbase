@@ -293,7 +293,11 @@ export function CiChecksWidget(p: CiChecksProps) {
 
 export const ciChecksWidget = defineWidget<CiChecksProps>({
   id: "ci-checks",
-  match: (c) => c.program === "gh" && c.sub === "pr" && c.args.includes("checks"),
+  // `checks` must be the sub-sub-command, not just present in the args:
+  // `gh pr list --json checks` has "checks" as a JSON field name, not the
+  // command, and `args.includes` would match it and pay for two failed regex
+  // sweeps over the JSON. `args[1]` is the token right after `pr`.
+  match: (c) => c.program === "gh" && c.sub === "pr" && c.args[1] === "checks",
   parse: parseCiChecks,
   render: (p) => <CiChecksWidget {...p} />
 })

@@ -209,7 +209,10 @@ export const devServerWidget = defineWidget<DevServerProps>({
   id: "dev-server",
   match: (c) =>
     invokes(c, DEV_PROGRAMS) ||
-    // `npm run dev` promotes the script to `program`; `pnpm dev` leaves it as `sub`.
+    // Scripts are never promoted to `program` (only exec-wrapped binaries are),
+    // so `pnpm dev` and `npm run dev` both leave the script as `sub` — caught by
+    // DEV_SCRIPTS.test(c.sub) below. This arm is for the rare case where the
+    // program name itself IS a dev script (a bare `./dev`, say).
     DEV_SCRIPTS.test(c.program) ||
     (c.sub !== null && (DEV_SCRIPTS.test(c.sub) || (SCRIPT_HOSTS.has(c.bin) && /\bdev\b/.test(c.sub)))),
   parse: parseDevServer,

@@ -46,7 +46,9 @@ describe("classify", () => {
     "gh run watch",
     "gh run list",
     "gh run view 12",
-    "gh run rerun"
+    "gh run rerun",
+    // "checks" here is a --json field, not the sub-command.
+    "gh pr list --json checks"
   ])("leaves %j to another widget", (cmd) => {
     expect(matches(cmd)).toBe(false)
   })
