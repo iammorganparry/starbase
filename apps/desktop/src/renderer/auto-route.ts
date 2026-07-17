@@ -32,13 +32,21 @@ import { agentBatchPrompt, reviewQueryKey, routedKey } from "./review-routing.js
  *     `setQueryData(reviewQueryKey(id))`, but App.tsx's auto-review poll caches
  *     its own copy under `["auto-review", id, prNumber]` — a DIFFERENT key that
  *     nothing backfills. That copy keeps `routedAt: null` until its next refetch
- *     (up to a minute), and its `combine` hands back a fresh array identity on
- *     every render, so the routing effect re-fires with the stale object. A
- *     guard released once the first call finished would let that re-send.
+ *     (up to a minute), and TWO independent things re-fire the routing effect
+ *     inside that window: its `combine` hands back a fresh array identity on
+ *     every run, and the effect also depends on `sessions`, whose identity
+ *     changes on every `SESSION_UPDATED`.
  *
- * Hence: released only when routing FAILED, so a genuine failure still retries on
- * the next tick, while success is remembered for the life of the renderer. The
- * persisted `routedAt` covers the third case — a reload — where this is empty.
+ *     That second trigger is what makes this more than a one-off. A routed turn
+ *     completing persists the session's settled status → `SESSION_UPDATED` →
+ *     new `sessions` identity → the effect re-fires with the same stale
+ *     `routedAt: null` review → another send, whose completion updates the
+ *     session again. A guard released once the first call finished would leave
+ *     that loop running until the next auto-review refetch closed it.
+ *
+ * Hence: claimed for the life of the renderer once the batch is away, and
+ * released only when a failure dispatched NOTHING (see the catch). The persisted
+ * `routedAt` covers the remaining case — a reload — where this set is empty.
  */
 const claimed = new Set<string>()
 
@@ -51,9 +59,9 @@ const claimed = new Set<string>()
  *
  * Failures are swallowed deliberately. This runs on a timer with nobody's finger
  * on a button; a toast for a failed stamp would be noise about a thing the user
- * never asked for. The cost of losing one is that the batch may be re-sent on the
- * next tick, which is the safe direction — the agent is idempotent about being
- * told twice, whereas silently never routing is invisible.
+ * never asked for. What a failure must NOT do is re-send: a duplicate is a second
+ * agent turn against the same worktree, editing the same files — so the retry is
+ * scoped to failures that dispatched nothing (see the catch).
  */
 export const routeReviewToAgent = async (
   session: Session,
@@ -67,11 +75,21 @@ export const routeReviewToAgent = async (
   if (claimed.has(guard)) return
   claimed.add(guard)
 
+  /**
+   * Whether the batch actually reached the agent.
+   *
+   * The send is the irreversible half of this function and it happens BEFORE the
+   * awaited stamp. Everything after it is bookkeeping, so a failure past this
+   * point must not be treated as "nothing happened, try again".
+   */
+  let sent = false
+
   try {
     const { toAgent } = partitionFindings(review.findings)
 
     if (toAgent.length > 0) {
       getConversationActor(session).send({ type: "SEND", text: agentBatchPrompt(toAgent) })
+      sent = true
       // Latch each finding's UI state. Namespaced by head SHA — finding ids are
       // positional (`f1`, `f2`), so a bare id would make the NEXT review's `f1`
       // render as already-sent the moment it arrived.
@@ -89,10 +107,24 @@ export const routeReviewToAgent = async (
       qc.setQueryData(reviewQueryKey(session.id), { ...review, routedAt })
     }
   } catch {
-    // Release the claim ONLY here. Not in a `finally`: on success the claim must
-    // outlive the call, or a re-render holding a stale `routedAt: null` review
-    // re-sends the batch (see `claimed`). Releasing on failure is what keeps a
-    // genuine failure retryable on the next tick.
-    claimed.delete(guard)
+    /**
+     * Release the claim ONLY when nothing reached the agent.
+     *
+     * Never in a `finally`: on success the claim must outlive the call, or a
+     * re-render holding a stale `routedAt: null` review re-sends the batch (see
+     * `claimed`).
+     *
+     * And not on EVERY failure either — which is the subtle half. The throw we
+     * can actually expect here is `rpc.reviewMarkRouted`, and by then the batch
+     * is already with the agent. Releasing would "retry" the send, not the
+     * stamp: a second full agent turn against the same worktree, which is the
+     * exact harm this guard exists to prevent. Keeping the claim costs at most
+     * one re-send after a reload (the stamp never persisted); releasing it costs
+     * a guaranteed duplicate on the very next tick.
+     *
+     * So a failed stamp keeps the claim, and only a pre-send failure — nothing
+     * dispatched, nothing to duplicate — is retryable.
+     */
+    if (!sent) claimed.delete(guard)
   }
 }

@@ -110,7 +110,16 @@ describe("routeReviewToAgent", () => {
     expect(sent).toHaveLength(2)
   })
 
-  it("retries on the next tick when routing failed", async () => {
+  /**
+   * The send is irreversible and happens BEFORE the awaited stamp, so a stamp
+   * failure must NOT release the claim: "retrying" would re-send a batch the
+   * agent already has — a second full turn against the same worktree, which is
+   * the harm this guard exists to prevent.
+   *
+   * Keeping the claim costs at most one re-send after a reload (the stamp never
+   * persisted). Releasing it costs a guaranteed duplicate on the very next tick.
+   */
+  it("does NOT re-send when the stamp fails after the batch reached the agent", async () => {
     markRoutedImpl = async () => {
       throw new Error("ipc down")
     }
@@ -120,7 +129,25 @@ describe("routeReviewToAgent", () => {
 
     markRoutedImpl = async () => "2026-07-17T10:00:00.000Z"
     await routeReviewToAgent(session, r, qc)
-    expect(sent).toHaveLength(2) // the claim was released, so it retried
+    expect(sent).toHaveLength(1) // still 1 — the claim held, so no duplicate turn
+  })
+
+  /**
+   * The other half: a failure that dispatched NOTHING has nothing to duplicate,
+   * so it stays retryable. A nits-only review sends no batch, so a failed stamp
+   * there can safely be re-attempted.
+   */
+  it("retries the stamp when the failure dispatched nothing", async () => {
+    let calls = 0
+    markRoutedImpl = async () => {
+      calls += 1
+      throw new Error("ipc down")
+    }
+    const r = review({ headSha: "h-ten", findings: [finding("f1", "nit")] })
+    await routeReviewToAgent(session, r, qc)
+    await routeReviewToAgent(session, r, qc)
+    expect(sent).toHaveLength(0)
+    expect(calls).toBe(2) // the claim was released, so the stamp was re-attempted
   })
 
   /**

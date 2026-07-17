@@ -44,13 +44,17 @@ test("streams a turn, pauses at a HITL gate, and resumes on approval", async ({ 
   await composer.pressSequentially("Add rate limiting to the refund endpoint.")
   await composer.press("Enter")
 
-  // The sidebar reflects the LIVE agent state (was "idle", now working). The row
-  // names the activity itself — "Thinking", then "Reading billing.ts", … — and
-  // each of those lasts a few hundred ms, so racing one specific verb is flaky.
-  // Having LEFT "idle" is the stable fact; the settled live label is asserted at
-  // the gate below.
+  // The sidebar reflects the LIVE agent state (was Idle, now working). The row
+  // reports one of five words — Thinking, then Running as tools start — and each
+  // lasts a few hundred ms, so racing one specific word is flaky. Having LEFT
+  // "Idle" is the stable fact; the settled live label is asserted at the gate
+  // below.
+  //
+  // The casing is load-bearing: `exact` means "Idle" and "idle" are different
+  // strings, so a stale lowercase matcher here would pass vacuously — count 0
+  // whether or not the session ever left idle — and quietly stop testing.
   const row = window.getByTestId("session-row-s_seeded")
-  await expect(row.getByText("idle", { exact: true })).toHaveCount(0, { timeout: 10_000 })
+  await expect(row.getByText("Idle", { exact: true })).toHaveCount(0, { timeout: 10_000 })
 
   // The assistant turn is labelled with the provider (Claude) in the eyebrow.
   await expect(window.getByText("Claude", { exact: true })).toBeVisible({ timeout: 20_000 })
@@ -66,9 +70,16 @@ test("streams a turn, pauses at a HITL gate, and resumes on approval", async ({ 
   await expect(window.getByRole("button", { name: /Allow once/ })).toBeVisible()
 
   // Paused for approval → the live status reaches BOTH surfaces: the sidebar row
-  // and the tab-bar pill. Each renders the activity's own label, so scope to the
-  // surface — an unscoped "Needs input" matches both and proves neither.
-  await expect(row.getByText("Needs input", { exact: true })).toBeVisible()
+  // and the tab-bar pill. They deliberately speak different vocabularies, and the
+  // casing is the tell:
+  //
+  //   - the row reports a fixed sidebar state, Title Case  → "Needs Input"
+  //   - the pill renders the activity's own label, prose    → "Needs input"
+  //     (the same register as "Searching the web" / "Wrapping up")
+  //
+  // So each is scoped to its surface and matched exactly — an unscoped matcher
+  // would prove neither.
+  await expect(row.getByText("Needs Input", { exact: true })).toBeVisible()
   await expect(
     window.getByTestId("session-tab-bar").getByText("Needs input", { exact: true })
   ).toBeVisible()
