@@ -25,6 +25,7 @@ import type {
   IssueSummary,
   Message,
   ModelOption,
+  OpencodeProviderInfo,
   ProviderModels,
   PermissionMode,
   PrFileChange,
@@ -155,6 +156,12 @@ export const rpc = {
   modelsList: (cli: CliKind): Promise<ReadonlyArray<ModelOption>> =>
     run((c) => c.Models.list({ cli })),
   modelsCatalog: (): Promise<ReadonlyArray<ProviderModels>> => run((c) => c.Models.catalog()),
+  /** opencode's resolved providers + where each credential came from. */
+  opencodeListProviders: (): Promise<ReadonlyArray<OpencodeProviderInfo>> =>
+    run((c) => c.Opencode.listProviders()),
+  /** Store an API key in opencode's OWN credential file (not SecretStore). */
+  opencodeSetAuth: (providerId: string, key: string): Promise<boolean> =>
+    run((c) => c.Opencode.setAuth({ providerId, key })),
   usageGet: (): Promise<Usage> => run((c) => c.Usage.get()),
   agentDecideGate: (sessionId: string, gateId: string, decision: GateDecision): Promise<void> =>
     run((c) => c.Agent.decideGate({ sessionId, gateId, decision })),

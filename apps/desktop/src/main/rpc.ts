@@ -18,6 +18,7 @@ import {
   ConfigService,
   claudeTitleGenerator,
   DiscoveryService,
+  fetchOpencodeProviders,
   filterVisible,
   GhService,
   ModelsService,
@@ -25,6 +26,7 @@ import {
   ReviewService,
   ReviewStore,
   SessionStore,
+  setOpencodeAuth,
   SkillsService,
   TerminalService,
   TranscriptStore,
@@ -169,6 +171,36 @@ export const modelsCatalog = () =>
       models: filterVisible(section.models, config?.providers?.[section.cli]?.visibleModels)
     }))
   })
+
+/** The opencode binary discovery resolved, or null when it isn't usable. */
+const opencodeBin = () =>
+  DiscoveryService.list().pipe(
+    Effect.orElseSucceed(() => []),
+    Effect.map((clis) => clis.find((c) => c.kind === "opencode")?.binPath ?? null)
+  )
+
+/**
+ * The providers opencode resolves for the user, with each credential's origin.
+ * Asked of the binary rather than stored by us, because the answer belongs to
+ * the user's setup — env vars, `opencode auth login`, their `opencode.json`.
+ * An unreachable opencode yields an empty list (the harness reads as
+ * unconfigured), never an error. Exported for tests.
+ */
+export const opencodeListProviders = () =>
+  Effect.flatMap(opencodeBin(), (binPath) =>
+    Effect.promise(() => fetchOpencodeProviders(binPath)).pipe(Effect.map((ps) => ps ?? []))
+  )
+
+/**
+ * Store an API key in OPENCODE's own credential file — not `SecretStore`, which
+ * stays reserved for the Starbase bearer token. The key therefore also works in
+ * a bare `opencode` shell, which is the whole point of respecting their BYOK.
+ * Exported for tests.
+ */
+export const opencodeSetAuth = (providerId: string, key: string) =>
+  Effect.flatMap(opencodeBin(), (binPath) =>
+    Effect.promise(() => setOpencodeAuth(binPath, providerId, key))
+  )
 
 /**
  * `Sessions.createFromIssue` handler. Like `createSession` (fresh branch, same
@@ -599,6 +631,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   // the absolute path discovery found.
   "Models.list": ({ cli }) => modelsList(cli),
   "Models.catalog": () => modelsCatalog(),
+  "Opencode.listProviders": () => opencodeListProviders(),
+  "Opencode.setAuth": ({ providerId, key }) => opencodeSetAuth(providerId, key),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),

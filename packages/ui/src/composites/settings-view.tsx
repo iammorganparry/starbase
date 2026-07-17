@@ -6,6 +6,8 @@ import type {
   GitConfig,
   GithubConfig,
   ModelOption,
+  OpencodeProviderInfo,
+  OpencodeProviderSource,
   OutputStyle,
   PermissionMode,
   ProviderConfig,
@@ -110,6 +112,154 @@ function summarize(cli: CliKind, cfg: ProviderConfig, installed: boolean): strin
   return parts.join(" · ")
 }
 
+/**
+ * How each opencode provider got its credential, phrased for a human.
+ *
+ * The point of showing this is restraint: opencode resolves providers from the
+ * user's OWN setup, and Starbase writing over that silently would be a
+ * betrayal of it. So we say where each key came from, and only offer to add one
+ * where there isn't one already.
+ */
+const SOURCE_LABEL: Record<OpencodeProviderSource, string> = {
+  env: "environment",
+  api: "signed in",
+  config: "opencode.json",
+  custom: "built-in"
+}
+
+const SOURCE_HINT: Record<OpencodeProviderSource, string> = {
+  env: "Resolved from an environment variable you set.",
+  api: "A key stored in opencode's own credential file — usable outside Starbase too.",
+  config: "Declared in your opencode.json.",
+  custom: "Built into opencode."
+}
+
+/**
+ * opencode's providers, and the key entry for them — the BYOK surface.
+ *
+ * Keys go to OPENCODE's credential store (`opencode auth login`'s file), never
+ * to Starbase's `SecretStore`, which holds only the Starbase bearer token. So a
+ * key added here works in a bare `opencode` shell, and one added there works
+ * here. There is exactly one credential store and it is opencode's.
+ */
+function OpencodeProviders({
+  loadProviders,
+  onSetAuth
+}: {
+  loadProviders: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
+  onSetAuth: (providerId: string, key: string) => Promise<boolean>
+}) {
+  const [providers, setProviders] = React.useState<ReadonlyArray<OpencodeProviderInfo> | null>(null)
+  const [editing, setEditing] = React.useState<string | null>(null)
+  const [key, setKey] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+
+  const refresh = React.useCallback(() => {
+    let live = true
+    void loadProviders()
+      .then((p) => live && setProviders(p))
+      .catch(() => live && setProviders([]))
+    return () => {
+      live = false
+    }
+  }, [loadProviders])
+
+  React.useEffect(() => refresh(), [refresh])
+
+  const save = async (providerId: string) => {
+    setSaving(true)
+    try {
+      await onSetAuth(providerId, key.trim())
+      setEditing(null)
+      setKey("")
+      // Re-read rather than patch local state: only opencode can say whether the
+      // key actually resolved the provider (and how many models it unlocked).
+      refresh()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Field label="Providers" flag="opencode auth">
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[11px] leading-relaxed text-muted-foreground">
+          opencode brings its own providers. Keys are stored by opencode itself, so anything you
+          add here also works in your terminal — and anything you added with{" "}
+          <span className="font-mono text-dim">opencode auth login</span> already works here.
+        </span>
+        {providers === null ? (
+          <span className="py-2 text-[11.5px] text-dim">Asking opencode…</span>
+        ) : providers.length === 0 ? (
+          <span className="py-2 text-[11.5px] text-dim">
+            opencode reported no providers. Check that it runs in your terminal.
+          </span>
+        ) : (
+          providers.map((p) => (
+            <div key={p.id} className="flex flex-col gap-1.5 rounded-md border border-hairline p-2.5">
+              <div className="flex items-center gap-2">
+                <StatusDot
+                  tone={p.source === null ? "bg-line-strong" : "bg-green"}
+                  size={6}
+                  glow={p.source !== null}
+                />
+                <span className="text-[12px] font-medium text-text-bright">{p.name}</span>
+                {p.source !== null && (
+                  <span
+                    title={SOURCE_HINT[p.source]}
+                    className="rounded bg-black/25 px-1.5 py-px font-mono text-[9.5px] text-muted-foreground"
+                  >
+                    {SOURCE_LABEL[p.source]}
+                  </span>
+                )}
+                <span className="ml-auto font-mono text-[10px] text-dim">
+                  {p.modelCount} {p.modelCount === 1 ? "model" : "models"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditing(editing === p.id ? null : p.id)
+                    setKey("")
+                  }}
+                  className="rounded border border-hairline px-1.5 py-px text-[10.5px] text-muted-foreground hover:text-text-bright"
+                >
+                  {p.source === "api" ? "Replace key" : "Add key"}
+                </button>
+              </div>
+              {/* Name the env var rather than making them go and find it. */}
+              {p.source === null && p.env.length > 0 && (
+                <span className="font-mono text-[10px] text-dim">
+                  or export {p.env.join(" / ")}
+                </span>
+              )}
+              {editing === p.id && (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="password"
+                    value={key}
+                    autoFocus
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder={`${p.id} API key`}
+                    className="min-w-0 flex-1 rounded border border-hairline bg-black/20 px-2 py-1 font-mono text-[11px] text-text-bright outline-none focus:border-line-strong"
+                  />
+                  <button
+                    type="button"
+                    disabled={key.trim().length === 0 || saving}
+                    onClick={() => void save(p.id)}
+                    className="rounded bg-blue/20 px-2 py-1 text-[10.5px] text-blue disabled:opacity-40"
+                  >
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </Field>
+  )
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SettingsViewProps {
@@ -121,6 +271,10 @@ export interface SettingsViewProps {
   onSaveProvider: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
   /** Load the selectable models for a CLI (live discovery). */
   loadModels: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
+  /** opencode's resolved providers + credential origins (opencode only). */
+  loadOpencodeProviders?: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
+  /** Store an API key in opencode's own credential file (opencode only). */
+  onSetOpencodeAuth?: (providerId: string, key: string) => Promise<boolean>
   // GitHub section (reused from the old settings modal).
   ghStatus: GhStatus
   github?: GithubConfig | null
@@ -144,6 +298,8 @@ export function SettingsView({
   providers,
   onSaveProvider,
   loadModels,
+  loadOpencodeProviders,
+  onSetOpencodeAuth,
   ghStatus,
   github,
   git,
@@ -209,6 +365,8 @@ export function SettingsView({
           providers={providers ?? undefined}
           onSaveProvider={onSaveProvider}
           loadModels={loadModels}
+          loadOpencodeProviders={loadOpencodeProviders}
+          onSetOpencodeAuth={onSetOpencodeAuth}
         />
       ) : section === "github" ? (
         <GithubSection
@@ -234,12 +392,16 @@ function ProvidersSection({
   clis,
   providers,
   onSaveProvider,
-  loadModels
+  loadModels,
+  loadOpencodeProviders,
+  onSetOpencodeAuth
 }: {
   clis: ReadonlyArray<CliInfo>
   providers: ProvidersConfig | undefined
   onSaveProvider: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
   loadModels: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
+  loadOpencodeProviders?: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
+  onSetOpencodeAuth?: (providerId: string, key: string) => Promise<boolean>
 }) {
   const [selected, setSelected] = React.useState<CliKind>(clis[0]?.kind ?? "claude")
   const stored = providerOf(providers, selected)
@@ -329,6 +491,21 @@ function ProvidersSection({
               />
             </label>
           </div>
+
+          {/*
+            An INSTALLED-but-unusable harness explains itself. Discovery reports
+            a too-old opencode as unavailable, and without this the header just
+            says "not installed" about a binary sitting right there on PATH.
+          */}
+          {selectedInfo?.note && <Callout tone="yellow">{selectedInfo.note}</Callout>}
+
+          {/* opencode's own providers + keys (BYOK) */}
+          {selected === "opencode" && loadOpencodeProviders && onSetOpencodeAuth && (
+            <OpencodeProviders
+              loadProviders={loadOpencodeProviders}
+              onSetAuth={onSetOpencodeAuth}
+            />
+          )}
 
           {/* default model */}
           <Field label="Default model" flag="--model">

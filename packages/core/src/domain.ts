@@ -242,6 +242,35 @@ export const ProviderConfig = Schema.Struct({
 export type ProviderConfig = Schema.Schema.Type<typeof ProviderConfig>
 
 /**
+ * Where an opencode provider's credential came from. opencode resolves providers
+ * from the user's own setup, and this says which part of it:
+ *  - `env` — an environment variable they exported (`OPENROUTER_API_KEY`, …)
+ *  - `api` — a key in opencode's own store, via `opencode auth login` or us
+ *  - `config` — declared in their `opencode.json`
+ *  - `custom` — opencode's built-in (e.g. the Zen gateway's free tier)
+ *
+ * Surfaced in Settings so it's obvious what is Starbase's doing and what is the
+ * user's own — we never overwrite a credential we didn't put there.
+ */
+export const OpencodeProviderSource = Schema.Literal("env", "config", "custom", "api")
+export type OpencodeProviderSource = Schema.Schema.Type<typeof OpencodeProviderSource>
+
+/** One provider opencode resolves for the user — a row in Settings · Providers. */
+export const OpencodeProviderInfo = Schema.Struct({
+  /** opencode's provider id, e.g. "openrouter" — the first segment of a model id. */
+  id: Schema.String,
+  /** Display name, e.g. "OpenRouter". */
+  name: Schema.String,
+  /** Null when opencode reports no origin (i.e. it isn't configured). */
+  source: Schema.NullOr(OpencodeProviderSource),
+  /** Env vars this provider reads, so the UI can name the one to set. */
+  env: Schema.Array(Schema.String),
+  /** How many models it resolves — 0 means "integration present, no key". */
+  modelCount: Schema.Number
+})
+export type OpencodeProviderInfo = Schema.Schema.Type<typeof OpencodeProviderInfo>
+
+/**
  * Per-CLI provider defaults, keyed by `CliKind`. Partial — a config only carries
  * entries for the CLIs the user has actually customised (a literal-key record
  * would otherwise require every CLI to be present).
