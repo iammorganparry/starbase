@@ -29,8 +29,20 @@ export const withOpencodeServer = async <A>(
   // `--port=0` asks for a free port. opencode actually tries 4096 first and only
   // falls back if it's taken, so the port is never assumed — we read the URL out
   // of the banner it prints.
+  //
+  // stderr is DISCARDED at the OS level, not piped. A pipe with no reader fills
+  // (~64KB) and the child then blocks on its next write — which could strand it
+  // before it ever prints the banner, and the failure would be invisible: the
+  // guard fires, this returns null, and the model list silently falls back while
+  // the provider list comes up empty. Today's opencode writes nothing to stderr
+  // at boot (389 bytes even at DEBUG), so it can't happen yet — but its log
+  // volume isn't our contract, and this costs nothing to rule out for good.
+  //
+  // `runOpencode`'s own spawn DOES pipe and drain stderr, because it puts the
+  // text in its error message. This one has nowhere to put it: every failure
+  // here resolves to null by design.
   const proc = spawn(binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "ignore"],
     env: process.env
   })
   const kill = (): void => {
