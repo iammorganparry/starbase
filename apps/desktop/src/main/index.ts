@@ -10,7 +10,13 @@
  * to re-check auth.
  */
 import { join } from "node:path"
-import { DiscoveryService, ModelsService, SecretStore, TerminalService } from "@starbase/cli-adapters"
+import {
+  DiscoveryService,
+  killTrackedChildren,
+  ModelsService,
+  SecretStore,
+  TerminalService
+} from "@starbase/cli-adapters"
 import { app, BrowserWindow, ipcMain, shell } from "electron"
 import { Effect } from "effect"
 import type { AuthCallback } from "./deep-link.js"
@@ -160,11 +166,23 @@ if (!gotPrimaryLock) {
   })
 
   app.on("before-quit", () => {
-    // PTY child processes live in their own session and are NOT reaped when the
-    // main process exits, so kill them explicitly (best-effort) before teardown.
+    // Spawned CLI children (opencode `serve`, codex `app-server`, PTYs) live in
+    // their own process group and are NOT reaped when the main process exits, so
+    // kill them explicitly (best-effort) before teardown, or they orphan to PPID
+    // 1 and pile up — an `opencode serve` holds ~100MB and never exits by itself.
+    killTrackedChildren()
     void runtime
       .runPromise(Effect.flatMap(TerminalService, (t) => t.killAll))
       .catch(() => {})
       .finally(() => void runtime.dispose())
+  })
+
+  // A hard exit (crash, `SIGTERM`, electron-vite's dev restart) skips `before-quit`
+  // entirely — the exact path that produced the orphans while diagnosing this. This
+  // synchronous last-ditch sweep still runs on `process.exit`, where nothing async
+  // can. `TerminalService.killAll` is Effect-based and can't run here; PTYs are far
+  // rarer and shorter-lived than the serve processes this reaps.
+  process.on("exit", () => {
+    killTrackedChildren()
   })
 }

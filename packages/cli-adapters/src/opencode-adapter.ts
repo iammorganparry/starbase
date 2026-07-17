@@ -576,22 +576,28 @@ const driveOpencode = async (
 ): Promise<void> => {
   const { createOpencodeClient } = await import("@opencode-ai/sdk")
   const { spawn } = await import("node:child_process")
+  const { trackChild } = await import("./child-registry.js")
 
   if (spec.binPath === null) throw new Error("opencode binary not found")
 
   // `--port=0` → the OS picks a free port, so parallel sessions never collide.
-  const proc = spawn(spec.binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
-    cwd: spec.cwd || undefined,
-    env: {
-      ...process.env,
-      // Layers OVER the user's own opencode config rather than replacing it, so
-      // their providers/keys/levers survive and we only pin what this run needs.
-      OPENCODE_CONFIG_CONTENT: JSON.stringify({
-        permission: mapOpencodePermission(spec.mode, spec.readOnly ?? false)
-      })
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  })
+  // Tracked so app teardown reaps it: the `finally` kill covers this run ending,
+  // but not the main process dying mid-run, which orphans a long-lived
+  // `opencode serve` (PPID 1) that holds ~100MB and never exits by itself.
+  const proc = trackChild(
+    spawn(spec.binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
+      cwd: spec.cwd || undefined,
+      env: {
+        ...process.env,
+        // Layers OVER the user's own opencode config rather than replacing it, so
+        // their providers/keys/levers survive and we only pin what this run needs.
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: mapOpencodePermission(spec.mode, spec.readOnly ?? false)
+        })
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    })
+  )
 
   const kill = (): void => {
     if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM")

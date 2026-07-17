@@ -1,6 +1,6 @@
 import type { CliInfo, CliKind, ModelOption, ProviderModels } from "@starbase/core"
 import { FALLBACK_MODELS } from "@starbase/core"
-import { Effect, Ref } from "effect"
+import { Effect } from "effect"
 import { fetchCodexModels } from "./codex-models.js"
 import { fetchOpencodeModels } from "./opencode-models.js"
 
@@ -81,25 +81,38 @@ export const filterVisible = (
 export class ModelsService extends Effect.Service<ModelsService>()("@starbase/ModelsService", {
   accessors: true,
   effect: Effect.gen(function* () {
-    const cache = yield* Ref.make(new Map<CliKind, ReadonlyArray<ModelOption>>())
-
     /**
-     * The models `cli` offers. `binPath` is the discovered CLI binary (from
-     * `DiscoveryService`) — it matters because a GUI-launched Electron app often
-     * has a threadbare `PATH`, so probing bare `codex` would miss installs that
-     * discovery finds at an absolute path.
+     * The models `cli` offers, memoized for the process lifetime AND coalesced
+     * while in flight — `cachedFunction` hands every concurrent caller the same
+     * running probe rather than starting a rival one.
+     *
+     * That coalescing is the point, not just an optimization: the startup
+     * prefetch and the renderer's `loadCatalog` (fired when a conversation opens)
+     * both call this before the first result lands, and without a shared probe
+     * each would boot its OWN `opencode serve` / `codex app-server` for the same
+     * harness — a real doubling of spawned servers seen during warm-up.
+     *
+     * Keyed by `cli` alone: `binPath` is resolved from `DiscoveryService` and is
+     * stable per harness across a session, so two calls for the same CLI want the
+     * same answer. (It matters at all because a GUI-launched Electron app has a
+     * threadbare PATH, so probing bare `codex` would miss an install discovery
+     * finds at an absolute path.) The fetch degrades to `FALLBACK_MODELS` on any
+     * failure and so always yields a value — caching it for the lifetime matches
+     * the prior behaviour of caching whatever the first probe returned.
      */
+    const fetchCached = yield* Effect.cachedFunction(
+      (input: { readonly cli: CliKind; readonly binPath?: string | null }) =>
+        Effect.tryPromise(() => fetchFor(input.cli, input.binPath)).pipe(
+          Effect.orElseSucceed(() => null),
+          Effect.map((fetched) =>
+            fetched && fetched.length > 0 ? fetched : FALLBACK_MODELS[input.cli]
+          )
+        ),
+      (a, b) => a.cli === b.cli
+    )
+
     const list = (cli: CliKind, binPath?: string | null): Effect.Effect<ReadonlyArray<ModelOption>> =>
-      Effect.gen(function* () {
-        const cached = (yield* Ref.get(cache)).get(cli)
-        if (cached) return cached
-        const fetched = yield* Effect.tryPromise(() => fetchFor(cli, binPath)).pipe(
-          Effect.orElseSucceed(() => null)
-        )
-        const result = fetched && fetched.length > 0 ? fetched : FALLBACK_MODELS[cli]
-        yield* Ref.update(cache, (m) => new Map(m).set(cli, result))
-        return result
-      })
+      fetchCached({ cli, binPath })
 
     return {
       list,
