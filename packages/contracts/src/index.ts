@@ -467,6 +467,25 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Stamp the stored review as having had its critical/major findings handed to
+   * the session's agent, returning the stamp (ISO-8601).
+   *
+   * The renderer owns the routing itself — the conversation actor lives there,
+   * and routing through it is what puts the agent's work and its approval gates
+   * in the Conversation tab instead of a hidden run. But it cannot own the
+   * MEMORY of having routed: `routed-store` is in-memory, so after a reload the
+   * auto-review poll would hand back the same review and re-send the whole batch
+   * as a fresh turn. So the renderer acts, and asks main to remember.
+   *
+   * A no-op (returning the existing stamp) when the review is already routed, so
+   * a double-call from a re-render can't move the goalposts.
+   */
+  Rpc.make("Review.markRouted", {
+    success: Schema.NullOr(Schema.String),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
    * The pull request linked to a session (its `prNumber`), assembled from `gh pr
    * view`. Null when the session has no worktree or no linked PR. Embeds CI
    * checks, reviewers, and the review timeline for the Pull Request tab.

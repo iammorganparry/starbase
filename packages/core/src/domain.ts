@@ -709,7 +709,37 @@ export const AdversarialReview = Schema.Struct({
    * refusal, a "looks good to me", or malformed output. Carries the raw text so
    * the user sees *something* rather than an empty list that looks like success.
    */
-  note: Schema.NullOr(Schema.String)
+  note: Schema.NullOr(Schema.String),
+  /**
+   * ISO-8601 stamp of when this review's critical/major findings were handed to
+   * the session's agent, or null when they haven't been.
+   *
+   * Persisted rather than tracked in the renderer, and that is load-bearing: the
+   * renderer's `routed-store` is in-memory, and the auto-review poll hands back
+   * this same stored review on every tick. After a reload an in-memory guard is
+   * empty, so the poll would re-send the whole batch to the agent as a fresh
+   * turn — every restart, forever. The stamp lives with the review because a
+   * review IS a snapshot of one head: same head, same routing decision.
+   *
+   * `optionalWith` (default null) so reviews persisted before this field decode
+   * cleanly instead of folding to null in `ReviewStore.readFile` — which would
+   * silently re-run the priciest model once per existing session.
+   */
+  routedAt: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
+  /**
+   * ISO-8601 stamp of when this review's minor/nit findings were posted to the
+   * PR as inline comments, or null when they weren't (none to post, or the post
+   * failed — `postError` distinguishes the two).
+   */
+  postedAt: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
+  /**
+   * Why posting the minor/nit half to the PR failed, or null.
+   *
+   * Posting is best-effort: a review costs real tokens and its verdict is useful
+   * whether or not GitHub accepted the comments, so a `gh` failure lands here
+   * instead of failing the run and throwing the findings away.
+   */
+  postError: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null })
 })
 export type AdversarialReview = Schema.Schema.Type<typeof AdversarialReview>
 

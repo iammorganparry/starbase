@@ -118,7 +118,10 @@ describe("AdversarialReview", () => {
         suggestion: "Use timingSafeEqual."
       }
     ],
-    note: null
+    note: null,
+    routedAt: null,
+    postedAt: null,
+    postError: null
   }
 
   it("round-trips through encode → decode unchanged", () => {
@@ -126,6 +129,30 @@ describe("AdversarialReview", () => {
       Schema.encodeSync(AdversarialReview)(review)
     )
     expect(roundTripped).toStrictEqual(review)
+  })
+
+  /**
+   * The back-compat guard. `ReviewStore.readFile` folds a decode failure to null,
+   * and a null read makes the auto-trigger run a fresh review — so if a review
+   * written before these fields failed to decode, every existing session would
+   * silently re-run the priciest model once. The defaults are what stop that.
+   */
+  it("decodes a review persisted before the routing fields existed", () => {
+    const { routedAt, postedAt, postError, ...legacy } = review
+    const result = decode(AdversarialReview, legacy)
+    expect(result).toStrictEqual(
+      Either.right({ ...legacy, routedAt: null, postedAt: null, postError: null })
+    )
+  })
+
+  it("carries the routing stamps when they are set", () => {
+    const result = decode(AdversarialReview, {
+      ...review,
+      routedAt: "2026-07-16T10:05:00.000Z",
+      postedAt: "2026-07-16T10:05:01.000Z",
+      postError: null
+    })
+    expect(Either.isRight(result)).toBe(true)
   })
 
   // A reviewer that refuses or emits prose still produces a review — findings

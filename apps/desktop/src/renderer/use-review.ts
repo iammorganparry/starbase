@@ -6,7 +6,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import type { PrFileChange, Session } from "@starbase/core"
+import type { PrFileChange, PrReviewThread, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
 import { getConversationActor } from "./conversation-registry.js"
 
@@ -78,6 +78,12 @@ export interface ReviewState {
   readonly fileDiffs: ReadonlyArray<{ readonly path: string; readonly diff: string }>
   readonly activePath: string | null
   readonly drafts: ReadonlyArray<ReviewDraft>
+  /**
+   * The PR's existing inline review threads — GitHub's, and anything a bot left.
+   * Empty on the local (uncommitted) source, which has no PR to carry them.
+   * Feeds the file list's feedback count alongside findings and drafts.
+   */
+  readonly reviewThreads: ReadonlyArray<PrReviewThread>
   readonly busy: boolean
   readonly selectFile: (path: string) => void
   readonly toggleViewed: (path: string, viewed: boolean) => void
@@ -136,6 +142,19 @@ export function useReview(session: Session): ReviewState {
       const [files, diff] = await Promise.all([rpc.githubFiles(session.id), rpc.githubDiff(session.id)])
       return { files, diff }
     }
+  })
+
+  // The PR's inline review threads, for the file list's feedback count.
+  //
+  // Deliberately a bare `useQuery` on the SAME key `usePullRequest` uses rather
+  // than a call to that hook: it carries auto-detect-and-link side effects in its
+  // queryFn, and running those from a second mounted pane would race the Pull
+  // Request tab's. Sharing the key means react-query dedupes — when the PR tab
+  // has already fetched, this resolves from cache and costs nothing.
+  const threadsQuery = useQuery({
+    queryKey: ["github", "pr", session.id],
+    queryFn: () => rpc.githubPr(session.id),
+    enabled: session.prNumber != null
   })
   const localQuery = useQuery({
     queryKey: localKey(session.id),
@@ -241,6 +260,9 @@ export function useReview(session: Session): ReviewState {
     fileDiffs,
     activePath,
     drafts,
+    // Threads belong to the PR. On the local (uncommitted) diff they'd anchor to
+    // lines that don't correspond, so the source decides whether they exist.
+    reviewThreads: effective === "pr" ? (threadsQuery.data?.reviewThreads ?? []) : [],
     busy: prQuery.isPending || localQuery.isPending,
     selectFile: setSelectedPath,
     toggleViewed,

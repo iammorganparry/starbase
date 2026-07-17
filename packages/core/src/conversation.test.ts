@@ -1,4 +1,6 @@
 import { Either, Schema } from "effect"
+import { SessionStatus } from "./domain.js"
+import type { ActivityKind, SessionActivity, SessionDisplayStatus } from "./conversation.js"
 import { describe, expect, it } from "vitest"
 import {
   ApprovalGate,
@@ -8,6 +10,7 @@ import {
   StreamEvent,
   Subagent,
   activityOf,
+  displayStatusOf,
   REVIEWER_AGENT_ID,
   addPlanComment,
   applyReviewEvent,
@@ -1019,6 +1022,97 @@ describe("activityOf", () => {
       }
     })
     expect(activityOf([gate], "idle")?.kind).toBe("needs-input")
+  })
+})
+
+/**
+ * The sidebar is allowed exactly five words. `displayStatusOf` is what enforces
+ * that, so what matters here is TOTALITY and the collapses: every activity kind
+ * and every session status must land on one of the five, and the ones that
+ * deliberately share a word must keep sharing it.
+ */
+describe("displayStatusOf", () => {
+  const act = (kind: ActivityKind): SessionActivity => ({ kind, verb: "v", target: "t" })
+
+  const FIVE: ReadonlyArray<SessionDisplayStatus> = [
+    "thinking",
+    "running",
+    "needs-input",
+    "monitoring",
+    "idle"
+  ]
+
+  const ALL_KINDS: ReadonlyArray<ActivityKind> = [
+    "thinking",
+    "reading",
+    "editing",
+    "running",
+    "monitoring",
+    "watching",
+    "web",
+    "delegating",
+    "needs-input",
+    "needs-approval"
+  ]
+
+  it("maps every activity kind onto one of the five", () => {
+    for (const kind of ALL_KINDS) {
+      expect(FIVE, `${kind} must map into the five`).toContain(displayStatusOf(act(kind), "idle"))
+    }
+  })
+
+  it("maps every session status onto one of the five", () => {
+    for (const status of SessionStatus.literals) {
+      expect(FIVE, `${status} must map into the five`).toContain(displayStatusOf(null, status))
+    }
+  })
+
+  // Every kind of tool work is one word. The conversation header keeps the
+  // distinction; a 10px line in a list has no room for it.
+  it("collapses all tool work to running", () => {
+    for (const kind of ["reading", "editing", "running", "web", "delegating"] as const) {
+      expect(displayStatusOf(act(kind), "idle"), kind).toBe("running")
+    }
+  })
+
+  // Both watchers mean the same thing here: a process that won't return.
+  it("reports both CI watching and a plain --watch as monitoring", () => {
+    expect(displayStatusOf(act("monitoring"), "idle")).toBe("monitoring")
+    expect(displayStatusOf(act("watching"), "idle")).toBe("monitoring")
+  })
+
+  it("reports needing approval as needing input", () => {
+    expect(displayStatusOf(act("needs-input"), "idle")).toBe("needs-input")
+    expect(displayStatusOf(act("needs-approval"), "idle")).toBe("needs-input")
+  })
+
+  it("reports thinking as thinking", () => {
+    expect(displayStatusOf(act("thinking"), "idle")).toBe("thinking")
+  })
+
+  /**
+   * A live activity is the truth; the persisted status is a stale fallback. A
+   * session mid-run still carries `idle` in the store (only settled statuses are
+   * written back), so reading the status first would report Idle for a session
+   * actively editing files.
+   */
+  it("prefers the live activity over the persisted status", () => {
+    expect(displayStatusOf(act("editing"), "idle")).toBe("running")
+    expect(displayStatusOf(act("thinking"), "needs-input")).toBe("thinking")
+  })
+
+  it("falls back to the persisted status when there is no activity", () => {
+    expect(displayStatusOf(null, "idle")).toBe("idle")
+    expect(displayStatusOf(undefined, "needs-input")).toBe("needs-input")
+    expect(displayStatusOf(null, "running")).toBe("running")
+    expect(displayStatusOf(null, "thinking")).toBe("thinking")
+  })
+
+  // "done" is in SessionStatus but nothing writes it (SettledSessionStatus is
+  // idle | needs-input), and it isn't one of the five. A session that finished is
+  // a session doing nothing.
+  it("folds the unreachable done status to idle", () => {
+    expect(displayStatusOf(null, "done")).toBe("idle")
   })
 })
 

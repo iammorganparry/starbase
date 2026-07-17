@@ -84,20 +84,20 @@ export const runGit = (
   )
 
 /**
- * Run `gh` in `cwd` and FAIL with `GhError` on a non-zero exit — used for the
- * mutating GitHub operations (`pr create`, `pr comment`, `pr review`) where a
- * failure must surface to the user. Captures stderr for the failure message.
+ * The shared body of `runGh` / `runGhInput`: run `gh` in `cwd`, capture both
+ * streams, and FAIL with `GhError` on a non-zero exit. `input`, when non-null,
+ * is fed to the process on stdin.
  */
-export const runGh = (
+const ghProcess = (
   cwd: string,
-  args: ReadonlyArray<string>
+  args: ReadonlyArray<string>,
+  input: string | null
 ): Effect.Effect<string, GhError, CommandExecutor.CommandExecutor> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const proc = yield* Command.make("gh", ...args).pipe(
-        Command.workingDirectory(cwd),
-        Command.start
-      )
+      const base = Command.make("gh", ...args).pipe(Command.workingDirectory(cwd))
+      const command = input === null ? base : base.pipe(Command.feed(input))
+      const proc = yield* command.pipe(Command.start)
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [decodeStream(proc.stdout), decodeStream(proc.stderr), proc.exitCode],
         { concurrency: 3 }
@@ -115,3 +115,31 @@ export const runGh = (
         : Effect.fail(new GhError({ message: `gh ${args.join(" ")} failed`, cause: error }))
     )
   )
+
+/**
+ * Run `gh` in `cwd` and FAIL with `GhError` on a non-zero exit — used for the
+ * mutating GitHub operations (`pr create`, `pr comment`, `pr review`) where a
+ * failure must surface to the user. Captures stderr for the failure message.
+ */
+export const runGh = (
+  cwd: string,
+  args: ReadonlyArray<string>
+): Effect.Effect<string, GhError, CommandExecutor.CommandExecutor> => ghProcess(cwd, args, null)
+
+/**
+ * `runGh`, but feeding `input` to the process on stdin.
+ *
+ * Exists for `gh api --input -`. The `gh api` flag vocabulary (`-f`, `-F`) can
+ * only express flat key/value pairs, so any payload with a NESTED ARRAY — the
+ * `comments` list on a pull-request review being the case in hand — has to
+ * arrive as raw JSON on stdin. There is no argv-shaped way to send it.
+ *
+ * The body is deliberately NOT in `args`: it would land in the `GhError`
+ * message on failure (`runGh` interpolates the args), turning a 422 into a
+ * screenful of JSON. Errors here quote gh's stderr and nothing else.
+ */
+export const runGhInput = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+  input: string
+): Effect.Effect<string, GhError, CommandExecutor.CommandExecutor> => ghProcess(cwd, args, input)

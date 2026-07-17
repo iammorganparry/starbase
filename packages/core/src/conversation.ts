@@ -1215,6 +1215,77 @@ export const activityLabel = (activity: SessionActivity): string =>
   activity.target ? `${activity.verb} ${activity.target}` : activity.verb
 
 /**
+ * The five states a session is allowed to REPORT in the sidebar.
+ *
+ * A third vocabulary, and it earns its place: `ActivityKind` has ten members
+ * because the conversation header has room to say "Searching the web" or
+ * "Delegating"; `SessionStatus` is the coarse thing we persist, and carries a
+ * "done" nobody writes. Neither is the right set for a 10px line in a list, where
+ * every extra word competes with the branch name beside it and the reader is
+ * scanning a column, not reading a sentence.
+ *
+ * Five is the whole point. A reader scanning the sidebar asks one question — does
+ * this session need me? — and the answer is: not yet (Thinking/Running), not for
+ * a while (Monitoring), yes (Needs Input), or no (Idle). Anything finer is detail
+ * they didn't ask for at the price of the thing they did.
+ */
+export type SessionDisplayStatus =
+  | "thinking"
+  | "running"
+  | "needs-input"
+  | "monitoring"
+  | "idle"
+
+/**
+ * What a session reports in the sidebar, from its live activity (when it has one)
+ * or its persisted status (when it doesn't).
+ *
+ * The mapping is a series of deliberate collapses:
+ *
+ *  - **Every kind of tool work is "running".** Reading, editing, web, delegating
+ *    — the distinction is real and the conversation header keeps it, but in a
+ *    list it's noise: they all mean the same thing to someone deciding where to
+ *    look.
+ *  - **Both watchers are "monitoring".** `gh pr checks --watch` and `vitest
+ *    --watch` differ in what they watch, not in what they mean here: a process
+ *    that will not return on its own. That's the state Monitoring names.
+ *  - **Needing approval is needing input.** Two ways to be blocked on a human,
+ *    one thing for the human to do about it.
+ *  - **"done" folds to idle.** It's in `SessionStatus` but nothing writes it —
+ *    `SettledSessionStatus` (the only thing persisted back) is idle | needs-input.
+ *    A session that finished is a session doing nothing.
+ */
+export const displayStatusOf = (
+  activity: SessionActivity | null | undefined,
+  status: SessionStatus
+): SessionDisplayStatus => {
+  if (activity) {
+    switch (activity.kind) {
+      case "needs-input":
+      case "needs-approval":
+        return "needs-input"
+      case "monitoring":
+      case "watching":
+        return "monitoring"
+      case "thinking":
+        return "thinking"
+      default:
+        return "running"
+    }
+  }
+  switch (status) {
+    case "needs-input":
+      return "needs-input"
+    case "thinking":
+      return "thinking"
+    case "running":
+      return "running"
+    default:
+      return "idle"
+  }
+}
+
+/**
  * The prompt that re-drives an approved plan as a fresh execution turn. Used when
  * approving a plan whose original run is gone (e.g. after an app restart): the
  * resumed harness has no memory of the planning conversation, so the plan is

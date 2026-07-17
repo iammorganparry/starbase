@@ -32,6 +32,8 @@ import { disposeConversationActor } from "./conversation-registry.js"
 import { clearDraft } from "./draft-store.js"
 import { onSessionUpdate } from "./session-updates.js"
 import { completedSessionIds } from "./pr-refresh.js"
+import { routeReviewToAgent } from "./auto-route.js"
+import { reviewQueryKey } from "./review-routing.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
 
@@ -323,9 +325,24 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   // appear without the user having to click Review.
   useEffect(() => {
     for (const { id, review } of autoReviews) {
-      qc.setQueryData(["review", id], review)
+      qc.setQueryData(reviewQueryKey(id), review)
     }
   }, [autoReviews, qc])
+
+  // Hand each new review's critical/major findings to that session's agent.
+  //
+  // Here rather than in `useAdversarialReview` because that hook only exists for
+  // the session you're LOOKING at, and the whole point of the auto-review is that
+  // it runs across every session on a timer — a background session's reviewer
+  // finding a data-loss bug should reach its agent whether or not the tab is
+  // open. `routeReviewToAgent` no-ops on an already-routed review (a stamp
+  // persisted in main), so firing it on every tick is safe.
+  useEffect(() => {
+    for (const { id, review } of autoReviews) {
+      const session = sessions.find((s) => s.id === id)
+      if (session) void routeReviewToAgent(session, review, qc)
+    }
+  }, [autoReviews, sessions, qc])
 
   const archiveMutation = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: "merged" | "closed" }) =>

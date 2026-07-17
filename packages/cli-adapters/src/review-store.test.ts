@@ -46,6 +46,9 @@ const review = (over: Partial<AdversarialReview> = {}): AdversarialReview => ({
     }
   ],
   note: null,
+  routedAt: null,
+  postedAt: null,
+  postError: null,
   ...over
 })
 

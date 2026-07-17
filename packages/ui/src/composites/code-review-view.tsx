@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef } from "react"
-import type { AdversarialReview, PrFileChange, ReviewFinding } from "@starbase/core"
-import { Undo2 } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { AdversarialReview, PrFileChange, PrReviewThread, ReviewFinding } from "@starbase/core"
+import { MessageSquare, Undo2 } from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { FileIcon } from "../components/file-icon.js"
 import { SegmentedControl } from "../components/segmented-control.js"
 import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
+import { cn } from "../lib/cn.js"
+import { feedbackCounts } from "../lib/review-feedback.js"
 import { ReviewDiff } from "./review-diff.js"
 import { ReviewFileRow } from "./review-file-row.js"
 import { ReviewFindingRow, rankFindings } from "./review-findings.js"
@@ -17,6 +19,12 @@ export type ReviewSource = "pr" | "local"
 
 export interface CodeReviewViewProps {
   files: readonly PrFileChange[]
+  /**
+   * The PR's unresolved inline review threads. Counted into each file's feedback
+   * marker alongside findings and drafts — a file a human commented on should
+   * flag as needing attention just as loudly as one the reviewer flagged.
+   */
+  reviewThreads?: readonly PrReviewThread[]
   /** The file currently in view (highlighted in the list; tracked by scroll). */
   activePath: string | null
   /** Every changed file's unified diff, in list order — rendered as one continuous scroll. */
@@ -62,7 +70,8 @@ export interface CodeReviewViewProps {
  * then finish the review (comment-only, or routed to the session's agent).
  */
 export function CodeReviewView({
-  files,
+  files: allFiles,
+  reviewThreads = [],
   activePath,
   fileDiffs,
   drafts,
@@ -84,19 +93,61 @@ export function CodeReviewView({
   onSendFindingToAgent,
   sentFindingIds
 }: CodeReviewViewProps) {
+  const isLocal = source === "local"
+
+  // Findings are shown against the PR they were argued about. On the local
+  // (uncommitted) diff they'd be anchored to the wrong thing entirely.
+  const activeReview = source === "pr" ? (review ?? null) : null
+
+  const feedback = useMemo(
+    () =>
+      feedbackCounts({
+        files: allFiles,
+        findings: activeReview?.findings ?? [],
+        drafts,
+        threads: reviewThreads
+      }),
+    [allFiles, activeReview, drafts, reviewThreads]
+  )
+
+  const [feedbackOnly, setFeedbackOnly] = useState(false)
+
+  /**
+   * The file list, narrowed to files carrying feedback when the filter is on.
+   *
+   * Filtered ONCE, here, and everything downstream reads `files`: the list, the
+   * +/− and viewed totals, and the stacked diff scroller. Filtering only the
+   * list would leave the scroller showing files the list denies exist.
+   */
+  const files = useMemo(
+    () => (feedbackOnly ? allFiles.filter((f) => feedback.byPath.has(f.path)) : allFiles),
+    [allFiles, feedbackOnly, feedback]
+  )
+
+  // Turning the filter on while a now-hidden file is active would leave the
+  // list with no selection and the scroll-spy chasing a section that no longer
+  // renders. Hand focus to the first visible file instead.
+  useEffect(() => {
+    if (files.length === 0) return
+    if (activePath !== null && files.some((f) => f.path === activePath)) return
+    onSelectFile(files[0]!.path)
+  }, [files, activePath, onSelectFile])
+
+  // A filter you can't turn off is a trap: if the last piece of feedback is
+  // resolved while it's on, the view empties and the only way back is a control
+  // that now looks inert. Force it off the moment there's nothing to filter to.
+  useEffect(() => {
+    if (feedbackOnly && !feedback.any) setFeedbackOnly(false)
+  }, [feedbackOnly, feedback.any])
+
   const added = files.reduce((sum, f) => sum + f.additions, 0)
   const removed = files.reduce((sum, f) => sum + f.deletions, 0)
   const viewed = files.filter((f) => f.viewed).length
-  const isLocal = source === "local"
 
   const diffByPath = useMemo(
     () => new Map(fileDiffs.map((d) => [d.path, d.diff])),
     [fileDiffs]
   )
-
-  // Findings are shown against the PR they were argued about. On the local
-  // (uncommitted) diff they'd be anchored to the wrong thing entirely.
-  const activeReview = source === "pr" ? (review ?? null) : null
 
   /**
    * Findings grouped by file, plus the ones that belong nowhere in particular.
@@ -104,10 +155,16 @@ export function CodeReviewView({
    * A finding whose `path` is absent from this diff goes to `general` rather
    * than being dropped — the reviewer may name a file it read for context, and
    * silently swallowing its verdict is worse than showing it unanchored.
+   *
+   * Keyed off `allFiles`, NOT the filtered `files`: "general" means "no file in
+   * this diff owns it", which is a fact about the DIFF. Resolving it against the
+   * filtered list would move a hidden file's findings into General the moment
+   * you turned the filter on — the same findings, silently reclassified by a
+   * view control.
    */
   const { byFile, general } = useMemo(() => {
     const findings = rankFindings(activeReview?.findings ?? [])
-    const paths = new Set(files.map((f) => f.path))
+    const paths = new Set(allFiles.map((f) => f.path))
     const byFile = new Map<string, ReviewFinding[]>()
     const general: ReviewFinding[] = []
     for (const finding of findings) {
@@ -118,7 +175,7 @@ export function CodeReviewView({
       }
     }
     return { byFile, general }
-  }, [activeReview, files])
+  }, [activeReview, allFiles])
 
 
   // The continuous diff scroller and one anchor per file section, so scrolling can
@@ -230,6 +287,28 @@ export function CodeReviewView({
         >
           <div className="flex h-[42px] flex-none items-center gap-2 border-b border-hairline px-[14px]">
             <span className="flex-1 text-[12px] font-semibold text-text-bright">Changed files</span>
+            {/* Only offer the filter when it would do something. Rendering it
+                permanently would put a dead control in the header of the common
+                case — a clean diff with nothing to say about it. */}
+            {feedback.any && (
+              <button
+                type="button"
+                aria-pressed={feedbackOnly}
+                title={feedbackOnly ? "Show all files" : "Show only files with feedback"}
+                onClick={() => setFeedbackOnly((on) => !on)}
+                className={cn(
+                  "flex items-center gap-[3px] rounded-[4px] border px-[5px] py-[2px] transition-colors",
+                  feedbackOnly
+                    ? "border-blue/40 bg-blue/[0.14] text-blue"
+                    : "border-transparent text-dim hover:border-line hover:text-text"
+                )}
+              >
+                <MessageSquare size={11} strokeWidth={2.25} />
+                <span className="font-mono text-[9.5px] tabular-nums leading-none">
+                  {feedback.byPath.size}
+                </span>
+              </button>
+            )}
             <span className="font-mono text-[10px] text-muted-foreground">{files.length}</span>
           </div>
           <div className="flex flex-1 flex-col gap-px overflow-auto p-2">
@@ -238,6 +317,7 @@ export function CodeReviewView({
                 key={file.path}
                 file={file}
                 active={file.path === activePath}
+                feedback={feedback.byPath.get(file.path) ?? 0}
                 onSelect={() => scrollToFile(file.path)}
                 onToggleViewed={(v) => onToggleViewed(file.path, v)}
               />
@@ -276,6 +356,7 @@ export function CodeReviewView({
                   finding={finding}
                   sent={sentFindingIds?.has(finding.id) ?? false}
                   canRoute={routeTargetSession !== null}
+                  review={activeReview}
                   onSendToAgent={onSendFindingToAgent}
                 />
               ))}
@@ -284,7 +365,10 @@ export function CodeReviewView({
 
           {files.length === 0 ? (
             <div className="flex flex-1 items-center justify-center text-[13px] text-dim">
-              No changes to review.
+              {/* The filter hiding everything is a different state from an empty
+                  diff, and says so — otherwise a filtered view reads as "your
+                  changes vanished". */}
+              {feedbackOnly ? "No files with feedback." : "No changes to review."}
             </div>
           ) : (
             files.map((file) => (
@@ -341,6 +425,7 @@ export function CodeReviewView({
                         finding={finding}
                         sent={sentFindingIds?.has(finding.id) ?? false}
                         canRoute={routeTargetSession !== null}
+                        review={activeReview}
                         onSendToAgent={onSendFindingToAgent}
                       />
                     ))}

@@ -6,16 +6,15 @@
  * gates surface in the Conversation tab instead of a hidden run that stalls
  * forever with its gates rendered nowhere.
  */
-import { useCallback, useMemo } from "react"
+import { useCallback, useEffect, useMemo } from "react"
 import { useSelector } from "@xstate/react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { AdversarialReview, ReviewFinding, ReviewPhase, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
 import { getConversationActor } from "./conversation-registry.js"
 import { markRouted, useRoutedEntries } from "./routed-store.js"
-import { resolveSentIds, routedKey } from "./review-routing.js"
-
-const reviewKey = (sessionId: string) => ["review", sessionId] as const
+import { resolveSentIds, reviewQueryKey, routedKey } from "./review-routing.js"
+import { routeReviewToAgent } from "./auto-route.js"
 
 /** Format a finding as the instruction handed to the session's agent. */
 const findingPrompt = (finding: ReviewFinding): string => {
@@ -66,7 +65,7 @@ export function useAdversarialReview(
   const hasPr = session.prNumber != null
 
   const query = useQuery({
-    queryKey: reviewKey(session.id),
+    queryKey: reviewQueryKey(session.id),
     queryFn: () => rpc.reviewGet(session.id),
     // Nothing to read until there's a PR to have reviewed.
     enabled: hasPr && connected,
@@ -81,7 +80,15 @@ export function useAdversarialReview(
   // fresh opinion, and silently handing back a cached review would read as a bug.
   const runMutation = useMutation({
     mutationFn: () => rpc.reviewRun(session.id, true),
-    onSuccess: (review) => qc.setQueryData(reviewKey(session.id), review)
+    onSuccess: (review) => {
+      qc.setQueryData(reviewQueryKey(session.id), review)
+      // Route here as well as from the auto-review poll: a manual run reaches
+      // this callback directly, and the poll is only mounted when auto-review is
+      // switched ON. Without this, clicking "Review again" with the toggle off
+      // would find critical bugs and hand them to nobody. `routeReviewToAgent`
+      // de-dupes, so the two paths overlapping is harmless.
+      void routeReviewToAgent(session, review, qc)
+    }
   })
 
   const runReview = useCallback(
@@ -98,6 +105,28 @@ export function useAdversarialReview(
   const startedAt = useSelector(actor, (s) => s.context.reviewStartedAt)
 
   const review = query.data ?? null
+
+  /**
+   * Route a review that reached us unrouted — whoever produced it.
+   *
+   * Closes a real gap the mutation's `onSuccess` can't: a review can be stored
+   * with `routedAt: null` and then never be run again. It happens on upgrade
+   * (reviews persisted before routing existed decode with the field defaulted to
+   * null), and whenever the app dies between the run and the stamp. With
+   * auto-review switched off nothing polls, so those findings would sit there —
+   * and their cards would read "Sending…" forever, waiting on a send that has
+   * nobody left to make it.
+   *
+   * Not a surprise-send: an unrouted review means the handoff never happened, and
+   * completing it is the whole point of the feature. `routeReviewToAgent` no-ops
+   * on an already-routed review, so this settles once and stays quiet.
+   */
+  useEffect(() => {
+    if (review !== null && review.routedAt === null) {
+      void routeReviewToAgent(session, review, qc)
+    }
+  }, [review, session, qc])
+
   const routedKeys = useRoutedEntries(session.id)
 
   // Resolve the namespaced keys down to plain ids for THIS review, so the UI
