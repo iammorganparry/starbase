@@ -118,3 +118,21 @@ describe("parseHttpRequest", () => {
     expect(p.bytes).toBeNull()
   })
 })
+
+describe("the endpoint is the target, not a URL inside a header", () => {
+  const urlFor = (command: string) =>
+    parseHttpRequest({ command: parseCommand(command), output: '{"ok":true}', status: "success", meta: null })?.url
+
+  it("ignores a URL in a -H header value", () => {
+    // The quoted header is one token, so -H swallows all of it; the real
+    // endpoint is the positional that follows.
+    expect(urlFor("curl -H 'Referer: https://referer.example.com' https://api.example.com/resource")).toBe(
+      "https://api.example.com/resource"
+    )
+  })
+  it("ignores a URL in an Origin header, whichever side the target sits", () => {
+    expect(urlFor("curl https://api.example.com/x -H 'Origin: https://evil.example.com'")).toBe(
+      "https://api.example.com/x"
+    )
+  })
+})

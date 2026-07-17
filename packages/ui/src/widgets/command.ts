@@ -132,6 +132,43 @@ const segments = (command: string): Segment[] => {
   return out
 }
 
+/**
+ * Split a segment into tokens, keeping a quoted span as ONE token.
+ *
+ * A plain `split(/\s+/)` tears `-H 'Referer: https://ref'` into three pieces
+ * (`-H`, `'Referer:`, `https://ref'`), so a value-flag that means to consume its
+ * whole argument only swallows the first word — and the URL hiding in the second
+ * gets read as the request endpoint. Respecting quotes keeps the header value
+ * intact as the single token the flag then skips. Quotes are retained on the
+ * token; callers `unquote` when they need the bare value.
+ */
+const tokenize = (s: string): string[] => {
+  const out: string[] = []
+  let buf = ""
+  let quote: string | null = null
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!
+    if (quote) {
+      buf += c
+      if (c === quote) quote = null
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      buf += c
+      continue
+    }
+    if (/\s/.test(c)) {
+      if (buf) out.push(buf)
+      buf = ""
+      continue
+    }
+    buf += c
+  }
+  if (buf) out.push(buf)
+  return out
+}
+
 /** `NODE_ENV=test pnpm vitest` → drop the assignment, keep the command. */
 const stripEnv = (tokens: string[]): string[] => {
   let i = 0
@@ -171,7 +208,7 @@ export const parseCommand = (raw: string): ParsedCommand => {
   // code without producing the log — see primaryOf.
   const primary = (primaryOf(segs) || raw).trim()
 
-  const tokens = stripEnv(primary.split(/\s+/).filter(Boolean))
+  const tokens = stripEnv(tokenize(primary))
   const bin = (tokens[0] ?? "").replace(/^.*\//, "") // ./node_modules/.bin/vitest → vitest
   let rest = tokens.slice(1)
 
