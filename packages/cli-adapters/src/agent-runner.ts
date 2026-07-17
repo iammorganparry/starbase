@@ -642,6 +642,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                 yield* out.offer(event)
                 return
               }
+              // Live tool output is stream-only. A main-turn `ToolDelta` is NOT a
+              // sub-agent event, so without this it would fall through to
+              // `patchLast` — which does a full-file read+decode+encode+rewrite of
+              // the transcript on EVERY tick. Surface it to the renderer (which
+              // folds it into the running card) and let `ToolEnd` persist the
+              // authoritative final output.
+              if (event._tag === "ToolDelta") {
+                yield* out.offer(event)
+                return
+              }
               const next = applyStreamEvent(yield* Ref.get(acc), event)
               yield* Ref.set(acc, next)
               yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)

@@ -3,6 +3,8 @@ import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
+import { startTeeStream, type TeeStream } from "./bash-tee.js"
+import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
 /**
@@ -29,6 +31,13 @@ export const isEditTool = (name: string): boolean => EDIT_TOOLS.has(name)
  * (and confusingly "pending") duplicate.
  */
 const SUPPRESSED_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"])
+
+/**
+ * How often a running Bash command's tee file is polled for new output. Fast
+ * enough to feel live, slow enough that a chatty command doesn't flood the RPC —
+ * each poll re-reads the whole file and re-sends only if it grew.
+ */
+const TEE_POLL_MS = 150
 
 /**
  * How `spec.readOnly` is enforced on this harness: the SDK refuses these outright.
@@ -324,32 +333,6 @@ const toolResultMeta = (name: string | undefined, content: unknown): string | nu
 }
 
 /**
- * How much of a tool's output we keep. It rides the RPC to the renderer AND is
- * persisted into the session's transcript.json, so an uncapped `pnpm test` log
- * would bloat the file every future read pays for.
- */
-const OUTPUT_CAP = 6_000
-/** Kept from the front when capping — enough to see what the command started doing. */
-const OUTPUT_HEAD = 3_600
-
-/**
- * Cap a tool's output, keeping BOTH ends.
- *
- * Which end matters depends on the command: a compile error lists its first
- * failures at the top, while a test run puts the summary that explains it at the
- * very bottom. Keeping only one end reliably hides the answer for half of them,
- * so we keep the head and the tail and say what went missing — a silent cut
- * reads as "that's all it printed".
- */
-const capOutput = (text: string): string => {
-  if (text.length <= OUTPUT_CAP) return text
-  const head = text.slice(0, OUTPUT_HEAD)
-  const tail = text.slice(text.length - (OUTPUT_CAP - OUTPUT_HEAD))
-  const dropped = text.length - OUTPUT_HEAD - (OUTPUT_CAP - OUTPUT_HEAD)
-  return `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
-}
-
-/**
  * Tools whose `tool_result` is an acknowledgement rather than output.
  *
  * A backgrounded Task's result lands ~150ms after the spawn saying only "Async
@@ -544,6 +527,29 @@ export const runClaude = (
         const { query } = await import("@anthropic-ai/claude-agent-sdk")
         const tools = new Map<string, ToolMemo>()
 
+        // ── Live bash output via tee (see bash-tee.ts) ──────────────────────
+        // claude has no partial-output event, so an allowed Bash command is
+        // rewritten to tee its output to a temp file we poll; each growth is a
+        // ToolDelta on the SAME id as its ToolStart, so the card fills live.
+        // toolUseId → its running stream; cleaned up when the command's ToolEnd
+        // lands or the run ends.
+        const teeStreams = new Map<string, TeeStream>()
+        const stopTee = (toolUseId: string): void => {
+          teeStreams.get(toolUseId)?.stop()
+          teeStreams.delete(toolUseId)
+        }
+        /** Tee an allowed Bash command to a temp file, tail it as ToolDelta, and return the rewritten command. */
+        const startTee = (toolUseId: string, command: string): string => {
+          const stream = startTeeStream(
+            toolUseId,
+            command,
+            (snapshot) => void runP(ctx.emit({ _tag: "ToolDelta", id: toolUseId, output: snapshot })),
+            { pollMs: TEE_POLL_MS }
+          )
+          teeStreams.set(toolUseId, stream)
+          return stream.command
+        }
+
         // Set once `query()` returns, so `canUseTool` can flip the run out of plan
         // mode when the operator approves the plan.
         let planQuery: Query | null = null
@@ -610,9 +616,17 @@ export const runClaude = (
           const req = toPermissionRequest(toolName, input)
           if (req === null) return { behavior: "allow", updatedInput: input }
           const decision = await runP(ctx.canUseTool(req))
-          return decision === "allow"
-            ? { behavior: "allow", updatedInput: input }
-            : { behavior: "deny", message: "Denied by the operator." }
+          if (decision !== "allow") return { behavior: "deny", message: "Denied by the operator." }
+          // Allowed. For a Bash command, tee its output to a temp file we tail so
+          // the card fills as it runs. Permission was decided on the ORIGINAL
+          // command just above, so the rewrite can NEVER introduce a prompt; and
+          // if the SDK declined to honour the changed command, streaming simply
+          // no-ops — the original runs and ToolEnd still carries the full output.
+          const teeId = options.toolUseID
+          if (toolName === "Bash" && typeof input.command === "string" && input.command.length > 0 && teeId) {
+            return { behavior: "allow", updatedInput: { ...input, command: startTee(teeId, input.command) } }
+          }
+          return { behavior: "allow", updatedInput: input }
         }
 
         // Resume id: prefer the live in-memory id (this launch), else the id
@@ -644,16 +658,28 @@ export const runClaude = (
         })
         planQuery = iterator
 
-        for await (const msg of iterator) {
-          const sid = (msg as { session_id?: unknown }).session_id
-          // A `fresh` run must leave no trace in the map, or the NEXT run under
-          // this key would resume it.
-          if (!spec.fresh && typeof sid === "string" && sid.length > 0) {
-            resume.set(sessionId, sid)
+        try {
+          for await (const msg of iterator) {
+            const sid = (msg as { session_id?: unknown }).session_id
+            // A `fresh` run must leave no trace in the map, or the NEXT run under
+            // this key would resume it.
+            if (!spec.fresh && typeof sid === "string" && sid.length > 0) {
+              resume.set(sessionId, sid)
+            }
+            for (const event of streamEventsFor(msg, tools)) {
+              // A command has finished: its ToolEnd carries the authoritative
+              // output, so stop tailing and drop the temp file BEFORE emitting —
+              // otherwise a late poll could re-open the settled card. A no-op for
+              // any tool that wasn't teed.
+              if (event._tag === "ToolEnd") stopTee(event.id)
+              await runP(ctx.emit(event))
+            }
           }
-          for (const event of streamEventsFor(msg, tools)) {
-            await runP(ctx.emit(event))
-          }
+        } finally {
+          // End of run (or a throw / interrupt-driven iterator close): tear down
+          // any watcher still open — a command whose ToolEnd never arrived, or the
+          // operator stopping mid-command — so no timer or temp file outlives it.
+          for (const id of [...teeStreams.keys()]) stopTee(id)
         }
       },
       catch: (cause) =>

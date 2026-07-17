@@ -3,6 +3,7 @@ import { CliExecError } from "@starbase/core"
 import type { ApprovalMode, SandboxMode, ThreadEvent } from "@openai/codex-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
+import { capOutput } from "./output-cap.js"
 
 /**
  * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
@@ -62,6 +63,23 @@ export const codexEventToStreamEvents = (
       return []
     }
 
+    // When codex emits a mid-run update, it reprints the command's aggregated
+    // stdout+stderr so far — stream it as live output so the card fills as it runs
+    // rather than staying blank until exit. Snapshot semantics (`aggregated_output`
+    // is the whole output, not a chunk) match `ToolDelta`'s idempotent fold, so a
+    // skipped update never corrupts the text; empty updates carry no card change.
+    //
+    // NOTE: whether codex emits `item.updated` for a running command is
+    // VERSION-DEPENDENT — some CLI builds go straight from `item.started` to
+    // `item.completed` with nothing in between (observed live). This maps the
+    // updates when they DO arrive; when they don't, the card fills whole from the
+    // `ToolEnd.output` below. Either way no output is lost.
+    case "item.updated": {
+      const it = event.item
+      if (it.type !== "command_execution" || it.aggregated_output.length === 0) return []
+      return [{ _tag: "ToolDelta", id: it.id, output: capOutput(it.aggregated_output) }]
+    }
+
     case "item.completed": {
       const it = event.item
       switch (it.type) {
@@ -69,7 +87,13 @@ export const codexEventToStreamEvents = (
           return [{ _tag: "Assistant", text: it.text }]
         case "reasoning":
           return [{ _tag: "Thinking", text: it.text, seconds: null, done: true }]
-        case "command_execution":
+        case "command_execution": {
+          // codex carries the command's output in `aggregated_output` (it fills
+          // NEITHER a separate output nor a preview field). Persist it as the
+          // tool's authoritative output so the card — and the bash widgets, which
+          // read `output` — show what actually ran, and so a reload matches the
+          // live view built up from the deltas above.
+          const output = it.aggregated_output.length > 0 ? capOutput(it.aggregated_output) : undefined
           return [
             {
               _tag: "ToolEnd",
@@ -77,9 +101,11 @@ export const codexEventToStreamEvents = (
               status: it.status === "failed" ? "error" : "success",
               meta: it.exit_code != null ? `exit ${it.exit_code}` : null,
               diff: null,
-              preview: null
+              preview: null,
+              ...(output !== undefined ? { output } : {})
             }
           ]
+        }
         case "file_change":
           return [
             {

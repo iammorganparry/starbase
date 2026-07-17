@@ -525,6 +525,44 @@ describe("createOpencodeMapper", () => {
     ])
   })
 
+  it("streams a running command's partial output as a ToolDelta when opencode exposes it", () => {
+    const m = mapper()
+    const running = (output: string) =>
+      part({
+        id: "prt_b",
+        messageID: "msg_b",
+        type: "tool",
+        callID: "call_b",
+        tool: "bash",
+        state: { status: "running", input: { command: "pnpm test" }, metadata: { output }, time: { start: 1 } }
+      })
+    // First sighting: the ToolStart plus the first slice of live output.
+    expect(m.apply(running("RUN  v2\n"))).toStrictEqual([
+      { _tag: "ToolStart", id: "call_b", name: "Bash", target: "pnpm test" },
+      { _tag: "ToolDelta", id: "call_b", output: "RUN  v2\n" }
+    ])
+    // Grown output → another delta; the card was already opened, so no ToolStart.
+    expect(m.apply(running("RUN  v2\n ✓ a\n"))).toStrictEqual([
+      { _tag: "ToolDelta", id: "call_b", output: "RUN  v2\n ✓ a\n" }
+    ])
+    // An update that didn't grow the output is silent — no duplicate delta.
+    expect(m.apply(running("RUN  v2\n ✓ a\n"))).toStrictEqual([])
+  })
+
+  it("says nothing live when a running tool exposes no partial output", () => {
+    const m = mapper()
+    const running = part({
+      id: "prt_c",
+      messageID: "msg_c",
+      type: "tool",
+      callID: "call_c",
+      tool: "bash",
+      state: { status: "running", input: { command: "sleep 1" }, time: { start: 1 } }
+    })
+    // No metadata output → just the ToolStart, output arrives whole on completion.
+    expect(m.apply(running)).toStrictEqual([{ _tag: "ToolStart", id: "call_c", name: "Bash", target: "sleep 1" }])
+  })
+
   it("emits a ToolStart even when the first sighting of a call is its failure", () => {
     // A denied permission surfaces as a straight-to-error tool: without the
     // synthesized start there'd be a ToolEnd for a card that never opened.

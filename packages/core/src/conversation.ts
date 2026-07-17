@@ -432,6 +432,22 @@ export const StreamEvent = Schema.Union(
     target: Schema.NullOr(Schema.String),
     agentId: AgentId
   }),
+  /**
+   * Live, cumulative output for a still-running tool — the whole of what it has
+   * printed so far (already capped upstream), NOT an incremental chunk. Snapshot
+   * semantics keep the fold idempotent: each delta simply replaces the running
+   * tool's `output`, so a dropped or duplicated tick never corrupts the text.
+   *
+   * Live-ONLY: the runner surfaces it to the renderer but never folds it into the
+   * persisted transcript (see `agent-runner`'s `emit`) — `ToolEnd` carries the
+   * authoritative final output that gets persisted. Emitted by a harness that can
+   * observe a command's stdout as it grows (see the bash tee-rewrite producer).
+   */
+  Schema.TaggedStruct("ToolDelta", {
+    id: Schema.String,
+    output: Schema.String,
+    agentId: AgentId
+  }),
   Schema.TaggedStruct("ToolEnd", {
     id: Schema.String,
     status: ToolStatus,
@@ -644,6 +660,20 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       }
       return { ...msg, parts: [...parts, part] }
     }),
+
+    // Live output for a running tool: overwrite its `output` with the latest
+    // cumulative snapshot. Matches only a tool still `running` — a delta arriving
+    // after `ToolEnd` (out-of-order) must not resurrect a settled card or clobber
+    // the authoritative final output. A delta for an unknown id is a no-op, so the
+    // fold stays total.
+    Match.tag("ToolDelta", (e) => ({
+      ...msg,
+      parts: parts.map((p): ContentPart =>
+        p._tag === "Tool" && p.tool.id === e.id && p.tool.status === "running"
+          ? { _tag: "Tool", tool: { ...p.tool, output: e.output } }
+          : p
+      )
+    })),
 
     Match.tag("ToolEnd", (e) => ({
       ...msg,

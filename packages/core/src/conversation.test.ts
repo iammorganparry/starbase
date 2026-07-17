@@ -167,6 +167,13 @@ describe("StreamEvent", () => {
     expect(Either.isRight(result)).toBe(true)
   })
 
+  it("decodes a ToolDelta, with and without an agentId", () => {
+    expect(Either.isRight(decode(StreamEvent, { _tag: "ToolDelta", id: "t1", output: "…" }))).toBe(true)
+    expect(
+      Either.isRight(decode(StreamEvent, { _tag: "ToolDelta", id: "t1", output: "…", agentId: "a1" }))
+    ).toBe(true)
+  })
+
   it("rejects an unknown event tag", () => {
     expect(Either.isLeft(decode(StreamEvent, { _tag: "Whoops" }))).toBe(true)
   })
@@ -214,6 +221,49 @@ describe("applyStreamEvent fold", () => {
       expect(part.tool.diff).toStrictEqual({ added: 7, removed: 0 })
       expect(part.tool.preview).toBe("+ router.post(...)")
     }
+  })
+
+  it("streams cumulative output onto a running tool via ToolDelta", () => {
+    const msg = fold([
+      { _tag: "ToolStart", id: "t1", name: "Bash", target: "pnpm test" },
+      { _tag: "ToolDelta", id: "t1", output: "RUN  v2\n" },
+      { _tag: "ToolDelta", id: "t1", output: "RUN  v2\n ✓ a.test.ts\n" }
+    ])
+    const part = msg.parts.find((p) => p._tag === "Tool")
+    expect(part && part._tag === "Tool" && part.tool.status).toBe("running")
+    // Snapshot semantics: the latest delta REPLACES, it doesn't concatenate.
+    expect(part && part._tag === "Tool" && part.tool.output).toBe("RUN  v2\n ✓ a.test.ts\n")
+  })
+
+  it("ignores a ToolDelta for a tool id it has never seen", () => {
+    const msg = fold([
+      { _tag: "ToolStart", id: "t1", name: "Bash", target: "pnpm test" },
+      { _tag: "ToolDelta", id: "ghost", output: "leak" }
+    ])
+    const part = msg.parts.find((p) => p._tag === "Tool")
+    expect(part && part._tag === "Tool" && part.tool.output).toBeUndefined()
+  })
+
+  it("lets ToolEnd's authoritative output win over a prior live delta", () => {
+    const msg = fold([
+      { _tag: "ToolStart", id: "t1", name: "Bash", target: "pnpm test" },
+      { _tag: "ToolDelta", id: "t1", output: "…partial…" },
+      { _tag: "ToolEnd", id: "t1", status: "success", meta: null, diff: null, preview: null, output: "final, whole output" }
+    ])
+    const part = msg.parts.find((p) => p._tag === "Tool")
+    expect(part && part._tag === "Tool" && part.tool.status).toBe("success")
+    expect(part && part._tag === "Tool" && part.tool.output).toBe("final, whole output")
+  })
+
+  it("drops a ToolDelta that arrives after the tool has settled", () => {
+    const msg = fold([
+      { _tag: "ToolStart", id: "t1", name: "Bash", target: "pnpm test" },
+      { _tag: "ToolEnd", id: "t1", status: "success", meta: null, diff: null, preview: null, output: "final" },
+      { _tag: "ToolDelta", id: "t1", output: "stale tick" }
+    ])
+    const part = msg.parts.find((p) => p._tag === "Tool")
+    // A late delta must not resurrect the card or clobber the final output.
+    expect(part && part._tag === "Tool" && part.tool.output).toBe("final")
   })
 
   it("keeps interleaved order and clears streaming on Done", () => {
@@ -690,6 +740,9 @@ describe("sub-agents", () => {
     // Same tag WITHOUT agentId belongs to the main turn.
     expect(isSubagentEvent({ _tag: "Assistant", text: "main" })).toBe(false)
     expect(isSubagentEvent({ _tag: "Done", costUsd: 0, tokens: 0 })).toBe(false)
+    // A ToolDelta routes to a sub-agent's tab only when it carries an agentId.
+    expect(isSubagentEvent({ _tag: "ToolDelta", id: "t1", output: "x", agentId: "a1" })).toBe(true)
+    expect(isSubagentEvent({ _tag: "ToolDelta", id: "t1", output: "x" })).toBe(false)
   })
 
   it("SubagentStarted opens a working tab; agentId events accrue onto its own message", () => {

@@ -3,6 +3,7 @@ import { CliExecError } from "@starbase/core"
 import type { Event, Part } from "@opencode-ai/sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
+import { capOutput } from "./output-cap.js"
 
 /**
  * Real opencode harness, driven by `@opencode-ai/sdk`'s CLIENT against a server
@@ -321,6 +322,8 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
   const emitted = new Map<string, number>()
   /** callID → true once ToolStart is out, so `running` updates don't re-open it. */
   const started = new Set<string>()
+  /** callID → length of the live output last streamed, so we don't re-send an unchanged snapshot. */
+  const streamedLen = new Map<string, number>()
   /** messageIDs known to be the operator's — their parts are not the agent talking. */
   const userMessages = new Set<string>()
   /**
@@ -343,6 +346,21 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
    */
   const agentOf = (sessionID: string): string | undefined =>
     sessionID !== opencodeSessionId() && subagents.has(sessionID) ? sessionID : undefined
+
+  /**
+   * A running tool's partial output, if opencode is exposing any.
+   *
+   * `ToolStateRunning.metadata` is untyped (`Record<string, unknown>`) and the
+   * SDK promises no partial-output field, but opencode's shell tool has grown a
+   * `metadata.output` (or `stdout`) string as a command runs. Read it defensively:
+   * when it's there, we stream it live; when it isn't, this returns null and
+   * output simply arrives whole on completion — no worse than before.
+   */
+  const runningOutput = (metadata: Record<string, unknown> | undefined): string | null => {
+    if (metadata === undefined) return null
+    const raw = metadata.output ?? metadata.stdout
+    return typeof raw === "string" && raw.length > 0 ? raw : null
+  }
 
   /** The unsent tail of a streaming text/reasoning part. */
   const suffix = (partId: string, full: string): string => {
@@ -391,6 +409,16 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
               target: toolTarget(part.tool, state.input as Record<string, unknown>),
               ...forAgent
             })
+          }
+          if (state.status === "running") {
+            // Best-effort live output: stream a running command's partial stdout
+            // as a ToolDelta when opencode exposes it (see `runningOutput`). Only
+            // when it has actually grown, so an unchanged running update is silent.
+            const partial = runningOutput(state.metadata)
+            if (partial !== null && partial.length !== streamedLen.get(part.callID)) {
+              streamedLen.set(part.callID, partial.length)
+              events.push({ _tag: "ToolDelta", id: part.callID, output: capOutput(partial), ...forAgent })
+            }
           }
           if (state.status === "completed") {
             events.push({
