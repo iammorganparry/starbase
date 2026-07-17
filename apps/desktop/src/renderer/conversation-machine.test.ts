@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   reviewCb: null as null | ((event: unknown) => void),
   // Lets a test hold the catalogue in flight to prove nothing waits on it.
   catalogGate: Promise.resolve() as Promise<void>,
+  // Same, for the skills probe — it spawns the harness, so nothing may wait on it.
+  skillsGate: Promise.resolve() as Promise<void>,
   setHarnessCalls: [] as Array<{ sessionId: string; cli: string; model: string }>,
   catalog: [
     { cli: "claude", label: "Claude Code", models: [{ id: "opus", label: "opus" }] },
@@ -38,6 +40,7 @@ vi.mock("./rpc-client.js", () => ({
     sessionsTranscript: async () => [],
     skillsList: async () => {
       h.skillsListCalls += 1
+      await h.skillsGate
       return [{ name: "/deploy", description: "Ship it", source: "skill" }]
     },
     workspaceFiles: async () => [],
@@ -103,6 +106,7 @@ beforeEach(() => {
   h.stopCalls.length = 0
   h.setHarnessCalls.length = 0
   h.catalogGate = Promise.resolve()
+  h.skillsGate = Promise.resolve()
   h.reviewCb = null
 })
 
@@ -174,6 +178,35 @@ describe("conversationMachine — queue while busy", () => {
     actor.send({ type: "STOP" })
     await waitFor(actor, (s) => s.matches(idle), { timeout: 3000 })
     expect(actor.getSnapshot().context.queued).toEqual([])
+    actor.stop()
+  })
+})
+
+describe("conversationMachine — nothing gates the transcript on a CLI probe", () => {
+  /**
+   * `loading` handles almost no events, so anything it waits on becomes a window
+   * where the operator's input is silently swallowed. `Skills.list` asks the
+   * HARNESS what commands it has — it spawns the binary, taking up to seconds —
+   * so awaiting it in `loadConversation` meant a prompt typed on open did
+   * nothing at all: the composer looked alive, the send vanished.
+   *
+   * Holding the skills fetch in flight here proves the machine reaches
+   * `awaitingInput` regardless, mirroring the same guarantee the catalogue has.
+   */
+  it("reaches idle and accepts a send while the skills probe is still in flight", async () => {
+    let release = () => {}
+    h.skillsGate = new Promise<void>((r) => (release = r))
+
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle), { timeout: 3000 })
+
+    actor.send({ type: "SEND", text: "hello" })
+    await waitFor(actor, (s) => s.matches("running"), { timeout: 3000 })
+    expect(h.agentRunCalls).toHaveLength(1)
+
+    // The `/` menu fills itself in a beat later, without having blocked anything.
+    release()
+    await waitFor(actor, (s) => s.context.skills.length > 0, { timeout: 3000 })
     actor.stop()
   })
 })
@@ -269,6 +302,10 @@ describe("conversationMachine — image attachments", () => {
     it("changes only the model when staying on the same harness", async () => {
       const actor = start()
       await waitFor(actor, (s) => s.matches(idle))
+      // Skills land OUT OF BAND now (the fetch probes the harness, so gating the
+      // transcript on it would freeze the composer) — wait for the first one
+      // before asserting that a same-harness switch doesn't trigger a second.
+      await waitFor(actor, (s) => s.context.skills.length > 0)
       const skillsBefore = h.skillsListCalls
 
       actor.send({ type: "SET_HARNESS", cli: "claude", model: "haiku" })
@@ -283,9 +320,52 @@ describe("conversationMachine — image attachments", () => {
       actor.stop()
     })
 
+    /**
+     * The composer's chips are live while the conversation loads, and loading is
+     * NOT instant — it asks the harness for its command list, which means
+     * spawning it. A switch made in that window used to be swallowed: the menu
+     * closed, the chip snapped back, nothing happened.
+     *
+     * Every other test here waits for `idle` first, which is exactly why none of
+     * them caught it — this one deliberately does not.
+     */
+    it("honours a switch made while the conversation is still loading", async () => {
+      const actor = start()
+      expect(actor.getSnapshot().matches("loading")).toBe(true)
+
+      actor.send({ type: "SET_HARNESS", cli: "codex", model: "gpt-5.6-sol" })
+
+      expect(actor.getSnapshot().context.cli).toBe("codex")
+      expect(h.setHarnessCalls).toStrictEqual([
+        { sessionId: "s1", cli: "codex", model: "gpt-5.6-sol" }
+      ])
+
+      // …and the load completing must not clobber the choice: `onDone` assigns
+      // transcript state only.
+      await waitFor(actor, (s) => s.matches(idle))
+      expect(actor.getSnapshot().context.cli).toBe("codex")
+      expect(actor.getSnapshot().context.model).toBe("gpt-5.6-sol")
+      actor.stop()
+    })
+
+    it("honours a mode change made while the conversation is still loading", async () => {
+      const actor = start()
+      expect(actor.getSnapshot().matches("loading")).toBe(true)
+
+      actor.send({ type: "SET_MODE", mode: "auto" })
+
+      expect(actor.getSnapshot().context.mode).toBe("auto")
+      await waitFor(actor, (s) => s.matches(idle))
+      expect(actor.getSnapshot().context.mode).toBe("auto")
+      actor.stop()
+    })
+
     it("switches harness and refetches the harness-specific skills", async () => {
       const actor = start()
       await waitFor(actor, (s) => s.matches(idle))
+      // As above — count from AFTER the out-of-band initial fetch, or the
+      // "+1 refetch" assertion below races it.
+      await waitFor(actor, (s) => s.context.skills.length > 0)
       const skillsBefore = h.skillsListCalls
 
       actor.send({ type: "SET_HARNESS", cli: "codex", model: "gpt-5.6-sol" })
