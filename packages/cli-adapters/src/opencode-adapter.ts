@@ -256,6 +256,20 @@ export const permissionToRequest = (asked: PermissionAsked): PermissionRequest =
 }
 
 /**
+ * A human message from one of opencode's error payloads.
+ *
+ * The union's members all carry a `name` and most a `data.message`, but the
+ * shape is provider-dependent — read it defensively rather than switch on every
+ * tag and go stale (the same reasoning the mapper's `session.error` uses).
+ */
+export const promptError = (error: unknown): string => {
+  const e = (error ?? {}) as { name?: unknown; data?: { message?: unknown } }
+  const message = typeof e.data?.message === "string" ? e.data.message : null
+  const name = typeof e.name === "string" ? e.name : null
+  return message ?? name ?? "opencode rejected the prompt"
+}
+
+/**
  * Total tokens for a finished turn. opencode's runtime reports a `total`, but the
  * SDK's type doesn't declare one — read it when present and fall back to the sum
  * so this can't silently report 0 if either side changes.
@@ -661,6 +675,13 @@ const driveOpencode = async (
           parts: [{ type: "text", text: spec.prompt }]
         }
       })
+
+      // The SDK REPORTS failure rather than throwing it, so this has to be
+      // checked: an unchecked `data?.info` turns a rejected prompt into a `Done`
+      // with zero tokens — the run does nothing at all and reports success, and
+      // the operator is left with no error to act on. Raise it instead; the
+      // runner folds a failed run into a `Failed` the transcript shows.
+      if (result.error !== undefined) throw new Error(promptError(result.error))
 
       // The turn is over the moment this resolves — `session.idle` lands AFTER
       // it, so waiting for the bus would mean never emitting `Done` at all. The

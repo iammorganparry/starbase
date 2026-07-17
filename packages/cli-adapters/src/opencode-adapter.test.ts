@@ -6,6 +6,7 @@ import {
   mapOpencodePermission,
   parseServerUrl,
   permissionToRequest,
+  promptError,
   splitModelId,
   toolTarget,
   totalTokens
@@ -122,6 +123,30 @@ describe("parseServerUrl", () => {
   it("is null until the banner arrives, so a partial chunk isn't mistaken for readiness", () => {
     expect(parseServerUrl("")).toBeNull()
     expect(parseServerUrl("opencode server listen")).toBeNull()
+  })
+})
+
+/**
+ * The SDK reports a rejected prompt in `error` rather than throwing, so the
+ * adapter has to check it: an unchecked `data?.info` turned a failed turn into a
+ * `Done` with zero tokens — the run did nothing and claimed success. This is the
+ * message the operator gets instead.
+ */
+describe("promptError", () => {
+  it("prefers the payload's own message", () => {
+    // Verbatim shape from a live server rejecting a foreign session id.
+    expect(
+      promptError({
+        name: "UnknownError",
+        data: { message: "Unexpected server error. Check server logs for details." }
+      })
+    ).toBe("Unexpected server error. Check server logs for details.")
+  })
+
+  it("falls back to the error's name, then to a plain statement", () => {
+    expect(promptError({ name: "ProviderAuthError" })).toBe("ProviderAuthError")
+    expect(promptError({})).toBe("opencode rejected the prompt")
+    expect(promptError(undefined)).toBe("opencode rejected the prompt")
   })
 })
 

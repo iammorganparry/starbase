@@ -16,4 +16,6 @@ opencode as a harness — run OSS and gateway models (OpenRouter, opencode Zen, 
 
 - **Subagents get their own tabs.** opencode's `task` tool runs its subagent in a child session with its own id, so its work — and, critically, its permission requests — arrive under an id that isn't the run's. Each child session opens a watch-only tab, its output is attributed to it, and nesting comes free from the session's `parentID`, the same shape Claude's adapter gets from `tool_use` ids. Spawning one isn't gated (Claude doesn't gate `Task` either); the subagent's own edits and commands are, under the same rules as the main agent's.
 
+Also fixes switching an existing session's harness from the model chip. A resume id only means something to the harness that issued it, and the store already drops the persisted one on a switch — but the adapters' live in-memory map outlived it and won, so the new harness was handed the old one's thread id and every turn failed until the app restarted. It's dropped on a switch now, which fixes Claude↔Codex as much as the new harness.
+
 Plan mode stays Claude-only — opencode's `plan` agent restricts tools but emits no plan for review, so there is nothing for the approve/revise contract to bind to.
