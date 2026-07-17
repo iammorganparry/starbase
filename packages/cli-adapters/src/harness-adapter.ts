@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import { CliAdapter, scriptedRun } from "./adapter.js"
 import { runClaude } from "./claude-adapter.js"
 import { runCodex } from "./codex-adapter.js"
+import { runOpencode } from "./opencode-adapter.js"
 
 /** When set (e2e / tests), force the deterministic scripted adapter. */
 const SCRIPTED_ENV = "STARBASE_SCRIPTED_AGENT"
@@ -10,17 +11,18 @@ const SCRIPTED_ENV = "STARBASE_SCRIPTED_AGENT"
 /**
  * Which adapter handles a spec. Pure so the routing is unit-tested without
  * spawning a harness: forced scripted (env), or no binary → scripted; otherwise
- * the harness's real adapter (`claude` / `codex`), falling back to scripted for
- * harnesses without one yet (Cursor).
+ * the harness's real adapter (`claude` / `codex` / `opencode`), falling back to
+ * scripted for harnesses without one yet (Cursor).
  */
 export const selectHarness = (
   cli: CliKind,
   binPath: string | null,
   forceScripted: boolean
-): "claude" | "codex" | "scripted" => {
+): "claude" | "codex" | "opencode" | "scripted" => {
   if (forceScripted || binPath === null) return "scripted"
   if (cli === "claude") return "claude"
   if (cli === "codex") return "codex"
+  if (cli === "opencode") return "opencode"
   return "scripted"
 }
 
@@ -29,9 +31,9 @@ const isScriptedEnv = (): boolean =>
 
 /**
  * The `CliAdapter` the app runs: dispatches each turn to the real harness
- * (Claude today) or the scripted fallback. Holds the per-session SDK session id
- * so multi-turn conversations resume. Codex/Cursor implement the same
- * `runClaude`-shaped contract next.
+ * (Claude, Codex, opencode) or the scripted fallback. Holds the per-session
+ * harness session id so multi-turn conversations resume. Cursor implements the
+ * same `runClaude`-shaped contract next.
  */
 export const HarnessCliAdapterLive: Layer.Layer<CliAdapter> = Layer.sync(CliAdapter, () => {
   const resume = new Map<string, string>()
@@ -43,6 +45,8 @@ export const HarnessCliAdapterLive: Layer.Layer<CliAdapter> = Layer.sync(CliAdap
           return runClaude(sessionId, spec, ctx, resume)
         case "codex":
           return runCodex(sessionId, spec, ctx, resume)
+        case "opencode":
+          return runOpencode(sessionId, spec, ctx, resume)
         default:
           return scripted(sessionId, spec, ctx)
       }

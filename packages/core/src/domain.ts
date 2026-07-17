@@ -9,7 +9,7 @@ import { Schema } from "effect"
 // ── CLI discovery ────────────────────────────────────────────────────────────
 
 /** The coding CLIs Starbase knows how to wrap. */
-export const CliKind = Schema.Literal("claude", "codex", "cursor")
+export const CliKind = Schema.Literal("claude", "codex", "cursor", "opencode")
 export type CliKind = Schema.Schema.Type<typeof CliKind>
 
 /** The outcome of probing for one CLI on the host. */
@@ -21,7 +21,14 @@ export const CliInfo = Schema.Struct({
   binPath: Schema.NullOr(Schema.String),
   /** Reported version string, or null when unknown / unavailable. */
   version: Schema.NullOr(Schema.String),
-  available: Schema.Boolean
+  available: Schema.Boolean,
+  /**
+   * Why an *installed* CLI is nonetheless unavailable — e.g. "opencode 1.0.220
+   * found; Starbase needs ≥1.18". Absent when the CLI is usable, or simply not
+   * installed (nothing to explain). Without this a too-old binary is
+   * indistinguishable from a missing one, which is a miserable thing to debug.
+   */
+  note: Schema.optional(Schema.String)
 })
 export type CliInfo = Schema.Schema.Type<typeof CliInfo>
 
@@ -222,7 +229,15 @@ export const ProviderConfig = Schema.Struct({
   /** Extended-thinking budget; absent = the harness default. */
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Reply tone/verbosity preset; absent = the harness default. */
-  outputStyle: Schema.optional(OutputStyle)
+  outputStyle: Schema.optional(OutputStyle),
+  /**
+   * Model ids to show in the composer's model menu; absent = show everything the
+   * harness offers. Curation exists for opencode, whose catalogue is resolved
+   * live from the user's own credentials and is enormous — a single OpenRouter
+   * key alone yields ~342 models, which is unusable as a flat menu. Ids are
+   * harness-native (for opencode, `provider/model`).
+   */
+  visibleModels: Schema.optional(Schema.Array(Schema.String))
 })
 export type ProviderConfig = Schema.Schema.Type<typeof ProviderConfig>
 

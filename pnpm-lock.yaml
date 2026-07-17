@@ -211,6 +211,9 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.144.1
         version: 0.144.1
+      '@opencode-ai/sdk':
+        specifier: 1.18.3
+        version: 1.18.3
       '@starbase/core':
         specifier: workspace:*
         version: link:../core
@@ -1578,6 +1581,9 @@ packages:
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
+
+  '@opencode-ai/sdk@1.18.3':
+    resolution: {integrity: sha512-Mevo4e6kQwbvto9E+42KSIVMhp+JBu+SwQhC5AomAvrV6Xkio3U249T+xDILDCXhl5Z/Hi/DlAuVLzpGnuh0gg==}
 
   '@opentelemetry/semantic-conventions@1.43.0':
     resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
@@ -8037,6 +8043,10 @@ snapshots:
 
   '@openai/codex@0.144.1-win32-x64':
     optional: true
+
+  '@opencode-ai/sdk@1.18.3':
+    dependencies:
+      cross-spawn: 7.0.6
 
   '@opentelemetry/semantic-conventions@1.43.0': {}
 

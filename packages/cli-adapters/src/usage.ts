@@ -3,7 +3,13 @@ import { Effect } from "effect"
 import { fetchClaudeUsage, toClaudeProviderUsage } from "./claude-usage.js"
 
 /** Short provider names for the usage modal. */
-const NAME: Record<CliKind, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor" }
+const NAME: Record<CliKind, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+  // Lowercase is the product's own styling, not a typo.
+  opencode: "opencode"
+}
 
 /** When set (e2e / tests), skip the live SDK usage poll. */
 const SCRIPTED_ENV = "STARBASE_SCRIPTED_AGENT"
