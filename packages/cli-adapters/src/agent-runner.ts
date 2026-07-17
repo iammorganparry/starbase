@@ -15,14 +15,16 @@ import {
   applyStreamEvent,
   assistantMessage,
   defaultModel,
+  findApprovedPlan,
   isSubagentEvent,
   resumePlanPrompt,
   setQuestionAnswers,
+  STOPPED_NOTE,
   userMessage
 } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
-import { Deferred, Effect, Mailbox, Ref, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Mailbox, Ref, Stream } from "effect"
 import { AppPaths } from "./app-paths.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
 import type { PermissionDecision, PermissionRequest, SessionSpec } from "./adapter.js"
@@ -80,6 +82,15 @@ interface PendingPlan {
   readonly deferred: Deferred.Deferred<PlanDecision>
 }
 
+/** An opaque per-run identity — object identity is the whole point. */
+type RunToken = Record<never, never>
+
+/** A session's in-flight run: the fiber to interrupt, and which run owns the slot. */
+interface RunFiber {
+  readonly fiber: Fiber.RuntimeFiber<void, never>
+  readonly token: RunToken
+}
+
 /**
  * Live handles onto the in-flight run for a session, so the out-of-band plan RPCs
  * (comment / revise / approve) can read + mutate the plan part in the current
@@ -90,6 +101,19 @@ interface ActiveRun {
   readonly readPlan: (planId: string) => Effect.Effect<Plan | null>
   readonly applyPlan: (planId: string, f: (plan: Plan) => Plan) => Effect.Effect<void>
 }
+
+/** Windows separators → POSIX, so path comparison has one shape to reason about. */
+const normalizePath = (p: string): string => p.replace(/\\/g, "/")
+
+/**
+ * Do two paths name the same file? One side is typically an absolute worktree
+ * path (the tool's edit target), the other a repo-relative path (a plan step's
+ * declared `files:`), so a suffix match is right — but ONLY anchored at a
+ * separator. An unanchored `endsWith` makes "a.ts" match "src/schema.ts" and
+ * ticks a step that had nothing to do with the edit.
+ */
+const samePath = (a: string, b: string): boolean =>
+  a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`)
 
 const findPlan = (msg: Message, planId: string): Plan | null => {
   for (const p of msg.parts) if (p._tag === "Plan" && p.plan.id === planId) return p.plan
@@ -197,6 +221,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     const execDefaults = yield* Ref.make(new Map<string, PermissionMode>())
     // sessionId → live handles onto the current run, for the out-of-band plan RPCs.
     const active = yield* Ref.make(new Map<string, ActiveRun>())
+    // sessionId → the fiber running the agent, so `stop` can interrupt it.
+    // Interruption is the ONLY thing that reaches the underlying process: the
+    // real adapter aborts its CLI in an `onInterrupt` finalizer. Nothing else
+    // gets there — `CliAdapter.stop` is a no-op in every implementation, and a
+    // client hanging up its stream does NOT tear the run down (verified: the run
+    // survives its consumer). Without this handle a "stopped" agent keeps running.
+    const fibers = yield* Ref.make(new Map<string, RunFiber>())
     // Monotonic id source — deterministic (no Date.now/random) for stable tests.
     const counter = yield* Ref.make(0)
     const nextId = Ref.updateAndGet(counter, (n) => n + 1)
@@ -372,7 +403,21 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         })
       )
 
-    /** Deny every pending gate + question + plan for a session — a graceful stop. */
+    /**
+     * Halt a session's agent: settle whatever it's blocked on, then interrupt the
+     * run itself.
+     *
+     * Both halves are load-bearing. Denying the pending gate/question/plan lets
+     * the paused agent-side code resume and clean up its own bookkeeping (and
+     * records the denial/rejection in the transcript, which the operator should
+     * see). Interrupting then kills the run for real — including the common case
+     * where the agent is mid-stream and blocked on nothing, where denial alone
+     * would be a no-op and the agent would just carry on.
+     *
+     * Deny-then-interrupt, in that order: the reverse would strand the pending
+     * entries, since the code that clears them sits after the `Deferred.await`
+     * we'd have just killed.
+     */
     const stop = (sessionId: string) =>
       Effect.gen(function* () {
         const allGates = yield* Ref.get(gates)
@@ -397,6 +442,20 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             ),
           { discard: true }
         )
+        // Now kill the run. `Fiber.interrupt` awaits the finalizers, so once this
+        // returns the agent is genuinely stopped — not merely asked to stop.
+        //
+        // KNOWN GAP: `prompt` does its setup (session load, CLI discovery, plan
+        // lookup) BEFORE it forks, so a stop landing in that window finds no
+        // fiber and no-ops — the agent then starts. It's narrow (the operator has
+        // to hit stop within ~a tenth of a second of sending) and self-evident:
+        // the run visibly continues and a second stop lands. Closing it properly
+        // means forking first and moving the setup inside the fiber, so there's
+        // always something to interrupt; a session flag can't fix it, since a
+        // stop arriving with no run in flight is indistinguishable from a stale
+        // one, and acting on it would kill the operator's NEXT turn instead.
+        const running = (yield* Ref.get(fibers)).get(sessionId)
+        if (running !== undefined) yield* Fiber.interrupt(running.fiber)
       })
 
     const prompt = (
@@ -483,26 +542,63 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // its ToolEnd can mark the matching plan step done (see markPlanProgress).
           const editTargets = yield* Ref.make(new Map<string, string>())
 
-          // Read the current plan from the live accumulator (for the out-of-band RPCs).
+          // The whole transcript, best-effort — the plan under execution usually
+          // lives in an EARLIER message than this turn's accumulator.
+          const allMessages: Effect.Effect<ReadonlyArray<Message>> = TranscriptStore.list(sessionId).pipe(
+            Effect.provide(env),
+            Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
+          )
+
+          // Find a plan and the message holding it. A plan part stays in the
+          // message of the turn it was PROPOSED in, while execution runs on over
+          // later turns — each with its own accumulator. So looking only at `acc`
+          // finds the plan on the proposing turn and never again. Accumulator
+          // first (it's the freshest copy of this turn's message), then the
+          // persisted transcript.
+          const locatePlan = (
+            planId: string
+          ): Effect.Effect<{ readonly plan: Plan; readonly messageId: string } | null> =>
+            Effect.gen(function* () {
+              const cur = yield* Ref.get(acc)
+              const inAcc = findPlan(cur, planId)
+              if (inAcc !== null) return { plan: inAcc, messageId: cur.id }
+              const msgs = yield* allMessages
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                const found = findPlan(msgs[i]!, planId)
+                if (found !== null) return { plan: found, messageId: msgs[i]!.id }
+              }
+              return null
+            })
+
+          // Read the current plan, wherever in the transcript it lives.
           const readPlan = (planId: string): Effect.Effect<Plan | null> =>
-            Effect.map(Ref.get(acc), (m) => findPlan(m, planId))
+            Effect.map(locatePlan(planId), (located) => located?.plan ?? null)
 
           // Replace a plan part in place: update the accumulator + persisted
           // transcript, and push a `PlanUpdated` so an attached renderer syncs.
+          // Addresses the plan's OWN message — `patchLast` would hit this turn's
+          // message, which for a plan proposed on an earlier turn holds no plan.
           const applyPlan = (planId: string, f: (plan: Plan) => Plan): Effect.Effect<void> =>
             Effect.gen(function* () {
-              const cur = yield* Ref.get(acc)
-              const plan = findPlan(cur, planId)
-              if (plan === null) return
-              const nextPlan = f(plan)
-              const next: Message = {
-                ...cur,
-                parts: cur.parts.map((p) =>
+              const located = yield* locatePlan(planId)
+              if (located === null) return
+              const nextPlan = f(located.plan)
+              const patch = (m: Message): Message => ({
+                ...m,
+                parts: m.parts.map((p) =>
                   p._tag === "Plan" && p.plan.id === planId ? { _tag: "Plan", plan: nextPlan } : p
                 )
+              })
+              const cur = yield* Ref.get(acc)
+              if (located.messageId === cur.id) {
+                const next = patch(cur)
+                yield* Ref.set(acc, next)
+                yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
+              } else {
+                // The plan is behind us: patch its message directly and leave the
+                // accumulator alone (it holds a different, later message).
+                yield* TranscriptStore.patchById(sessionId, located.messageId, patch).pipe(Effect.ignore)
               }
-              yield* Ref.set(acc, next)
-              yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
               yield* out.offer({ _tag: "PlanUpdated", plan: nextPlan })
             }).pipe(Effect.provide(env), Effect.asVoid)
 
@@ -514,17 +610,18 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             Effect.gen(function* () {
               const target = (yield* Ref.get(editTargets)).get(toolId)
               if (target === undefined) return
+              // Accumulator first (the plan was proposed this turn), else the
+              // transcript (it was proposed earlier and execution has moved on).
               const cur = yield* Ref.get(acc)
-              const executing = cur.parts.find((p) => p._tag === "Plan" && p.plan.status === "approved")
-              if (executing === undefined || executing._tag !== "Plan") return
-              const t = target.replace(/\\/g, "/")
+              const inAcc = cur.parts.find((p) => p._tag === "Plan" && p.plan.status === "approved")
+              const executing =
+                inAcc !== undefined && inAcc._tag === "Plan"
+                  ? { plan: inAcc.plan, messageId: cur.id }
+                  : findApprovedPlan(yield* allMessages)
+              if (executing === null) return
+              const t = normalizePath(target)
               const step = executing.plan.steps.find(
-                (s) =>
-                  s.status !== "done" &&
-                  s.files.some((f) => {
-                    const fp = f.path.replace(/\\/g, "/")
-                    return t === fp || t.endsWith(`/${fp}`) || fp.endsWith(t) || t.endsWith(fp)
-                  })
+                (s) => s.status !== "done" && s.files.some((f) => samePath(t, normalizePath(f.path)))
               )
               if (step === undefined) return
               yield* applyPlan(executing.plan.id, (pl) => ({
@@ -642,8 +739,22 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // torn down when the run ends so out-of-band calls become no-ops.
           yield* Ref.update(active, (m) => new Map(m).set(sessionId, { readPlan, applyPlan }))
 
+          /** Identifies THIS run, so its cleanup can't evict a successor's fiber. */
+          const token: RunToken = {}
+
           const run = adapter.run(sessionId, spec, { emit, canUseTool, askQuestion, proposePlan }).pipe(
-            Effect.catchAllCause(() => emit({ _tag: "Failed", message: "The agent run failed." })),
+            // An operator stop arrives as an interruption. Record it as the turn's
+            // terminal event so the message settles (and the transcript says why)
+            // rather than being left mid-stream forever. Finalizers run
+            // uninterruptibly, so this emit completes before the mailbox closes.
+            Effect.onInterrupt(() => emit({ _tag: "Failed", message: STOPPED_NOTE })),
+            // A stop is not a crash — don't report the operator's own interrupt as
+            // "the agent run failed" on top of the note we just wrote.
+            Effect.catchAllCause((cause) =>
+              Cause.isInterruptedOnly(cause)
+                ? Effect.void
+                : emit({ _tag: "Failed", message: "The agent run failed." })
+            ),
             Effect.ensuring(
               Ref.update(active, (m) => {
                 const nextMap = new Map(m)
@@ -651,9 +762,34 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                 return nextMap
               })
             ),
+            Effect.ensuring(
+              // Deregister THIS run only. A session's slot can already belong to a
+              // NEWER run by the time this one finishes: "send now" interrupts the
+              // current turn and starts the next without waiting for the stop to
+              // land (the renderer fires it and moves on), so the two overlap.
+              // Deleting by session id alone would evict the new run's fiber, and
+              // the next stop would find nothing and quietly do nothing — leaving
+              // a turn nobody can halt. The token is in scope here; the fiber
+              // doesn't exist yet.
+              //
+              // Untested, deliberately: the obvious test can't reach this. This
+              // finalizer runs BEFORE `out.end`, and a consumer only returns once
+              // the stream ends — so any test that awaits run 1 before starting
+              // run 2 has already missed the overlap, and passes with or without
+              // the guard. Reproducing it needs run 1 still unwinding while run 2
+              // registers, which is a timing construction, not a fact about the
+              // code. Reviewed rather than pinned.
+              Ref.update(fibers, (m) => {
+                if (m.get(sessionId)?.token !== token) return m
+                const nextMap = new Map(m)
+                nextMap.delete(sessionId)
+                return nextMap
+              })
+            ),
             Effect.ensuring(out.end)
           )
-          yield* Effect.forkScoped(run)
+          const fiber = yield* Effect.forkScoped(run)
+          yield* Ref.update(fibers, (m) => new Map(m).set(sessionId, { fiber, token }))
           return Mailbox.toStream(out)
         })
       )

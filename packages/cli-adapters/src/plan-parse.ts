@@ -129,11 +129,54 @@ const parentIdOf = (armNumber: string): string | null => {
   return m ? `s_${m[1]!.padStart(2, "0")}` : null
 }
 
-const splitList = (v: string): ReadonlyArray<string> =>
-  v
-    .split(/[;,]/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
+const clean = (parts: ReadonlyArray<string>): ReadonlyArray<string> =>
+  parts.map((s) => s.trim()).filter((s) => s.length > 0)
+
+/**
+ * Split a prose/code field — `approach`, `guards`, `files`.
+ *
+ * Semicolons ONLY. The format documents these as semicolon-separated precisely
+ * because their values are prose and code, which are full of commas: splitting
+ * on commas too tears `meetsMinVersion(raw, min)` into "…meetsMinVersion(raw"
+ * and "min)", and turns the guard "fires once, even on repeated 401s" into two
+ * fragments that each say nothing.
+ */
+const splitProse = (v: string): ReadonlyArray<string> => clean(v.split(";"))
+
+/**
+ * Split a list of step ordinals — `depends`, `blocks`.
+ *
+ * Commas are fine here, unlike the prose fields: an ordinal ("01", "4a") can't
+ * contain one, so "01, 02" and "01; 02" can safely mean the same two steps.
+ */
+const splitRefs = (v: string): ReadonlyArray<string> => clean(v.split(/[;,]/))
+
+/** The relation fields — the only ones the format puts two-to-a-line. */
+const RELATION = /^\s*(depends|blocks)\s*:\s*(.*)$/i
+
+/**
+ * Peel a trailing relation field out of a value.
+ *
+ * The format writes both relations on ONE line — `depends: 01; blocks: 03` — so
+ * reading that line as a single field swallows the second: `blocks` goes unset
+ * while `dependsOn` gains a junk "blocks: 03" entry. Applied only to relation
+ * fields, so prose that happens to contain "…; blocks: …" is left alone.
+ */
+const splitRelations = (key: string, value: string): ReadonlyArray<readonly [string, string]> => {
+  const out: Array<readonly [string, string]> = []
+  let k = key
+  let buf: Array<string> = []
+  for (const token of value.split(";")) {
+    const m = RELATION.exec(token)
+    if (m) {
+      out.push([k, buf.join(";")] as const)
+      k = m[1]!.toLowerCase()
+      buf = [m[2]!]
+    } else buf.push(token)
+  }
+  out.push([k, buf.join(";")] as const)
+  return out
+}
 
 const parseFile = (token: string): PlanFileChange | null => {
   const m = /^([AMD])\s+(\S+)(?:\s+\+(\d+))?(?:\s+-(\d+))?/.exec(token.trim())
@@ -212,29 +255,38 @@ const parseBlock = (block: string): { summary: string; steps: PlanStep[] } => {
       const key = field[1]!.toLowerCase()
       const value = field[2]!
       const s = current!
-      switch (key) {
-        case "intent":
-          s.intent = value
-          break
-        case "approach":
-          s.approach = splitList(value)
-          break
-        case "files":
-          s.files = splitList(value).map(parseFile).filter((f): f is PlanFileChange => f !== null)
-          break
-        case "guards":
-          s.guards = splitList(value).map(parseGuard)
-          break
-        case "depends":
-          s.dependsOn = splitList(value).map(normNum)
-          break
-        case "blocks":
-          s.blocks = splitList(value).map(normNum)
-          break
-        case "branch":
-          s.kind = "branch"
-          s.condition = value
-          break
+      // One line can carry both relations (`depends: 01; blocks: 03`), so a
+      // relation field may yield two; everything else is a single field whose
+      // value is taken whole.
+      const fields =
+        key === "depends" || key === "blocks"
+          ? splitRelations(key, value)
+          : [[key, value] as const]
+      for (const [k, v] of fields) {
+        switch (k) {
+          case "intent":
+            s.intent = v
+            break
+          case "approach":
+            s.approach = splitProse(v)
+            break
+          case "files":
+            s.files = splitProse(v).map(parseFile).filter((f): f is PlanFileChange => f !== null)
+            break
+          case "guards":
+            s.guards = splitProse(v).map(parseGuard)
+            break
+          case "depends":
+            s.dependsOn = splitRefs(v).map(normNum)
+            break
+          case "blocks":
+            s.blocks = splitRefs(v).map(normNum)
+            break
+          case "branch":
+            s.kind = "branch"
+            s.condition = v
+            break
+        }
       }
       continue
     }

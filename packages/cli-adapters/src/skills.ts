@@ -1,6 +1,8 @@
 import type { CliKind, Skill } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
-import { Effect } from "effect"
+import { Effect, Ref } from "effect"
+import { NO_CAPABILITIES, probeClaudeCapabilities } from "./claude-commands.js"
+import type { ClaudeCapabilities } from "./claude-commands.js"
 
 /** What harness a `list` request is scoped to, and where to scan for skills. */
 export interface SkillSpec {
@@ -9,19 +11,38 @@ export interface SkillSpec {
   readonly homeDir: string | null
   /** The session's worktree, scanned for PROJECT skills; null when none. */
   readonly worktreePath: string | null
+  /** The harness binary, so its own command list can be read from it. */
+  readonly binPath?: string | null
 }
 
 /**
- * Built-in slash commands surfaced in every harness's `/` menu. Kept
- * harness-agnostic — real global/project skills are layered on top per harness.
+ * A one-line gloss for the CLI's own built-in commands.
+ *
+ * Descriptions only — never existence. Which commands exist comes from the
+ * harness (`ClaudeCapabilities.commands`), so nothing here can conjure a command
+ * that isn't real; an entry for a command the CLI dropped simply goes unused, and
+ * a built-in we haven't glossed still lists, just without a description. That
+ * split is the whole point: the previous hardcoded list decided BOTH, and so
+ * offered `/test` and `/commit`, which this harness has never had.
  */
-const BUILTIN_COMMANDS: ReadonlyArray<Skill> = [
-  { name: "/plan", description: "Draft a plan before making edits", source: "command" },
-  { name: "/review", description: "Review the current diff", source: "command" },
-  { name: "/test", description: "Run the test suite", source: "command" },
-  { name: "/commit", description: "Stage and commit the changes", source: "command" },
-  { name: "/clear", description: "Clear the conversation", source: "command" }
-]
+const BUILTIN_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  agents: "Manage sub-agents",
+  clear: "Clear the conversation",
+  compact: "Compact the conversation to free context",
+  config: "Open the config panel",
+  context: "Show what's using the context window",
+  doctor: "Diagnose the installation",
+  effort: "Set the reasoning effort",
+  goal: "Set the goal for this session",
+  init: "Write a CLAUDE.md for this codebase",
+  insights: "Show usage insights",
+  mcp: "Manage MCP servers",
+  model: "Change the model",
+  recap: "Recap the session so far",
+  rename: "Rename the conversation",
+  "security-review": "Review the pending changes for vulnerabilities",
+  usage: "Show usage and limits"
+}
 
 const field = (content: string, key: string): string | null =>
   content.match(new RegExp(`^${key}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? null
@@ -69,19 +90,56 @@ const scanSkillsDir = (dir: string): Effect.Effect<ReadonlyArray<Skill>, never, 
     ).pipe(Effect.map((results) => results.filter((s): s is Skill => s !== null)))
   })
 
+const byName = (a: Skill, b: Skill): number => a.name.localeCompare(b.name)
+
 /**
  * Reports the skills/slash-commands the selected harness exposes for the `/`
- * menu. For Claude it scans the operator's GLOBAL skills (`~/.claude/skills`)
- * and the session's PROJECT skills (`<worktree>/.claude/skills`), deduped by name
- * (project overrides global), plus the shared built-in commands. Other harnesses
- * report only their built-ins until their own reporters land.
+ * menu.
+ *
+ * For Claude the list of what EXISTS comes from the CLI itself, which announces
+ * its whole surface on startup — its built-ins (`/goal`, `/init`, `/compact`),
+ * file-based skills, and plugin commands alike. Descriptions are layered on
+ * afterwards from the skills directories' frontmatter (`~/.claude/skills` global,
+ * `<worktree>/.claude/skills` project — project wins), since the CLI reports
+ * names only.
+ *
+ * The probe is cached per harness for the process lifetime: it costs a CLI
+ * startup, and the answer only changes when the operator installs something.
+ *
+ * Other harnesses report nothing until their own reporters land. That's
+ * deliberate: they used to be handed a hardcoded list of five commands, most of
+ * which no harness has ever had, and an empty menu is at least true.
  */
 export class SkillsService extends Effect.Service<SkillsService>()("@starbase/SkillsService", {
   accessors: true,
-  sync: () => ({
-    list: (spec: SkillSpec): Effect.Effect<ReadonlyArray<Skill>, never, ScanEnv> =>
+  effect: Effect.gen(function* () {
+    const cache = yield* Ref.make(new Map<string, ClaudeCapabilities>())
+
+    /**
+     * The CLI's own surface, probed once per binary.
+     *
+     * Requires a discovered binary. Without one there's nothing to ask — and
+     * insisting on it keeps the probe out of anywhere that hasn't opted in by
+     * resolving a path, so a unit test never spawns a CLI to list skills.
+     */
+    const capabilities = (
+      binPath: string | null,
+      cwd: string | null
+    ): Effect.Effect<ClaudeCapabilities> =>
       Effect.gen(function* () {
-        if (spec.cli !== "claude") return BUILTIN_COMMANDS
+        if (binPath === null) return NO_CAPABILITIES
+        const hit = (yield* Ref.get(cache)).get(binPath)
+        if (hit) return hit
+        const probed = yield* probeClaudeCapabilities(binPath, cwd)
+        // Don't cache a miss: a probe that failed because the CLI was busy or
+        // mid-upgrade should be retried, not remembered as "no commands".
+        if (probed.commands.length > 0) yield* Ref.update(cache, (m) => new Map(m).set(binPath, probed))
+        return probed
+      })
+
+    const list = (spec: SkillSpec): Effect.Effect<ReadonlyArray<Skill>, never, ScanEnv> =>
+      Effect.gen(function* () {
+        if (spec.cli !== "claude") return []
         const path = yield* Path.Path
 
         // Global first, then project, so a project skill overrides a global one.
@@ -91,11 +149,31 @@ export class SkillsService extends Effect.Service<SkillsService>()("@starbase/Sk
         ].filter((d): d is string => d !== null)
 
         const scanned = yield* Effect.forEach(dirs, scanSkillsDir)
-        const byName = new Map<string, Skill>()
-        for (const skill of scanned.flat()) byName.set(skill.name, skill)
-        const skills = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
+        const described = new Map<string, Skill>()
+        for (const skill of scanned.flat()) described.set(skill.name, skill)
 
-        return [...skills, ...BUILTIN_COMMANDS]
+        const caps = yield* capabilities(spec.binPath ?? null, spec.worktreePath)
+        // No answer from the CLI (not installed, still booting, probe failed) —
+        // fall back to what's on disk, so the menu degrades to the skills we can
+        // see rather than to nothing.
+        if (caps.commands.length === 0) return [...described.values()].sort(byName)
+
+        const isSkill = new Set(caps.skills)
+        return caps.commands
+          .map((command): Skill => {
+            const name = `/${command}`
+            const local = described.get(name)
+            return {
+              name,
+              // Prefer the skill's own frontmatter; fall back to our gloss for
+              // the CLI's built-ins; else say nothing rather than invent.
+              description: local?.description ?? BUILTIN_DESCRIPTIONS[command] ?? "",
+              source: isSkill.has(command) ? "skill" : "command"
+            }
+          })
+          .sort(byName)
       })
+
+    return { list }
   })
 }) {}

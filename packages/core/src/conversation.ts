@@ -36,7 +36,18 @@ export const ToolCall = Schema.Struct({
   /** Added/removed line counts, for edit-style tools. */
   diff: Schema.NullOr(DiffStat),
   /** A compact unified-diff snippet shown inline under the card (Edit). */
-  preview: Schema.NullOr(Schema.String)
+  preview: Schema.NullOr(Schema.String),
+  /**
+   * What the tool printed — the expanded body of a non-edit card (a Bash
+   * command's output, a Grep's hits). Capped upstream; edit tools use `preview`.
+   *
+   * OPTIONAL, not `NullOr`, and that is load-bearing: this schema decodes every
+   * transcript ever written, and a REQUIRED field rejects tool cards recorded
+   * before it existed. `TranscriptStore.readAll` turns a decode failure into an
+   * empty transcript, so requiring it would silently erase the history of every
+   * existing session the moment it was opened.
+   */
+  output: Schema.optional(Schema.String)
 })
 export type ToolCall = Schema.Schema.Type<typeof ToolCall>
 
@@ -427,6 +438,8 @@ export const StreamEvent = Schema.Union(
     meta: Schema.NullOr(Schema.String),
     diff: Schema.NullOr(DiffStat),
     preview: Schema.NullOr(Schema.String),
+    /** What the tool printed (capped upstream). Optional — see `ToolCall.output`. */
+    output: Schema.optional(Schema.String),
     agentId: AgentId
   }),
   Schema.TaggedStruct("GateRequested", { gate: ApprovalGate }),
@@ -458,6 +471,17 @@ export const StreamEvent = Schema.Union(
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )
 export type StreamEvent = Schema.Schema.Type<typeof StreamEvent>
+
+/**
+ * What the transcript records when the operator halts a run.
+ *
+ * Shared because BOTH sides write it and they must agree: the runner emits it as
+ * the interrupted run's terminal event (persisting it), while the renderer folds
+ * the same note optimistically on STOP — it can't wait for the event, since it
+ * leaves `running` (and stops listening) the moment you hit Stop. Same string
+ * either way, so the live view and a reload show the same turn.
+ */
+export const STOPPED_NOTE = "Stopped."
 
 // ── Constructors & fold ──────────────────────────────────────────────────────
 
@@ -625,7 +649,20 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       ...msg,
       parts: parts.map((p): ContentPart =>
         p._tag === "Tool" && p.tool.id === e.id
-          ? { _tag: "Tool", tool: { ...p.tool, status: e.status, meta: e.meta, diff: e.diff, preview: e.preview } }
+          ? {
+              _tag: "Tool",
+              tool: {
+                ...p.tool,
+                status: e.status,
+                meta: e.meta,
+                diff: e.diff,
+                preview: e.preview,
+                // Spread so an event without output leaves the key ABSENT rather
+                // than present-and-undefined — the field is optional, and an
+                // explicit `undefined` re-encodes differently from "not there".
+                ...(e.output !== undefined ? { output: e.output } : {})
+              }
+            }
           : p
       )
     })),
@@ -951,6 +988,32 @@ export const latestPlan = (messages: ReadonlyArray<Message>): Plan | null => {
     for (let j = parts.length - 1; j >= 0; j--) {
       const part = parts[j]!
       if (part._tag === "Plan") return part.plan
+    }
+  }
+  return null
+}
+
+/**
+ * The newest APPROVED plan across a transcript, together with the id of the
+ * message holding it — or null when the session has no plan under execution.
+ *
+ * A plan part lives in the assistant message of the turn it was PROPOSED in, and
+ * stays there: later turns get their own messages. So anything reconciling
+ * execution back onto the plan (progress marking) must address the plan's own
+ * message rather than the newest one — hence the `messageId` alongside the plan.
+ * `latestPlan` deliberately can't serve this: it ignores status and drops the
+ * location.
+ */
+export const findApprovedPlan = (
+  messages: ReadonlyArray<Message>
+): { readonly plan: Plan; readonly messageId: string } | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!
+    for (let j = msg.parts.length - 1; j >= 0; j--) {
+      const part = msg.parts[j]!
+      if (part._tag === "Plan" && part.plan.status === "approved") {
+        return { plan: part.plan, messageId: msg.id }
+      }
     }
   }
   return null

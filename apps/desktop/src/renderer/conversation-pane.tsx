@@ -177,6 +177,7 @@ export function ConversationPane({
           catalog={convo.catalog}
           onSetHarness={convo.setHarness}
           onSend={sendPrompt}
+          onStop={convo.stop}
           onDecideGate={convo.decideGate}
           onSetMode={convo.setMode}
           question={convo.question}
