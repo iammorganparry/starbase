@@ -35,7 +35,7 @@ const review = (over: Partial<AdversarialReview> = {}): AdversarialReview => ({
   ...over
 })
 
-const opts = { canRoute: true, sent: false }
+const opts = { sent: false }
 
 describe("outcomeOf — agent-destined (critical/major)", () => {
   it("reports routed once the review carries a routedAt", () => {
@@ -44,15 +44,17 @@ describe("outcomeOf — agent-destined (critical/major)", () => {
     expect(outcomeOf(finding("major"), r, opts).kind).toBe("routed")
   })
 
-  // The real, short window between the review landing and the stamp returning.
-  it("reports pending while routing is in flight", () => {
-    expect(outcomeOf(finding("critical"), review(), opts).kind).toBe("pending")
-  })
-
-  it("offers the manual fallback when there is no conversation to route through", () => {
-    expect(outcomeOf(finding("critical"), review(), { canRoute: false, sent: false }).kind).toBe(
-      "manual"
-    )
+  /**
+   * The heart of the "no unsupervised send on mount" fix. An unrouted agent
+   * finding reads "Send to agent" (manual) — never a "Sending…" spinner. There
+   * is no honest in-flight state a card can derive from an absent stamp:
+   * "pending" could not tell a fresh run a moment from settling apart from a
+   * pre-upgrade review that will never settle, so it spun forever and, worse,
+   * hid the fallback. Unstamped = the operator's call.
+   */
+  it("reports manual for an unrouted agent finding — never a pending spinner", () => {
+    expect(outcomeOf(finding("critical"), review(), opts).kind).toBe("manual")
+    expect(outcomeOf(finding("major"), review(), opts).kind).toBe("manual")
   })
 })
 
@@ -74,19 +76,15 @@ describe("outcomeOf — PR-destined (minor/nit)", () => {
    * The regression. `Review.run` stamps postedAt or postError before the review
    * is ever returned, so an unstamped PR-destined finding can only come from a
    * review persisted BEFORE posting existed — and nothing backfills those,
-   * because posting only happens on a fresh run.
-   *
-   * "pending" there spins forever for a post that will never come, and the
-   * pending branch hides the manual fallback, so the finding becomes impossible
-   * to act on. It must degrade to "manual" instead.
+   * because posting only happens on a fresh run. It must read "manual", not spin.
    */
-  it("NEVER reports pending — an unstamped pre-upgrade review falls back to manual", () => {
+  it("reports manual for an unstamped pre-upgrade review — never a pending spinner", () => {
     expect(outcomeOf(finding("minor"), review(), opts).kind).toBe("manual")
     expect(outcomeOf(finding("nit"), review(), opts).kind).toBe("manual")
   })
 
-  it("still falls back to manual on a pre-upgrade review whose agent half HAS routed", () => {
-    // routedAt gets stamped on upgrade by the routing effect; postedAt never does.
+  it("still reports manual on a pre-upgrade review whose agent half HAS routed", () => {
+    // A pre-upgrade review can carry routedAt (stamped once) but never postedAt.
     const r = review({ routedAt: "2026-07-17T10:00:01.000Z" })
     expect(outcomeOf(finding("nit"), r, opts).kind).toBe("manual")
   })
@@ -94,7 +92,7 @@ describe("outcomeOf — PR-destined (minor/nit)", () => {
 
 describe("outcomeOf — manual sends", () => {
   it("reports routed for anything the operator sent by hand", () => {
-    const sent = { canRoute: true, sent: true }
+    const sent = { sent: true }
     expect(outcomeOf(finding("nit"), review(), sent).kind).toBe("routed")
     expect(outcomeOf(finding("critical"), review(), sent).kind).toBe("routed")
   })

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import type { AdversarialReview, ReviewFinding, ReviewPhase, ReviewSeverity } from "@starbase/core"
 import { destinationOf, findingLocation, partitionFindings } from "@starbase/core"
-import { AlertTriangle, CornerDownRight, Loader2, type LucideIcon, MessageSquare } from "lucide-react"
+import { AlertTriangle, CornerDownRight, type LucideIcon, MessageSquare } from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { Spinner } from "../components/loading.js"
@@ -39,8 +39,7 @@ export type FindingOutcome =
   | { readonly kind: "routed" } // sent to the agent
   | { readonly kind: "posted" } // posted to the PR
   | { readonly kind: "post-failed"; readonly message: string }
-  | { readonly kind: "pending" } // the run is done but routing/posting hasn't landed
-  | { readonly kind: "manual" } // nothing automatic applies — offer the button
+  | { readonly kind: "manual" } // not sent — offer the button
 
 /**
  * Work out a finding's outcome from the review's own stamps.
@@ -49,40 +48,29 @@ export type FindingOutcome =
  * is empty after a reload, so a card keyed off it alone would show "not sent"
  * for a finding the agent is already fixing. `routedAt`/`postedAt` are persisted
  * with the review, so they survive — and severity says which stamp applies.
+ *
+ * There is deliberately no "pending / Sending…" outcome. A finding was either
+ * acted on (its stamp is set) or it wasn't (offer the button). "In flight" is
+ * not a state a card can honestly report: routing/posting happen server-side and
+ * the only signal a card sees is the stamp flipping null→set, so a "pending"
+ * derived from an absent stamp cannot tell "a moment from settling" apart from
+ * "never going to settle" — and the latter (a review persisted before this
+ * feature, which nothing backfills) would spin forever. Unstamped always reads
+ * as "Send to agent": true, and actionable.
  */
 export const outcomeOf = (
   finding: ReviewFinding,
   review: AdversarialReview | null,
-  opts: { readonly canRoute: boolean; readonly sent: boolean }
+  opts: { readonly sent: boolean }
 ): FindingOutcome => {
   if (review === null) return opts.sent ? { kind: "routed" } : { kind: "manual" }
   const destination = destinationOf(finding.severity)
   if (destination === "agent") {
-    if (review.routedAt !== null || opts.sent) return { kind: "routed" }
-    // No conversation to route through (no live session) — the automatic path
-    // can't run, so fall back to offering the button rather than claiming a
-    // "pending" that will never resolve.
-    return opts.canRoute ? { kind: "pending" } : { kind: "manual" }
+    return review.routedAt !== null || opts.sent ? { kind: "routed" } : { kind: "manual" }
   }
   if (opts.sent) return { kind: "routed" }
   if (review.postError !== null) return { kind: "post-failed", message: review.postError }
   if (review.postedAt !== null) return { kind: "posted" }
-  /**
-   * Unstamped, and NOT pending — "manual".
-   *
-   * The PR half has no pending window to report. Posting happens inside
-   * `Review.run`, which stamps `postedAt` or `postError` before the review is
-   * ever returned; the one unstamped path is "no low-severity findings at all",
-   * which renders no PR-destined card to ask. So on a review this build produced,
-   * reaching here is impossible.
-   *
-   * It IS reachable for a review persisted BEFORE posting existed: the fields
-   * decode to null and nothing backfills them, because posting only ever happens
-   * on a fresh run. Reporting "Sending…" there spins a spinner forever for a post
-   * that will never come — and, worse, the manual fallback is hidden for pending,
-   * so the finding becomes unactionable. "manual" tells the truth (nobody is
-   * sending this) and hands back the button.
-   */
   return { kind: "manual" }
 }
 
@@ -123,8 +111,7 @@ const OUTCOME_META: Record<
 > = {
   routed: { Icon: CornerDownRight, label: "Sent to agent", tone: "text-green" },
   posted: { Icon: MessageSquare, label: "Posted to PR", tone: "text-dim" },
-  "post-failed": { Icon: AlertTriangle, label: "Couldn't post to PR", tone: "text-red" },
-  pending: { Icon: Loader2, label: "Sending…", tone: "text-dim" }
+  "post-failed": { Icon: AlertTriangle, label: "Couldn't post to PR", tone: "text-red" }
 }
 
 /** The outcome footer — an icon, a word, and nothing else unless it went wrong. */
@@ -136,7 +123,7 @@ function OutcomeLine({ outcome }: { outcome: FindingOutcome }) {
       className={cn("flex items-center gap-[5px] text-[10.5px] leading-none", meta.tone)}
       title={outcome.kind === "post-failed" ? outcome.message : undefined}
     >
-      <meta.Icon size={10.5} strokeWidth={2.25} className={outcome.kind === "pending" ? "animate-spin" : ""} />
+      <meta.Icon size={10.5} strokeWidth={2.25} />
       <span>{meta.label}</span>
     </div>
   )
@@ -169,7 +156,7 @@ export function ReviewFindingRow({
 }: ReviewFindingRowProps) {
   const accent = severityAccent[finding.severity]
   const location = findingLocation(finding)
-  const outcome = outcomeOf(finding, review, { canRoute, sent })
+  const outcome = outcomeOf(finding, review, { sent })
   return (
     <div
       className={cn(
@@ -214,7 +201,7 @@ export function ReviewFindingRow({
             with no live conversation to route through. Shown on hover so it
             doesn't compete with the outcome line in the common case.
           */}
-          {onSendToAgent && outcome.kind !== "routed" && outcome.kind !== "pending" && (
+          {onSendToAgent && outcome.kind !== "routed" && (
             <button
               type="button"
               disabled={!canRoute}

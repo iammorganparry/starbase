@@ -253,7 +253,10 @@ export const ReviewFindingCards: Story = {
           { ...adversarialReview, postedAt: null, postError: "HTTP 422: line must be part of the diff" },
           all
         )}
-        {column("Not yet settled", { ...adversarialReview, routedAt: null, postedAt: null }, all)}
+        {/* Unstamped (e.g. a review persisted before auto-routing existed):
+            every card offers "Send to agent" rather than spinning — the operator
+            decides, nothing fires on its own. */}
+        {column("Unstamped → manual", { ...adversarialReview, routedAt: null, postedAt: null }, all)}
       </div>
     )
   }

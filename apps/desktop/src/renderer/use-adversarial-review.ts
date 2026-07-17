@@ -6,7 +6,7 @@
  * gates surface in the Conversation tab instead of a hidden run that stalls
  * forever with its gates rendered nowhere.
  */
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useMemo } from "react"
 import { useSelector } from "@xstate/react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { AdversarialReview, ReviewFinding, ReviewPhase, Session } from "@starbase/core"
@@ -106,26 +106,21 @@ export function useAdversarialReview(
 
   const review = query.data ?? null
 
-  /**
-   * Route a review that reached us unrouted — whoever produced it.
-   *
-   * Closes a real gap the mutation's `onSuccess` can't: a review can be stored
-   * with `routedAt: null` and then never be run again. It happens on upgrade
-   * (reviews persisted before routing existed decode with the field defaulted to
-   * null), and whenever the app dies between the run and the stamp. With
-   * auto-review switched off nothing polls, so those findings would sit there —
-   * and their cards would read "Sending…" forever, waiting on a send that has
-   * nobody left to make it.
-   *
-   * Not a surprise-send: an unrouted review means the handoff never happened, and
-   * completing it is the whole point of the feature. `routeReviewToAgent` no-ops
-   * on an already-routed review, so this settles once and stays quiet.
-   */
-  useEffect(() => {
-    if (review !== null && review.routedAt === null) {
-      void routeReviewToAgent(session, review, qc)
-    }
-  }, [review, session, qc])
+  // Deliberately NO "route any unrouted stored review on mount" effect here.
+  //
+  // Routing to the agent is an unsupervised action, so it happens ONLY as the
+  // direct result of a review the user asked for: a manual run (`onSuccess`
+  // above) or the auto-review poll (App.tsx), which is gated on the
+  // `autoAdversarialReview` toggle. Merely OPENING a session must not send
+  // anything.
+  //
+  // An earlier version routed every `routedAt: null` review on mount to clear a
+  // "Sending…" spinner. It fired for reviews the user never opted into — heads
+  // that predate the upgrade (findings describing code that has since changed),
+  // findings declined under the old manual flow, and sessions with auto-review
+  // off. The spinner is gone by a different route: an unstamped finding now
+  // reads "Send to agent" (see `outcomeOf`), which is the truth — it was not
+  // sent, and here is how — and hands the choice back to the operator.
 
   const routedKeys = useRoutedEntries(session.id)
 
