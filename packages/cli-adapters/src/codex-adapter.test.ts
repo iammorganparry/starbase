@@ -62,7 +62,38 @@ describe("codexEventToStreamEvents", () => {
       ev({ type: "item.completed", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "ok", exit_code: 0, status: "completed" } }),
       "s1"
     )
-    expect(end).toStrictEqual([{ _tag: "ToolEnd", id: "c1", status: "success", meta: "exit 0", diff: null, preview: null }])
+    // codex keeps a command's output in `aggregated_output`; surface it as the
+    // card's authoritative output (the bash widgets read it), not a dropped field.
+    expect(end).toStrictEqual([
+      { _tag: "ToolEnd", id: "c1", status: "success", meta: "exit 0", diff: null, preview: null, output: "ok" }
+    ])
+  })
+
+  it("omits output on a command that printed nothing, rather than an empty string", () => {
+    const end = codexEventToStreamEvents(
+      ev({ type: "item.completed", item: { id: "c2", type: "command_execution", command: "true", aggregated_output: "", exit_code: 0, status: "completed" } }),
+      "s1"
+    )
+    expect(end).toStrictEqual([{ _tag: "ToolEnd", id: "c2", status: "success", meta: "exit 0", diff: null, preview: null }])
+  })
+
+  it("streams a running command's aggregated output as a ToolDelta on item.updated", () => {
+    const tick = codexEventToStreamEvents(
+      ev({ type: "item.updated", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "RUN  v2\n ✓ a\n", status: "in_progress" } }),
+      "s1"
+    )
+    // Same id as the ToolStart, so it folds onto that running card. Cumulative
+    // snapshot, capped the same way as final output.
+    expect(tick).toStrictEqual([{ _tag: "ToolDelta", id: "c1", output: "RUN  v2\n ✓ a\n" }])
+  })
+
+  it("does not emit a ToolDelta before a running command has printed anything", () => {
+    expect(
+      codexEventToStreamEvents(
+        ev({ type: "item.updated", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "in_progress" } }),
+        "s1"
+      )
+    ).toStrictEqual([])
   })
 
   it("maps a file_change completion to an Edit tool card with a file count", () => {
@@ -97,8 +128,10 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([{ _tag: "Failed", message: "boom" }])
   })
 
-  it("ignores intermediate events (turn.started, item.updated)", () => {
+  it("ignores intermediate events with no card to fill (turn.started, a non-command item.updated)", () => {
     expect(codexEventToStreamEvents(ev({ type: "turn.started" }), "s1")).toStrictEqual([])
+    // Only a running COMMAND streams live output; a mid-flight agent_message is
+    // re-sent whole on completion, so an update to it carries no ToolDelta.
     expect(
       codexEventToStreamEvents(ev({ type: "item.updated", item: { id: "m1", type: "agent_message", text: "partial" } }), "s1")
     ).toStrictEqual([])

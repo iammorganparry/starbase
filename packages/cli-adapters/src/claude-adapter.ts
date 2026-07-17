@@ -3,6 +3,7 @@ import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
+import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
 /**
@@ -321,32 +322,6 @@ const toolResultMeta = (name: string | undefined, content: unknown): string | nu
   if (name !== "Read") return null
   const text = toolResultText(content)
   return text ? `${lineCount(text)} lines` : null
-}
-
-/**
- * How much of a tool's output we keep. It rides the RPC to the renderer AND is
- * persisted into the session's transcript.json, so an uncapped `pnpm test` log
- * would bloat the file every future read pays for.
- */
-const OUTPUT_CAP = 6_000
-/** Kept from the front when capping — enough to see what the command started doing. */
-const OUTPUT_HEAD = 3_600
-
-/**
- * Cap a tool's output, keeping BOTH ends.
- *
- * Which end matters depends on the command: a compile error lists its first
- * failures at the top, while a test run puts the summary that explains it at the
- * very bottom. Keeping only one end reliably hides the answer for half of them,
- * so we keep the head and the tail and say what went missing — a silent cut
- * reads as "that's all it printed".
- */
-const capOutput = (text: string): string => {
-  if (text.length <= OUTPUT_CAP) return text
-  const head = text.slice(0, OUTPUT_HEAD)
-  const tail = text.slice(text.length - (OUTPUT_CAP - OUTPUT_HEAD))
-  const dropped = text.length - OUTPUT_HEAD - (OUTPUT_CAP - OUTPUT_HEAD)
-  return `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
 }
 
 /**
