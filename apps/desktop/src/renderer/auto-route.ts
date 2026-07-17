@@ -19,16 +19,28 @@ import { agentBatchPrompt, reviewQueryKey, routedKey } from "./review-routing.js
  */
 
 /**
- * In-flight guard, keyed by `sessionId:headSha`.
+ * Heads this renderer has claimed for routing, keyed by `sessionId:headSha`.
  *
- * `routeReviewToAgent` is called from effects, and the `routedAt` it checks only
- * becomes true after an await. Two calls in the same tick — the Pull Request tab
- * and the Code Review tab both mounted on one session, or React 18 StrictMode
- * double-invoking — would both see `routedAt: null` and both send the batch, so
- * the agent gets the same prompt twice. The persisted stamp makes routing idempotent
- * ACROSS reloads; this makes it idempotent WITHIN a tick.
+ * Claimed BEFORE the send and released ONLY on failure, which is what makes it
+ * cover two different races with one mechanism:
+ *
+ *  1. **Same tick.** `routeReviewToAgent` is called from effects, and the
+ *     `routedAt` it checks only flips after an await. The Pull Request tab and
+ *     the Code Review tab mounted on one session — or StrictMode double-invoking
+ *     — would both see `routedAt: null` and both send.
+ *  2. **A stale review object, minutes later.** The stamp is written with
+ *     `setQueryData(reviewQueryKey(id))`, but App.tsx's auto-review poll caches
+ *     its own copy under `["auto-review", id, prNumber]` — a DIFFERENT key that
+ *     nothing backfills. That copy keeps `routedAt: null` until its next refetch
+ *     (up to a minute), and its `combine` hands back a fresh array identity on
+ *     every render, so the routing effect re-fires with the stale object. A
+ *     guard released once the first call finished would let that re-send.
+ *
+ * Hence: released only when routing FAILED, so a genuine failure still retries on
+ * the next tick, while success is remembered for the life of the renderer. The
+ * persisted `routedAt` covers the third case — a reload — where this is empty.
  */
-const inFlight = new Set<string>()
+const claimed = new Set<string>()
 
 /**
  * Route `review`'s critical/major findings to `session`'s agent, if they haven't
@@ -52,8 +64,8 @@ export const routeReviewToAgent = async (
   if (review.routedAt !== null) return
 
   const guard = `${session.id}:${review.headSha}`
-  if (inFlight.has(guard)) return
-  inFlight.add(guard)
+  if (claimed.has(guard)) return
+  claimed.add(guard)
 
   try {
     const { toAgent } = partitionFindings(review.findings)
@@ -77,8 +89,10 @@ export const routeReviewToAgent = async (
       qc.setQueryData(reviewQueryKey(session.id), { ...review, routedAt })
     }
   } catch {
-    // See the doc comment: better to retry next tick than to shout.
-  } finally {
-    inFlight.delete(guard)
+    // Release the claim ONLY here. Not in a `finally`: on success the claim must
+    // outlive the call, or a re-render holding a stale `routedAt: null` review
+    // re-sends the batch (see `claimed`). Releasing on failure is what keeps a
+    // genuine failure retryable on the next tick.
+    claimed.delete(guard)
   }
 }

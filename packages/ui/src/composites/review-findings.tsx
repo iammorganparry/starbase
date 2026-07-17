@@ -67,7 +67,23 @@ export const outcomeOf = (
   if (opts.sent) return { kind: "routed" }
   if (review.postError !== null) return { kind: "post-failed", message: review.postError }
   if (review.postedAt !== null) return { kind: "posted" }
-  return { kind: "pending" }
+  /**
+   * Unstamped, and NOT pending — "manual".
+   *
+   * The PR half has no pending window to report. Posting happens inside
+   * `Review.run`, which stamps `postedAt` or `postError` before the review is
+   * ever returned; the one unstamped path is "no low-severity findings at all",
+   * which renders no PR-destined card to ask. So on a review this build produced,
+   * reaching here is impossible.
+   *
+   * It IS reachable for a review persisted BEFORE posting existed: the fields
+   * decode to null and nothing backfills them, because posting only ever happens
+   * on a fresh run. Reporting "Sending…" there spins a spinner forever for a post
+   * that will never come — and, worse, the manual fallback is hidden for pending,
+   * so the finding becomes unactionable. "manual" tells the truth (nobody is
+   * sending this) and hands back the button.
+   */
+  return { kind: "manual" }
 }
 
 /**
