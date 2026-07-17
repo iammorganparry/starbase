@@ -18,12 +18,15 @@ import {
   ConfigService,
   claudeTitleGenerator,
   DiscoveryService,
+  fetchOpencodeProviders,
+  filterVisible,
   GhService,
   ModelsService,
   retitleSession,
   ReviewService,
   ReviewStore,
   SessionStore,
+  setOpencodeAuth,
   SkillsService,
   TerminalService,
   TranscriptStore,
@@ -33,6 +36,7 @@ import {
 import { homedir } from "node:os"
 import { GhError, GitError, ReviewError, reviewModelFor } from "@starbase/core"
 import type {
+  CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
@@ -141,6 +145,78 @@ export const createSession = (input: CreateSessionInput) =>
       defaultModel: provider?.defaultModel
     })
   })
+
+/**
+ * Every model a harness offers — the WHOLE catalogue, deliberately uncurated.
+ *
+ * This feeds Settings' default-model picker, which is where a provider is
+ * CONFIGURED. Curation (`visibleModels`) is defined as what shows in the
+ * composer's model menu, so applying it here too would let it hide models from
+ * the one surface you'd use to change it: curate down to three, and the fourth
+ * can never be chosen as your default again — from inside the app there'd be no
+ * way back. Configuration surfaces show what exists; `Models.catalog` is where
+ * the operator's own choice is honoured.
+ *
+ * Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
+ * app has a threadbare PATH, so Codex's and opencode's own model lists are only
+ * reachable via the absolute path discovery found. Exported for tests.
+ */
+export const modelsList = (cli: CliKind) =>
+  Effect.gen(function* () {
+    const clis = yield* DiscoveryService.list()
+    return yield* ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
+  })
+
+/**
+ * Every installed harness's models, each narrowed by its own curation — the
+ * composer's model menu.
+ *
+ * This is the surface curation exists for: opencode's catalogue is resolved from
+ * the user's own credentials, and a single OpenRouter key resolves ~342 models,
+ * which is not a menu anyone can use. Applied HERE rather than inside
+ * `ModelsService` so that service stays free of a config dependency (and
+ * hermetically testable). Exported for tests.
+ */
+export const modelsCatalog = () =>
+  Effect.gen(function* () {
+    const clis = yield* DiscoveryService.list()
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    const catalog = yield* ModelsService.catalog(clis)
+    return catalog.map((section) => ({
+      ...section,
+      models: filterVisible(section.models, config?.providers?.[section.cli]?.visibleModels)
+    }))
+  })
+
+/** The opencode binary discovery resolved, or null when it isn't usable. */
+const opencodeBin = () =>
+  DiscoveryService.list().pipe(
+    Effect.orElseSucceed(() => []),
+    Effect.map((clis) => clis.find((c) => c.kind === "opencode")?.binPath ?? null)
+  )
+
+/**
+ * The providers opencode resolves for the user, with each credential's origin.
+ * Asked of the binary rather than stored by us, because the answer belongs to
+ * the user's setup — env vars, `opencode auth login`, their `opencode.json`.
+ * An unreachable opencode yields an empty list (the harness reads as
+ * unconfigured), never an error. Exported for tests.
+ */
+export const opencodeListProviders = () =>
+  Effect.flatMap(opencodeBin(), (binPath) =>
+    Effect.promise(() => fetchOpencodeProviders(binPath)).pipe(Effect.map((ps) => ps ?? []))
+  )
+
+/**
+ * Store an API key in OPENCODE's own credential file — not `SecretStore`, which
+ * stays reserved for the Starbase bearer token. The key therefore also works in
+ * a bare `opencode` shell, which is the whole point of respecting their BYOK.
+ * Exported for tests.
+ */
+export const opencodeSetAuth = (providerId: string, key: string) =>
+  Effect.flatMap(opencodeBin(), (binPath) =>
+    Effect.promise(() => setOpencodeAuth(binPath, providerId, key))
+  )
 
 /**
  * `Sessions.createFromIssue` handler. Like `createSession` (fresh branch, same
@@ -569,11 +645,10 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   // Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
   // app has a threadbare PATH, so Codex's own model list is only reachable via
   // the absolute path discovery found.
-  "Models.list": ({ cli }) =>
-    Effect.flatMap(DiscoveryService.list(), (clis) =>
-      ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
-    ),
-  "Models.catalog": () => Effect.flatMap(DiscoveryService.list(), (clis) => ModelsService.catalog(clis)),
+  "Models.list": ({ cli }) => modelsList(cli),
+  "Models.catalog": () => modelsCatalog(),
+  "Opencode.listProviders": () => opencodeListProviders(),
+  "Opencode.setAuth": ({ providerId, key }) => opencodeSetAuth(providerId, key),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),

@@ -1,14 +1,17 @@
 import type { CliInfo, CliKind, ProviderUsage, Usage } from "@starbase/core"
 import { Effect } from "effect"
 import { fetchClaudeUsage, toClaudeProviderUsage } from "./claude-usage.js"
+import { isScriptedEnv } from "./scripted.js"
 
 /** Short provider names for the usage modal. */
-const NAME: Record<CliKind, string> = { claude: "Claude", codex: "Codex", cursor: "Cursor" }
+const NAME: Record<CliKind, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  cursor: "Cursor",
+  // Lowercase is the product's own styling, not a typo.
+  opencode: "opencode"
+}
 
-/** When set (e2e / tests), skip the live SDK usage poll. */
-const SCRIPTED_ENV = "STARBASE_SCRIPTED_AGENT"
-const isScriptedEnv = (): boolean =>
-  process.env[SCRIPTED_ENV] === "1" || process.env[SCRIPTED_ENV] === "true"
 
 const unavailable = (cli: CliKind, name?: string): ProviderUsage => ({
   cli,

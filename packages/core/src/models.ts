@@ -48,6 +48,26 @@ export const FALLBACK_MODELS: Record<CliKind, ReadonlyArray<ModelOption>> = {
     { id: "auto", label: "auto" },
     { id: "sonnet-4.5", label: "sonnet-4.5" },
     { id: "gpt-5", label: "gpt-5" }
+  ],
+  // opencode ids are provider-qualified (`provider/model`), and the provider can
+  // itself contain slashes — `openrouter/anthropic/claude-opus-4.5` is one id, so
+  // only the FIRST slash separates provider from model (see `splitModelId`).
+  //
+  // These are opencode Zen's *free* tier on purpose. opencode resolves providers
+  // from the user's own credentials, so with none configured the only thing that
+  // runs is Zen free (opencode drops every model with a non-zero input cost and
+  // falls back to a "public" key). That makes this list the honest offline answer
+  // AND a working zero-config first run. The real catalogue — including the
+  // user's OpenRouter/Anthropic models — comes live from `ModelsService`.
+  //
+  // NOTE: `defaultModel` takes index 0, so this also seeds a new session's model.
+  // opencode users who configured their own default deserve *that* instead —
+  // `/config/providers` returns a `default` map per provider, which live
+  // discovery should prefer over this list.
+  opencode: [
+    { id: "opencode/big-pickle", label: "big-pickle" },
+    { id: "opencode/north-mini-code-free", label: "north-mini-code-free" },
+    { id: "opencode/hy3-free", label: "hy3-free" }
   ]
 }
 
@@ -71,7 +91,13 @@ export const DEFAULT_REVIEW_MODEL: Record<CliKind, string> = {
   codex: "gpt-5.6-sol",
   // Cursor has no headless adapter, so a review on it is rejected before this is
   // ever read (see ReviewService). Present only to keep the record total.
-  cursor: "auto"
+  cursor: "auto",
+  // Same reasoning as Codex: the offline fallback has no stronger tier to reach
+  // for, so an opencode review runs on the model that wrote the code unless the
+  // user picks otherwise. Live discovery surfaces the real catalogue — and for
+  // opencode that is the widest of any harness (models.dev spans 167 providers),
+  // so the Settings override is where a serious reviewer model gets chosen.
+  opencode: "opencode/big-pickle"
 }
 
 /** The reviewer's model for `cli`, honouring the user's override when set. */

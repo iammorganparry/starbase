@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test as base } from "@playwright/test"
@@ -15,7 +15,7 @@ export interface SeedSession {
   readonly branch: string
   readonly title: string
   readonly status: "idle" | "running" | "thinking" | "needs-input" | "done"
-  readonly cli: "claude" | "codex" | "cursor"
+  readonly cli: "claude" | "codex" | "cursor" | "opencode"
   readonly diff: { added: number; removed: number }
   readonly prNumber: number | null
   readonly costUsd: number
@@ -63,6 +63,26 @@ export interface LaunchOptions {
    */
   readonly signedIn?: boolean
   /**
+   * Install a deterministic fake `opencode` on PATH so discovery, the version
+   * gate, the model catalogue and the provider list all run offline — instead of
+   * depending on whether this host happens to have opencode installed.
+   */
+  readonly opencode?: {
+    /** What `--version` reports. Below 1.18 the version gate must reject it. */
+    readonly version?: string
+    /** Make storing a key fail, to drive the UI's failure path. */
+    readonly authFails?: boolean
+    /** Providers `/config/providers` reports, mirroring the real response. */
+    readonly providers?: ReadonlyArray<{
+      readonly id: string
+      readonly name?: string
+      /** Where the credential came from; omit for "unconfigured". */
+      readonly source?: "env" | "config" | "custom" | "api"
+      readonly env?: ReadonlyArray<string>
+      readonly models?: ReadonlyArray<string>
+    }>
+  }
+  /**
    * Install a deterministic fake `gh` on PATH so the GitHub flows run offline:
    * `gh` reports authenticated, `gh pr list` returns these PRs, and
    * `gh pr checkout <n>` checks out the matching head branch (pre-created in the
@@ -98,6 +118,128 @@ export interface LaunchOptions {
   }
 }
 
+/**
+ * Install a fake `opencode` on PATH: a node shim that answers `--version` and,
+ * on `serve`, boots a tiny HTTP server speaking just enough of opencode's API
+ * for discovery and the model catalogue (`/config/providers`).
+ *
+ * Why a fake rather than the real binary: discovery probes PATH, so today's
+ * model-chip tests `test.skip()` on any host without the harness installed —
+ * which means the provider-switching path is untested in exactly the situation
+ * that matters. A shim makes it deterministic and offline, and lets us drive the
+ * cases a real install *can't* reach: a too-old version, or a provider whose key
+ * is missing.
+ *
+ * Returns the env vars the shim reads.
+ */
+const installFakeOpencode = (
+  binDir: string,
+  opencode: NonNullable<LaunchOptions["opencode"]>
+): Record<string, string> => {
+  mkdirSync(binDir, { recursive: true })
+  // Providers as `GET /config/providers` reports them, shaped exactly like the
+  // real 1.18 response the adapter parses.
+  const providers = (opencode.providers ?? []).map((p) => ({
+    id: p.id,
+    name: p.name ?? p.id,
+    source: p.source ?? null,
+    env: p.env ?? [],
+    models: Object.fromEntries(
+      (p.models ?? []).map((m) => [m, { id: m, name: m, providerID: p.id }])
+    )
+  }))
+
+  const script = `#!/usr/bin/env node
+const version = process.env.STARBASE_E2E_OPENCODE_VERSION || "1.18.0"
+const providers = JSON.parse(process.env.STARBASE_E2E_OPENCODE_PROVIDERS || "[]")
+const argv = process.argv.slice(2)
+
+if (argv.includes("--version") || argv.includes("-v")) {
+  process.stdout.write(version + "\\n")
+  process.exit(0)
+}
+
+if (argv[0] === "serve") {
+  const http = require("node:http")
+  // A provider is "connected" iff the fixture gave it a source — mirroring the
+  // real server, where /config/providers returns ONLY what resolves while
+  // /provider returns the whole registry plus a connected list.
+  const connected = providers.filter((p) => p.source !== null).map((p) => p.id)
+  const server = http.createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json")
+    if (req.url.startsWith("/provider")) {
+      // The registry stamps a source on everything regardless of whether it
+      // resolves — reproduced here, because the fold must ignore it and trust
+      // \`connected\` instead.
+      res.end(
+        JSON.stringify({
+          all: providers.map((p) => ({ ...p, source: "custom" })),
+          connected,
+          default: {}
+        })
+      )
+      return
+    }
+    if (req.url.startsWith("/config/providers")) {
+      const live = providers.filter((p) => connected.includes(p.id))
+      // The real server also returns a per-provider default; mirroring it keeps
+      // the fold under test identical to production.
+      const def = {}
+      for (const p of live) {
+        const first = Object.keys(p.models)[0]
+        if (first) def[p.id] = first
+      }
+      res.end(JSON.stringify({ providers: live, default: def }))
+      return
+    }
+    if (req.method === "PUT" && req.url.startsWith("/auth/")) {
+      // Record the write so a test can assert the key went to opencode's own
+      // store rather than anywhere of Starbase's.
+      const id = decodeURIComponent(req.url.slice("/auth/".length))
+      let body = ""
+      req.on("data", (c) => (body += c))
+      req.on("end", () => {
+        require("node:fs").appendFileSync(
+          process.env.STARBASE_E2E_OPENCODE_AUTH_LOG,
+          JSON.stringify({ id, body: JSON.parse(body || "{}") }) + "\\n"
+        )
+        // Refusing the write is a state a real server reaches (its credential
+        // store unwritable) and the one the row itself can't show — the UI has
+        // to say so rather than close as though the key landed.
+        if (process.env.STARBASE_E2E_OPENCODE_AUTH_FAILS === "1") {
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: "cannot write auth.json" }))
+          return
+        }
+        res.end("true")
+      })
+      return
+    }
+    res.end("{}")
+  })
+  server.listen(0, "127.0.0.1", () => {
+    process.stdout.write(
+      "opencode server listening on http://127.0.0.1:" + server.address().port + "\\n"
+    )
+  })
+  const bye = () => { server.close(); process.exit(0) }
+  process.on("SIGTERM", bye)
+  process.on("SIGINT", bye)
+  return
+}
+process.exit(0)
+`
+  const path = join(binDir, "opencode")
+  writeFileSync(path, script)
+  chmodSync(path, 0o755)
+  return {
+    STARBASE_E2E_OPENCODE_VERSION: opencode.version ?? "1.18.0",
+    STARBASE_E2E_OPENCODE_PROVIDERS: JSON.stringify(providers),
+    STARBASE_E2E_OPENCODE_AUTH_LOG: join(binDir, "auth-writes.jsonl"),
+    STARBASE_E2E_OPENCODE_AUTH_FAILS: opencode.authFails === true ? "1" : "0"
+  }
+}
+
 export interface LaunchedApp {
   readonly app: ElectronApplication
   readonly window: Page
@@ -109,6 +251,12 @@ export interface LaunchedApp {
   readonly repoPath: string
   /** The offline fake auth backend this launch talks to. */
   readonly authServer: FakeAuthServer
+  /**
+   * Keys the fake opencode was asked to store, in the order it was asked. The
+   * point of the assertion is WHERE a key lands: opencode's own credential
+   * store, never Starbase's SecretStore.
+   */
+  readonly opencodeAuthWrites: () => ReadonlyArray<{ id: string; body: { type: string; key: string } }>
   /**
    * Drive a `starbase://` sign-in callback into the running app (the OS would
    * normally do this after the browser flow). Emits the main-process `open-url`.
@@ -297,12 +445,20 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       // when the app first scans them.
       options.seed?.({ reposDir, repoPath })
 
-      // Optional fake `gh` on PATH for the GitHub flows (offline + deterministic).
+      // Optional fake `gh` / `opencode` on PATH (offline + deterministic). Both
+      // land in the same bin dir, which is prefixed onto PATH so the shims win
+      // over any real install on this host — that's what makes these tests say
+      // the same thing on every machine.
       let ghEnv: Record<string, string> = {}
+      let opencodeEnv: Record<string, string> = {}
       let pathPrefix = ""
+      const binDir = join(home, "bin")
       if (options.gh) {
-        const binDir = join(home, "bin")
         ghEnv = installFakeGh(binDir, repoPath, options.gh)
+        pathPrefix = `${binDir}:`
+      }
+      if (options.opencode) {
+        opencodeEnv = installFakeOpencode(binDir, options.opencode)
         pathPrefix = `${binDir}:`
       }
 
@@ -332,6 +488,7 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         env: {
           ...process.env,
           ...ghEnv,
+          ...opencodeEnv,
           PATH: `${pathPrefix}${process.env.PATH ?? ""}`,
           STARBASE_HOME: home,
           ELECTRON_RENDERER_URL: "",
@@ -357,7 +514,25 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         )
       }
 
-      return { app, window, home, reposDir, repoPath, authServer, completeDeepLinkSignIn }
+      const opencodeAuthWrites = () => {
+        const log = join(home, "bin", "auth-writes.jsonl")
+        if (!existsSync(log)) return []
+        return readFileSync(log, "utf8")
+          .split("\n")
+          .filter((l) => l.length > 0)
+          .map((l) => JSON.parse(l) as { id: string; body: { type: string; key: string } })
+      }
+
+      return {
+        app,
+        window,
+        home,
+        reposDir,
+        repoPath,
+        authServer,
+        completeDeepLinkSignIn,
+        opencodeAuthWrites
+      }
     }
 
     await use(launch)

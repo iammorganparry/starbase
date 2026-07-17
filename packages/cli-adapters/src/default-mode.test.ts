@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { claudeDefaultMode, codexDefaultMode } from "./default-mode.js"
+import { claudeDefaultMode, codexDefaultMode, opencodeDefaultMode } from "./default-mode.js"
 
 /**
  * The config → exec-mode mapping is the seam that lets "approve plan" drop the
@@ -39,5 +39,48 @@ describe("codexDefaultMode", () => {
   it("falls back to accept-edits when neither key is present", () => {
     expect(codexDefaultMode("")).toBe("accept-edits")
     expect(codexDefaultMode("model = \"gpt-5\"")).toBe("accept-edits")
+  })
+})
+
+describe("opencodeDefaultMode", () => {
+  const cfg = (permission: unknown) => JSON.stringify({ permission })
+
+  it("maps opencode's permission block onto our exec modes", () => {
+    expect(opencodeDefaultMode(cfg("allow"))).toBe("auto")
+    expect(opencodeDefaultMode(cfg({ edit: "allow", bash: "allow" }))).toBe("auto")
+    expect(opencodeDefaultMode(cfg({ edit: "allow", bash: "ask" }))).toBe("accept-edits")
+    expect(opencodeDefaultMode(cfg({ edit: "ask", bash: "ask" }))).toBe("ask")
+    expect(opencodeDefaultMode(cfg("ask"))).toBe("ask")
+  })
+
+  it("honours a `*` default for tools that aren't named", () => {
+    expect(opencodeDefaultMode(cfg({ "*": "allow" }))).toBe("auto")
+    // The explicit key wins over the wildcard.
+    expect(opencodeDefaultMode(cfg({ "*": "allow", edit: "ask" }))).toBe("ask")
+  })
+
+  /**
+   * A glob ruleset means the user wants to be asked about *most* of a tool's
+   * uses. Reading `{ "*": "ask", "git *": "allow" }` as a blanket grant would
+   * invert their intent and hand the agent an unattended shell.
+   */
+  it("does not mistake a glob ruleset for a blanket grant", () => {
+    expect(opencodeDefaultMode(cfg({ edit: "allow", bash: { "*": "ask", "git *": "allow" } }))).toBe(
+      "accept-edits"
+    )
+    expect(opencodeDefaultMode(cfg({ bash: { "*": "allow" } }))).toBe("accept-edits")
+  })
+
+  it("maps deny onto ask — there is no refuse-everything exec mode", () => {
+    expect(opencodeDefaultMode(cfg({ edit: "deny" }))).toBe("ask")
+    expect(opencodeDefaultMode(cfg("deny"))).toBe("ask")
+  })
+
+  it("falls back to accept-edits on missing config / no permission block / bad JSON", () => {
+    expect(opencodeDefaultMode("")).toBe("accept-edits")
+    expect(opencodeDefaultMode("{ not json")).toBe("accept-edits")
+    expect(opencodeDefaultMode(JSON.stringify({ model: "opencode/big-pickle" }))).toBe("accept-edits")
+    // opencode allows comments; JSON.parse doesn't. Falling back beats guessing.
+    expect(opencodeDefaultMode('{ // hi\n "permission": "allow" }')).toBe("accept-edits")
   })
 })

@@ -19,6 +19,7 @@ import {
   IssueSummary,
   Message,
   ModelOption,
+  OpencodeProviderInfo,
   PermissionMode,
   PrFileChange,
   PrMergeMethod,
@@ -348,6 +349,32 @@ export class StarbaseRpcs extends RpcGroup.make(
    */
   Rpc.make("Models.catalog", {
     success: Schema.Array(ProviderModels)
+  }),
+
+  /**
+   * The providers opencode resolves for the user, and where each credential came
+   * from — Settings · Providers. Live from the binary, because the answer is a
+   * property of the USER's setup (env vars, `opencode auth login`,
+   * `opencode.json`), not of Starbase.
+   */
+  Rpc.make("Opencode.listProviders", {
+    success: Schema.Array(OpencodeProviderInfo),
+    error: ConfigError
+  }),
+
+  /**
+   * Store an API key for one opencode provider (e.g. `openrouter`).
+   *
+   * Writes to opencode's OWN credential file, exactly as `opencode auth login`
+   * would — NOT to Starbase's `SecretStore`, which stays reserved for the
+   * Starbase bearer token. A key added here therefore works in a bare `opencode`
+   * shell too. Succeeds silently into `false` rather than erroring on a bad key:
+   * opencode doesn't validate on write.
+   */
+  Rpc.make("Opencode.setAuth", {
+    success: Schema.Boolean,
+    error: ConfigError,
+    payload: { providerId: Schema.String, key: Schema.String }
   }),
 
   /** Provider usage / rate-limit windows for the Usage & limits modal. */

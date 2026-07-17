@@ -66,7 +66,10 @@ export function TabBar({
   browserActive?: boolean
 }) {
   return (
-    <div className="flex h-9 flex-none items-stretch border-b border-hairline bg-sunken">
+    <div
+      data-testid="session-tab-bar"
+      className="flex h-9 flex-none items-stretch border-b border-hairline bg-sunken"
+    >
       <div className="flex items-stretch">
         {tabs.map((key) => {
           const Icon = ICON[key]

@@ -4,9 +4,10 @@ import { cn } from "../lib/cn.js"
 /**
  * Brand marks for the coding-agent providers (`currentColor`). Claude is the
  * official sunburst symbol; OpenAI's blossom for Codex; Cursor's cube for Cursor
- * Agent. Each carries its own viewBox (the marks aren't all 24×24).
+ * Agent; opencode's block from their favicon. Each carries its own viewBox (the
+ * marks aren't all 24×24), and `fillRule` where the mark has holes.
  */
-const ICONS: Record<CliKind, { viewBox: string; d: string }> = {
+const ICONS: Record<CliKind, { viewBox: string; d: string; fillRule?: "evenodd" }> = {
   claude: {
     viewBox: "0 0 100 100",
     d: "m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"
@@ -18,6 +19,16 @@ const ICONS: Record<CliKind, { viewBox: string; d: string }> = {
   cursor: {
     viewBox: "0 0 747 851",
     d: "M731.545 201.413L390.888 4.73778C379.949 -1.57926 366.451 -1.57926 355.512 4.73778L14.873 201.413C5.67736 206.723 0 216.542 0 227.177V623.776C0 634.394 5.67736 644.23 14.873 649.539L355.529 846.214C366.468 852.532 379.966 852.532 390.905 846.214L731.56 649.539C740.756 644.23 746.434 634.409 746.434 623.776V227.177C746.434 216.558 740.756 206.723 731.56 201.413H731.545ZM710.147 243.074L381.292 812.663C379.07 816.501 373.201 814.933 373.201 810.487V437.526C373.201 430.074 369.218 423.18 362.757 419.438L39.7734 232.966C35.9352 230.744 37.5024 224.874 41.9483 224.874H699.655C708.995 224.874 714.833 234.997 710.162 243.09H710.147V243.074Z"
+  },
+  // opencode's mark, flattened from their favicon (opencode.ai/favicon.svg) into
+  // one `currentColor` path: an outer frame, a rectangular hole, and the block
+  // that half-fills it. The three subpaths only compose correctly under
+  // even-odd — the block sits *inside* the hole, so nonzero winding would swallow
+  // it and render a plain rectangle.
+  opencode: {
+    viewBox: "0 0 512 512",
+    fillRule: "evenodd",
+    d: "M384 416H128V96H384V416ZM320 160H192V352H320V160ZM320 224V352H192V224H320Z"
   }
 }
 
@@ -25,17 +36,20 @@ const ICONS: Record<CliKind, { viewBox: string; d: string }> = {
 export const PROVIDER_LABEL: Record<CliKind, string> = {
   claude: "Claude",
   codex: "Codex",
-  cursor: "Cursor"
+  cursor: "Cursor",
+  // Lowercase is opencode's own styling, not a typo.
+  opencode: "opencode"
 }
 
 /**
- * Brand colours: Anthropic's clay orange for Claude; OpenAI and Cursor render
- * monochrome (their marks are black/white) so they read cleanly on dark.
+ * Brand colours: Anthropic's clay orange for Claude; OpenAI, Cursor and opencode
+ * render monochrome (their marks are black/white) so they read cleanly on dark.
  */
 export const PROVIDER_COLOR: Record<CliKind, string> = {
   claude: "#d97757",
   codex: "#d7dae0",
-  cursor: "#d7dae0"
+  cursor: "#d7dae0",
+  opencode: "#d7dae0"
 }
 
 export function ProviderIcon({
@@ -61,7 +75,7 @@ export function ProviderIcon({
       className={cn("shrink-0", className)}
       aria-hidden
     >
-      <path d={icon.d} />
+      <path d={icon.d} fillRule={icon.fillRule} />
     </svg>
   )
 }

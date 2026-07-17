@@ -141,16 +141,24 @@ type ConversationEvent =
 
 interface LoadedData {
   readonly transcript: ReadonlyArray<Message>
-  readonly skills: ReadonlyArray<Skill>
   readonly files: ReadonlyArray<string>
   readonly patch: string
 }
 
-/** Load the persisted transcript, harness skills, worktree files + diff. */
+/**
+ * Load the persisted transcript, worktree files + diff.
+ *
+ * Skills are NOT here, deliberately — they are fetched out of band (see
+ * `loadSkills`), exactly like the model catalogue. `Skills.list` asks the
+ * harness itself what commands it has, which means spawning it: hundreds of ms
+ * to seconds. `loading` handles almost no events, so gating the transcript on a
+ * CLI probe silently swallows everything the operator does in that window —
+ * including SEND, which is to say the composer looks alive but does nothing.
+ * The `/` menu just fills itself in a beat later.
+ */
 const loadConversation = fromPromise<LoadedData, { session: Session }>(async ({ input }) => {
-  const [rawTranscript, skills, files, patch] = await Promise.all([
+  const [rawTranscript, files, patch] = await Promise.all([
     rpc.sessionsTranscript(input.session.id),
-    rpc.skillsList(input.session.id),
     input.session.worktreePath
       ? rpc.workspaceFiles(input.session.worktreePath)
       : Promise.resolve([] as ReadonlyArray<string>),
@@ -161,7 +169,7 @@ const loadConversation = fromPromise<LoadedData, { session: Session }>(async ({ 
   // and resolve orphaned approval gates / questions whose live run has died (their
   // approve/deny buttons would otherwise be dead no-ops).
   const transcript = rawTranscript.map(settleLoaded)
-  return { transcript, skills, files, patch }
+  return { transcript, files, patch }
 })
 
 /** Re-read the worktree diff after a turn completes (edits may have landed). */
@@ -481,6 +489,21 @@ export const conversationMachine = setup({
         .then((catalog) => self.send({ type: "CATALOG_LOADED", catalog }))
         .catch(() => {})
     },
+
+    /**
+     * The `/` menu's contents, fetched out of band for the same reason as the
+     * catalogue above: `Skills.list` asks the HARNESS what commands it has,
+     * which means spawning it — seconds, in the worst case. Awaiting it inside
+     * `loadConversation` held the machine in `loading`, where SEND isn't
+     * handled, so a prompt typed on open was silently dropped and the composer
+     * did nothing at all.
+     */
+    loadSkills: ({ context, self }) => {
+      void rpc
+        .skillsList(context.session.id)
+        .then((skills) => self.send({ type: "SKILLS_LOADED", skills }))
+        .catch(() => {})
+    },
     applyCatalog: assign(({ event }) =>
       event.type === "CATALOG_LOADED" ? { catalog: event.catalog } : {}
     ),
@@ -561,14 +584,19 @@ export const conversationMachine = setup({
 }).createMachine({
   id: "conversation",
   initial: "loading",
-  // Kick the (slow, out-of-band) model catalogue fetch off once, at start.
-  entry: "loadCatalog",
+  // Kick the (slow, out-of-band) model catalogue + `/` menu fetches off once, at
+  // start. Both probe a CLI, so neither may gate the transcript — see below.
+  entry: ["loadCatalog", "loadSkills"],
   // Watch the reviewer for the machine's whole life — a review is not part of a
   // turn, so it can start, run and finish in any state.
   invoke: { src: "reviewStream", input: ({ context }) => ({ sessionId: context.session.id }) },
-  // Both can land in any state — they race nothing.
+  // All three can land in any state — they race nothing. SKILLS_LOADED belongs
+  // here for the same reason CATALOG_LOADED does: now that the `/` menu is
+  // fetched out of band, its reply can arrive while the transcript is still
+  // loading, and a per-state handler would drop it on the floor.
   on: {
     CATALOG_LOADED: { actions: "applyCatalog" },
+    SKILLS_LOADED: { actions: "applySkills" },
     REVIEW_EVENT: { actions: "applyReview" }
   },
   context: ({ input }) => ({
@@ -596,22 +624,63 @@ export const conversationMachine = setup({
   }),
   states: {
     loading: {
+      /**
+       * The composer and its chips are on screen and interactive while this
+       * runs, and `loadConversation` is not instant — it asks the harness for
+       * its command list, which means spawning it. Without these, a model or
+       * mode picked in that window is silently swallowed: the menu closes, the
+       * chip snaps back, nothing happens.
+       *
+       * Safe here because `onDone` below assigns only transcript state
+       * (messages/skills/files/patch) and never `cli`/`model`/`mode` — so a
+       * choice made mid-load survives the transition rather than being clobbered.
+       */
+      on: {
+        SET_MODE: { actions: "persistMode" },
+        SET_HARNESS: { actions: "persistHarness" },
+        // The composer is enabled from the first paint, so a prompt can be sent
+        // before the transcript lands — and a dropped one is invisible: the box
+        // clears and the operator believes they sent it. Hold it and run it the
+        // moment the load settles, exactly as a send during a run is held.
+        SEND: { actions: "enqueue" }
+      },
       invoke: {
         src: "loadConversation",
         input: ({ context }) => ({ session: context.session }),
-        onDone: {
-          target: "awaitingInput",
-          actions: assign(({ event }) => ({
-            messages: event.output.transcript,
-            skills: event.output.skills,
-            files: event.output.files,
-            patch: event.output.patch,
-            loaded: true
-          }))
-        },
+        // A prompt sent while loading starts its turn as soon as the transcript
+        // settles; otherwise we go idle. The transcript is applied either way.
+        onDone: [
+          {
+            guard: "hasQueued",
+            target: "running",
+            actions: [
+              assign(({ event }) => ({
+                messages: event.output.transcript,
+                files: event.output.files,
+                patch: event.output.patch,
+                loaded: true
+              })),
+              "dequeueTurn"
+            ]
+          },
+          {
+            target: "awaitingInput",
+            actions: assign(({ event }) => ({
+              messages: event.output.transcript,
+              files: event.output.files,
+              patch: event.output.patch,
+              loaded: true
+            }))
+          }
+        ],
         // `loaded` stays false — the empty `messages` here says nothing about the
-        // session, so the status write is skipped rather than clobbering it.
-        onError: { target: "awaitingInput" }
+        // session, so the status write is skipped rather than clobbering it. A
+        // prompt held through a FAILED load still runs: losing the transcript is
+        // no reason to also lose what the operator just typed.
+        onError: [
+          { guard: "hasQueued", target: "running", actions: "dequeueTurn" },
+          { target: "awaitingInput" }
+        ]
       }
     },
     awaitingInput: {
@@ -624,7 +693,6 @@ export const conversationMachine = setup({
         RESUME_PLAN: { target: "running", actions: "startResumePlan" },
         SET_MODE: { actions: "persistMode" },
         SET_HARNESS: { actions: "persistHarness" },
-        SKILLS_LOADED: { actions: "applySkills" },
         // Re-read the worktree diff on demand (e.g. after a revert from the rail).
         REFRESH_DIFF: { target: "refreshingDiff" }
       }
@@ -663,7 +731,6 @@ export const conversationMachine = setup({
         APPROVE_PLAN: { actions: "optimisticPlanApprove" },
         SET_MODE: { actions: "persistMode" },
         SET_HARNESS: { actions: "persistHarness" },
-        SKILLS_LOADED: { actions: "applySkills" },
         // Stopping abandons the queue too — the operator asked the agent to halt.
         // Live sub-agent tabs go with it (no completion events will arrive).
         STOP: {
@@ -704,8 +771,7 @@ export const conversationMachine = setup({
         // refresh's onDone runs last, so it wins).
         PATCH_UPDATED: { actions: "applyLivePatch" },
         SET_MODE: { actions: "persistMode" },
-        SET_HARNESS: { actions: "persistHarness" },
-        SKILLS_LOADED: { actions: "applySkills" }
+        SET_HARNESS: { actions: "persistHarness" }
       }
     }
   }

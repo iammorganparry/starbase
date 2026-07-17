@@ -1,8 +1,9 @@
 import type { CliKind, Skill } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import { Effect, Ref } from "effect"
-import { NO_CAPABILITIES, probeClaudeCapabilities } from "./claude-commands.js"
+import { NO_CAPABILITIES, probeClaudeCapabilities, SCRIPTED_COMMANDS } from "./claude-commands.js"
 import type { ClaudeCapabilities } from "./claude-commands.js"
+import { isScriptedEnv } from "./scripted.js"
 
 /** What harness a `list` request is scoped to, and where to scan for skills. */
 export interface SkillSpec {
@@ -152,7 +153,19 @@ export class SkillsService extends Effect.Service<SkillsService>()("@starbase/Sk
         const described = new Map<string, Skill>()
         for (const skill of scanned.flat()) described.set(skill.name, skill)
 
-        const caps = yield* capabilities(spec.binPath ?? null, spec.worktreePath)
+        // Under the scripted harness there is no CLI to ask — asking would spawn
+        // the operator's real `claude`, which is the one thing that switch
+        // forbids. Answer for the fake instead: its built-ins, plus the skills
+        // just scanned off disk (a real CLI announces those alongside its own,
+        // so the fake reporting them is a faithful stand-in, not an invention).
+        const scriptedSkills = [...described.keys()].map((name) => name.replace(/^\//, ""))
+        const caps = isScriptedEnv()
+          ? {
+              commands: [...SCRIPTED_COMMANDS, ...scriptedSkills],
+              skills: scriptedSkills
+            }
+          : yield* capabilities(spec.binPath ?? null, spec.worktreePath)
+
         // No answer from the CLI (not installed, still booting, probe failed) —
         // fall back to what's on disk, so the menu degrades to the skills we can
         // see rather than to nothing.

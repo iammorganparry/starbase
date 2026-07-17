@@ -9,7 +9,7 @@ import { Schema } from "effect"
 // ── CLI discovery ────────────────────────────────────────────────────────────
 
 /** The coding CLIs Starbase knows how to wrap. */
-export const CliKind = Schema.Literal("claude", "codex", "cursor")
+export const CliKind = Schema.Literal("claude", "codex", "cursor", "opencode")
 export type CliKind = Schema.Schema.Type<typeof CliKind>
 
 /** The outcome of probing for one CLI on the host. */
@@ -21,7 +21,14 @@ export const CliInfo = Schema.Struct({
   binPath: Schema.NullOr(Schema.String),
   /** Reported version string, or null when unknown / unavailable. */
   version: Schema.NullOr(Schema.String),
-  available: Schema.Boolean
+  available: Schema.Boolean,
+  /**
+   * Why an *installed* CLI is nonetheless unavailable — e.g. "opencode 1.0.220
+   * found; Starbase needs ≥1.18". Absent when the CLI is usable, or simply not
+   * installed (nothing to explain). Without this a too-old binary is
+   * indistinguishable from a missing one, which is a miserable thing to debug.
+   */
+  note: Schema.optional(Schema.String)
 })
 export type CliInfo = Schema.Schema.Type<typeof CliInfo>
 
@@ -222,9 +229,56 @@ export const ProviderConfig = Schema.Struct({
   /** Extended-thinking budget; absent = the harness default. */
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Reply tone/verbosity preset; absent = the harness default. */
-  outputStyle: Schema.optional(OutputStyle)
+  outputStyle: Schema.optional(OutputStyle),
+  /**
+   * Model ids to show in the composer's model menu; absent = show everything the
+   * harness offers. Curation exists for opencode, whose catalogue is resolved
+   * live from the user's own credentials and is enormous — a single OpenRouter
+   * key alone yields ~342 models, which is unusable as a flat menu. Ids are
+   * harness-native (for opencode, `provider/model`).
+   *
+   * The composer's menu ONLY (`Models.catalog`). It must never narrow a
+   * CONFIGURATION surface such as Settings' default-model picker
+   * (`Models.list`): a curation that could hide models from the screen you'd use
+   * to change it is a one-way door — pick three, and the fourth can never be
+   * chosen again from inside the app.
+   *
+   * No UI writes this yet; the picker that does lands separately. Until then a
+   * hand-edited `config.json` is the only writer, which is exactly why the
+   * one-way-door property matters.
+   */
+  visibleModels: Schema.optional(Schema.Array(Schema.String))
 })
 export type ProviderConfig = Schema.Schema.Type<typeof ProviderConfig>
+
+/**
+ * Where an opencode provider's credential came from. opencode resolves providers
+ * from the user's own setup, and this says which part of it:
+ *  - `env` — an environment variable they exported (`OPENROUTER_API_KEY`, …)
+ *  - `api` — a key in opencode's own store, via `opencode auth login` or us
+ *  - `config` — declared in their `opencode.json`
+ *  - `custom` — opencode's built-in (e.g. the Zen gateway's free tier)
+ *
+ * Surfaced in Settings so it's obvious what is Starbase's doing and what is the
+ * user's own — we never overwrite a credential we didn't put there.
+ */
+export const OpencodeProviderSource = Schema.Literal("env", "config", "custom", "api")
+export type OpencodeProviderSource = Schema.Schema.Type<typeof OpencodeProviderSource>
+
+/** One provider opencode resolves for the user — a row in Settings · Providers. */
+export const OpencodeProviderInfo = Schema.Struct({
+  /** opencode's provider id, e.g. "openrouter" — the first segment of a model id. */
+  id: Schema.String,
+  /** Display name, e.g. "OpenRouter". */
+  name: Schema.String,
+  /** Null when opencode reports no origin (i.e. it isn't configured). */
+  source: Schema.NullOr(OpencodeProviderSource),
+  /** Env vars this provider reads, so the UI can name the one to set. */
+  env: Schema.Array(Schema.String),
+  /** How many models it resolves — 0 means "integration present, no key". */
+  modelCount: Schema.Number
+})
+export type OpencodeProviderInfo = Schema.Schema.Type<typeof OpencodeProviderInfo>
 
 /**
  * Per-CLI provider defaults, keyed by `CliKind`. Partial — a config only carries

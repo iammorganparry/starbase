@@ -11,6 +11,7 @@ import type {
   DiffStat,
   IssueSummary,
   ModelOption,
+  OpencodeProviderInfo,
   PrSummary,
   ProviderConfig,
   ProvidersConfig,
@@ -85,6 +86,10 @@ export interface StarbaseAppProps {
   onSaveProvider?: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
   /** Load the selectable models for a CLI (Settings · Providers). */
   loadModels?: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
+  /** opencode's resolved providers + credential origins (Settings · Providers). */
+  loadOpencodeProviders?: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
+  /** Store an API key in opencode's own credential file. */
+  onSetOpencodeAuth?: (providerId: string, key: string) => Promise<boolean>
   /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
@@ -184,6 +189,8 @@ export function StarbaseApp({
   providersConfig,
   onSaveProvider,
   loadModels,
+  loadOpencodeProviders,
+  onSetOpencodeAuth,
   renderPullRequest,
   renderReview,
   renderCode,
@@ -354,6 +361,8 @@ export function StarbaseApp({
               providers={providersConfig}
               onSaveProvider={onSaveProvider}
               loadModels={loadModels ?? (async () => [])}
+              loadOpencodeProviders={loadOpencodeProviders}
+              onSetOpencodeAuth={onSetOpencodeAuth}
               ghStatus={ghStatus ?? GH_UNAVAILABLE}
               github={githubConfig}
               git={gitConfig}
