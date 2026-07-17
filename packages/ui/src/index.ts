@@ -24,6 +24,15 @@ export * from "./components/dialog.js"
 export * from "./components/input.js"
 export * from "./components/select.js"
 export * from "./components/file-icon.js"
+
+// Atoms — command widgets (rich renders of bash tool calls)
+export * from "./components/command-line.js"
+export * from "./components/stat-count.js"
+export * from "./components/segmented-bar.js"
+export * from "./components/failure-detail.js"
+export * from "./components/kv-row.js"
+export * from "./components/log-lines.js"
+export * from "./components/data-grid.js"
 export * from "./components/diff-peek.js"
 export * from "./components/html-preview.js"
 export * from "./components/code-chip.js"
@@ -38,6 +47,12 @@ export * from "./components/starfield.js"
 
 // Molecules / composites
 export * from "./composites/tool-call.js"
+export * from "./composites/command-widget.js"
+
+// Command widgets — the registry, and each family's parse + render
+export * from "./widgets/types.js"
+export * from "./widgets/command.js"
+export * from "./widgets/registry.js"
 export * from "./composites/thought-block.js"
 export * from "./composites/phase-node.js"
 export * from "./composites/agent-card.js"
