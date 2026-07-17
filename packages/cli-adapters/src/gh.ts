@@ -559,8 +559,13 @@ const REVIEW_FLAG: Record<ReviewSubmitKind, string> = {
   "request-changes": "--request-changes"
 }
 
-/** A hunk header — `@@ -12,7 +14,9 @@`, where the `,7`/`,9` counts are optional. */
-const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/
+/**
+ * A hunk header — `@@ -12,7 +14,9 @@`. Group 1 is the new-side START line; group
+ * 2 is the new-side LENGTH (the `,9`), which is optional and defaults to 1 when
+ * absent (`@@ -12 +14 @@` is a single-line hunk). The old-side `-12,7` is not
+ * captured — only the new side can be commented on.
+ */
+const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
 
 /**
  * The NEW-side (`side: "RIGHT"`) line numbers GitHub will accept a review
@@ -581,6 +586,11 @@ export const postableLines = (diff: string): ReadonlyMap<string, ReadonlySet<num
   const out = new Map<string, Set<number>>()
   let path: string | null = null
   let newLine = 0
+  // New-side lines still expected in the current hunk, from the header's `+c,d`
+  // length. Decremented on each context/added line; at 0 the hunk's new side is
+  // spent. This is the diff's OWN declared bound, and it is what keeps counting
+  // honest — see the trailing-line note below.
+  let remaining = 0
   // Whether we're inside a hunk body. Load-bearing for diffs-of-diffs (a PR that
   // touches a .patch fixture, or this very repo's tests): inside a hunk, a line
   // reading `+++ b/x` is an ADDED LINE whose content is `++ b/x`, not a file
@@ -606,11 +616,29 @@ export const postableLines = (diff: string): ReadonlyMap<string, ReadonlySet<num
     if (hunk !== null) {
       inHunk = true
       newLine = Number(hunk[1])
+      // The `,d` length, or 1 when omitted.
+      remaining = hunk[2] === undefined ? 1 : Number(hunk[2])
       continue
     }
     if (!inHunk || path === null) continue
 
+    if (raw.startsWith("-")) {
+      // Left side only — advances nothing on the right, and consumes none of the
+      // new-side budget.
+      continue
+    }
+
     if (raw.startsWith("+") || raw.startsWith(" ") || raw.length === 0) {
+      // Bounded by the header's declared new-side length. Past it, a line that
+      // still LOOKS like hunk body is not one — most commonly the empty final
+      // element `diff.split("\n")` yields for `gh pr diff`'s trailing newline.
+      // Counting it would admit a phantom line number one past the file's end —
+      // the classic end-of-file off-by-one — and a finding mis-anchored there
+      // would 422 the whole review, the exact failure this function prevents.
+      if (remaining <= 0) {
+        inHunk = false
+        continue
+      }
       // A bare empty line is a context line whose single space was stripped —
       // `gh pr diff` and the REST `patch` field both emit these. Counting it is
       // what keeps every subsequent line number in the hunk aligned.
@@ -621,8 +649,7 @@ export const postableLines = (diff: string): ReadonlyMap<string, ReadonlySet<num
       }
       lines.add(newLine)
       newLine += 1
-    } else if (raw.startsWith("-")) {
-      // Left side only — advances nothing on the right.
+      remaining -= 1
     } else {
       // "\ No newline at end of file", or we've fallen out of the hunk body.
       if (!raw.startsWith("\\")) inHunk = false

@@ -125,4 +125,54 @@ describe("postableLines", () => {
   it("is empty for an empty diff", () => {
     expect(postableLines("").size).toBe(0)
   })
+
+  /**
+   * The one that bites in production but never in a `.join("\n")` fixture. Real
+   * `gh pr diff` output ends with a newline, so `split("\n")` yields a trailing
+   * "" while still inside the last hunk. Counting it admits a phantom line one
+   * past the file's end — and a finding the model mis-anchors there (the classic
+   * end-of-file off-by-one) would 422 the ENTIRE review. The hunk header's
+   * declared length is what bounds it out.
+   */
+  it("does not count the trailing newline's empty element as a line", () => {
+    // `@@ -1 +1,2 @@` → new side is lines 1–2 only. The trailing \n must NOT
+    // produce a postable line 3.
+    const diff = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n one\n+two\n"
+    expect(lines(diff, "a.ts")).toStrictEqual([1, 2])
+  })
+
+  it("counts identically whether or not the diff ends in a newline", () => {
+    const body = ["--- a/a.ts", "+++ b/a.ts", "@@ -1,2 +1,2 @@", " one", "+two", " three"]
+    expect(lines(body.join("\n"), "a.ts")).toStrictEqual(lines(body.join("\n") + "\n", "a.ts"))
+  })
+
+  /**
+   * The general form of the same guard: a body line beyond the header's declared
+   * new-side length is outside the hunk, so it must not be counted — even a
+   * well-formed-looking `+` line. (A malformed diff, but the whole point of this
+   * function is not to trust its input.)
+   */
+  it("stops counting once the hunk's declared new-side length is spent", () => {
+    const diff = [
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1 +1,2 @@",
+      " one",
+      "+two",
+      "+three-should-not-count" // one past the declared +1,2
+    ].join("\n")
+    expect(lines(diff, "a.ts")).toStrictEqual([1, 2])
+  })
+
+  it("counts trailing removals within the hunk without inventing a new-side line", () => {
+    // `@@ -1,3 +1,1 @@`: new side is line 1 only; two removals follow, then a
+    // trailing newline. None of those may add to the postable set.
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,1 @@\n one\n-two\n-three\n"
+    expect(lines(diff, "a.ts")).toStrictEqual([1])
+  })
+
+  it("handles a no-newline marker followed by the trailing newline", () => {
+    const diff = "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n+only\n\\ No newline at end of file\n"
+    expect(lines(diff, "a.ts")).toStrictEqual([1])
+  })
 })
