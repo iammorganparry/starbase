@@ -147,26 +147,36 @@ export const createSession = (input: CreateSessionInput) =>
   })
 
 /**
- * The models a harness offers, narrowed to what the user chose to see.
+ * Every model a harness offers — the WHOLE catalogue, deliberately uncurated.
+ *
+ * This feeds Settings' default-model picker, which is where a provider is
+ * CONFIGURED. Curation (`visibleModels`) is defined as what shows in the
+ * composer's model menu, so applying it here too would let it hide models from
+ * the one surface you'd use to change it: curate down to three, and the fourth
+ * can never be chosen as your default again — from inside the app there'd be no
+ * way back. Configuration surfaces show what exists; `Models.catalog` is where
+ * the operator's own choice is honoured.
  *
  * Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
  * app has a threadbare PATH, so Codex's and opencode's own model lists are only
- * reachable via the absolute path discovery found.
- *
- * Curation is applied HERE rather than inside `ModelsService` so that service
- * stays free of a config dependency (and hermetically testable). It matters for
- * opencode above all: its catalogue comes from the user's own credentials, and a
- * single OpenRouter key resolves ~342 models. Exported for tests.
+ * reachable via the absolute path discovery found. Exported for tests.
  */
 export const modelsList = (cli: CliKind) =>
   Effect.gen(function* () {
     const clis = yield* DiscoveryService.list()
-    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
-    const models = yield* ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
-    return filterVisible(models, config?.providers?.[cli]?.visibleModels)
+    return yield* ModelsService.list(cli, clis.find((c) => c.kind === cli)?.binPath)
   })
 
-/** Every installed harness's models, each narrowed by its own curation. */
+/**
+ * Every installed harness's models, each narrowed by its own curation — the
+ * composer's model menu.
+ *
+ * This is the surface curation exists for: opencode's catalogue is resolved from
+ * the user's own credentials, and a single OpenRouter key resolves ~342 models,
+ * which is not a menu anyone can use. Applied HERE rather than inside
+ * `ModelsService` so that service stays free of a config dependency (and
+ * hermetically testable). Exported for tests.
+ */
 export const modelsCatalog = () =>
   Effect.gen(function* () {
     const clis = yield* DiscoveryService.list()

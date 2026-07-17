@@ -236,6 +236,16 @@ export const ProviderConfig = Schema.Struct({
    * live from the user's own credentials and is enormous — a single OpenRouter
    * key alone yields ~342 models, which is unusable as a flat menu. Ids are
    * harness-native (for opencode, `provider/model`).
+   *
+   * The composer's menu ONLY (`Models.catalog`). It must never narrow a
+   * CONFIGURATION surface such as Settings' default-model picker
+   * (`Models.list`): a curation that could hide models from the screen you'd use
+   * to change it is a one-way door — pick three, and the fourth can never be
+   * chosen again from inside the app.
+   *
+   * No UI writes this yet; the picker that does lands separately. Until then a
+   * hand-edited `config.json` is the only writer, which is exactly why the
+   * one-way-door property matters.
    */
   visibleModels: Schema.optional(Schema.Array(Schema.String))
 })

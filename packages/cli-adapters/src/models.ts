@@ -60,6 +60,10 @@ const fetchFor = (
  * menu anyone can use. An absent or empty list means "show everything" — the
  * user hasn't curated, so we don't presume to.
  *
+ * For the COMPOSER's menu only. Never narrow a configuration surface with it —
+ * a curation that can hide models from the screen you'd use to edit it is a
+ * one-way door (see `visibleModels` in `domain.ts`).
+ *
  * A curation that matches nothing (every id stale after an upstream rename)
  * falls back to the full list. Showing everything is recoverable; showing an
  * empty model menu looks like the harness is broken.
