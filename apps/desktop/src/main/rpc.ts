@@ -82,12 +82,18 @@ export const chooseReposDir = () =>
 export const skillsList = (sessionId: string) =>
   Effect.gen(function* () {
     const session = yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+    const cli = session?.cli ?? "claude"
+    // The harness announces its own command list, so we need the binary discovery
+    // resolved — a GUI-launched Electron app has a threadbare PATH, so the bare
+    // name often isn't runnable (same reason `Models.list` takes it).
+    const clis = yield* DiscoveryService.list().pipe(Effect.orElseSucceed(() => []))
     return yield* SkillsService.list({
-      cli: session?.cli ?? "claude",
+      cli,
       // The operator's global skills live under the real home (~/.claude/skills),
       // never STARBASE_HOME.
       homeDir: homedir(),
-      worktreePath: session?.worktreePath ?? null
+      worktreePath: session?.worktreePath ?? null,
+      binPath: clis.find((c) => c.kind === cli)?.binPath ?? null
     })
   })
 

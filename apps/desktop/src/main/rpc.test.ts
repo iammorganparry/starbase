@@ -116,16 +116,35 @@ describe("RPC handlers", () => {
     })
   })
 
+  /**
+   * No harness discovered — which keeps this hermetic. The real DiscoveryService
+   * would find the operator's actual `claude` binary, and listing skills asks the
+   * harness what it offers, so the test would spawn a CLI.
+   */
+  const noHarnesses = Layer.succeed(
+    DiscoveryService,
+    new DiscoveryService({ list: () => Effect.succeed([]) })
+  )
+
   describe("Skills.list", () => {
-    // An unknown session must not error — the `/` menu still shows built-ins.
-    it("falls back to the built-in commands for an unknown session", async () => {
+    // An unknown session must not error — the `/` menu just has nothing to add.
+    it("resolves for an unknown session, rather than failing", async () => {
       const skills = await Effect.runPromise(
         skillsList("nope").pipe(
-          Effect.provide(Layer.mergeAll(base, SessionStore.Default, SkillsService.Default))
+          Effect.provide(
+            Layer.mergeAll(base, SessionStore.Default, SkillsService.Default, noHarnesses)
+          )
         )
       )
-      expect(skills.length).toBeGreaterThan(0)
-      expect(skills.some((s) => s.name === "/plan")).toBe(true)
+      // No session → no worktree to scan, and no harness discovered → nothing to
+      // ask. Whatever the operator's real ~/.claude/skills holds may still be
+      // scanned, so we assert the CONTRACT rather than a count: it resolves, and
+      // it never conjures a command the harness doesn't have. `/plan`, `/test`
+      // and `/commit` used to be served from a hardcoded list; none are real.
+      expect(Array.isArray(skills)).toBe(true)
+      expect(skills.map((s) => s.name)).not.toContain("/plan")
+      expect(skills.map((s) => s.name)).not.toContain("/test")
+      expect(skills.map((s) => s.name)).not.toContain("/commit")
     })
   })
 
