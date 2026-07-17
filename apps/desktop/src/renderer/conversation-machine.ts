@@ -637,23 +637,50 @@ export const conversationMachine = setup({
        */
       on: {
         SET_MODE: { actions: "persistMode" },
-        SET_HARNESS: { actions: "persistHarness" }
+        SET_HARNESS: { actions: "persistHarness" },
+        // The composer is enabled from the first paint, so a prompt can be sent
+        // before the transcript lands — and a dropped one is invisible: the box
+        // clears and the operator believes they sent it. Hold it and run it the
+        // moment the load settles, exactly as a send during a run is held.
+        SEND: { actions: "enqueue" }
       },
       invoke: {
         src: "loadConversation",
         input: ({ context }) => ({ session: context.session }),
-        onDone: {
-          target: "awaitingInput",
-          actions: assign(({ event }) => ({
-            messages: event.output.transcript,
-            files: event.output.files,
-            patch: event.output.patch,
-            loaded: true
-          }))
-        },
+        // A prompt sent while loading starts its turn as soon as the transcript
+        // settles; otherwise we go idle. The transcript is applied either way.
+        onDone: [
+          {
+            guard: "hasQueued",
+            target: "running",
+            actions: [
+              assign(({ event }) => ({
+                messages: event.output.transcript,
+                files: event.output.files,
+                patch: event.output.patch,
+                loaded: true
+              })),
+              "dequeueTurn"
+            ]
+          },
+          {
+            target: "awaitingInput",
+            actions: assign(({ event }) => ({
+              messages: event.output.transcript,
+              files: event.output.files,
+              patch: event.output.patch,
+              loaded: true
+            }))
+          }
+        ],
         // `loaded` stays false — the empty `messages` here says nothing about the
-        // session, so the status write is skipped rather than clobbering it.
-        onError: { target: "awaitingInput" }
+        // session, so the status write is skipped rather than clobbering it. A
+        // prompt held through a FAILED load still runs: losing the transcript is
+        // no reason to also lose what the operator just typed.
+        onError: [
+          { guard: "hasQueued", target: "running", actions: "dequeueTurn" },
+          { target: "awaitingInput" }
+        ]
       }
     },
     awaitingInput: {

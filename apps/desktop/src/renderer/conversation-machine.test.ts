@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   catalogGate: Promise.resolve() as Promise<void>,
   // Same, for the skills probe — it spawns the harness, so nothing may wait on it.
   skillsGate: Promise.resolve() as Promise<void>,
+  // Lets a test hold the transcript load, to drive the "typed before it lands" race.
+  transcriptGate: Promise.resolve() as Promise<void>,
   setHarnessCalls: [] as Array<{ sessionId: string; cli: string; model: string }>,
   catalog: [
     { cli: "claude", label: "Claude Code", models: [{ id: "opus", label: "opus" }] },
@@ -37,7 +39,10 @@ const h = vi.hoisted(() => ({
 
 vi.mock("./rpc-client.js", () => ({
   rpc: {
-    sessionsTranscript: async () => [],
+    sessionsTranscript: async () => {
+      await h.transcriptGate
+      return []
+    },
     skillsList: async () => {
       h.skillsListCalls += 1
       await h.skillsGate
@@ -107,6 +112,7 @@ beforeEach(() => {
   h.setHarnessCalls.length = 0
   h.catalogGate = Promise.resolve()
   h.skillsGate = Promise.resolve()
+  h.transcriptGate = Promise.resolve()
   h.reviewCb = null
 })
 
@@ -193,6 +199,44 @@ describe("conversationMachine — nothing gates the transcript on a CLI probe", 
    * Holding the skills fetch in flight here proves the machine reaches
    * `awaitingInput` regardless, mirroring the same guarantee the catalogue has.
    */
+  /**
+   * The composer is enabled from the first paint, so a prompt can be sent before
+   * the transcript lands. A dropped one is invisible — the box clears and the
+   * operator believes they sent it — so it's held and run the moment the load
+   * settles, exactly as a send during a run is.
+   */
+  it("holds a prompt sent before the transcript lands, then runs it", async () => {
+    let release = () => {}
+    h.transcriptGate = new Promise<void>((r) => (release = r))
+
+    const actor = start()
+    expect(actor.getSnapshot().matches("loading")).toBe(true)
+
+    actor.send({ type: "SEND", text: "typed on open" })
+    // Held, not dispatched — there's no transcript to append it to yet.
+    expect(h.agentRunCalls).toHaveLength(0)
+    expect(actor.getSnapshot().context.queued).toEqual([{ text: "typed on open", images: [] }])
+
+    release()
+    await waitFor(actor, (s) => s.matches("running"), { timeout: 3000 })
+    expect(h.agentRunCalls).toHaveLength(1)
+    expect(h.agentRunCalls[0]!.text).toBe("typed on open")
+    expect(actor.getSnapshot().context.queued).toEqual([])
+    actor.stop()
+  })
+
+  /** Losing the transcript is no reason to also lose what the operator typed. */
+  it("still runs a held prompt when the load FAILS", async () => {
+    h.transcriptGate = Promise.reject(new Error("disk gone"))
+
+    const actor = start()
+    actor.send({ type: "SEND", text: "typed on open" })
+
+    await waitFor(actor, (s) => s.matches("running"), { timeout: 3000 })
+    expect(h.agentRunCalls[0]!.text).toBe("typed on open")
+    actor.stop()
+  })
+
   it("reaches idle and accepts a send while the skills probe is still in flight", async () => {
     let release = () => {}
     h.skillsGate = new Promise<void>((r) => (release = r))
