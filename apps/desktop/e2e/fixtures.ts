@@ -159,17 +159,35 @@ if (argv.includes("--version") || argv.includes("-v")) {
 
 if (argv[0] === "serve") {
   const http = require("node:http")
+  // A provider is "connected" iff the fixture gave it a source — mirroring the
+  // real server, where /config/providers returns ONLY what resolves while
+  // /provider returns the whole registry plus a connected list.
+  const connected = providers.filter((p) => p.source !== null).map((p) => p.id)
   const server = http.createServer((req, res) => {
     res.setHeader("Content-Type", "application/json")
+    if (req.url.startsWith("/provider")) {
+      // The registry stamps a source on everything regardless of whether it
+      // resolves — reproduced here, because the fold must ignore it and trust
+      // \`connected\` instead.
+      res.end(
+        JSON.stringify({
+          all: providers.map((p) => ({ ...p, source: "custom" })),
+          connected,
+          default: {}
+        })
+      )
+      return
+    }
     if (req.url.startsWith("/config/providers")) {
+      const live = providers.filter((p) => connected.includes(p.id))
       // The real server also returns a per-provider default; mirroring it keeps
       // the fold under test identical to production.
       const def = {}
-      for (const p of providers) {
+      for (const p of live) {
         const first = Object.keys(p.models)[0]
         if (first) def[p.id] = first
       }
-      res.end(JSON.stringify({ providers, default: def }))
+      res.end(JSON.stringify({ providers: live, default: def }))
       return
     }
     if (req.method === "PUT" && req.url.startsWith("/auth/")) {

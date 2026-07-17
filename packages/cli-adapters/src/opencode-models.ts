@@ -72,6 +72,30 @@ export const readProviders = async (url: string): Promise<ProvidersResponse | nu
   return res.ok ? ((await res.json()) as ProvidersResponse) : null
 }
 
+/**
+ * The `/provider` payload — the FULL models.dev registry, not just what resolves.
+ *
+ * `/config/providers` answers "what can this user run right now" (~2 entries);
+ * this answers "what does opencode know about at all" (~167) plus which of them
+ * are `connected`. Settings needs both: you cannot offer to add a key for
+ * OpenRouter if OpenRouter only appears once it already has one.
+ *
+ * NOTE: `all[].source` is NOT a usable connected-signal here — the registry
+ * stamps 166 of 167 as `"custom"` regardless. `connected` is the real answer,
+ * and `/config/providers` is where a connected provider's true origin lives.
+ */
+export interface AllProvidersResponse {
+  readonly all?: ReadonlyArray<OpencodeProvider>
+  /** Provider ids that currently resolve, e.g. `["openai", "opencode"]`. */
+  readonly connected?: ReadonlyArray<string>
+}
+
+/** Ask a running opencode server for every provider it knows, connected or not. */
+export const readAllProviders = async (url: string): Promise<AllProvidersResponse | null> => {
+  const res = await fetch(`${url}/provider`)
+  return res.ok ? ((await res.json()) as AllProvidersResponse) : null
+}
+
 /** Boot a throwaway opencode server and ask it for the resolved catalogue. */
 export const fetchOpencodeModels = async (
   binPath?: string | null

@@ -1,6 +1,6 @@
 import type { OpencodeProviderInfo } from "@starbase/core"
 import type { OpencodeProvider } from "./opencode-models.js"
-import { readProviders } from "./opencode-models.js"
+import { readAllProviders, readProviders } from "./opencode-models.js"
 import { withOpencodeServer } from "./opencode-server.js"
 
 /**
@@ -23,41 +23,72 @@ import { withOpencodeServer } from "./opencode-server.js"
  */
 
 /**
- * Fold `/config/providers` into the rows Settings renders — the pure,
+ * Fold opencode's two provider reads into the rows Settings renders — the pure,
  * unit-tested seam.
  *
- * Providers are sorted by whether they're configured, so the ones actually doing
- * work are at the top. A provider with zero resolved models is still listed:
- * that is precisely the "you have the integration but no key" case the settings
- * page exists to fix.
+ * It takes BOTH reads because neither alone can answer the question:
+ *  - `all` + `connected` (`GET /provider`) — every provider opencode knows
+ *    (~167) and which currently resolve. This is what makes "Add key" reachable:
+ *    `/config/providers` lists only providers that ALREADY work, so on its own
+ *    you could never add a key for one you haven't configured — to add
+ *    OpenRouter you'd need OpenRouter already working.
+ *  - `configured` (`GET /config/providers`) — the true ORIGIN of a connected
+ *    provider's credential. `all[].source` can't be used for this: the registry
+ *    stamps almost everything `"custom"` regardless.
+ *
+ * Connected providers sort first — the ones actually doing work belong at the
+ * top — then alphabetically within each group.
  */
 export const toProviderInfos = (
-  providers: ReadonlyArray<OpencodeProvider>
-): ReadonlyArray<OpencodeProviderInfo> =>
-  providers
+  all: ReadonlyArray<OpencodeProvider>,
+  connected: ReadonlyArray<string> = [],
+  configured: ReadonlyArray<OpencodeProvider> = []
+): ReadonlyArray<OpencodeProviderInfo> => {
+  const isConnected = new Set(connected)
+  const byId = new Map(configured.filter((p) => typeof p?.id === "string").map((p) => [p.id, p]))
+
+  return all
     .filter((p) => typeof p?.id === "string" && p.id.length > 0)
-    .map((p) => ({
-      id: p.id,
-      name: p.name ?? p.id,
-      source: p.source ?? null,
-      // The env vars this provider reads, so the UI can name the one to set
-      // instead of making the user go and find it.
-      env: p.env ?? [],
-      modelCount: Object.keys(p.models ?? {}).length
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((p) => {
+      const live = byId.get(p.id)
+      return {
+        id: p.id,
+        name: p.name ?? p.id,
+        // A provider is only "sourced" if it actually resolves. `api` is the
+        // fallback for a connected provider that `/config/providers` didn't
+        // detail — it resolved from somewhere, and a key in opencode's own store
+        // is the likeliest somewhere.
+        source: isConnected.has(p.id) ? (live?.source ?? "api") : null,
+        // The env vars this provider reads, so the UI can name the one to set
+        // instead of making the user go and find it.
+        env: p.env ?? [],
+        // Models it RESOLVES, not models it could. An unconnected provider
+        // resolves none — the registry's catalogue for it is potential, and
+        // reporting that as live would be a lie.
+        modelCount: isConnected.has(p.id) ? Object.keys(live?.models ?? p.models ?? {}).length : 0
+      }
+    })
+    .sort(
+      (a, b) =>
+        Number(b.source !== null) - Number(a.source !== null) || a.name.localeCompare(b.name)
+    )
+}
 
 /**
- * Every provider opencode currently resolves for the user, with the origin of
- * each credential. Null when opencode can't be reached — the caller shows the
- * harness as unconfigured rather than an empty provider list.
+ * Every provider opencode knows about, each marked with whether it resolves for
+ * this user and where its credential came from. Null when opencode can't be
+ * reached — the caller shows the harness as unconfigured rather than an empty
+ * provider list.
  */
 export const fetchOpencodeProviders = async (
   binPath?: string | null
 ): Promise<ReadonlyArray<OpencodeProviderInfo> | null> =>
   withOpencodeServer(binPath, async (url) => {
-    const body = await readProviders(url)
-    return body === null ? null : toProviderInfos(body.providers ?? [])
+    // One server boot, two reads — the registry is useless without knowing which
+    // entries are live, and the live list is useless for adding a key.
+    const [registry, live] = await Promise.all([readAllProviders(url), readProviders(url)])
+    if (registry === null) return null
+    return toProviderInfos(registry.all ?? [], registry.connected ?? [], live?.providers ?? [])
   })
 
 /**

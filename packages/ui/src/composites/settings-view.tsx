@@ -16,6 +16,7 @@ import type {
 } from "@starbase/core"
 import { DEFAULT_REVIEW_MODEL, reviewModelFor } from "@starbase/core"
 import {
+  ChevronRight,
   Cpu,
   Keyboard,
   RotateCcw,
@@ -134,6 +135,9 @@ const SOURCE_HINT: Record<OpencodeProviderSource, string> = {
   custom: "Built into opencode."
 }
 
+/** How many unconfigured providers the browse list renders before asking for a narrower search. */
+const BROWSE_LIMIT = 8
+
 /**
  * opencode's providers, and the key entry for them — the BYOK surface.
  *
@@ -153,6 +157,9 @@ function OpencodeProviders({
   const [editing, setEditing] = React.useState<string | null>(null)
   const [key, setKey] = React.useState("")
   const [saving, setSaving] = React.useState(false)
+  /** Whether the rest of opencode's registry is open for browsing. */
+  const [browsing, setBrowsing] = React.useState(false)
+  const [filter, setFilter] = React.useState("")
 
   const refresh = React.useCallback(() => {
     let live = true
@@ -180,6 +187,84 @@ function OpencodeProviders({
     }
   }
 
+  const row = (p: OpencodeProviderInfo) => (
+    <div key={p.id} className="flex flex-col gap-1.5 rounded-md border border-hairline p-2.5">
+      <div className="flex items-center gap-2">
+        <StatusDot
+          tone={p.source === null ? "bg-line-strong" : "bg-green"}
+          size={6}
+          glow={p.source !== null}
+        />
+        <span className="text-[12px] font-medium text-text-bright">{p.name}</span>
+        {p.source !== null && (
+          <span
+            title={SOURCE_HINT[p.source]}
+            className="rounded bg-black/25 px-1.5 py-px font-mono text-[9.5px] text-muted-foreground"
+          >
+            {SOURCE_LABEL[p.source]}
+          </span>
+        )}
+        {p.source !== null && (
+          <span className="ml-auto font-mono text-[10px] text-dim">
+            {p.modelCount} {p.modelCount === 1 ? "model" : "models"}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(editing === p.id ? null : p.id)
+            setKey("")
+          }}
+          className={cn(
+            "rounded border border-hairline px-1.5 py-px text-[10.5px] text-muted-foreground hover:text-text-bright",
+            p.source === null && "ml-auto"
+          )}
+        >
+          {/*
+            Keyed on whether the provider resolves AT ALL, not on how. A provider
+            live from an env var already HAS a key — offering to "Add" one next to
+            a green dot and an "environment" badge reads as though none is present.
+          */}
+          {p.source === null ? "Add key" : "Replace key"}
+        </button>
+      </div>
+      {/* Name the env var rather than making them go and find it. */}
+      {p.source === null && p.env.length > 0 && (
+        <span className="font-mono text-[10px] text-dim">or export {p.env.join(" / ")}</span>
+      )}
+      {editing === p.id && (
+        <div className="flex items-center gap-1.5">
+          <input
+            type="password"
+            value={key}
+            autoFocus
+            onChange={(e) => setKey(e.target.value)}
+            placeholder={`${p.id} API key`}
+            className="min-w-0 flex-1 rounded border border-hairline bg-black/20 px-2 py-1 font-mono text-[11px] text-text-bright outline-none focus:border-line-strong"
+          />
+          <button
+            type="button"
+            disabled={key.trim().length === 0 || saving}
+            onClick={() => void save(p.id)}
+            className="rounded bg-blue/20 px-2 py-1 text-[10.5px] text-blue disabled:opacity-40"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+
+  // Connected providers are the page's subject; the rest of opencode's registry
+  // (~165 of them, most obscure) is a catalogue to search, not a list to read —
+  // so it stays behind a disclosure and a filter.
+  const connected = (providers ?? []).filter((p) => p.source !== null)
+  const available = (providers ?? []).filter((p) => p.source === null)
+  const needle = filter.trim().toLowerCase()
+  const matches = needle
+    ? available.filter((p) => p.name.toLowerCase().includes(needle) || p.id.includes(needle))
+    : available
+
   return (
     <Field label="Providers" flag="opencode auth">
       <div className="flex flex-col gap-1.5">
@@ -188,6 +273,7 @@ function OpencodeProviders({
           add here also works in your terminal — and anything you added with{" "}
           <span className="font-mono text-dim">opencode auth login</span> already works here.
         </span>
+
         {providers === null ? (
           <span className="py-2 text-[11.5px] text-dim">Asking opencode…</span>
         ) : providers.length === 0 ? (
@@ -195,65 +281,65 @@ function OpencodeProviders({
             opencode reported no providers. Check that it runs in your terminal.
           </span>
         ) : (
-          providers.map((p) => (
-            <div key={p.id} className="flex flex-col gap-1.5 rounded-md border border-hairline p-2.5">
-              <div className="flex items-center gap-2">
-                <StatusDot
-                  tone={p.source === null ? "bg-line-strong" : "bg-green"}
-                  size={6}
-                  glow={p.source !== null}
-                />
-                <span className="text-[12px] font-medium text-text-bright">{p.name}</span>
-                {p.source !== null && (
-                  <span
-                    title={SOURCE_HINT[p.source]}
-                    className="rounded bg-black/25 px-1.5 py-px font-mono text-[9.5px] text-muted-foreground"
-                  >
-                    {SOURCE_LABEL[p.source]}
-                  </span>
-                )}
-                <span className="ml-auto font-mono text-[10px] text-dim">
-                  {p.modelCount} {p.modelCount === 1 ? "model" : "models"}
-                </span>
+          <>
+            {connected.length === 0 ? (
+              <span className="py-1 text-[11.5px] text-dim">
+                No providers configured yet — add a key below, or export one of their environment
+                variables.
+              </span>
+            ) : (
+              connected.map(row)
+            )}
+
+            {available.length > 0 && (
+              <>
                 <button
                   type="button"
                   onClick={() => {
-                    setEditing(editing === p.id ? null : p.id)
-                    setKey("")
+                    setBrowsing((b) => !b)
+                    setFilter("")
                   }}
-                  className="rounded border border-hairline px-1.5 py-px text-[10.5px] text-muted-foreground hover:text-text-bright"
+                  className="mt-0.5 flex items-center gap-1.5 self-start text-[11px] text-muted-foreground hover:text-text-bright"
                 >
-                  {p.source === "api" ? "Replace key" : "Add key"}
-                </button>
-              </div>
-              {/* Name the env var rather than making them go and find it. */}
-              {p.source === null && p.env.length > 0 && (
-                <span className="font-mono text-[10px] text-dim">
-                  or export {p.env.join(" / ")}
-                </span>
-              )}
-              {editing === p.id && (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="password"
-                    value={key}
-                    autoFocus
-                    onChange={(e) => setKey(e.target.value)}
-                    placeholder={`${p.id} API key`}
-                    className="min-w-0 flex-1 rounded border border-hairline bg-black/20 px-2 py-1 font-mono text-[11px] text-text-bright outline-none focus:border-line-strong"
+                  <ChevronRight
+                    size={12}
+                    className={cn("transition-transform", browsing && "rotate-90")}
                   />
-                  <button
-                    type="button"
-                    disabled={key.trim().length === 0 || saving}
-                    onClick={() => void save(p.id)}
-                    className="rounded bg-blue/20 px-2 py-1 text-[10.5px] text-blue disabled:opacity-40"
-                  >
-                    {saving ? "Saving…" : "Save"}
-                  </button>
-                </div>
-              )}
-            </div>
-          ))
+                  Add a provider
+                  <span className="font-mono text-[10px] text-dim">({available.length})</span>
+                </button>
+
+                {browsing && (
+                  <>
+                    <input
+                      value={filter}
+                      autoFocus
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="Search providers…"
+                      className="rounded border border-hairline bg-black/20 px-2 py-1 text-[11.5px] text-text-bright outline-none focus:border-line-strong"
+                    />
+                    {matches.length === 0 ? (
+                      <span className="py-1 text-[11.5px] text-dim">
+                        No provider matches “{filter}”.
+                      </span>
+                    ) : (
+                      /*
+                        Capped: opencode knows ~167 providers, and rendering the
+                        tail of that list helps nobody — searching does. The count
+                        below says what's hidden rather than pretending this is all.
+                      */
+                      matches.slice(0, BROWSE_LIMIT).map(row)
+                    )}
+                    {matches.length > BROWSE_LIMIT && (
+                      <span className="text-[10.5px] text-dim">
+                        {matches.length - BROWSE_LIMIT} more — keep typing to narrow.
+                      </span>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </>
         )}
       </div>
     </Field>
