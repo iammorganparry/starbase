@@ -196,23 +196,24 @@ test("the model chip shows the harness model and switches", async ({ launchApp }
 })
 
 /**
- * Switching provider from the model chip. The menu only lists harnesses that are
- * actually installed, so this skips rather than fails on a machine without the
- * Codex CLI (discovery probes the real binary — there's no fixture for it).
+ * Switching provider from the model chip.
+ *
+ * The menu only lists installed harnesses, so this used to skip unless the
+ * developer personally had the Codex CLI — meaning it asserted nothing on CI and
+ * something different on every machine. Discovery is now pinned to the fixture's
+ * bin dir, which ships a fake `codex` speaking the app-server protocol, so the
+ * harness is always present and the skip has been removed: if Codex is missing
+ * from the menu now, that is a real failure.
  */
 test("the model chip switches provider", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
   await expect(window.getByPlaceholder("Message Claude…")).toBeVisible()
 
   await window.getByRole("button", { name: /opus/ }).click()
-  const codexSection = window.getByText("Codex CLI", { exact: true })
-  if ((await codexSection.count()) === 0) {
-    test.skip(true, "Codex CLI not installed on this host")
-    return
-  }
+  await expect(window.getByText("Codex CLI", { exact: true })).toBeVisible()
 
-  // Codex's models come live from the CLI itself, so assert the shape of a real
-  // id (`gpt-5.…`) rather than a specific one — the catalogue moves upstream.
+  // The catalogue comes from the CLI itself, so assert the shape of an id
+  // (`GPT-5.…`) rather than a specific one — it moves upstream.
   const codexModel = window.getByRole("menuitem").filter({ hasText: /^GPT-5\./ }).first()
   const label = (await codexModel.textContent())!.trim()
   await codexModel.click()

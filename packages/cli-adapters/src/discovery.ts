@@ -1,3 +1,4 @@
+import { join } from "node:path"
 import type { CliInfo, CliKind } from "@starbase/core"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
@@ -54,6 +55,28 @@ const CLI_SPECS: Record<CliKind, CliSpec> = {
   }
 }
 
+/**
+ * Restrict discovery to a single directory. Set only by the e2e suite.
+ *
+ * The tests must not find the developer's real `claude` / `opencode`. Booting
+ * them is slow and non-deterministic, and `withOpencodeServer` inherits the
+ * environment UNTOUCHED by design (the BYOK contract), so a test run would drive
+ * the developer's own binary against their own credentials.
+ *
+ * Scrubbing `PATH` cannot achieve this on its own: `candidates` below deliberately
+ * includes absolute install paths (`/opt/homebrew/bin/opencode`, `~/.local/bin/...`)
+ * precisely so a GUI-launched app with a threadbare PATH still finds them. This
+ * override therefore replaces BOTH lookups — it is the only way to make discovery
+ * hermetic.
+ */
+const DISCOVERY_BIN_DIR = "STARBASE_DISCOVERY_BIN_DIR"
+
+/** The pinned discovery dir, or null when discovery should probe the real host. */
+const pinnedBinDir = (): string | null => {
+  const dir = process.env[DISCOVERY_BIN_DIR]
+  return dir === undefined || dir === "" ? null : dir
+}
+
 /** Capture a CLI's version string by invoking `<bin> --version`. */
 const versionOf = (bin: string) => runString(bin, "--version")
 
@@ -106,6 +129,19 @@ const probe = (
       spec.minVersion !== undefined && !meetsMinVersion(version, spec.minVersion)
         ? tooOld(kind, spec, version)
         : { kind, label: spec.label, binPath, version, available: true }
+
+    // 0. Pinned dir (e2e only): this dir IS the host, so neither the PATH lookup
+    //    nor the absolute candidates below may run — a real install must stay
+    //    invisible even though its path is hardcoded a few lines down.
+    const pinned = pinnedBinDir()
+    if (pinned !== null) {
+      for (const bin of spec.bins) {
+        const candidate = join(pinned, bin)
+        const version = yield* versionOf(candidate)
+        if (version !== null) return accept(candidate, version)
+      }
+      return unavailable(kind, spec)
+    }
 
     // 1. PATH lookup for each candidate binary name.
     for (const bin of spec.bins) {
