@@ -11,7 +11,8 @@
     "clean": "rimraf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "effect": "^3.21.4"
+    "effect": "^3.21.4",
+    "xstate": "^5.32.4"
   },
   "devDependencies": {
     "@starbase/tsconfig": "workspace:*"

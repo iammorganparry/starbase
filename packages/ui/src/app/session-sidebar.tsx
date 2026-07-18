@@ -1,5 +1,5 @@
 import * as React from "react"
-import type { Session, SessionActivity, SessionDisplayStatus, User } from "@starbase/core"
+import type { PrState, Session, SessionActivity, SessionDisplayStatus, User } from "@starbase/core"
 import { displayStatusOf } from "@starbase/core"
 import { Archive, ChevronRight, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -57,6 +57,8 @@ export interface SessionSidebarProps {
   /** Live per-session agent status, overriding the persisted status. */
   /** What each session's agent is doing right now, keyed by id (live). */
   liveActivity?: Record<string, SessionActivity>
+  /** Live linked-PR state per session id, badged onto the row (never auto-archives). */
+  prStates?: Record<string, PrState>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
   /** The signed-in user, shown in the footer account menu. */
@@ -94,6 +96,7 @@ export function SessionSidebar({
   onRestore,
   onDelete,
   liveActivity,
+  prStates,
   onNewSession,
   user,
   onOpenUsage,
@@ -148,7 +151,18 @@ export function SessionSidebar({
   // Archived sessions collapse into their own group at the bottom, regardless of
   // the active grouping; everything else is grouped by repo / status.
   const activeSessions = React.useMemo(() => filtered.filter((s) => !s.archived), [filtered])
-  const archivedSessions = React.useMemo(() => filtered.filter((s) => s.archived), [filtered])
+  // Newest-archived first. `sessions` arrives ordered by `updatedAt`, which is
+  // the WRONG axis here: a session you archive today whose last turn was a week
+  // ago would sort below sessions archived days earlier, so the one you just
+  // retired (or lost) is buried mid-list exactly when you go looking for it.
+  // Sessions with no `archivedAt` (archived before the field existed) sort last.
+  const archivedSessions = React.useMemo(
+    () =>
+      filtered
+        .filter((s) => s.archived)
+        .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? "")),
+    [filtered]
+  )
   const groups = React.useMemo(() => {
     if (groupBy === "status") return groupByStatus(activeSessions, statusOf)
     const byRepo = groupByRepo(activeSessions)
@@ -309,6 +323,7 @@ export function SessionSidebar({
                       key={s.id}
                       session={s}
                       activity={liveActivity?.[s.id]}
+                      prState={prStates?.[s.id]}
                       active={s.id === activeSessionId}
                       onSelect={onSelect}
                       onRename={onRename}

@@ -6,10 +6,13 @@
  * the Plan tab does NOT unmount the agent stream (which would abort a parked plan).
  */
 import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import type { Session } from "@starbase/core"
 import { agentChildren, agentPath } from "@starbase/core"
 import {
   AgentTabBar,
+  BackgroundTaskDock,
+  BackgroundTaskOutput,
   ConversationView,
   MAIN_AGENT,
   McpStatusDialog,
@@ -19,6 +22,7 @@ import {
 import { rpc } from "./rpc-client.js"
 import { clearDraft, getDraft, seedDraftOnce, setDraft, useDraft } from "./draft-store.js"
 import { useConversation } from "./use-conversation.js"
+import { useBackgroundTasks } from "./use-background-tasks.js"
 import { useMcp } from "./use-mcp.js"
 
 export function ConversationPane({
@@ -55,6 +59,17 @@ export function ConversationPane({
   // MCP config is a property of the harness.
   const mcp = useMcp(session.id, convo.cli)
   const [mcpOpen, setMcpOpen] = useState(false)
+
+  // Background tasks. Gated on the HARNESS's capability, read from discovery —
+  // only Claude reports a live task set and accepts a per-task stop, so the dock
+  // stays hidden elsewhere rather than offering a button with nothing to aim at.
+  const clisQuery = useQuery({ queryKey: ["clis"], queryFn: () => rpc.discoveryList() })
+  const backgroundTasksSupported =
+    clisQuery.data?.find((c) => c.kind === convo.cli)?.backgroundTasks ?? false
+  const bgTasks = useBackgroundTasks(session.id, backgroundTasksSupported)
+  const [viewingTaskId, setViewingTaskId] = useState<string | null>(null)
+  const [taskOutput, setTaskOutput] = useState("")
+  const viewingTask = bgTasks.tasks.find((t) => t.id === viewingTaskId) ?? null
 
   // The composer's draft lives in the store, not the composer — this pane is
   // mounted keyed by session id, so switching sessions unmounts it and any local
@@ -227,6 +242,29 @@ export function ConversationPane({
           }
         />
       )}
+      {/*
+        Background tasks dock — harness work that OUTLIVES this turn. Sits below
+        the conversation (not in the sub-agent tab bar, which is per-run and
+        cleared on the next turn) so a task the operator needs to stop can't be
+        swept away while it is still running. Renders nothing when the harness
+        has no per-task support or there is nothing to show.
+      */}
+      {viewingTask && (
+        <BackgroundTaskOutput
+          task={viewingTask}
+          output={taskOutput}
+          onClose={() => setViewingTaskId(null)}
+        />
+      )}
+      <BackgroundTaskDock
+        tasks={bgTasks.tasks}
+        supported={backgroundTasksSupported}
+        onStop={bgTasks.stop}
+        onView={(taskId) => {
+          setViewingTaskId(taskId)
+          void bgTasks.output(taskId).then(setTaskOutput)
+        }}
+      />
       <McpStatusDialog
         open={mcpOpen}
         cli={convo.cli}

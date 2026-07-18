@@ -226,6 +226,9 @@ importers:
       smol-toml:
         specifier: ^1.7.0
         version: 1.7.0
+      xstate:
+        specifier: ^5.32.4
+        version: 5.32.4
     devDependencies:
       '@effect/platform-node':
         specifier: ^0.107.0
@@ -258,6 +261,9 @@ importers:
       effect:
         specifier: ^3.21.4
         version: 3.21.4
+      xstate:
+        specifier: ^5.32.4
+        version: 5.32.4
     devDependencies:
       '@starbase/tsconfig':
         specifier: workspace:*

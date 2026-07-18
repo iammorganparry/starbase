@@ -32,6 +32,7 @@ import { disposeConversationActor } from "./conversation-registry.js"
 import { clearDraft } from "./draft-store.js"
 import { onSessionUpdate } from "./session-updates.js"
 import { completedSessionIds } from "./pr-refresh.js"
+import { issuesToCloseOnMerge } from "./pr-sweep.js"
 import { routeReviewToAgent } from "./auto-route.js"
 import { reviewQueryKey } from "./review-routing.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
@@ -261,31 +262,38 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     }
   }, [planSessions, sessions, send])
 
-  // Archive sweep: once a linked PR is merged or closed, auto-archive the session
-  // so it drops into the sidebar's "Archived" group (read-only, kept). react-query
-  // owns the per-session PR-state reads (cached + retried); `combine` distils them
-  // to the sessions that need archiving, and a mutation performs the archive.
+  // PR-state sweep: track each linked PR's merged/closed state and BADGE the row.
+  //
+  // This used to auto-archive the session the moment its PR merged. That was
+  // wrong: a session holds a single `prNumber`, but one session routinely
+  // outlives several PRs (open one, merge it, keep working off the same worktree
+  // and open the next). Merging PR #204 therefore said nothing about whether the
+  // WORK was done, and a live multi-PR session would silently vanish from the
+  // sidebar mid-flight. Retiring a session is now always the operator's call —
+  // the badge reports, it doesn't act.
   const sweepTargets = useMemo(
     () => sessions.filter((s) => s.prNumber != null && Boolean(s.worktreePath) && !s.archived),
     [sessions]
   )
-  const toArchive = useQueries({
+  const prStates = useQueries({
     queries: sweepTargets.map((s) => ({
       queryKey: ["pr-state", s.id, s.prNumber] as const,
       queryFn: () => rpc.githubPrState(s.id),
       enabled: connected,
       staleTime: PR_STATE_STALE_MS,
-      // Poll so a PR merged/closed on GitHub archives its session live instead of
+      // Poll so a PR merged/closed on GitHub badges its session live instead of
       // only on a cold app relaunch (the query would otherwise never re-fetch).
       refetchInterval: ARCHIVE_POLL_MS,
       refetchIntervalInBackground: true,
       refetchOnWindowFocus: true
     })),
     combine: (results) =>
-      sweepTargets.flatMap((s, i) => {
-        const state = results[i]?.data
-        return state === "merged" || state === "closed" ? [{ id: s.id, reason: state }] : []
-      })
+      Object.fromEntries(
+        sweepTargets.flatMap((s, i) => {
+          const state = results[i]?.data
+          return state ? [[s.id, state] as const] : []
+        })
+      )
   })
   // Auto adversarial review (opt-in). Polls `Review.run` on the same cadence as
   // the archive sweep, which sounds expensive but isn't: the main process
@@ -344,29 +352,18 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     }
   }, [autoReviews, sessions, qc])
 
-  const archiveMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: "merged" | "closed" }) =>
-      rpc.sessionsArchive(id, reason),
-    onSuccess: (session) => send({ type: "SESSION_UPDATED", session })
-  })
-  // Fire the archive once per session (the ref guards against re-firing while the
-  // SESSION_UPDATED that removes it from `sweepTargets` is still propagating).
-  const archivedRef = useRef<Set<string>>(new Set())
+  // Close-on-merge automation. Decoupled from archiving (which no longer happens
+  // automatically): closing the linked ISSUE when its PR merges is a statement
+  // about the issue, not about whether the session is finished, so it still fires
+  // on merge. Once per session — the ref guards against the poll re-firing it on
+  // every tick, since a merged PR stays merged forever.
+  const closedIssuesRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    for (const { id, reason } of toArchive) {
-      if (archivedRef.current.has(id)) continue
-      archivedRef.current.add(id)
-      archiveMutation.mutate({ id, reason })
-      // Close-on-merge automation: when the linked PR MERGES (not just closes),
-      // close the session's linked issue too, if the user opted in. Best-effort.
-      if (reason === "merged") {
-        const s = sessions.find((x) => x.id === id)
-        if (s?.issueNumber != null && s.automations?.closeOnMerge) {
-          void rpc.githubCloseIssue(id).catch(() => {})
-        }
-      }
+    for (const id of issuesToCloseOnMerge(prStates, sessions, closedIssuesRef.current)) {
+      closedIssuesRef.current.add(id)
+      void rpc.githubCloseIssue(id).catch(() => {})
     }
-  }, [toArchive, archiveMutation, sessions])
+  }, [prStates, sessions])
 
   if (state.matches("loading") || state.matches("starting")) {
     return <LoadingScreen />
@@ -412,6 +409,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       defaultRepoPath={lastRepoPath}
       ghStatus={ghStatus}
       liveActivity={liveActivity}
+      prStates={prStates}
       liveDiff={liveDiff}
       usage={usage}
       onLoadUsage={loadUsage}

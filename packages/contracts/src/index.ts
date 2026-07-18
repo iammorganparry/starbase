@@ -25,6 +25,7 @@ import {
   McpServer,
   McpServerStatus,
   PrMergeMethod,
+  BackgroundTask,
   PrState,
   PrSummary,
   ProviderConfig,
@@ -725,6 +726,40 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Terminal.list", {
     success: Schema.Array(TerminalInfo),
     payload: { sessionId: Schema.String }
+  }),
+
+  // ── Background tasks ─────────────────────────────────────────────────────────
+  // Harness work that OUTLIVES the turn that started it. Lives in a main-process
+  // registry (one statechart per task) rather than in per-run renderer state,
+  // which is cleared on every new turn.
+
+  /**
+   * A session's background tasks — running first, then settled ones (whose
+   * transcripts are still worth reading). Rebuilds the dock on mount.
+   */
+  Rpc.make("BackgroundTasks.list", {
+    success: Schema.Array(BackgroundTask),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * Ask the harness to stop one task, returning it in its new state — normally
+   * `stopping`, since confirmation arrives later, or a terminal state when no
+   * live harness owns it. Null when the id is unknown. Idempotent.
+   */
+  Rpc.make("BackgroundTasks.stop", {
+    success: Schema.NullOr(BackgroundTask),
+    payload: { sessionId: Schema.String, taskId: Schema.String }
+  }),
+
+  /**
+   * A settled task's full transcript, read from the `output_file` the harness
+   * reported. Empty while the task is still running — there is no output stream
+   * before it settles, only the progress fields on the task itself.
+   */
+  Rpc.make("BackgroundTasks.output", {
+    success: Schema.String,
+    payload: { sessionId: Schema.String, taskId: Schema.String }
   }),
 
   // ── Auth ─────────────────────────────────────────────────────────────────────

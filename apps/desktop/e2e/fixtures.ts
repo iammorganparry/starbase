@@ -30,6 +30,15 @@ export interface SeedSession {
 }
 
 export interface LaunchOptions {
+  /**
+   * Relaunch against an EXISTING `~/starbase` (a previous launch's `home`) —
+   * i.e. a real app restart, reading whatever the last run persisted rather than
+   * what the test seeded. Pass `reposDir` alongside it to keep the same repos.
+   * The original launch still owns teardown for both.
+   */
+  readonly home?: string
+  /** Reuse a previous launch's repos dir; pair with `home` for a restart. */
+  readonly reposDir?: string
   /** Seed config.json so the app boots configured (past first-run). */
   readonly configured?: boolean
   /** Create a real git repo in the seeded repos dir (for the create-session flow). */
@@ -507,16 +516,25 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
     const apps: ElectronApplication[] = []
 
     const launch = async (options: LaunchOptions = {}): Promise<LaunchedApp> => {
-      const home = mkdtempSync(join(tmpdir(), "starbase-e2e-home-"))
+      // Reusing a previous launch's `home`/`reposDir` is what makes a REAL
+      // restart testable: the second launch reads the state the first one wrote,
+      // rather than state the test seeded. Without it, "survives a restart" can
+      // only ever assert that seeded fixtures render. Skip re-registering
+      // cleanups so the first launch's teardown isn't run twice.
+      const reused = options.home !== undefined
+      const home = options.home ?? mkdtempSync(join(tmpdir(), "starbase-e2e-home-"))
       const starbaseDir = join(home, "starbase")
-      const reposDir = mkdtempSync(join(tmpdir(), "starbase-e2e-repos-"))
-      cleanups.push(() => rmSync(home, { recursive: true, force: true }))
-      cleanups.push(() => rmSync(reposDir, { recursive: true, force: true }))
+      const reposDir = options.reposDir ?? mkdtempSync(join(tmpdir(), "starbase-e2e-repos-"))
+      if (!reused) {
+        cleanups.push(() => rmSync(home, { recursive: true, force: true }))
+        cleanups.push(() => rmSync(reposDir, { recursive: true, force: true }))
+      }
 
       let repoPath = ""
       if (options.withRepo) {
         repoPath = join(reposDir, "widget")
-        initRepo(repoPath)
+        // A reused home already has its repo; re-initialising would wipe it.
+        if (!existsSync(repoPath)) initRepo(repoPath)
       }
 
       if (options.configured) {
@@ -663,7 +681,13 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
           STARBASE_SECRET_STORE: "memory",
           // Force the deterministic scripted agent so chat e2e never spawns a
           // real harness (no auth, no network, reproducible).
-          STARBASE_SCRIPTED_AGENT: "1"
+          STARBASE_SCRIPTED_AGENT: "1",
+          // Keep the window hidden and off the dock. The suite launches a real
+          // Electron app dozens of times, and a visible window steals focus on
+          // every launch — which makes running the suite locally (its only home;
+          // it's not in CI) incompatible with using the machine at the same time.
+          // Set STARBASE_E2E_HEADED=1 to watch a run instead.
+          STARBASE_E2E_HEADLESS: process.env.STARBASE_E2E_HEADED === "1" ? "0" : "1"
         }
       })
       apps.push(app)

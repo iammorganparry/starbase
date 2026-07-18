@@ -20,11 +20,21 @@ interface CliSpec {
   readonly minVersion?: readonly [number, number]
   /** Command to suggest when `minVersion` isn't met, e.g. `opencode upgrade`. */
   readonly upgradeWith?: string
+  /**
+   * Whether this harness exposes BACKGROUND TASKS the operator can see and stop
+   * individually — a live task set, per-task progress, and a per-task stop.
+   *
+   * Only Claude does. Codex and OpenCode can abort a whole turn but have no
+   * per-task handle, so the background-task dock stays hidden for them rather
+   * than offering a Stop button with nothing to aim at.
+   */
+  readonly backgroundTasks?: boolean
 }
 
 const CLI_SPECS: Record<CliKind, CliSpec> = {
   claude: {
     label: "Claude Code",
+    backgroundTasks: true,
     bins: ["claude"],
     candidates: ["~/.claude/local/claude", "~/.local/bin/claude", "/opt/homebrew/bin/claude"]
   },
@@ -99,6 +109,7 @@ export const meetsMinVersion = (raw: string | null, min: readonly [number, numbe
 const unavailable = (kind: CliKind, spec: CliSpec, note?: string): CliInfo => ({
   kind,
   label: spec.label,
+  backgroundTasks: spec.backgroundTasks ?? false,
   binPath: null,
   version: null,
   available: false,
@@ -128,7 +139,14 @@ const probe = (
     const accept = (binPath: string, version: string | null): CliInfo =>
       spec.minVersion !== undefined && !meetsMinVersion(version, spec.minVersion)
         ? tooOld(kind, spec, version)
-        : { kind, label: spec.label, binPath, version, available: true }
+        : {
+            kind,
+            label: spec.label,
+            binPath,
+            version,
+            available: true,
+            backgroundTasks: spec.backgroundTasks ?? false
+          }
 
     // 0. Pinned dir (e2e only): this dir IS the host, so neither the PATH lookup
     //    nor the absolute candidates below may run — a real install must stay

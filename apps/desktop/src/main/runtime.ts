@@ -23,6 +23,7 @@ import {
   SkillsService,
   TerminalService,
   TranscriptStore,
+  BackgroundTaskStore,
   UsageService,
   WorkspaceService
 } from "@starbase/cli-adapters"
@@ -46,6 +47,7 @@ const SecretStoreLayer =
  */
 const StoreLayers = Layer.mergeAll(
   TranscriptStore.Default,
+  BackgroundTaskStore.Default,
   PlanStore.Default,
   ReviewStore.Default
 )

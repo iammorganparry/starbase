@@ -116,11 +116,27 @@ export type ProposePlan = (plan: Plan) => Effect.Effect<PlanDecision>
  * that interleaves these in program order, the transcript order (where a
  * gate/question/plan lands) is deterministic.
  */
+/**
+ * Stop ONE background task by its harness task id.
+ *
+ * Per-run rather than a method on the adapter because the handle only exists
+ * while the harness process is alive — a background task cannot outlive the
+ * process that owns it, so a stale handle would be worse than none.
+ */
+export type StopBackgroundTask = (taskId: string) => Promise<void>
+
 export interface AgentContext {
   readonly emit: (event: StreamEvent) => Effect.Effect<void>
   readonly canUseTool: CanUseTool
   readonly askQuestion: AskQuestion
   readonly proposePlan: ProposePlan
+  /**
+   * Publish a handle the operator's "Stop" button can reach. Adapters whose
+   * harness has no per-task cancellation (codex, opencode — both can only abort
+   * a whole turn) simply never call this, and the UI reports the capability as
+   * unsupported rather than offering a button that does nothing.
+   */
+  readonly registerBackgroundStop: (stop: StopBackgroundTask) => Effect.Effect<void>
 }
 
 /**
@@ -203,12 +219,56 @@ export const scriptedPlan = (sessionId: string, rev: number): Plan => ({
  */
 export const scriptedRun =
   (delayMs: number): CliAdapterShape["run"] =>
-  (sessionId, spec, { emit, canUseTool, askQuestion, proposePlan }) =>
+  (sessionId, spec, { emit, canUseTool, askQuestion, proposePlan, registerBackgroundStop }) =>
     Effect.gen(function* () {
       const pause = delayMs > 0 ? Effect.sleep(`${delayMs} millis`) : Effect.void
 
       yield* emit({ _tag: "Started", sessionId })
       yield* pause
+
+      // A `[[background]]` marker starts a background task that keeps running
+      // after the turn ends — the case the dock exists for, and the only way to
+      // drive it end-to-end without a real harness. The registered stop handle
+      // settles it the way a real one does: by reporting the outcome back through
+      // the same signals, rather than mutating state behind the registry's back.
+      if (spec.prompt.includes("[[background]]")) {
+        const taskId = `bgtask_${sessionId}`
+        yield* registerBackgroundStop(async (id) => {
+          if (id !== taskId) return
+          await Effect.runPromise(
+            emit({
+              _tag: "BackgroundTaskSettled",
+              id: taskId,
+              status: "stopped",
+              summary: "Stopped by the operator.",
+              outputFile: null
+            }).pipe(Effect.zipRight(emit({ _tag: "BackgroundTasksChanged", ids: [] })))
+          )
+        })
+        yield* emit({
+          _tag: "BackgroundTaskStarted",
+          id: taskId,
+          description: "Watching the test suite",
+          taskType: "bash",
+          subagentType: null,
+          toolUseId: null
+        })
+        yield* emit({ _tag: "BackgroundTasksChanged", ids: [taskId] })
+        yield* emit({
+          _tag: "BackgroundTaskProgress",
+          id: taskId,
+          description: "Watching the test suite",
+          tokens: 1200,
+          toolUses: 3,
+          durationMs: 12_000,
+          lastTool: "Bash"
+        })
+        yield* emit({ _tag: "Assistant", text: "Started a watcher in the background." })
+        // The turn ENDS while the task runs on — exactly the situation that made
+        // this work invisible before the dock existed.
+        yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+        return
+      }
 
       // A `[[plan]]` marker drives plan mode: propose a plan, then execute on
       // approval or re-propose a revised one on revise (one cycle max, for tests).

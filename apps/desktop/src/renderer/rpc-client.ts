@@ -5,6 +5,7 @@
  * `StarbaseRpcs` group. Callers get plain, typed Promises back.
  */
 import type {
+  BackgroundTask,
   AdversarialReview,
   ArchiveReason,
   Attachment,
@@ -345,6 +346,17 @@ export const rpc = {
   /** List a session's live terminals (rebuild the tab strip on mount). */
   terminalList: (sessionId: string): Promise<ReadonlyArray<TerminalInfo>> =>
     run((c) => c.Terminal.list({ sessionId })),
+
+  // ── Background tasks ───────────────────────────────────────────────────────
+  /** A session's background tasks — running and recently settled. */
+  backgroundTasksList: (sessionId: string): Promise<ReadonlyArray<BackgroundTask>> =>
+    run((c) => c.BackgroundTasks.list({ sessionId })),
+  /** Ask the harness to stop one task; resolves with its new (usually `stopping`) state. */
+  backgroundTasksStop: (sessionId: string, taskId: string): Promise<BackgroundTask | null> =>
+    run((c) => c.BackgroundTasks.stop({ sessionId, taskId })),
+  /** A settled task's transcript ("" while it is still running). */
+  backgroundTasksOutput: (sessionId: string, taskId: string): Promise<string> =>
+    run((c) => c.BackgroundTasks.output({ sessionId, taskId })),
 
   // ── Browser preview ────────────────────────────────────────────────────────
   /** Show the preview view and load `url` at `bounds` (rejects non-http(s)). */

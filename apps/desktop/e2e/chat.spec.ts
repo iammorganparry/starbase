@@ -697,11 +697,17 @@ test("sidebar quick-actions: right-click → Delete removes a session after conf
   await expect(window.getByText("First session")).toBeVisible()
 })
 
-test("a merged PR auto-archives its linked session on load", async ({ launchApp }) => {
+test("a merged PR badges its linked session but never archives it", async ({ launchApp }) => {
+  // This used to assert the opposite — the sweep auto-archived a session as soon
+  // as its linked PR merged. That was wrong: a session record holds ONE
+  // `prNumber` but routinely outlives several PRs (open one, merge it, keep
+  // working off the same worktree, open the next), so merging the first PR made
+  // a live session vanish from the sidebar mid-flight. Merge state now only
+  // badges the row; retiring a session is the operator's call.
   const { window } = await launchApp({
     configured: true,
     withRepo: true,
-    // gh reports this PR as merged; the sweep should archive the session.
+    // gh reports this PR as merged; the sweep should badge, not archive.
     gh: {
       login: "e2e-user",
       prs: [
@@ -730,16 +736,19 @@ test("a merged PR auto-archives its linked session on load", async ({ launchApp 
         updatedAt: "2026-07-11T00:00:00.000Z",
         worktreePath: repoPath,
         baseBranch: "main"
-        // NOT archived — the sweep must archive it because PR #500 is merged.
+        // NOT archived — and it must STAY that way despite PR #500 being merged.
       }
     ]
   })
 
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
 
-  // The archive sweep detects the merged PR → the session moves into Archived.
-  await expect(window.getByText("Archived", { exact: true })).toBeVisible({ timeout: 15_000 })
-  await expect(window.getByText("Merged #500")).toBeVisible()
+  // Waiting on the badge is what proves the PR-state poll actually ran — without
+  // it, "was not archived" would pass trivially by asserting before the sweep.
+  await expect(window.getByText(/#500 Merged/)).toBeVisible({ timeout: 15_000 })
+  // Still an active session: no Archived group was created for it.
+  await expect(window.getByText("Old shipped work")).toBeVisible()
+  await expect(window.getByRole("button", { name: /collapse archived/i })).toHaveCount(0)
 })
 
 /**

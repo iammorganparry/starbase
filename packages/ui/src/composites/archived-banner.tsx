@@ -48,8 +48,8 @@ export function ArchivedBanner({ reason, prNumber, base, onRestore, onDelete }: 
           </Badge>
         </div>
         <p className="mt-1 text-pretty text-[12px] leading-[1.5] text-muted-foreground">
-          This session was archived automatically and is now read-only. Nothing is lost — restore it
-          to keep iterating, or delete it for good.
+          This session is archived and now read-only. Nothing is lost — restore it to keep iterating,
+          or delete it for good.
         </p>
         <div className="mt-2.5 flex items-center gap-2">
           {onRestore && (
