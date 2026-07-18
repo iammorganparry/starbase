@@ -32,7 +32,7 @@ export function StatCount({
   className?: string
 }) {
   return (
-    <span className={cn("inline-flex items-baseline gap-1", className)}>
+    <span className={cn("inline-flex items-baseline gap-1 font-mono text-[11px]", className)}>
       <span className={cn("tabular-nums", toneClass[tone])}>{value}</span>
       <span className="text-dim">{label}</span>
     </span>

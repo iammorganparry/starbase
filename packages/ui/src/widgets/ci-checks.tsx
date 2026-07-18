@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { Spinner } from "../components/loading.js"
 import { StatusDot } from "../components/status-dot.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
@@ -254,24 +254,44 @@ export function CiChecksWidget(p: CiChecksProps) {
   const queued = tally("queued")
   const skipped = tally("skipped")
   const cancelled = tally("cancelled")
+  /** The row's tally, in the order the states matter to someone waiting on CI. */
+  const tallies = (
+    [
+      [passed, "passed", "text-green"],
+      [failed, "failed", "text-red"],
+      [running, "running", "text-yellow"],
+      [queued, "queued", "text-dim"],
+      [skipped, "skipped", "text-dim"],
+      [cancelled, "cancelled", "text-dim"]
+    ] as const
+  )
+    .filter(([n]) => n > 0)
+    .map(([n, label, cls]) => (
+      <span key={label} className={cls}>
+        {n} {label}
+      </span>
+    ))
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
-      icon={p.status === "running" ? <StatusDot tone="bg-yellow" size={9} pulse /> : undefined}
+      // No icon: a running board wants exactly ToolCall's pulsing dot, and
+      // passing a near-identical copy through statusIcon only guarantees the
+      // two drift.
       headerMeta={p.pr ? <span className="font-mono text-blue">#{p.pr}</span> : undefined}
       /*
        * The board's whole point is the tally, and it lives in the footer — so the
        * collapsed row says that rather than the default exit code, which for a
        * `--watch` run still in flight isn't even settled yet.
+       *
+       * Every state counts, including skipped and cancelled. Tallying only the
+       * lively four left an all-skipped board with a summary that rendered to
+       * nothing — and because a non-undefined summary suppresses the exit-label
+       * fallback, the row then said nothing at all. Undefined when there is
+       * genuinely no tally, so the fallback can do its job.
        */
       summary={
-        <span className="flex items-center gap-2">
-          {passed > 0 && <span className="text-green">{passed} passed</span>}
-          {failed > 0 && <span className="text-red">{failed} failed</span>}
-          {running > 0 && <span className="text-yellow">{running} running</span>}
-          {queued > 0 && <span className="text-dim">{queued} queued</span>}
-        </span>
+        tallies.length > 0 ? <span className="flex items-center gap-2">{tallies}</span> : undefined
       }
       footer={
         <span className="flex items-center gap-3.5">

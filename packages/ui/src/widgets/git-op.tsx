@@ -1,5 +1,5 @@
 import { GitBranch } from "lucide-react"
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { DiffStat } from "../components/diff-stat.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { cn } from "../lib/cn.js"
@@ -166,7 +166,7 @@ export function GitOpWidget(p: GitOpProps) {
   const running = p.status === "running"
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       icon={
         <>
@@ -218,7 +218,7 @@ export function GitOpWidget(p: GitOpProps) {
             <span>
               {p.filesChanged} {p.filesChanged === 1 ? "file" : "files"} changed ·
             </span>
-            <DiffStat added={p.insertions ?? 0} removed={p.deletions ?? 0} className="" />
+            <DiffStat added={p.insertions ?? 0} removed={p.deletions ?? 0} />
           </div>
         )}
 

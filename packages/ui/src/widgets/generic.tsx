@@ -1,4 +1,4 @@
-import { CommandWidget, toneOf } from "../composites/command-widget.js"
+import { CommandWidget } from "../composites/command-widget.js"
 import { LogLines } from "../components/log-lines.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { exitLabel, explanatoryMeta, scrapeDuration } from "./command.js"
@@ -73,13 +73,19 @@ export function GenericCommandWidget(p: GenericCommandProps) {
 
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       summary={
         <>
           {/* The error message, when the adapter gave one and there's no log to
               show it in — otherwise a failed codex/opencode call reads as blank. */}
-          {p.note && n === 0 && <span className="min-w-0 truncate text-red">{p.note}</span>}
+          {/* max-w + truncate, NOT min-w-0: ToolCall wraps meta in a `shrink-0`
+              span, so nothing here can shrink and a long opencode error would
+              squeeze the command to nothing and push the chevron into the
+              row's overflow clip — losing the toggle entirely. */}
+          {p.note && n === 0 && (
+            <span className="max-w-[45%] truncate text-red">{p.note}</span>
+          )}
           <span className="flex-none">{summary(p)}</span>
         </>
       }

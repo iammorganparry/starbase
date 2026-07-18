@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { FailureDetail } from "../components/failure-detail.js"
 import { FileIcon } from "../components/file-icon.js"
 import { SegmentedBar } from "../components/segmented-bar.js"
@@ -204,7 +204,7 @@ export function TestRunWidget(p: TestRunProps) {
   const running = p.status === "running"
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       headerMeta={
         running ? (

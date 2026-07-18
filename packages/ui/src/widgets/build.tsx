@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { cn } from "../lib/cn.js"
 import { exitLabel, invokes, scrapeDuration } from "./command.js"
@@ -144,7 +144,7 @@ export function BuildWidget(p: BuildProps) {
   const running = p.status === "running"
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       headerMeta={
         running ? (

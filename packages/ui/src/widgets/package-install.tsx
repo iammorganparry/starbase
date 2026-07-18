@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { DiffStat } from "../components/diff-stat.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { cn } from "../lib/cn.js"
@@ -170,7 +170,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
 
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       headerMeta={
         running ? <span className="text-yellow">installing…</span> : <span className="text-dim">{p.duration}</span>
@@ -183,7 +183,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
           {p.added + p.removed > 0 && (
             <>
               <span className="text-dim">·</span>
-              <DiffStat added={p.added} removed={p.removed} className="" />
+              <DiffStat added={p.added} removed={p.removed} />
             </>
           )}
           {note && (

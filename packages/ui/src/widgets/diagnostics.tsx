@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { FileIcon } from "../components/file-icon.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { cn } from "../lib/cn.js"
@@ -196,7 +196,7 @@ export function DiagnosticsWidget(p: DiagnosticsProps) {
     <CommandWidget
       // The exit code can lie by omission — `eslint --max-warnings 0` exits 1 on
       // warnings alone. The diagnostics themselves are the truth about the tone.
-      tone={p.errorCount > 0 ? "failed" : toneOf(p.status)}
+      status={p.errorCount > 0 ? "error" : p.status}
       command={p.command}
       headerMeta={
         p.errorCount > 0 ? (

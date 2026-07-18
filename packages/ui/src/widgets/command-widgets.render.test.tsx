@@ -427,6 +427,14 @@ describe("the resting row", () => {
     ["pnpm build", VITE_BUILD, "build"],
     ["git push", GIT, "git-op"],
     ["curl https://api.x/v1/customers", CURL, "http-request"],
+    // The three that were missing, and they are the ones that most needed
+    // covering: dev-server and diagnostics are the only widgets that OVERRIDE
+    // the row's status (a listening server reports success though its process
+    // runs on; a linter with errors reports error whatever it exited), so they
+    // are exactly where the resting row can diverge from the rest.
+    [`psql $DATABASE_URL -c "select 1"`, PSQL, "db-query"],
+    ["pnpm dev", VITE_DEV, "dev-server"],
+    ["tsc --noEmit", TSC, "diagnostics"],
     ["./scripts/seed.sh", "a\nb", "generic"]
   ] as const
 
@@ -469,6 +477,38 @@ describe("the resting row", () => {
     // row picks one. This read "2 failed · 2 failed · 3.20s · failed".
     const row = showClosed("vitest run", VITEST, "error").container.textContent ?? ""
     expect(row.match(/failed/g)?.length).toBe(1)
+  })
+
+  it("shows the live-work shimmer on a running collapsed row, like any running tool call", () => {
+    /*
+     * The frame passes its body as `{expanded && …}`, which is `false` — not
+     * null — when collapsed. ToolCall shows its shimmer only for `children ==
+     * null`, so `false` read as "there is a body" and silently suppressed the
+     * bar: a running command sat inert while an identical running Read pulsed.
+     */
+    const { container } = showClosed("vitest run", undefined, "running")
+    expect(container.querySelector(".animate-shine")).not.toBeNull()
+  })
+
+  it("never states a result a failed or running command hasn't got", () => {
+    // A query that errored parses zero rows; "0 rows" would assert it ran and
+    // came back empty. The row must fall back to the failure instead.
+    const failed = showClosed(`psql $DATABASE_URL -c "select 1"`, "ERROR: relation does not exist", "error")
+    expect(failed.container.textContent).not.toContain("0 rows")
+    cleanup()
+    // And the healthy case still says it, so the guard isn't just suppressing.
+    expect(showClosed(`psql $DATABASE_URL -c "select 1"`, PSQL).container.textContent).toContain("2 rows")
+  })
+
+  it("draws one hairline, not two, when an opened command printed nothing", () => {
+    // `{n > 0 && …}` is `false` with no output, which `children == null` missed:
+    // the footer then ruled itself off directly under the body wrapper's rule.
+    const { container } = showClosed("true", "")
+    open(container)
+    const doubled = [...container.querySelectorAll(".border-t")].filter(
+      (el) => el.previousElementSibling === null && el.parentElement?.classList.contains("border-t")
+    )
+    expect(doubled).toHaveLength(0)
   })
 
   it("keeps the command legible in the row", () => {

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { LogLines } from "../components/log-lines.js"
 import { Pill } from "../components/pill.js"
 import { StatusDot } from "../components/status-dot.js"
@@ -278,7 +278,7 @@ function JsonBody({ value }: { value: unknown }) {
 export function HttpRequestWidget(p: HttpRequestProps) {
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       /*
        * The glyph tracks the *response*, not the process: curl exits 0 having

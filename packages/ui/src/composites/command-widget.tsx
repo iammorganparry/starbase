@@ -23,18 +23,32 @@ import { ToolCall, type ToolCallStatus } from "./tool-call.js"
  * demand — a transcript is read by scrolling past commands, not by studying
  * each one, so a screenful of always-open scoreboards buries the conversation
  * between them.
+ *
+ * ON COLOUR, since this reverses a decision worth reversing explicitly. The
+ * card these widgets used to be tinted a RUNNING command blue, on the argument
+ * that yellow is the agent's own thinking state and a command is external work.
+ * A running command now takes ToolCall's yellow, like every other running tool
+ * call. The old argument sorted by *who is working*; this sorts by *what kind
+ * of thing this is*, and the second is what a reader actually scans for — a
+ * column of tool calls where one is a different colour reads as a different
+ * kind of row, not as "this one is external". Blue would have to be threaded
+ * back through `ToolCall` for every tool to keep that distinction honest, and
+ * no other tool wants it.
  */
-export type WidgetTone = "live" | "done" | "failed"
-
-export const toneOf = (status: ToolCallStatus): WidgetTone =>
-  status === "running" ? "live" : status === "error" ? "failed" : "done"
-
-/** `toneOf` backwards — the row speaks in tool-call status, widgets in tone. */
-const statusOf = (tone: WidgetTone): ToolCallStatus =>
-  tone === "live" ? "running" : tone === "failed" ? "error" : "success"
-
 export interface CommandWidgetProps {
-  tone: WidgetTone
+  /**
+   * The command's state, in the row's own vocabulary.
+   *
+   * This was a `WidgetTone` ("live" | "done" | "failed") back when the card
+   * painted its own border and header tint from it. `ToolCall` owns that now,
+   * so a tone type would be `ToolCallStatus` under another name — every widget
+   * mapping status → tone and this component mapping it straight back, a
+   * bijection composed with its inverse that both sides had to be read to see
+   * cancelled out. Widgets that want to *override* the state still do (a
+   * listening dev server reports success; a linter with errors reports error) —
+   * they now say so in the vocabulary the row actually uses.
+   */
+  status: ToolCallStatus
   /** The command as the agent wrote it. */
   command: string
   /**
@@ -68,7 +82,7 @@ export interface CommandWidgetProps {
 
 /** A rich render of one bash command — a tool-call row, its body, its outcome. */
 export function CommandWidget({
-  tone,
+  status,
   command,
   icon,
   headerMeta,
@@ -81,9 +95,38 @@ export function CommandWidget({
   const [expanded, setExpanded] = useState(false)
   const toggle = () => setExpanded((v) => !v)
 
+  /*
+   * `!== undefined`, not `??`: an explicit `null` is a widget saying "the badge
+   * covers it", and must not fall through to the default.
+   */
+  const resolvedSummary = summary !== undefined ? summary : (footerMeta ?? footer)
+  /*
+   * What the row says on the right. Once open, the footer states the outcome in
+   * full, so the row drops the summary and keeps only the badge — repeating it
+   * would say the same thing twice on one screen.
+   */
+  const rowMeta = expanded
+    ? headerMeta
+    : headerMeta && resolvedSummary
+      ? (
+          <span className="flex items-center gap-2.5">
+            {headerMeta}
+            {resolvedSummary}
+          </span>
+        )
+      : (headerMeta ?? resolvedSummary)
+  /*
+   * A widget's body is routinely conditional JSX (`{n > 0 && <div/>}`), which
+   * yields `false`, not null, when the condition fails. `Boolean(children)` —
+   * never `children == null` — so an absent body reads as absent: otherwise the
+   * footer draws its own rule directly under the body wrapper's, two hairlines
+   * with nothing between them.
+   */
+  const hasBody = Boolean(children)
+
   return (
     <ToolCall
-      status={statusOf(tone)}
+      status={status}
       // No name: `❯ vitest run` says "this is a command" better than the word
       // "Bash" does, and the row's job is to get you to the command fast.
       statusIcon={icon}
@@ -92,22 +135,23 @@ export function CommandWidget({
         // every tool call, and a command is not a louder kind of tool call.
         <CommandLine command={command} className="text-[11.5px]" />
       }
-      meta={
-        <span className="flex items-center gap-2.5">
-          {headerMeta}
-          {/* Once open, the footer states the outcome in full; repeating it up
-              here would say the same thing twice on one screen. */}
-          {!expanded &&
-            /* `!== undefined`, not `??`: an explicit `null` is a widget saying
-               "the badge covers it", and must not fall through to the default. */
-            (summary !== undefined ? summary : (footerMeta ?? footer))}
-        </span>
-      }
+      // `|| undefined` so an empty result reaches ToolCall's own `meta &&`
+      // guard. An always-rendered wrapper span defeats it and leaves an empty
+      // flex item widening the gap before the chevron — visible against a
+      // plain row, which is the parity this frame is for.
+      meta={rowMeta || undefined}
       expanded={expanded}
       onToggle={toggle}
       className={className}
     >
-      {expanded && (
+      {/*
+       * `undefined` when collapsed, NOT `false`. ToolCall shows its running
+       * shimmer only for `children == null`, so passing `false` would suppress
+       * the live-work bar on a running collapsed command while an identical
+       * running Read still showed it — losing the very parity this frame exists
+       * to establish.
+       */}
+      {expanded ? (
         <div className="border-t border-line bg-editor">
           {children}
           {(footer || footerMeta) && (
@@ -116,7 +160,7 @@ export function CommandWidget({
                 "flex items-center gap-3 px-3 py-1.5 font-mono text-[11px] text-muted-foreground",
                 // No rule above the footer when the body already ends in one —
                 // only when the footer is carrying the card on its own.
-                children == null ? "" : "border-t border-line/60"
+                hasBody && "border-t border-line/60"
               )}
             >
               {footer}
@@ -125,7 +169,7 @@ export function CommandWidget({
             </div>
           )}
         </div>
-      )}
+      ) : undefined}
     </ToolCall>
   )
 }

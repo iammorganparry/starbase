@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { KeyValueRow } from "../components/kv-row.js"
 import { StatusDot } from "../components/status-dot.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
@@ -134,10 +134,11 @@ export function DevServerWidget(p: DevServerProps) {
    * A server that's listening isn't pending — it has finished starting and is
    * doing its job. Once it exits, the tone is the exit's business again.
    */
-  const tone = listening ? "done" : toneOf(p.status)
+  // A listening server is a success even though the process is still running.
+  const status = listening ? "success" : p.status
   return (
     <CommandWidget
-      tone={tone}
+      status={status}
       command={p.command}
       icon={listening ? <StatusDot tone="bg-green" size={9} pulse glow /> : undefined}
       headerMeta={
@@ -159,7 +160,7 @@ export function DevServerWidget(p: DevServerProps) {
     >
       <WidgetBody className="gap-[9px]">
         {(p.tool || p.readyIn) && (
-          <div className="">
+          <div>
             {p.tool && <span className="text-purple">{p.tool}</span>}
             {p.version && <span className="text-dim"> v{p.version}</span>}
             {p.readyIn && <span className="text-green">{p.tool ? " " : ""}ready in {p.readyIn}</span>}
