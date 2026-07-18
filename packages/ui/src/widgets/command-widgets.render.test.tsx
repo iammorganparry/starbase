@@ -37,8 +37,27 @@ const bash = (target: string, output?: string, status: ToolCallModel["status"] =
 const widgetIn = (c: HTMLElement): string | null =>
   c.querySelector("[data-command-widget]")?.getAttribute("data-command-widget") ?? null
 
-const show = (target: string, output?: string, status: ToolCallModel["status"] = "success") =>
+/**
+ * Render a bash call and OPEN it.
+ *
+ * Every widget now rests as a collapsed row and reveals its body on click, so a
+ * test that asserts what a widget read has to open it first — otherwise it is
+ * asserting against a one-line summary and would fail for the wrong reason. The
+ * collapsed row is covered on its own terms in "the resting row" below; these
+ * cases are about what each parser puts on screen once you look.
+ */
+const show = (target: string, output?: string, status: ToolCallModel["status"] = "success") => {
+  const result = showClosed(target, output, status)
+  open(result.container)
+  return result
+}
+
+/** The same call left as the transcript first draws it: one collapsed row. */
+const showClosed = (target: string, output?: string, status: ToolCallModel["status"] = "success") =>
   render(<MessageTurn message={bash(target, output, status)} />)
+
+/** Click a rendered widget's resting row open. */
+const open = (c: HTMLElement) => fireEvent.click(c.querySelector("[aria-expanded='false']")!)
 
 // ── Fixtures: output as these tools actually print it ──────────────────────────
 
@@ -375,21 +394,127 @@ describe("W10 · generic", () => {
   })
 
   it("stays a one-liner until asked, then shows the log", () => {
-    show("./scripts/seed.sh", SEED)
+    const { container } = showClosed("./scripts/seed.sh", SEED)
     expect(screen.queryByText(/seeded 8,214 users/)).toBeNull()
-    fireEvent.click(screen.getByRole("button", { expanded: false }))
+    open(container)
     expect(screen.getByText(/seeded 8,214 users/)).toBeDefined()
   })
 
   it("summarises the outcome while still collapsed", () => {
-    show("./scripts/seed.sh", SEED)
+    showClosed("./scripts/seed.sh", SEED)
     expect(screen.getByText(/exit 0 · 3 lines/)).toBeDefined()
   })
 
   it("says when the middle was elided, rather than passing a cut log off as whole", () => {
     show("./scripts/noisy.sh", "line 1\n\n… 4,096 characters omitted …\n\nline 999")
-    fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(screen.getByText(/middle elided/)).toBeDefined()
+  })
+})
+
+// ── The resting row ───────────────────────────────────────────────────────────
+
+describe("the resting row", () => {
+  /**
+   * A transcript is read by scrolling past commands, not by studying each one.
+   * Every widget therefore rests as a single row and opens on demand — the
+   * behaviour the plain tool card always had, and which for one release only
+   * `generic` kept while the other nine drew themselves open.
+   */
+  const CASES = [
+    ["vitest run", VITEST, "test-runner"],
+    ["gh pr checks 482", GH_CHECKS, "ci-checks"],
+    ["pnpm install", PNPM_INSTALL, "package-install"],
+    ["pnpm build", VITE_BUILD, "build"],
+    ["git push", GIT, "git-op"],
+    ["curl https://api.x/v1/customers", CURL, "http-request"],
+    // The three that were missing, and they are the ones that most needed
+    // covering: dev-server and diagnostics are the only widgets that OVERRIDE
+    // the row's status (a listening server reports success though its process
+    // runs on; a linter with errors reports error whatever it exited), so they
+    // are exactly where the resting row can diverge from the rest.
+    [`psql $DATABASE_URL -c "select 1"`, PSQL, "db-query"],
+    ["pnpm dev", VITE_DEV, "dev-server"],
+    ["tsc --noEmit", TSC, "diagnostics"],
+    ["./scripts/seed.sh", "a\nb", "generic"]
+  ] as const
+
+  it("draws every widget collapsed, whatever it parsed", () => {
+    for (const [cmd, out, id] of CASES) {
+      const { container } = showClosed(cmd, out)
+      expect(widgetIn(container), id).toBe(id)
+      // The row is the toggle: exactly one, and it is shut.
+      expect(container.querySelectorAll("[aria-expanded='false']").length, id).toBe(1)
+      expect(container.querySelector("[aria-expanded='true']"), id).toBeNull()
+      cleanup()
+    }
+  })
+
+  it("opens each one into its own body, and closes again", () => {
+    for (const [cmd, out, id] of CASES) {
+      const { container } = showClosed(cmd, out)
+      open(container)
+      expect(container.querySelector("[aria-expanded='true']"), id).not.toBeNull()
+      // Same control, now shut again — opening is reversible, not one-way.
+      fireEvent.click(container.querySelector("[aria-expanded='true']")!)
+      expect(container.querySelector("[aria-expanded='false']"), id).not.toBeNull()
+      cleanup()
+    }
+  })
+
+  it("states the outcome in the row, so the summary survives being closed", () => {
+    // The whole point of collapsing: you still learn the result without opening.
+    expect(showClosed("vitest run", VITEST, "error").container.textContent).toContain("2 failed")
+    cleanup()
+    // Where the headline fact is the footer's, not the exit code's, the row says
+    // that instead — a query's rows, a check board's tally.
+    expect(showClosed("psql -c 'select 1'", PSQL).container.textContent).toContain("2 rows")
+    cleanup()
+    expect(showClosed("gh pr checks 482", GH_CHECKS, "running").container.textContent).toContain("1 passed")
+  })
+
+  it("says the result once, not three times over", () => {
+    // header badge + footer + footer meta are three phrasings of one fact; the
+    // row picks one. This read "2 failed · 2 failed · 3.20s · failed".
+    const row = showClosed("vitest run", VITEST, "error").container.textContent ?? ""
+    expect(row.match(/failed/g)?.length).toBe(1)
+  })
+
+  it("shows the live-work shimmer on a running collapsed row, like any running tool call", () => {
+    /*
+     * The frame passes its body as `{expanded && …}`, which is `false` — not
+     * null — when collapsed. ToolCall shows its shimmer only for `children ==
+     * null`, so `false` read as "there is a body" and silently suppressed the
+     * bar: a running command sat inert while an identical running Read pulsed.
+     */
+    const { container } = showClosed("vitest run", undefined, "running")
+    expect(container.querySelector(".animate-shine")).not.toBeNull()
+  })
+
+  it("never states a result a failed or running command hasn't got", () => {
+    // A query that errored parses zero rows; "0 rows" would assert it ran and
+    // came back empty. The row must fall back to the failure instead.
+    const failed = showClosed(`psql $DATABASE_URL -c "select 1"`, "ERROR: relation does not exist", "error")
+    expect(failed.container.textContent).not.toContain("0 rows")
+    cleanup()
+    // And the healthy case still says it, so the guard isn't just suppressing.
+    expect(showClosed(`psql $DATABASE_URL -c "select 1"`, PSQL).container.textContent).toContain("2 rows")
+  })
+
+  it("draws one hairline, not two, when an opened command printed nothing", () => {
+    // `{n > 0 && …}` is `false` with no output, which `children == null` missed:
+    // the footer then ruled itself off directly under the body wrapper's rule.
+    const { container } = showClosed("true", "")
+    open(container)
+    const doubled = [...container.querySelectorAll(".border-t")].filter(
+      (el) => el.previousElementSibling === null && el.parentElement?.classList.contains("border-t")
+    )
+    expect(doubled).toHaveLength(0)
+  })
+
+  it("keeps the command legible in the row", () => {
+    const { container } = showClosed("pnpm --filter @starbase/ui test", VITEST, "error")
+    expect(container.textContent).toContain("pnpm")
+    expect(container.textContent).toContain("@starbase/ui")
   })
 })
 
@@ -483,6 +608,7 @@ describe("every harness's bash call", () => {
     // away — every opencode bash call silently loses what it printed.
     const { container } = render(<MessageTurn message={opencodeBash("vitest run", VITEST)} />)
     expect(widgetIn(container)).toBe("test-runner")
+    open(container)
     expect(screen.getByText("128")).toBeDefined()
   })
 
@@ -495,7 +621,6 @@ describe("every harness's bash call", () => {
   it("says nothing was printed only when nothing was", () => {
     const { container } = show("true", "", "success")
     expect(widgetIn(container)).toBe("generic")
-    fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(screen.getByText("No output.")).toBeDefined()
   })
 })

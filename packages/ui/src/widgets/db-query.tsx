@@ -1,5 +1,5 @@
 import { Database } from "lucide-react"
-import { CommandWidget, toneOf } from "../composites/command-widget.js"
+import { CommandWidget } from "../composites/command-widget.js"
 import { DataGrid, type DataColumn } from "../components/data-grid.js"
 import { StatusDot } from "../components/status-dot.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
@@ -248,7 +248,9 @@ const TOKEN_TONE: Record<SqlTokenKind, string> = {
 
 function Sql({ sql }: { sql: string }) {
   return (
-    <pre className="whitespace-pre-wrap rounded-lg border border-line/25 bg-hairline px-3 py-2.5 font-mono text-[12px] leading-[1.7]">
+    // A left rule, not a rounded tinted panel: the body it sits in is already a
+    // flat surface, and a card inside it reads as a panel floating on a panel.
+    <pre className="whitespace-pre-wrap border-l-2 border-line pl-2.5 font-mono text-[11px] leading-[1.5]">
       {tokeniseSql(sql).map((t, i) => (
         <span key={i} className={TOKEN_TONE[t.kind]}>
           {t.text}
@@ -262,7 +264,7 @@ export function DbQueryWidget(p: DbQueryProps) {
   const rows = p.rowCount ?? p.rows.length
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       // The database mark, next to the usual status glyph: a query card is
       // recognisable from across the transcript before a word of it is read.
@@ -279,6 +281,21 @@ export function DbQueryWidget(p: DbQueryProps) {
         </span>
       }
       headerMeta={p.sql && READ_ONLY.test(p.sql) ? <span className="text-dim">read-only</span> : undefined}
+      /*
+       * What a query returned is the result; `exit 0` says only that psql ran.
+       *
+       * Only on success, though. A failed or still-running query parses zero
+       * rows, and "0 rows" in bright text asserts the query RAN and came back
+       * empty — a different and false statement. Undefined there falls through
+       * to the exit label, which is the honest one.
+       */
+      summary={
+        p.status === "success" ? (
+          <span className="text-text-bright">
+            {rows.toLocaleString("en-US")} {rows === 1 ? "row" : "rows"}
+          </span>
+        ) : undefined
+      }
       footer={
         <span>
           <span className="text-text-bright">
@@ -297,11 +314,11 @@ export function DbQueryWidget(p: DbQueryProps) {
       footerMeta={<span className="text-dim">{p.tag ?? exitLabel(p.status, p.exit)}</span>}
     >
       {p.sql && (
-        <div className="px-[15px] pt-[13px]">
+        <div className="px-3 pt-2">
           <Sql sql={p.sql} />
         </div>
       )}
-      <div className="px-[15px] py-3">
+      <div className="px-3 py-2">
         <DataGrid columns={p.columns} rows={p.rows} />
       </div>
     </CommandWidget>

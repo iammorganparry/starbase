@@ -23,8 +23,8 @@ export function DataGrid({
   className?: string
 }) {
   return (
-    <div className={cn("font-mono text-[12px]", className)}>
-      <div className="flex border-b border-line px-1 pb-[7px] text-[10.5px] uppercase tracking-[0.3px] text-muted-foreground">
+    <div className={cn("font-mono text-[11px] leading-[1.5]", className)}>
+      <div className="flex border-b border-line/60 px-1 pb-1 text-[10px] uppercase tracking-[0.3px] text-dim">
         {columns.map((c) => (
           <span key={c.key} className={cn(c.numeric ? "w-20 flex-none text-right" : "min-w-0 flex-1 truncate")}>
             {c.key}
@@ -34,7 +34,7 @@ export function DataGrid({
       {rows.map((row, i) => (
         <div
           key={i}
-          className={cn("flex px-1 py-1.5", i < rows.length - 1 && "border-b border-line/25")}
+          className={cn("flex px-1 py-[3px]", i < rows.length - 1 && "border-b border-line/25")}
         >
           {columns.map((c, j) => (
             <span

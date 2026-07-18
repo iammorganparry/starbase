@@ -20,7 +20,7 @@ export function KeyValueRow({
   className?: string
 }) {
   return (
-    <div className={cn("flex gap-2 font-mono text-[11.5px] leading-[1.6]", className)}>
+    <div className={cn("flex gap-2 font-mono text-[11px] leading-[1.5]", className)}>
       <span className="flex-none text-dim" style={{ width: labelWidth }}>
         {label}
       </span>

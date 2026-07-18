@@ -26,7 +26,9 @@ export function SegmentedBar({
 }) {
   const shown = segments.filter((s) => s.value > 0)
   return (
-    <div className={cn("flex h-2 gap-[2px] overflow-hidden rounded-sm bg-hairline", className)}>
+    // h-1: a hairline proportion, not a chart. At the body's reading size a 8px
+    // track was the heaviest element on the card.
+    <div className={cn("flex h-1 gap-[2px] overflow-hidden rounded-sm bg-hairline", className)}>
       {shown.map((s, i) => (
         <span
           key={i}
