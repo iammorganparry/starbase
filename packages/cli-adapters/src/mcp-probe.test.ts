@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
 import { describe, expect, it } from "vitest"
 import type { McpLaunch, ParsedMcpServer } from "./mcp-config.js"
-import { probeAll, probeServer } from "./mcp-probe.js"
+import { PROBE_TIMEOUT, probeAll, probeServer } from "./mcp-probe.js"
 
 const FAKE_SERVER = fileURLToPath(new URL("./mcp-fixtures/fake-mcp-server.mjs", import.meta.url))
 
@@ -50,6 +50,9 @@ const remote = (name: string, url: string): ParsedMcpServer => ({
 })
 
 const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect)
+
+/** Short timeout for the hang cases, so they don't cost the real 15s. */
+const SHORT = Duration.millis(750)
 
 /** Count live children of this process, to prove the probe doesn't orphan any. */
 const childCount = (): number => {
@@ -128,17 +131,73 @@ describe("probeServer — timeout", () => {
   it("times out a hung server and leaves no orphaned process", async () => {
     const before = childCount()
     const started = Date.now()
-    const status = await run(probeServer(stdio("hung", ["hang"]), null, now))
+    // A short injected timeout — the production value is deliberately long (cold
+    // `npx`), which would make this a 15s test for no extra coverage.
+    const status = await run(probeServer(stdio("hung", ["hang"]), null, now, SHORT))
     const elapsed = Date.now() - started
 
     expect(status.state).toBe("failed")
     expect(status.error).toContain("timed out")
-    expect(elapsed).toBeLessThan(15_000)
+    expect(elapsed).toBeLessThan(Duration.toMillis(SHORT) + 5_000)
 
     // Give the transport a moment to reap, then confirm we're back where we started.
     await new Promise((resolve) => setTimeout(resolve, 500))
     expect(childCount()).toBeLessThanOrEqual(before)
   }, 20_000)
+
+  /**
+   * The production default is long on purpose: a cold `npx -y <pkg>` regularly runs
+   * past 10s, and reporting (and caching) "failed" for a healthy server is worse
+   * than making the operator wait.
+   */
+  it("defaults to a timeout generous enough for a cold npx fetch", () => {
+    expect(Duration.toMillis(PROBE_TIMEOUT)).toBeGreaterThanOrEqual(10_000)
+  })
+})
+
+/**
+ * The trust boundary. A project-scope entry from a harness that gates project
+ * config behind its own prompt could have been committed by any repo you cloned,
+ * and the harness hasn't asked yet — so we list it and refuse to run it.
+ *
+ * Every case here points the launch half at `crash`: if the entry were probed the
+ * status would be `failed`, so `unknown` is proof no process was spawned.
+ */
+describe("probeServer — un-gated project servers are never spawned", () => {
+  const projectEntry = (cli: "claude" | "codex" | "cursor" | "opencode"): ParsedMcpServer => {
+    const base = stdio("proj", ["crash"])
+    return { ...base, server: { ...base.server, cli, scope: "project" } }
+  }
+
+  it.each([["cursor" as const], ["opencode" as const]])(
+    "reports %s's project server as unknown without running it",
+    async (cli) => {
+      const status = await run(probeServer(projectEntry(cli), null, now))
+      expect(status.state).toBe("unknown")
+      expect(status.toolCount).toBeNull()
+      expect(status.error).toBeNull()
+    }
+  )
+
+  /** Claude's project servers ARE gated in config we read, so an approved one is fair game. */
+  it("still probes claude's project servers, whose approval we can see", async () => {
+    const status = await run(probeServer(projectEntry("claude"), null, now))
+    expect(status.state).toBe("failed")
+  })
+
+  it("still probes user-scope servers for an un-gated harness", async () => {
+    const base = stdio("userSrv", ["crash"])
+    const userScope = { ...base, server: { ...base.server, cli: "cursor" as const, scope: "user" as const } }
+    const status = await run(probeServer(userScope, null, now))
+    expect(status.state).toBe("failed")
+  })
+
+  it("still probes local-scope servers, which are this machine's own config", async () => {
+    const base = stdio("localSrv", ["crash"])
+    const localScope = { ...base, server: { ...base.server, cli: "cursor" as const, scope: "local" as const } }
+    const status = await run(probeServer(localScope, null, now))
+    expect(status.state).toBe("failed")
+  })
 })
 
 describe("probeServer — credentials", () => {
@@ -181,7 +240,7 @@ describe("probeAll", () => {
 
   /** One bad server must not sink the batch. */
   it("keeps good results when a sibling hangs", async () => {
-    const statuses = await run(probeAll([stdio("good", ["ok", "2"]), stdio("hung", ["hang"])], null, now))
+    const statuses = await run(probeAll([stdio("good", ["ok", "2"]), stdio("hung", ["hang"])], null, now, SHORT))
     expect(statuses.find((s) => s.name === "good")?.state).toBe("connected")
     expect(statuses.find((s) => s.name === "hung")?.state).toBe("failed")
   }, 20_000)

@@ -44,7 +44,7 @@ import {
 import { SegmentedControl } from "../components/segmented-control.js"
 import { StatusDot } from "../components/status-dot.js"
 import { Toggle } from "../components/toggle.js"
-import { McpServerRow } from "./mcp-server-row.js"
+import { McpServerRow, mcpServerMeta, statusForServer } from "./mcp-server-row.js"
 import { ProviderCard } from "./provider-card.js"
 
 // ── Section registry ─────────────────────────────────────────────────────────
@@ -911,6 +911,11 @@ function McpSection({
   const [servers, setServers] = React.useState<ReadonlyArray<McpServer> | null>(null)
   const [statuses, setStatuses] = React.useState<ReadonlyArray<McpServerStatus>>([])
   const [probing, setProbing] = React.useState(false)
+  /** Read inside late callbacks — `selected` there is captured at call time. */
+  const selectedRef = React.useRef(selected)
+  React.useEffect(() => {
+    selectedRef.current = selected
+  }, [selected])
 
   // Guarded so a late response for a harness the user has since switched away
   // from can't overwrite the current list (same shape as GithubSection's models).
@@ -938,16 +943,18 @@ function McpSection({
   const probe = React.useCallback(
     (refresh: boolean) => {
       if (!loadMcpStatus) return
+      // Guard the response against a harness switch mid-flight, exactly as the
+      // servers effect does. Without this, claude's statuses land against codex's
+      // list and the button flips to "Recheck" for a harness never probed.
+      const probedCli = selected
       setProbing(true)
       void loadMcpStatus(selected, refresh)
-        .then(setStatuses)
-        .catch(() => setStatuses([]))
+        .then((next) => setStatuses((held) => (probedCli === selectedRef.current ? next : held)))
+        .catch(() => setStatuses((held) => (probedCli === selectedRef.current ? [] : held)))
         .finally(() => setProbing(false))
     },
     [selected, loadMcpStatus]
   )
-
-  const statusFor = (name: string) => statuses.find((s) => s.name === name)
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor">
@@ -998,14 +1005,15 @@ function McpSection({
         ) : (
           <div className="flex flex-col gap-1.5">
             {servers.map((server) => {
-              const status = statusFor(server.name)
+              const status = statusForServer(server, statuses)
               return (
                 <McpServerRow
                   key={`${server.scope}:${server.name}`}
                   name={server.name}
                   transport={server.transport}
-                  enabled={status === undefined ? server.enabled : status.state === "connected"}
-                  meta={mcpRowMeta(server, status)}
+                  enabled={server.enabled}
+                  state={status?.state}
+                  meta={mcpServerMeta(server, status, { includeScope: true })}
                 />
               )
             })}
@@ -1014,22 +1022,6 @@ function McpSection({
       </div>
     </div>
   )
-}
-
-/**
- * The row's mono sub-line: scope, then whatever we actually know. Before a probe
- * that's the target and any env keys; after one it leads with the outcome, since a
- * failure reason is the most useful thing on screen.
- */
-export function mcpRowMeta(server: McpServer, status?: McpServerStatus): string {
-  const parts: Array<string> = [server.scope]
-  if (status?.state === "connected") parts.push(`${status.toolCount ?? 0} tools`)
-  else if (status?.state === "failed") parts.push(status.error ?? "failed")
-  else if (status?.state === "disabled" || !server.enabled) parts.push("not enabled")
-  parts.push(server.target)
-  if (server.envKeys.length > 0) parts.push(`env: ${server.envKeys.join(", ")}`)
-  if (server.headerKeys.length > 0) parts.push(`headers: ${server.headerKeys.join(", ")}`)
-  return parts.join(" · ")
 }
 
 function GithubSection({

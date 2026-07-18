@@ -49,7 +49,8 @@ export class McpService extends Effect.Service<McpService>()("@starbase/McpServi
     /** Probe results, keyed `cli:worktree:scope:name`. Survives dialog open/close; refresh bypasses. */
     const cache = yield* Ref.make(new Map<string, McpServerStatus>())
 
-    /** Injectable clock so tests can assert on `checkedAt` without freezing time globally. */
+    /** Wall clock for `checkedAt`. The probe layer takes it as a parameter, which is
+     * where tests pin it; nothing injects it here. */
     const now = () => new Date().toISOString()
 
     /**
@@ -164,6 +165,9 @@ export class McpService extends Effect.Service<McpService>()("@starbase/McpServi
         return parsed.map((entry) => hit(entry) ?? freshByKey.get(keyOf(entry))!)
       })
 
-    return { list, parse, status }
+    // `parse` is deliberately NOT returned: it yields launch halves carrying real
+    // secrets, and `accessors: true` would make it a first-class public accessor.
+    // Keeping it a closure means the only ways in are `list` (redacted) and `status`.
+    return { list, status }
   })
 }) {}

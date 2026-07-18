@@ -10,17 +10,15 @@ import {
   DialogHeader,
   DialogTitle
 } from "../components/dialog.js"
-import { McpServerRow } from "./mcp-server-row.js"
+import { McpServerRow, mcpServerMeta, statusForServer } from "./mcp-server-row.js"
+import { relativeTime } from "../lib/relative-time.js"
 
-/** "2 min ago" — mirrors the usage modal's relative stamp. */
-export const fmtChecked = (iso: string | null): string => {
-  if (!iso) return "not checked yet"
-  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000))
-  if (s < 60) return "checked just now"
-  if (s < 3600) return `checked ${Math.floor(s / 60)} min ago`
-  if (s < 86_400) return `checked ${Math.floor(s / 3600)} hr ago`
-  return `checked ${Math.floor(s / 86_400)} days ago`
-}
+/**
+ * "checked 2m ago". Built on the repo's existing `relativeTime` so the app speaks
+ * one relative-time dialect rather than two.
+ */
+export const fmtChecked = (iso: string | null): string =>
+  iso === null ? "not checked yet" : `checked ${relativeTime(iso)}`
 
 const SCOPE_LABEL: Record<McpScope, string> = {
   user: "User",
@@ -36,22 +34,6 @@ const SCOPE_HINT: Record<McpScope, string> = {
 
 /** Scope order matches config precedence, so the most specific wins visually too. */
 const SCOPE_ORDER: ReadonlyArray<McpScope> = ["local", "project", "user"]
-
-/**
- * The row's mono sub-line. Leads with the probe outcome once we have one, since a
- * failure reason is the most useful thing on screen; otherwise shows where the
- * server points and which credentials it expects (names only — never values).
- */
-export function mcpStatusMeta(server: McpServer, status?: McpServerStatus): string {
-  const parts: Array<string> = []
-  if (status?.state === "connected") parts.push(`${status.toolCount ?? 0} tools`)
-  else if (status?.state === "failed") parts.push(status.error ?? "failed")
-  else if (status?.state === "disabled" || !server.enabled) parts.push("not enabled")
-  parts.push(server.target)
-  if (server.envKeys.length > 0) parts.push(`env: ${server.envKeys.join(", ")}`)
-  if (server.headerKeys.length > 0) parts.push(`headers: ${server.headerKeys.join(", ")}`)
-  return parts.join(" · ")
-}
 
 /**
  * The composer's MCP status dialog: which servers this session's harness will
@@ -84,9 +66,6 @@ export function McpStatusDialog({
   onRefresh?: () => void
   onClose?: () => void
 }) {
-  const statusFor = (server: McpServer) =>
-    statuses.find((s) => s.name === server.name && s.scope === server.scope)
-
   const failed = statuses.filter((s) => s.state === "failed").length
   const groups = SCOPE_ORDER.map((scope) => ({
     scope,
@@ -125,14 +104,15 @@ export function McpStatusDialog({
                   </div>
                   <div className="flex flex-col gap-1.5">
                     {group.servers.map((server) => {
-                      const status = statusFor(server)
+                      const status = statusForServer(server, statuses)
                       return (
                         <McpServerRow
                           key={`${server.scope}:${server.name}`}
                           name={server.name}
                           transport={server.transport}
-                          enabled={status === undefined ? server.enabled : status.state === "connected"}
-                          meta={mcpStatusMeta(server, status)}
+                          enabled={server.enabled}
+                          state={status?.state}
+                          meta={mcpServerMeta(server, status)}
                         />
                       )
                     })}

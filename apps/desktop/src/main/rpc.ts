@@ -124,8 +124,19 @@ const mcpSpec = (sessionId: string | null, cli: CliKind | undefined) =>
     const session =
       sessionId === null ? null : yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
     return {
-      cli: session?.cli ?? cli ?? "claude",
+      /**
+       * An explicitly-passed `cli` WINS over the stored session's.
+       *
+       * `Agent.setHarness` persists asynchronously, so right after a harness switch
+       * the store still holds the old one. The renderer knows which harness it is
+       * asking about and caches the answer under that key, so trusting the store
+       * here would let the old harness's servers be cached under the new harness's
+       * key — with `staleTime: Infinity`, permanently.
+       */
+      cli: cli ?? session?.cli ?? "claude",
       homeDir: harnessHome(),
+      // The worktree is a property of the session, not the harness, so it is only
+      // ever read from the store.
       worktreePath: session?.worktreePath ?? null
     }
   })

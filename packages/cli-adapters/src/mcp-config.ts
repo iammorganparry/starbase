@@ -88,8 +88,10 @@ const displayUrl = (url: string): string => {
     const parsedUrl = new URL(url)
     return `${parsedUrl.origin}${parsedUrl.pathname}`
   } catch {
-    // Not a parseable URL — drop everything from the first `?` rather than guess.
-    return url.split("?")[0] ?? url
+    // Not a parseable URL — drop everything from the first `?` OR `#` rather than
+    // guess. Splitting on `?` alone would let `not-a-url#token=SECRET` through, a
+    // hole in the one rule this function exists to enforce.
+    return url.split(/[?#]/)[0] ?? url
   }
 }
 

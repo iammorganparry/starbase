@@ -21,7 +21,14 @@ export type McpTransport = Schema.Schema.Type<typeof McpTransport>
 export const McpScope = Schema.Literal("user", "project", "local")
 export type McpScope = Schema.Schema.Type<typeof McpScope>
 
-/** The result of probing a server: did it actually answer an MCP handshake? */
+/**
+ * The result of probing a server.
+ *
+ * `unknown` means "configured, deliberately not contacted" — a project-scope server
+ * from a harness that gates project config behind its own consent prompt, which we
+ * must not spawn on the operator's behalf. Distinct from an absent status, which
+ * just means nothing has been probed yet.
+ */
 export const McpServerState = Schema.Literal("unknown", "connected", "failed", "disabled")
 export type McpServerState = Schema.Schema.Type<typeof McpServerState>
 

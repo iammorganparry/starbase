@@ -1,7 +1,8 @@
 import type { CliInfo, McpServer, McpServerStatus } from "@starbase/core"
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { mcpRowMeta, SettingsView } from "./settings-view.js"
+import { mcpServerMeta } from "./mcp-server-row.js"
+import { SettingsView } from "./settings-view.js"
 
 /**
  * Settings → MCP servers reflects the harness's OWN config. It is a mirror, not a
@@ -159,43 +160,43 @@ describe("Settings → MCP servers", () => {
   })
 })
 
-describe("mcpRowMeta", () => {
+describe("mcpServerMeta — Settings variant (scope prefixed)", () => {
   it("leads with scope and includes the target", () => {
-    expect(mcpRowMeta(server())).toBe("user · npx -y @linear/mcp")
+    expect(mcpServerMeta(server(), undefined, { includeScope: true })).toBe("user · npx -y @linear/mcp")
   })
 
   it("shows the tool count once connected", () => {
     expect(
-      mcpRowMeta(server(), {
+      mcpServerMeta(server(), {
         name: "linear",
         scope: "user",
         state: "connected",
         toolCount: 6,
         error: null,
         checkedAt: "x"
-      })
+      }, { includeScope: true })
     ).toContain("6 tools")
   })
 
   it("leads with the failure reason, the most useful thing on screen", () => {
     expect(
-      mcpRowMeta(server(), {
+      mcpServerMeta(server(), {
         name: "linear",
         scope: "user",
         state: "failed",
         toolCount: null,
         error: "timed out after 5000ms",
         checkedAt: "x"
-      })
+      }, { includeScope: true })
     ).toContain("timed out after 5000ms")
   })
 
   it("marks an unapproved server as not enabled", () => {
-    expect(mcpRowMeta(server({ enabled: false }))).toContain("not enabled")
+    expect(mcpServerMeta(server({ enabled: false }), undefined, { includeScope: true })).toContain("not enabled")
   })
 
   it("lists env and header key names but has nowhere to put a value", () => {
-    const meta = mcpRowMeta(server({ envKeys: ["A_KEY"], headerKeys: ["Authorization"] }))
+    const meta = mcpServerMeta(server({ envKeys: ["A_KEY"], headerKeys: ["Authorization"] }), undefined, { includeScope: true })
     expect(meta).toContain("env: A_KEY")
     expect(meta).toContain("headers: Authorization")
   })

@@ -10,7 +10,13 @@
  * to re-check auth.
  */
 import { join } from "node:path"
-import { DiscoveryService, ModelsService, SecretStore, TerminalService } from "@starbase/cli-adapters"
+import {
+  DiscoveryService,
+  killAllChildren,
+  ModelsService,
+  SecretStore,
+  TerminalService
+} from "@starbase/cli-adapters"
 import { app, BrowserWindow, ipcMain, shell } from "electron"
 import { Effect } from "effect"
 import type { AuthCallback } from "./deep-link.js"
@@ -160,8 +166,20 @@ if (!gotPrimaryLock) {
   })
 
   app.on("before-quit", () => {
-    // PTY child processes live in their own session and are NOT reaped when the
-    // main process exits, so kill them explicitly (best-effort) before teardown.
+    // Nothing we spawned is reaped when the main process exits — POSIX reparents
+    // orphans to init and they live forever. Two families of child, killed the
+    // same way for the same reason:
+    //
+    //  - PTYs, which live in their own session (TerminalService.killAll);
+    //  - harness subprocesses — `opencode serve`, `codex app-server` — which each
+    //    spawn site cleans up on its own happy path, but NOT when the app quits
+    //    mid-flight. That gap leaked one `opencode serve` per e2e test, since the
+    //    suite tears down Electron once per test while the model catalogue is
+    //    still being fetched.
+    //
+    // Synchronous and first: `runtime.dispose()` below may never get the chance to
+    // run to completion, and an orphaned server outlives the app either way.
+    killAllChildren()
     void runtime
       .runPromise(Effect.flatMap(TerminalService, (t) => t.killAll))
       .catch(() => {})

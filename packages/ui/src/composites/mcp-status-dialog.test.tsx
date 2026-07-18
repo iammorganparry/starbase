@@ -1,7 +1,8 @@
 import type { McpServer, McpServerStatus } from "@starbase/core"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { fmtChecked, McpStatusDialog, mcpStatusMeta } from "./mcp-status-dialog.js"
+import { fmtChecked, McpStatusDialog } from "./mcp-status-dialog.js"
+import { mcpServerMeta } from "./mcp-server-row.js"
 
 /**
  * The composer's MCP dialog is the one surface with a session, so it's the only
@@ -129,6 +130,41 @@ describe("McpStatusDialog", () => {
     expect(screen.getByText(/not checked yet/i)).toBeTruthy()
   })
 
+  /**
+   * "off" means the harness won't load the server. A server whose PROBE failed is
+   * still loaded — the agent just runs without its tools, which is exactly what the
+   * Callout above says. Rendering it "off" made the row contradict the Callout.
+   */
+  it("keeps a failed server marked on, not off, and flags it unreachable", () => {
+    open({ servers: [server()], statuses: [status({ state: "failed", toolCount: null, error: "boom" })] })
+    expect(screen.getByText("unreachable")).toBeTruthy()
+    expect(screen.queryByText("off")).toBeNull()
+  })
+
+  it("marks a server the harness won't load as off", () => {
+    open({ servers: [server({ enabled: false })] })
+    expect(screen.getByText("off")).toBeTruthy()
+    expect(screen.queryByText("unreachable")).toBeNull()
+  })
+
+  /** An un-gated project server is listed but deliberately never contacted. */
+  it("shows an un-probed project server as not checked, explaining why", () => {
+    open({
+      servers: [server({ name: "proj", scope: "project", cli: "cursor" })],
+      statuses: [status({ name: "proj", scope: "project", state: "unknown", toolCount: null })]
+    })
+    expect(screen.getByText("not checked")).toBeTruthy()
+    expect(screen.getByText(/approve it in the harness first/)).toBeTruthy()
+  })
+
+  it("does not count an un-probed server as a failure", () => {
+    open({
+      servers: [server({ name: "proj", scope: "project" })],
+      statuses: [status({ name: "proj", scope: "project", state: "unknown", toolCount: null })]
+    })
+    expect(screen.queryByText(/didn't respond/i)).toBeNull()
+  })
+
   it("renders env key names but never a value", () => {
     open({ servers: [server({ envKeys: ["LINEAR_API_KEY"] })] })
     expect(screen.getByText(/LINEAR_API_KEY/)).toBeTruthy()
@@ -136,19 +172,19 @@ describe("McpStatusDialog", () => {
   })
 })
 
-describe("mcpStatusMeta", () => {
+describe("mcpServerMeta — dialog variant (no scope prefix)", () => {
   it("leads with the failure reason", () => {
-    expect(mcpStatusMeta(server(), status({ state: "failed", toolCount: null, error: "spawn ENOENT" }))).toContain(
+    expect(mcpServerMeta(server(), status({ state: "failed", toolCount: null, error: "spawn ENOENT" }))).toContain(
       "spawn ENOENT"
     )
   })
 
   it("marks a server the harness won't load", () => {
-    expect(mcpStatusMeta(server({ enabled: false }))).toContain("not enabled")
+    expect(mcpServerMeta(server({ enabled: false }))).toContain("not enabled")
   })
 
   it("falls back to the target before any probe", () => {
-    expect(mcpStatusMeta(server())).toBe("npx -y @linear/mcp")
+    expect(mcpServerMeta(server())).toBe("npx -y @linear/mcp")
   })
 })
 
@@ -161,7 +197,8 @@ describe("fmtChecked", () => {
     expect(fmtChecked(new Date().toISOString())).toBe("checked just now")
   })
 
-  it("reads in minutes for an older probe", () => {
-    expect(fmtChecked(new Date(Date.now() - 5 * 60_000).toISOString())).toBe("checked 5 min ago")
+  /** Delegates to the repo's shared `relativeTime`, hence "5m" not "5 min". */
+  it("reads in minutes for an older probe, in the repo's dialect", () => {
+    expect(fmtChecked(new Date(Date.now() - 5 * 60_000).toISOString())).toBe("checked 5m ago")
   })
 })

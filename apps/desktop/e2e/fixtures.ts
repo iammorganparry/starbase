@@ -63,8 +63,9 @@ export interface LaunchOptions {
    */
   readonly signedIn?: boolean
   /**
-   * Seed a fake harness home (`~/.claude.json`, `~/.claude/settings.json`,
-   * `~/.codex/config.toml`) and point the app at it with `STARBASE_HARNESS_HOME`.
+   * Seed a fake harness home for CLAUDE (`~/.claude.json`, `~/.claude/settings.json`)
+   * and point the app at it with `STARBASE_HARNESS_HOME`. Codex/cursor/opencode
+   * seeding does not exist yet — add it here when a spec needs those harnesses.
    *
    * Needed because MCP config lives under the operator's REAL home, not
    * `STARBASE_HOME` — without this override an MCP spec would read the developer's
@@ -470,10 +471,6 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       // when the app first scans them.
       options.seed?.({ reposDir, repoPath })
 
-      // Optional fake `gh` / `opencode` on PATH (offline + deterministic). Both
-      // land in the same bin dir, which is prefixed onto PATH so the shims win
-      // over any real install on this host — that's what makes these tests say
-      // the same thing on every machine.
       // Fake harness home for MCP config. Written before launch so the first read
       // sees it; `STARBASE_HARNESS_HOME` below points the main process here.
       let mcpEnv: Record<string, string> = {}
@@ -507,6 +504,10 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         mcpEnv = { STARBASE_HARNESS_HOME: harnessHome }
       }
 
+      // Optional fake `gh` / `opencode` on PATH (offline + deterministic). Both
+      // land in the same bin dir, which is prefixed onto PATH so the shims win
+      // over any real install on this host — that's what makes these tests say
+      // the same thing on every machine.
       let ghEnv: Record<string, string> = {}
       let opencodeEnv: Record<string, string> = {}
       let pathPrefix = ""

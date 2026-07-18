@@ -206,8 +206,9 @@ describe("McpService.list — opencode", () => {
 
 describe("McpService.status", () => {
   /**
-   * A run-count marker: the fake server appends a line to this file on start, so a
-   * cached read can be distinguished from a re-probe by counting spawns.
+   * A claude config pointing at the fake server in a given mode. Cache tests tell a
+   * cached read from a re-probe by SWAPPING the mode's tool count between reads: a
+   * changed count proves the server was contacted again.
    */
   const fakeConfig = (mode: ReadonlyArray<string>) => ({
     mcpServers: { fake: { command: process.execPath, args: [FAKE_SERVER, ...mode] } }
