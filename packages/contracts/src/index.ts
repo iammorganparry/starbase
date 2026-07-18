@@ -22,6 +22,8 @@ import {
   OpencodeProviderInfo,
   PermissionMode,
   PrFileChange,
+  McpServer,
+  McpServerStatus,
   PrMergeMethod,
   PrState,
   PrSummary,
@@ -334,6 +336,29 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Skills.list", {
     success: Schema.Array(Skill),
     payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * List the MCP servers the harness will load. `sessionId` resolves the harness
+   * and worktree (so project/local scope is included); pass it null from Settings,
+   * which has no session and therefore sees user scope only.
+   */
+  Rpc.make("Mcp.list", {
+    success: Schema.Array(McpServer),
+    payload: { sessionId: Schema.NullOr(Schema.String), cli: Schema.optional(CliKind) }
+  }),
+
+  /**
+   * Live status for those servers — the real MCP handshake, not just "configured".
+   * Cached per server; `refresh` forces a re-probe (the dialog's refresh button).
+   */
+  Rpc.make("Mcp.status", {
+    success: Schema.Array(McpServerStatus),
+    payload: {
+      sessionId: Schema.NullOr(Schema.String),
+      cli: Schema.optional(CliKind),
+      refresh: Schema.optional(Schema.Boolean)
+    }
   }),
 
   /** List the models a harness supports (live from the provider; for the chip). */

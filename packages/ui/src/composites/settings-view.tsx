@@ -5,6 +5,8 @@ import type {
   GhStatus,
   GitConfig,
   GithubConfig,
+  McpServer,
+  McpServerStatus,
   ModelOption,
   OpencodeProviderInfo,
   OpencodeProviderSource,
@@ -42,6 +44,7 @@ import {
 import { SegmentedControl } from "../components/segmented-control.js"
 import { StatusDot } from "../components/status-dot.js"
 import { Toggle } from "../components/toggle.js"
+import { McpServerRow } from "./mcp-server-row.js"
 import { ProviderCard } from "./provider-card.js"
 
 // ── Section registry ─────────────────────────────────────────────────────────
@@ -68,7 +71,7 @@ const NAV: ReadonlyArray<NavItem> = [
   { key: "providers", label: "Providers", icon: <Cpu size={14} />, ready: true },
   { key: "agents", label: "Agents & skills", icon: <Sparkles size={14} />, ready: false },
   { key: "permissions", label: "Permissions", icon: <ShieldCheck size={14} />, ready: false },
-  { key: "mcp", label: "MCP servers", icon: <Server size={14} />, ready: false },
+  { key: "mcp", label: "MCP servers", icon: <Server size={14} />, ready: true },
   { key: "github", label: "GitHub", icon: <GithubMark size={14} />, ready: true },
   { key: "keybindings", label: "Keybindings", icon: <Keyboard size={14} />, ready: false }
 ]
@@ -393,6 +396,13 @@ export interface SettingsViewProps {
   loadOpencodeProviders?: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
   /** Store an API key in opencode's own credential file (opencode only). */
   onSetOpencodeAuth?: (providerId: string, key: string) => Promise<boolean>
+  /**
+   * MCP servers the given harness will load. Settings has no session, so this is
+   * user scope only — project `.mcp.json` needs a worktree, which only the composer has.
+   */
+  loadMcpServers?: (cli: CliKind) => Promise<ReadonlyArray<McpServer>>
+  /** Live status for those servers; `refresh` re-probes rather than reading the cache. */
+  loadMcpStatus?: (cli: CliKind, refresh: boolean) => Promise<ReadonlyArray<McpServerStatus>>
   // GitHub section (reused from the old settings modal).
   ghStatus: GhStatus
   github?: GithubConfig | null
@@ -418,6 +428,8 @@ export function SettingsView({
   loadModels,
   loadOpencodeProviders,
   onSetOpencodeAuth,
+  loadMcpServers,
+  loadMcpStatus,
   ghStatus,
   github,
   git,
@@ -486,6 +498,8 @@ export function SettingsView({
           loadOpencodeProviders={loadOpencodeProviders}
           onSetOpencodeAuth={onSetOpencodeAuth}
         />
+      ) : section === "mcp" ? (
+        <McpSection clis={clis} loadMcpServers={loadMcpServers} loadMcpStatus={loadMcpStatus} />
       ) : section === "github" ? (
         <GithubSection
           ghStatus={ghStatus}
@@ -869,6 +883,153 @@ function ToggleRow({
       <Toggle checked={checked} disabled={disabled} onCheckedChange={onChange} className="mt-0.5" />
     </div>
   )
+}
+
+/**
+ * Settings → MCP servers.
+ *
+ * Reads the selected harness's OWN config — Starbase defines no MCP format of its
+ * own, so this is a mirror, not a store, and there is nothing here to save.
+ *
+ * SCOPE: Settings has no session and therefore no worktree, so it can only show
+ * user-scope servers. A project's `.mcp.json` lives against a worktree and is shown
+ * in the composer's MCP dialog instead. The note in the header says so, because the
+ * nav footer's "user scope" claim would otherwise read as a limitation of Starbase
+ * rather than of this screen.
+ */
+function McpSection({
+  clis,
+  loadMcpServers,
+  loadMcpStatus
+}: {
+  clis: ReadonlyArray<CliInfo>
+  loadMcpServers?: (cli: CliKind) => Promise<ReadonlyArray<McpServer>>
+  loadMcpStatus?: (cli: CliKind, refresh: boolean) => Promise<ReadonlyArray<McpServerStatus>>
+}) {
+  const [selected, setSelected] = React.useState<CliKind>(clis[0]?.kind ?? "claude")
+  // null = still loading; [] = the harness genuinely has nothing configured.
+  const [servers, setServers] = React.useState<ReadonlyArray<McpServer> | null>(null)
+  const [statuses, setStatuses] = React.useState<ReadonlyArray<McpServerStatus>>([])
+  const [probing, setProbing] = React.useState(false)
+
+  // Guarded so a late response for a harness the user has since switched away
+  // from can't overwrite the current list (same shape as GithubSection's models).
+  React.useEffect(() => {
+    if (!loadMcpServers) return
+    let stale = false
+    setServers(null)
+    setStatuses([])
+    void loadMcpServers(selected)
+      .then((next) => {
+        if (!stale) setServers(next)
+      })
+      .catch(() => {
+        if (!stale) setServers([])
+      })
+    return () => {
+      stale = true
+    }
+  }, [selected, loadMcpServers])
+
+  /**
+   * Probing spawns the servers' own commands, so it is never automatic — the
+   * operator asks for it. Until then rows show their configured state only.
+   */
+  const probe = React.useCallback(
+    (refresh: boolean) => {
+      if (!loadMcpStatus) return
+      setProbing(true)
+      void loadMcpStatus(selected, refresh)
+        .then(setStatuses)
+        .catch(() => setStatuses([]))
+        .finally(() => setProbing(false))
+    },
+    [selected, loadMcpStatus]
+  )
+
+  const statusFor = (name: string) => statuses.find((s) => s.name === name)
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor">
+      <div className="flex max-w-[560px] flex-col gap-4 p-6">
+        <div className="flex items-center gap-2 border-b border-hairline pb-2.5">
+          <Server size={14} className="text-text-bright" />
+          <span className="text-[13px] font-semibold text-text-bright">MCP servers</span>
+        </div>
+
+        <Callout tone="blue">
+          Starbase reads each harness&apos;s own MCP config — edit it where the harness
+          expects it, and the change shows up here. This screen shows{" "}
+          <span className="font-mono text-text">user scope</span> only; a repo&apos;s project
+          servers appear in a session&apos;s MCP status dialog.
+        </Callout>
+
+        {clis.length > 1 && (
+          <SegmentedControl
+            value={selected}
+            onChange={(kind) => setSelected(kind as CliKind)}
+            items={clis.map((c) => ({ value: c.kind, label: PROVIDER_LABEL[c.kind] ?? c.kind }))}
+          />
+        )}
+
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] uppercase tracking-wide text-dim">
+            Configured for {selected}
+          </span>
+          {loadMcpStatus && servers !== null && servers.length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => probe(statuses.length > 0)}
+              disabled={probing}
+            >
+              {probing ? "Checking…" : statuses.length > 0 ? "Recheck" : "Check status"}
+            </Button>
+          )}
+        </div>
+
+        {servers === null ? (
+          <span className="py-2 text-[11.5px] text-dim">Reading {selected}&apos;s config…</span>
+        ) : servers.length === 0 ? (
+          <span className="py-2 text-[11.5px] text-dim">
+            {selected} has no MCP servers configured. Add one where {selected} expects it and it
+            will appear here.
+          </span>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {servers.map((server) => {
+              const status = statusFor(server.name)
+              return (
+                <McpServerRow
+                  key={`${server.scope}:${server.name}`}
+                  name={server.name}
+                  transport={server.transport}
+                  enabled={status === undefined ? server.enabled : status.state === "connected"}
+                  meta={mcpRowMeta(server, status)}
+                />
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The row's mono sub-line: scope, then whatever we actually know. Before a probe
+ * that's the target and any env keys; after one it leads with the outcome, since a
+ * failure reason is the most useful thing on screen.
+ */
+export function mcpRowMeta(server: McpServer, status?: McpServerStatus): string {
+  const parts: Array<string> = [server.scope]
+  if (status?.state === "connected") parts.push(`${status.toolCount ?? 0} tools`)
+  else if (status?.state === "failed") parts.push(status.error ?? "failed")
+  else if (status?.state === "disabled" || !server.enabled) parts.push("not enabled")
+  parts.push(server.target)
+  if (server.envKeys.length > 0) parts.push(`env: ${server.envKeys.join(", ")}`)
+  if (server.headerKeys.length > 0) parts.push(`headers: ${server.headerKeys.join(", ")}`)
+  return parts.join(" · ")
 }
 
 function GithubSection({

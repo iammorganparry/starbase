@@ -21,6 +21,7 @@ import {
   fetchOpencodeProviders,
   filterVisible,
   GhService,
+  McpService,
   ModelsService,
   planReviewPost,
   retitleSession,
@@ -103,6 +104,39 @@ export const skillsList = (sessionId: string) =>
       binPath: clis.find((c) => c.kind === cli)?.binPath ?? null
     })
   })
+
+/**
+ * Where each harness's own config lives.
+ *
+ * `STARBASE_HARNESS_HOME` exists so the e2e suite can seed a fake `~` — the normal
+ * `STARBASE_HOME` override is no use here, because MCP config lives under the
+ * operator's REAL home, not Starbase's state dir. Unset in normal runs.
+ */
+const harnessHome = (): string => process.env.STARBASE_HARNESS_HOME ?? homedir()
+
+/**
+ * Resolve the harness + worktree an MCP request is about. A session supplies both;
+ * Settings has no session, so it passes `cli` explicitly and gets user scope only
+ * (there is no worktree to read project config from).
+ */
+const mcpSpec = (sessionId: string | null, cli: CliKind | undefined) =>
+  Effect.gen(function* () {
+    const session =
+      sessionId === null ? null : yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+    return {
+      cli: session?.cli ?? cli ?? "claude",
+      homeDir: harnessHome(),
+      worktreePath: session?.worktreePath ?? null
+    }
+  })
+
+/** `Mcp.list` handler. Exported for tests. */
+export const mcpList = (sessionId: string | null, cli: CliKind | undefined) =>
+  Effect.flatMap(mcpSpec(sessionId, cli), (spec) => McpService.list(spec))
+
+/** `Mcp.status` handler — probes the servers live. Exported for tests. */
+export const mcpStatus = (sessionId: string | null, cli: CliKind | undefined, refresh: boolean | undefined) =>
+  Effect.flatMap(mcpSpec(sessionId, cli), (spec) => McpService.status(spec, { refresh: refresh ?? false }))
 
 /**
  * `Sessions.diff` handler. Resolves the session's worktree and returns its
@@ -718,6 +752,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Agent.stop": ({ sessionId }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
   "Skills.list": ({ sessionId }) => skillsList(sessionId),
+  "Mcp.list": ({ sessionId, cli }) => mcpList(sessionId, cli),
+  "Mcp.status": ({ sessionId, cli, refresh }) => mcpStatus(sessionId, cli, refresh),
   // Discovery supplies the CLI's resolved binary path — a GUI-launched Electron
   // app has a threadbare PATH, so Codex's own model list is only reachable via
   // the absolute path discovery found.

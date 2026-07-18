@@ -10,6 +10,8 @@ import type {
   GithubConfig,
   DiffStat,
   IssueSummary,
+  McpServer,
+  McpServerStatus,
   ModelOption,
   OpencodeProviderInfo,
   PrSummary,
@@ -90,6 +92,10 @@ export interface StarbaseAppProps {
   loadOpencodeProviders?: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
   /** Store an API key in opencode's own credential file. */
   onSetOpencodeAuth?: (providerId: string, key: string) => Promise<boolean>
+  /** MCP servers the given harness will load (Settings → MCP servers; user scope). */
+  loadMcpServers?: (cli: CliKind) => Promise<ReadonlyArray<McpServer>>
+  /** Live probe of those servers; `refresh` bypasses the cache. */
+  loadMcpStatus?: (cli: CliKind, refresh: boolean) => Promise<ReadonlyArray<McpServerStatus>>
   /** Render the Pull Request tab; `ctx.onConnectGithub` opens the settings modal. */
   renderPullRequest?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /** Render the Code Review tab; `ctx.onConnectGithub` opens the settings modal. */
@@ -191,6 +197,8 @@ export function StarbaseApp({
   loadModels,
   loadOpencodeProviders,
   onSetOpencodeAuth,
+  loadMcpServers,
+  loadMcpStatus,
   renderPullRequest,
   renderReview,
   renderCode,
@@ -363,6 +371,8 @@ export function StarbaseApp({
               loadModels={loadModels ?? (async () => [])}
               loadOpencodeProviders={loadOpencodeProviders}
               onSetOpencodeAuth={onSetOpencodeAuth}
+              loadMcpServers={loadMcpServers}
+              loadMcpStatus={loadMcpStatus}
               ghStatus={ghStatus ?? GH_UNAVAILABLE}
               github={githubConfig}
               git={gitConfig}

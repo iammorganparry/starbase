@@ -9,6 +9,7 @@ import { ChipMenu, type ChipOption } from "../components/chip-menu.js"
 import { CodeChip } from "../components/code-chip.js"
 import { Pill } from "../components/pill.js"
 import { PROVIDER_LABEL } from "../components/provider-icon.js"
+import { StatusDot } from "../components/status-dot.js"
 import { CommandMenu } from "./command-menu.js"
 import { MentionMenu } from "./mention-menu.js"
 
@@ -72,6 +73,8 @@ export function Composer({
   mode = "accept-edits",
   onSetMode,
   allowPlan = false,
+  mcp,
+  onOpenMcp,
   paused = false,
   busy = false,
   placeholder,
@@ -113,6 +116,15 @@ export function Composer({
   onSetMode?: (mode: PermissionMode) => void
   /** Offer the Plan mode option (Claude sessions only). */
   allowPlan?: boolean
+  /**
+   * MCP status for this session, or undefined until it arrives. The chip stays
+   * HIDDEN while undefined rather than rendering "0 servers" — the status lands a
+   * beat after mount, same as the model catalogue, and a momentary "no MCP" would
+   * be a lie about the operator's setup.
+   */
+  mcp?: { readonly total: number; readonly failed: number; readonly probed: boolean }
+  /** Open the MCP status dialog. */
+  onOpenMcp?: () => void
   paused?: boolean
   /**
    * The agent is producing a turn — sends are queued (processed once it's free)
@@ -439,6 +451,23 @@ export function Composer({
             disabled={modelGroups.length === 0}
           />
           <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} className={accent.chip} />
+          {mcp !== undefined && mcp.total > 0 && (
+            <button
+              type="button"
+              onClick={onOpenMcp}
+              title="MCP server status"
+              className="inline-flex items-center gap-1.5 rounded-md border border-line bg-sunken px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-text"
+            >
+              {/* Neutral until a probe has actually run — a green dot before we've
+                  checked anything would claim a health we don't know. */}
+              <StatusDot
+                tone={!mcp.probed ? "bg-line-strong" : mcp.failed > 0 ? "bg-yellow" : "bg-green"}
+                size={6}
+                glow={false}
+              />
+              {mcp.probed && mcp.failed > 0 ? `${mcp.failed} of ${mcp.total} MCP down` : `${mcp.total} MCP`}
+            </button>
+          )}
           <span className="font-mono text-[11px] text-line-strong">/ · @ · paste image</span>
           <div className="flex-1" />
           {paused ? (

@@ -424,6 +424,9 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       loadModels={rpc.modelsList}
       loadOpencodeProviders={rpc.opencodeListProviders}
       onSetOpencodeAuth={rpc.opencodeSetAuth}
+      // Settings has no session, so MCP config resolves to user scope only.
+      loadMcpServers={(cli) => rpc.mcpList(null, cli)}
+      loadMcpStatus={(cli, refresh) => rpc.mcpStatus(null, cli, refresh)}
       onRecheckGh={recheckGh}
       loadBranches={rpc.workspaceBranches}
       onCreateSession={createSession}

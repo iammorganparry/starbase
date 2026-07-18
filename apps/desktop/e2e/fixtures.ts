@@ -63,6 +63,23 @@ export interface LaunchOptions {
    */
   readonly signedIn?: boolean
   /**
+   * Seed a fake harness home (`~/.claude.json`, `~/.claude/settings.json`,
+   * `~/.codex/config.toml`) and point the app at it with `STARBASE_HARNESS_HOME`.
+   *
+   * Needed because MCP config lives under the operator's REAL home, not
+   * `STARBASE_HOME` — without this override an MCP spec would read the developer's
+   * own `~/.claude.json` and say something different on every machine.
+   */
+  readonly mcp?: {
+    /** Written to `<fake home>/.claude.json` as top-level `mcpServers` (user scope). */
+    readonly userServers?: Record<string, unknown>
+    /** Written to `<fake home>/.claude/settings.json`. */
+    readonly settings?: Record<string, unknown>
+    /** Written to `<repo>/.mcp.json` as `mcpServers` (project scope). */
+    readonly projectServers?: Record<string, unknown>
+  }
+
+  /**
    * Install a deterministic fake `opencode` on PATH so discovery, the version
    * gate, the model catalogue and the provider list all run offline — instead of
    * depending on whether this host happens to have opencode installed.
@@ -449,6 +466,29 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       // land in the same bin dir, which is prefixed onto PATH so the shims win
       // over any real install on this host — that's what makes these tests say
       // the same thing on every machine.
+      // Fake harness home for MCP config. Written before launch so the first read
+      // sees it; `STARBASE_HARNESS_HOME` below points the main process here.
+      let mcpEnv: Record<string, string> = {}
+      if (options.mcp) {
+        const harnessHome = join(home, "harness-home")
+        mkdirSync(join(harnessHome, ".claude"), { recursive: true })
+        writeFileSync(
+          join(harnessHome, ".claude.json"),
+          JSON.stringify({ mcpServers: options.mcp.userServers ?? {} })
+        )
+        writeFileSync(
+          join(harnessHome, ".claude", "settings.json"),
+          JSON.stringify(options.mcp.settings ?? {})
+        )
+        if (options.mcp.projectServers) {
+          writeFileSync(
+            join(repoPath, ".mcp.json"),
+            JSON.stringify({ mcpServers: options.mcp.projectServers })
+          )
+        }
+        mcpEnv = { STARBASE_HARNESS_HOME: harnessHome }
+      }
+
       let ghEnv: Record<string, string> = {}
       let opencodeEnv: Record<string, string> = {}
       let pathPrefix = ""
@@ -489,6 +529,7 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
           ...process.env,
           ...ghEnv,
           ...opencodeEnv,
+          ...mcpEnv,
           PATH: `${pathPrefix}${process.env.PATH ?? ""}`,
           STARBASE_HOME: home,
           ELECTRON_RENDERER_URL: "",
