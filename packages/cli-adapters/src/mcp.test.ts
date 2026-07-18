@@ -55,6 +55,67 @@ describe("McpService.list — claude", () => {
     expect(byName.shared?.target).toBe("from-local")
   })
 
+  /**
+   * The mainstream approval flow. Claude records `.mcp.json` approvals in the repo's
+   * `.claude/settings.local.json` and in `~/.claude.json` under `projects[<cwd>]` —
+   * NOT in `~/.claude/settings.json`. Reading only the latter (which in a real
+   * install carries none of these keys) made every project server render
+   * "not enabled" and report `disabled` without ever probing.
+   */
+  it("honours enableAllProjectMcpServers from the repo's .claude/settings.local.json", async () => {
+    write(home.dir, ".claude/settings.json", {})
+    write(repo.dir, ".claude/settings.local.json", { enableAllProjectMcpServers: true })
+    write(repo.dir, ".mcp.json", { mcpServers: { linear: { command: "l" } } })
+
+    const servers = await run(McpService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    expect(servers.map((s) => [s.name, s.enabled])).toStrictEqual([["linear", true]])
+  })
+
+  it("honours enabledMcpjsonServers from the repo's .claude/settings.local.json", async () => {
+    write(repo.dir, ".claude/settings.local.json", { enabledMcpjsonServers: ["linear"] })
+    write(repo.dir, ".mcp.json", { mcpServers: { linear: { command: "l" }, other: { command: "o" } } })
+
+    const servers = await run(McpService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    expect(Object.fromEntries(servers.map((s) => [s.name, s.enabled]))).toStrictEqual({
+      linear: true,
+      other: false
+    })
+  })
+
+  it("honours approvals recorded in ~/.claude.json under projects[worktree]", async () => {
+    write(home.dir, ".claude.json", { projects: { [repo.dir]: { enabledMcpjsonServers: ["linear"] } } })
+    write(repo.dir, ".mcp.json", { mcpServers: { linear: { command: "l" } } })
+
+    const servers = await run(McpService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    expect(servers.map((s) => [s.name, s.enabled])).toStrictEqual([["linear", true]])
+  })
+
+  it("honours the repo's committed .claude/settings.json too", async () => {
+    write(repo.dir, ".claude/settings.json", { enableAllProjectMcpServers: true })
+    write(repo.dir, ".mcp.json", { mcpServers: { linear: { command: "l" } } })
+
+    const servers = await run(McpService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    expect(servers[0]?.enabled).toBe(true)
+  })
+
+  /**
+   * `disabledMcpServers` is a separate, per-project list that turns a server off
+   * whatever scope defined it — the operator's real config uses it on user-scope
+   * servers, which would otherwise show as on.
+   */
+  it("disables a user-scope server listed in the project's disabledMcpServers", async () => {
+    write(home.dir, ".claude.json", {
+      mcpServers: { obsidian: { command: "o" }, linear: { command: "l" } },
+      projects: { [repo.dir]: { disabledMcpServers: ["obsidian"] } }
+    })
+
+    const servers = await run(McpService.list({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir }))
+    expect(Object.fromEntries(servers.map((s) => [s.name, s.enabled]))).toStrictEqual({
+      obsidian: false,
+      linear: true
+    })
+  })
+
   it("surfaces an unapproved project server as disabled rather than hiding it", async () => {
     write(home.dir, ".claude/settings.json", {})
     write(repo.dir, ".mcp.json", { mcpServers: { pending: { command: "p" } } })
@@ -201,6 +262,56 @@ describe("McpService.status", () => {
 
     expect(first[0]?.toolCount).toBe(2)
     expect(refreshed[0]?.toolCount).toBe(9)
+  })
+
+  /**
+   * McpService is a singleton in `AppLayer`, so every session shares one cache.
+   * Two repos routinely have a project-scope server of the SAME NAME pointing at
+   * different commands; keying on `cli:scope:name` alone served repo A's status for
+   * repo B's server, and repo B's real server was never probed.
+   */
+  it("does not share a cached status between two worktrees using the same server name", async () => {
+    const other = mkTemp("starbase-mcp-repo2-")
+    try {
+      write(home.dir, ".claude/settings.json", { enableAllProjectMcpServers: true })
+      // Same name, different tool counts — so a collision is visible in the result.
+      write(repo.dir, ".mcp.json", {
+        mcpServers: { shared: { command: process.execPath, args: [FAKE_SERVER, "ok", "2"] } }
+      })
+      write(other.dir, ".mcp.json", {
+        mcpServers: { shared: { command: process.execPath, args: [FAKE_SERVER, "ok", "7"] } }
+      })
+
+      const [first, second] = await run(
+        Effect.gen(function* () {
+          const a = yield* McpService.status({ cli: "claude", homeDir: home.dir, worktreePath: repo.dir })
+          const b = yield* McpService.status({ cli: "claude", homeDir: home.dir, worktreePath: other.dir })
+          return [a, b] as const
+        })
+      )
+
+      expect(first[0]?.toolCount).toBe(2)
+      // Would be 2 if the second worktree hit the first's cache entry.
+      expect(second[0]?.toolCount).toBe(7)
+    } finally {
+      other.cleanup()
+    }
+  })
+
+  it("still caches within a single worktree", async () => {
+    write(home.dir, ".claude.json", fakeConfig(["ok", "2"]))
+    const spec = { cli: "claude" as const, homeDir: home.dir, worktreePath: repo.dir }
+
+    const [first, second] = await run(
+      Effect.gen(function* () {
+        const a = yield* McpService.status(spec)
+        write(home.dir, ".claude.json", fakeConfig(["ok", "9"]))
+        const b = yield* McpService.status(spec)
+        return [a, b] as const
+      })
+    )
+    expect(first[0]?.toolCount).toBe(2)
+    expect(second[0]?.toolCount).toBe(2)
   })
 
   it("reports a broken server as failed without failing the call", async () => {

@@ -134,8 +134,9 @@ test("the composer chip opens a dialog showing user and project servers", async 
     mcp: {
       userServers: { userSrv: stdioServer(["ok", "2"]) },
       projectServers: { projSrv: stdioServer(["ok", "1"]) },
-      // Approve project servers, as Claude requires before it will load them.
-      settings: { enableAllProjectMcpServers: true }
+      // Approve project servers where Claude actually records approvals — the repo's
+      // .claude/settings.local.json, NOT the user-level settings.json.
+      projectSettings: { enableAllProjectMcpServers: true }
     }
   })
 
@@ -195,4 +196,80 @@ test("the dialog warns when a server didn't respond", async ({ launchApp }) => {
   await window.getByText("MCP session").click()
   await window.getByTitle("MCP server status").click()
   await expect(window.getByText(/1 server didn't respond/i)).toBeVisible({ timeout: 15_000 })
+})
+
+/**
+ * The approval gate, end to end, at the two places Claude actually records it.
+ * The original implementation read only `~/.claude/settings.json` — which in a real
+ * install carries none of these keys — so an operator who had approved their project
+ * servers through the normal prompt saw every one of them as "not enabled".
+ */
+test("a project server approved in the repo's settings.local.json is live, not 'not enabled'", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    mcp: {
+      projectServers: { approved: stdioServer(["ok", "5"]) },
+      projectSettings: { enabledMcpjsonServers: ["approved"] }
+    }
+  })
+
+  await window.getByText("MCP session").click()
+  await window.getByTitle("MCP server status").click()
+  await expect(window.getByText("approved", { exact: true })).toBeVisible()
+  // It was probed rather than skipped as disabled — proof the gate resolved.
+  await expect(window.getByText(/5 tools/)).toBeVisible({ timeout: 15_000 })
+  await expect(window.getByText(/not enabled/)).toBeHidden()
+})
+
+test("a project server approved via ~/.claude.json projects[<repo>] is live", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    mcp: {
+      projectServers: { approved: stdioServer(["ok", "2"]) },
+      projectEntry: { enabledMcpjsonServers: ["approved"] }
+    }
+  })
+
+  await window.getByText("MCP session").click()
+  await window.getByTitle("MCP server status").click()
+  await expect(window.getByText(/2 tools/)).toBeVisible({ timeout: 15_000 })
+})
+
+test("an unapproved project server still shows, marked not enabled", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    mcp: { projectServers: { pending: stdioServer(["ok", "1"]) } }
+  })
+
+  await window.getByText("MCP session").click()
+  await window.getByTitle("MCP server status").click()
+  // Visible (so the operator can see WHY it's inert) but never probed.
+  await expect(window.getByText("pending", { exact: true })).toBeVisible()
+  await expect(window.getByText(/not enabled/)).toBeVisible()
+})
+
+test("a user-scope server disabled for this project shows as not enabled", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions,
+    mcp: {
+      userServers: { obsidian: stdioServer(["ok", "1"]), linear: stdioServer(["ok", "1"]) },
+      // `disabledMcpServers` turns a server off whatever scope defined it.
+      projectEntry: { disabledMcpServers: ["obsidian"] }
+    }
+  })
+
+  await window.getByText("MCP session").click()
+  await window.getByTitle("MCP server status").click()
+  await expect(window.getByText("obsidian", { exact: true })).toBeVisible()
+  await expect(window.getByText(/not enabled/)).toBeVisible()
 })

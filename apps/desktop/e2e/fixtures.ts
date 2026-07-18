@@ -73,8 +73,16 @@ export interface LaunchOptions {
   readonly mcp?: {
     /** Written to `<fake home>/.claude.json` as top-level `mcpServers` (user scope). */
     readonly userServers?: Record<string, unknown>
-    /** Written to `<fake home>/.claude/settings.json`. */
+    /** Written to `<fake home>/.claude/settings.json` (user-level settings). */
     readonly settings?: Record<string, unknown>
+    /**
+     * Written to `<repo>/.claude/settings.local.json` — where Claude actually
+     * records `.mcp.json` approvals in the mainstream flow, so this is the path
+     * that matters for the project-server gate.
+     */
+    readonly projectSettings?: Record<string, unknown>
+    /** Written to `~/.claude.json` as `projects[<repo>]` (what the interactive prompt writes). */
+    readonly projectEntry?: Record<string, unknown>
     /** Written to `<repo>/.mcp.json` as `mcpServers` (project scope). */
     readonly projectServers?: Record<string, unknown>
   }
@@ -474,12 +482,22 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         mkdirSync(join(harnessHome, ".claude"), { recursive: true })
         writeFileSync(
           join(harnessHome, ".claude.json"),
-          JSON.stringify({ mcpServers: options.mcp.userServers ?? {} })
+          JSON.stringify({
+            mcpServers: options.mcp.userServers ?? {},
+            ...(options.mcp.projectEntry ? { projects: { [repoPath]: options.mcp.projectEntry } } : {})
+          })
         )
         writeFileSync(
           join(harnessHome, ".claude", "settings.json"),
           JSON.stringify(options.mcp.settings ?? {})
         )
+        if (options.mcp.projectSettings) {
+          mkdirSync(join(repoPath, ".claude"), { recursive: true })
+          writeFileSync(
+            join(repoPath, ".claude", "settings.local.json"),
+            JSON.stringify(options.mcp.projectSettings)
+          )
+        }
         if (options.mcp.projectServers) {
           writeFileSync(
             join(repoPath, ".mcp.json"),

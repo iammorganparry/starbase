@@ -182,33 +182,111 @@ const parseMcpServersMap = (
 }
 
 /**
- * Gating for project-scope (`.mcp.json`) servers, read from a Claude settings file.
- * Claude requires the operator to approve project servers; `enableAllProjectMcpServers`
- * blanket-approves, otherwise `enabledMcpjsonServers` allow-lists and
- * `disabledMcpjsonServers` deny-lists. A server nobody has approved is surfaced as
- * `enabled: false` rather than hidden — the operator needs to see why it is inert.
+ * One settings source's MCP approval flags, exactly as written in that file.
+ *
+ * Claude requires the operator to approve project (`.mcp.json`) servers before it
+ * will load them: `enableAllProjectMcpServers` blanket-approves, otherwise
+ * `enabledMcpjsonServers` allow-lists and `disabledMcpjsonServers` deny-lists. A
+ * server nobody has approved is surfaced as `enabled: false` rather than hidden —
+ * the operator needs to see why it is inert.
+ *
+ * These flags are spread across FOUR files (see `claudeGateSources` in `mcp.ts`).
+ * Reading only `~/.claude/settings.json` is wrong in the mainstream flow: approving
+ * a server at the interactive prompt writes to `~/.claude.json` under
+ * `projects[<cwd>]`, and hand-edited approvals usually land in the repo's
+ * `.claude/settings.local.json`.
  */
 export interface ClaudeProjectGate {
   readonly enableAll: boolean
   readonly enabled: ReadonlyArray<string>
   readonly disabled: ReadonlyArray<string>
+  /**
+   * `disabledMcpServers` — turns a server off regardless of which scope defined it,
+   * which is what Claude writes when a server is toggled off for a project. Distinct
+   * from `disabledMcpjsonServers`, which only withholds approval from `.mcp.json`
+   * servers. Without this, a user-scope server the operator has switched off still
+   * shows as on.
+   */
+  readonly disabledAnyScope: ReadonlyArray<string>
 }
 
+/** A gate that decides nothing — the neutral element when a source is absent. */
+export const EMPTY_CLAUDE_GATE: ClaudeProjectGate = {
+  enableAll: false,
+  enabled: [],
+  disabled: [],
+  disabledAnyScope: []
+}
+
+/** Read the approval flags out of one Claude settings file. */
 export const claudeProjectGate = (settingsJson: string): ClaudeProjectGate => {
   const root = json(settingsJson)
-  if (!isRecord(root)) return { enableAll: false, enabled: [], disabled: [] }
-  return {
-    enableAll: root.enableAllProjectMcpServers === true,
-    enabled: strArray(root.enabledMcpjsonServers),
-    disabled: strArray(root.disabledMcpjsonServers)
-  }
+  return isRecord(root) ? gateFrom(root) : EMPTY_CLAUDE_GATE
 }
 
-const gateAllows = (gate: ClaudeProjectGate | undefined, name: string): boolean => {
-  if (gate === undefined) return true
-  if (gate.disabled.includes(name)) return false
-  return gate.enableAll || gate.enabled.includes(name)
+const gateFrom = (root: Record<string, unknown>): ClaudeProjectGate => ({
+  enableAll: root.enableAllProjectMcpServers === true,
+  enabled: strArray(root.enabledMcpjsonServers),
+  disabled: strArray(root.disabledMcpjsonServers),
+  disabledAnyScope: strArray(root.disabledMcpServers)
+})
+
+/**
+ * `~/.claude.json` → `projects[<path>]`, which is where Claude records approvals
+ * made at the interactive prompt. The single most important source, and the one a
+ * naive implementation misses entirely.
+ */
+export const claudeProjectGateFor = (claudeJson: string, projectPath: string): ClaudeProjectGate => {
+  const root = json(claudeJson)
+  if (!isRecord(root) || !isRecord(root.projects)) return EMPTY_CLAUDE_GATE
+  const project = root.projects[projectPath]
+  return isRecord(project) ? gateFrom(project) : EMPTY_CLAUDE_GATE
 }
+
+/** Per-server decisions after folding every source in precedence order. */
+export interface ResolvedClaudeGate {
+  readonly enableAll: boolean
+  readonly decisions: ReadonlyMap<string, boolean>
+  readonly disabledAnyScope: ReadonlySet<string>
+}
+
+/**
+ * Fold gate sources in ASCENDING precedence — later sources override earlier ones
+ * per server, which is how Claude layers user → project → local → per-project
+ * settings. Within one source a deny still beats an allow.
+ */
+export const mergeClaudeGates = (sources: ReadonlyArray<ClaudeProjectGate>): ResolvedClaudeGate => {
+  let enableAll = false
+  const decisions = new Map<string, boolean>()
+  const disabledAnyScope = new Set<string>()
+  for (const source of sources) {
+    if (source.enableAll) enableAll = true
+    for (const name of source.enabled) decisions.set(name, true)
+    // Applied after `enabled`, so a name in both lists resolves to denied.
+    for (const name of source.disabled) decisions.set(name, false)
+    for (const name of source.disabledAnyScope) disabledAnyScope.add(name)
+  }
+  return { enableAll, decisions, disabledAnyScope }
+}
+
+const gateAllows = (gate: ResolvedClaudeGate | undefined, name: string): boolean => {
+  if (gate === undefined) return true
+  return gate.decisions.get(name) ?? gate.enableAll
+}
+
+/**
+ * Apply `disabledMcpServers` across every scope. Runs after the scopes are merged,
+ * because this list disables by name irrespective of where the server was defined.
+ */
+export const applyDisabledAnyScope = (
+  servers: ReadonlyArray<ParsedMcpServer>,
+  disabled: ReadonlySet<string>
+): ReadonlyArray<ParsedMcpServer> =>
+  disabled.size === 0
+    ? servers
+    : servers.map((entry) =>
+        disabled.has(entry.server.name) ? { ...entry, server: { ...entry.server, enabled: false } } : entry
+      )
 
 // ── Claude Code ──────────────────────────────────────────────────────────────
 
@@ -241,7 +319,7 @@ export const claudeLocalServers = (claudeJson: string, projectPath: string): Rea
 /** `<root>/.mcp.json` (project scope), gated by the operator's approvals. */
 export const claudeProjectServers = (
   mcpJson: string,
-  gate?: ClaudeProjectGate
+  gate?: ResolvedClaudeGate
 ): ReadonlyArray<ParsedMcpServer> => {
   const root = json(mcpJson)
   if (!isRecord(root)) return []

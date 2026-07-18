@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 import type { ParsedMcpServer } from "./mcp-config.js"
 import {
+  applyDisabledAnyScope,
   claudeLocalServers,
   claudeProjectGate,
+  claudeProjectGateFor,
+  mergeClaudeGates,
   claudeProjectServers,
   claudeSettingsServers,
   claudeUserServers,
@@ -141,8 +144,11 @@ describe("claudeProjectGate + claudeProjectServers", () => {
   const enabledByName = (parsed: ReadonlyArray<ParsedMcpServer>) =>
     Object.fromEntries(pub(parsed).map((s) => [s.name, s.enabled]))
 
+  /** Resolve a single settings source, the common case in these cases. */
+  const gateOf = (settings: string) => mergeClaudeGates([claudeProjectGate(settings)])
+
   it("marks an allow-listed server enabled and an unlisted one disabled", () => {
-    const gate = claudeProjectGate(JSON.stringify({ enabledMcpjsonServers: ["approved"] }))
+    const gate = gateOf(JSON.stringify({ enabledMcpjsonServers: ["approved"] }))
     expect(enabledByName(claudeProjectServers(MCP_JSON, gate))).toStrictEqual({
       approved: true,
       pending: false,
@@ -151,16 +157,12 @@ describe("claudeProjectGate + claudeProjectServers", () => {
   })
 
   it("deny-list beats allow-list for the same name", () => {
-    const gate = claudeProjectGate(
-      JSON.stringify({ enabledMcpjsonServers: ["denied"], disabledMcpjsonServers: ["denied"] })
-    )
+    const gate = gateOf(JSON.stringify({ enabledMcpjsonServers: ["denied"], disabledMcpjsonServers: ["denied"] }))
     expect(enabledByName(claudeProjectServers(MCP_JSON, gate)).denied).toBe(false)
   })
 
   it("deny-list beats enableAllProjectMcpServers", () => {
-    const gate = claudeProjectGate(
-      JSON.stringify({ enableAllProjectMcpServers: true, disabledMcpjsonServers: ["denied"] })
-    )
+    const gate = gateOf(JSON.stringify({ enableAllProjectMcpServers: true, disabledMcpjsonServers: ["denied"] }))
     expect(enabledByName(claudeProjectServers(MCP_JSON, gate))).toStrictEqual({
       approved: true,
       pending: true,
@@ -170,7 +172,7 @@ describe("claudeProjectGate + claudeProjectServers", () => {
 
   /** Unapproved servers are surfaced as disabled, not hidden — the operator needs to see why nothing loaded. */
   it("still lists unapproved servers so they are visible as disabled", () => {
-    const servers = pub(claudeProjectServers(MCP_JSON, claudeProjectGate("{}")))
+    const servers = pub(claudeProjectServers(MCP_JSON, gateOf("{}")))
     expect(servers).toHaveLength(3)
     expect(servers.every((s) => s.enabled === false)).toBe(true)
     expect(servers.every((s) => s.scope === "project")).toBe(true)
@@ -180,8 +182,155 @@ describe("claudeProjectGate + claudeProjectServers", () => {
     expect(pub(claudeProjectServers(MCP_JSON)).every((s) => s.enabled)).toBe(true)
   })
 
-  it("returns a permissive-by-default gate for malformed settings", () => {
-    expect(claudeProjectGate("{{{")).toStrictEqual({ enableAll: false, enabled: [], disabled: [] })
+  it("returns a decides-nothing gate for malformed settings", () => {
+    expect(claudeProjectGate("{{{")).toStrictEqual({
+      enableAll: false,
+      enabled: [],
+      disabled: [],
+      disabledAnyScope: []
+    })
+  })
+})
+
+/**
+ * Where Claude ACTUALLY records MCP approvals. Shapes here are taken from a real
+ * `~/.claude.json` and a real repo `.claude/settings.local.json` — the original
+ * implementation read only `~/.claude/settings.json`, which in practice carries
+ * none of these keys, so every project server rendered "not enabled".
+ */
+describe("claudeProjectGateFor — approvals recorded per project", () => {
+  const CLAUDE_JSON = JSON.stringify({
+    projects: {
+      "/repos/app": {
+        enabledMcpjsonServers: ["linear"],
+        disabledMcpjsonServers: ["sentry"],
+        disabledMcpServers: ["obsidian"]
+      }
+    }
+  })
+
+  it("reads the approvals the interactive prompt writes", () => {
+    expect(claudeProjectGateFor(CLAUDE_JSON, "/repos/app")).toStrictEqual({
+      enableAll: false,
+      enabled: ["linear"],
+      disabled: ["sentry"],
+      disabledAnyScope: ["obsidian"]
+    })
+  })
+
+  it("decides nothing for a path with no entry", () => {
+    expect(claudeProjectGateFor(CLAUDE_JSON, "/repos/other")).toStrictEqual({
+      enableAll: false,
+      enabled: [],
+      disabled: [],
+      disabledAnyScope: []
+    })
+  })
+
+  it.each([
+    ["no projects key", "{}"],
+    ["malformed json", "{{{"]
+  ])("decides nothing for %s", (_label, raw) => {
+    expect(claudeProjectGateFor(raw, "/repos/app").enabled).toStrictEqual([])
+  })
+})
+
+describe("mergeClaudeGates", () => {
+  const MCP_JSON = JSON.stringify({ mcpServers: { linear: { command: "l" }, sentry: { command: "s" } } })
+  const enabledByName = (gate: ReturnType<typeof mergeClaudeGates>) =>
+    Object.fromEntries(pub(claudeProjectServers(MCP_JSON, gate)).map((s) => [s.name, s.enabled]))
+
+  /** The exact real-world case the original code got wrong. */
+  it("honours enableAllProjectMcpServers from the repo's settings.local.json", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate("{}"), // ~/.claude/settings.json — empty, as it usually is
+      claudeProjectGate("{}"), // <repo>/.claude/settings.json
+      claudeProjectGate(JSON.stringify({ enableAllProjectMcpServers: true })),
+      claudeProjectGateFor("{}", "/repos/app")
+    ])
+    expect(enabledByName(gate)).toStrictEqual({ linear: true, sentry: true })
+  })
+
+  it("honours approvals recorded in ~/.claude.json projects[path]", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate("{}"),
+      claudeProjectGateFor(JSON.stringify({ projects: { "/repos/app": { enabledMcpjsonServers: ["linear"] } } }), "/repos/app")
+    ])
+    expect(enabledByName(gate)).toStrictEqual({ linear: true, sentry: false })
+  })
+
+  /** Later sources are more specific, so they override earlier ones per server. */
+  it("lets a more specific source re-enable what an earlier one denied", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate(JSON.stringify({ disabledMcpjsonServers: ["linear"] })),
+      claudeProjectGate(JSON.stringify({ enabledMcpjsonServers: ["linear"] }))
+    ])
+    expect(enabledByName(gate).linear).toBe(true)
+  })
+
+  it("lets a more specific source deny what an earlier one allowed", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate(JSON.stringify({ enabledMcpjsonServers: ["linear"] })),
+      claudeProjectGate(JSON.stringify({ disabledMcpjsonServers: ["linear"] }))
+    ])
+    expect(enabledByName(gate).linear).toBe(false)
+  })
+
+  it("keeps a deny beating an allow within one source", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate(JSON.stringify({ enabledMcpjsonServers: ["linear"], disabledMcpjsonServers: ["linear"] }))
+    ])
+    expect(enabledByName(gate).linear).toBe(false)
+  })
+
+  it("takes enableAll from any source, and an explicit deny still wins over it", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate(JSON.stringify({ enableAllProjectMcpServers: true })),
+      claudeProjectGate(JSON.stringify({ disabledMcpjsonServers: ["sentry"] }))
+    ])
+    expect(enabledByName(gate)).toStrictEqual({ linear: true, sentry: false })
+  })
+
+  it("unions disabledAnyScope across sources", () => {
+    const gate = mergeClaudeGates([
+      claudeProjectGate(JSON.stringify({ disabledMcpServers: ["a"] })),
+      claudeProjectGateFor(JSON.stringify({ projects: { p: { disabledMcpServers: ["b"] } } }), "p")
+    ])
+    expect([...gate.disabledAnyScope].sort()).toStrictEqual(["a", "b"])
+  })
+
+  it("decides nothing for no sources", () => {
+    const gate = mergeClaudeGates([])
+    expect(gate.enableAll).toBe(false)
+    expect(gate.decisions.size).toBe(0)
+  })
+})
+
+describe("applyDisabledAnyScope", () => {
+  const servers = [
+    ...claudeUserServers(JSON.stringify({ mcpServers: { obsidian: { command: "o" }, linear: { command: "l" } } }))
+  ]
+
+  /**
+   * `disabledMcpServers` names servers from ANY scope — the operator's real config
+   * disables user-scope servers this way, so gating only `.mcp.json` entries would
+   * show a switched-off server as on.
+   */
+  it("disables a user-scope server named in disabledMcpServers", () => {
+    const out = pub(applyDisabledAnyScope(servers, new Set(["obsidian"])))
+    expect(Object.fromEntries(out.map((s) => [s.name, s.enabled]))).toStrictEqual({
+      obsidian: false,
+      linear: true
+    })
+  })
+
+  it("is a no-op for an empty set", () => {
+    expect(applyDisabledAnyScope(servers, new Set())).toBe(servers)
+  })
+
+  it("leaves the launch half untouched, so a re-enabled server still probes", () => {
+    const out = applyDisabledAnyScope(servers, new Set(["obsidian"]))
+    expect(out.find((e) => e.server.name === "obsidian")?.launch.command).toBe("o")
   })
 })
 
