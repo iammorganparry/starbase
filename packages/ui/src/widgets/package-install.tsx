@@ -183,7 +183,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
           {p.added + p.removed > 0 && (
             <>
               <span className="text-dim">·</span>
-              <DiffStat added={p.added} removed={p.removed} className="text-[11px]" />
+              <DiffStat added={p.added} removed={p.removed} className="" />
             </>
           )}
           {note && (
@@ -198,7 +198,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
     >
       <WidgetBody>
         {progress.length > 0 && (
-          <div className="font-mono text-[11.5px] text-muted-foreground">
+          <div className="text-muted-foreground">
             <span className="text-green">✓</span>{" "}
             {progress.map(([label, value], i) => (
               <span key={label}>
@@ -210,7 +210,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
         )}
 
         {shown.length > 0 && (
-          <div className="flex flex-col gap-[5px] font-mono text-[12px]">
+          <div className="flex flex-col">
             {shown.map((pkg, i) => {
               const add = pkg.change === "add"
               return (
@@ -225,7 +225,7 @@ export function PackageInstallWidget(p: PackageInstallProps) {
                 </div>
               )
             })}
-            {extra > 0 && <span className="pl-[19px] font-mono text-[11px] text-dim">+{extra} more</span>}
+            {extra > 0 && <span className="pl-[19px] text-dim">+{extra} more</span>}
           </div>
         )}
       </WidgetBody>

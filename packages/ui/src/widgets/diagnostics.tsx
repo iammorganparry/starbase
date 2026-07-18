@@ -1,4 +1,4 @@
-import { CommandWidget, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
 import { FileIcon } from "../components/file-icon.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { cn } from "../lib/cn.js"
@@ -218,15 +218,18 @@ export function DiagnosticsWidget(p: DiagnosticsProps) {
         ) : undefined
       }
     >
-      <div className="flex flex-col px-2 py-1.5 font-mono">
+      {/* WidgetBody, not a bare div: this stack carried no type of its own and
+          inherited the app's 14px, which made a tsc card the one tool call in
+          the transcript rendered at prose size. */}
+      <WidgetBody className="gap-0">
         {groups.map((g, i) => (
           <div key={g.path} className={cn(i > 0 && "mt-0.5 border-t border-line/25")}>
-            <div className="flex items-center gap-[7px] px-2 pt-2 pb-[5px] text-[11.5px] leading-[1.5] text-cyan">
+            <div className="flex items-center gap-[7px] px-1 pt-1.5 text-cyan">
               <FileIcon path={g.path} size={13} />
               <span className="min-w-0 truncate">{g.path}</span>
             </div>
             {g.rows.map((d, j) => (
-              <div key={j} className="flex items-baseline gap-2.5 px-2 py-1 text-[11.5px] leading-[1.5]">
+              <div key={j} className="flex items-baseline gap-2.5 px-1">
                 <span className="w-11 flex-none text-dim">
                   {d.line}:{d.col}
                 </span>
@@ -239,8 +242,8 @@ export function DiagnosticsWidget(p: DiagnosticsProps) {
             ))}
           </div>
         ))}
-        {hidden > 0 && <div className="px-2 py-1.5 text-[11.5px] leading-[1.5] text-dim">+{hidden} more</div>}
-      </div>
+        {hidden > 0 && <div className="px-1 text-dim">+{hidden} more</div>}
+      </WidgetBody>
     </CommandWidget>
   )
 }

@@ -1,10 +1,6 @@
-import { useState } from "react"
-import { ChevronDown, ChevronRight } from "lucide-react"
 import { CommandWidget, toneOf } from "../composites/command-widget.js"
-import { CommandLine } from "../components/command-line.js"
 import { LogLines } from "../components/log-lines.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
-import { cn } from "../lib/cn.js"
 import { exitLabel, explanatoryMeta, scrapeDuration } from "./command.js"
 import { defineWidget, type ParseContext } from "./types.js"
 
@@ -20,10 +16,11 @@ import { defineWidget, type ParseContext } from "./types.js"
  * and of surfacing an opencode failure's error message, which likewise arrives
  * only in `meta`.
  *
- * Alone among the widgets it collapses. The other nine ARE summaries — a
- * scoreboard, a bundle table — and are already worth their height. This one is a
- * raw log, so it stays a one-liner until asked, which is how the plain tool card
- * behaved and what the design draws.
+ * It once owned the collapsed row; the frame owns it now, so all ten widgets
+ * rest as a one-liner and open on demand — the behaviour the plain tool card
+ * always had. What stays here is the summary that row states for a raw log:
+ * `exit 127 · 1.2s · 14 lines`, plus the adapter's error when there's no body to
+ * put it in.
  */
 
 export interface GenericCommandProps {
@@ -72,48 +69,19 @@ const summary = (p: GenericCommandProps): string => {
 }
 
 export function GenericCommandWidget(p: GenericCommandProps) {
-  const [expanded, setExpanded] = useState(false)
   const n = p.lines.length
-  const toggle = () => setExpanded((v) => !v)
-
-  if (!expanded) {
-    return (
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={false}
-        className={cn(
-          "flex w-full items-center gap-2.5 rounded-xl border bg-sunken px-3 py-2.5 text-left transition-colors hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          p.status === "error" ? "border-red/35" : "border-line"
-        )}
-      >
-        {p.status === "success" && <span className="flex-none text-green">✓</span>}
-        {p.status === "error" && <span className="flex-none text-red">✗</span>}
-        {p.status === "running" && <span className="flex-none text-yellow">·</span>}
-        <CommandLine command={p.command} className="flex-1" />
-        {/* The error message, when the adapter gave one and there's no log to
-            show it in — otherwise a failed codex/opencode call reads as blank. */}
-        {p.note && n === 0 && <span className="flex-none truncate text-[10.5px] text-red">{p.note}</span>}
-        <span className="flex-none font-mono text-[10.5px] text-dim">{summary(p)}</span>
-        <ChevronRight className="size-3 flex-none text-blue" />
-      </button>
-    )
-  }
 
   return (
     <CommandWidget
       tone={toneOf(p.status)}
       command={p.command}
-      headerMeta={
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded
-          aria-label="Collapse output"
-          className="flex items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ChevronDown className="size-3 text-dim" />
-        </button>
+      summary={
+        <>
+          {/* The error message, when the adapter gave one and there's no log to
+              show it in — otherwise a failed codex/opencode call reads as blank. */}
+          {p.note && n === 0 && <span className="min-w-0 truncate text-red">{p.note}</span>}
+          <span className="flex-none">{summary(p)}</span>
+        </>
       }
       footer={
         <span className={p.status === "error" ? "text-red" : p.status === "success" ? "text-green" : "text-yellow"}>

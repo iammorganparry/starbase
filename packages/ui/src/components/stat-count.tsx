@@ -10,9 +10,14 @@ const toneClass: Record<StatTone, string> = {
 }
 
 /**
- * A headline number over its label — the test-runner scoreboard.
+ * A number and what it counts — `128 passed`.
  *
- * `tabular-nums` so a counter ticking 98 → 128 doesn't shift the label under it,
+ * Was a 26px display number stacked over its label, which made a test run the
+ * loudest thing in a transcript of 11px tool calls: scrolling past a Read, a
+ * Grep and a vitest, only the vitest shouted. The count is the same fact at
+ * reading size, inline, so a scoreboard is a dense line rather than a billboard.
+ *
+ * `tabular-nums` so a counter ticking 98 → 128 doesn't shove the label along,
  * which is the whole point of showing it live.
  */
 export function StatCount({
@@ -27,11 +32,9 @@ export function StatCount({
   className?: string
 }) {
   return (
-    <div className={cn("flex flex-col gap-0.5", className)}>
-      <span className={cn("font-mono text-[26px] font-semibold leading-none tabular-nums", toneClass[tone])}>
-        {value}
-      </span>
-      <span className="text-[10.5px] tracking-[0.3px] text-dim">{label}</span>
-    </div>
+    <span className={cn("inline-flex items-baseline gap-1", className)}>
+      <span className={cn("tabular-nums", toneClass[tone])}>{value}</span>
+      <span className="text-dim">{label}</span>
+    </span>
   )
 }

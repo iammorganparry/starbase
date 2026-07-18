@@ -37,8 +37,27 @@ const bash = (target: string, output?: string, status: ToolCallModel["status"] =
 const widgetIn = (c: HTMLElement): string | null =>
   c.querySelector("[data-command-widget]")?.getAttribute("data-command-widget") ?? null
 
-const show = (target: string, output?: string, status: ToolCallModel["status"] = "success") =>
+/**
+ * Render a bash call and OPEN it.
+ *
+ * Every widget now rests as a collapsed row and reveals its body on click, so a
+ * test that asserts what a widget read has to open it first — otherwise it is
+ * asserting against a one-line summary and would fail for the wrong reason. The
+ * collapsed row is covered on its own terms in "the resting row" below; these
+ * cases are about what each parser puts on screen once you look.
+ */
+const show = (target: string, output?: string, status: ToolCallModel["status"] = "success") => {
+  const result = showClosed(target, output, status)
+  open(result.container)
+  return result
+}
+
+/** The same call left as the transcript first draws it: one collapsed row. */
+const showClosed = (target: string, output?: string, status: ToolCallModel["status"] = "success") =>
   render(<MessageTurn message={bash(target, output, status)} />)
+
+/** Click a rendered widget's resting row open. */
+const open = (c: HTMLElement) => fireEvent.click(c.querySelector("[aria-expanded='false']")!)
 
 // ── Fixtures: output as these tools actually print it ──────────────────────────
 
@@ -375,21 +394,87 @@ describe("W10 · generic", () => {
   })
 
   it("stays a one-liner until asked, then shows the log", () => {
-    show("./scripts/seed.sh", SEED)
+    const { container } = showClosed("./scripts/seed.sh", SEED)
     expect(screen.queryByText(/seeded 8,214 users/)).toBeNull()
-    fireEvent.click(screen.getByRole("button", { expanded: false }))
+    open(container)
     expect(screen.getByText(/seeded 8,214 users/)).toBeDefined()
   })
 
   it("summarises the outcome while still collapsed", () => {
-    show("./scripts/seed.sh", SEED)
+    showClosed("./scripts/seed.sh", SEED)
     expect(screen.getByText(/exit 0 · 3 lines/)).toBeDefined()
   })
 
   it("says when the middle was elided, rather than passing a cut log off as whole", () => {
     show("./scripts/noisy.sh", "line 1\n\n… 4,096 characters omitted …\n\nline 999")
-    fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(screen.getByText(/middle elided/)).toBeDefined()
+  })
+})
+
+// ── The resting row ───────────────────────────────────────────────────────────
+
+describe("the resting row", () => {
+  /**
+   * A transcript is read by scrolling past commands, not by studying each one.
+   * Every widget therefore rests as a single row and opens on demand — the
+   * behaviour the plain tool card always had, and which for one release only
+   * `generic` kept while the other nine drew themselves open.
+   */
+  const CASES = [
+    ["vitest run", VITEST, "test-runner"],
+    ["gh pr checks 482", GH_CHECKS, "ci-checks"],
+    ["pnpm install", PNPM_INSTALL, "package-install"],
+    ["pnpm build", VITE_BUILD, "build"],
+    ["git push", GIT, "git-op"],
+    ["curl https://api.x/v1/customers", CURL, "http-request"],
+    ["./scripts/seed.sh", "a\nb", "generic"]
+  ] as const
+
+  it("draws every widget collapsed, whatever it parsed", () => {
+    for (const [cmd, out, id] of CASES) {
+      const { container } = showClosed(cmd, out)
+      expect(widgetIn(container), id).toBe(id)
+      // The row is the toggle: exactly one, and it is shut.
+      expect(container.querySelectorAll("[aria-expanded='false']").length, id).toBe(1)
+      expect(container.querySelector("[aria-expanded='true']"), id).toBeNull()
+      cleanup()
+    }
+  })
+
+  it("opens each one into its own body, and closes again", () => {
+    for (const [cmd, out, id] of CASES) {
+      const { container } = showClosed(cmd, out)
+      open(container)
+      expect(container.querySelector("[aria-expanded='true']"), id).not.toBeNull()
+      // Same control, now shut again — opening is reversible, not one-way.
+      fireEvent.click(container.querySelector("[aria-expanded='true']")!)
+      expect(container.querySelector("[aria-expanded='false']"), id).not.toBeNull()
+      cleanup()
+    }
+  })
+
+  it("states the outcome in the row, so the summary survives being closed", () => {
+    // The whole point of collapsing: you still learn the result without opening.
+    expect(showClosed("vitest run", VITEST, "error").container.textContent).toContain("2 failed")
+    cleanup()
+    // Where the headline fact is the footer's, not the exit code's, the row says
+    // that instead — a query's rows, a check board's tally.
+    expect(showClosed("psql -c 'select 1'", PSQL).container.textContent).toContain("2 rows")
+    cleanup()
+    expect(showClosed("gh pr checks 482", GH_CHECKS, "running").container.textContent).toContain("1 passed")
+  })
+
+  it("says the result once, not three times over", () => {
+    // header badge + footer + footer meta are three phrasings of one fact; the
+    // row picks one. This read "2 failed · 2 failed · 3.20s · failed".
+    const row = showClosed("vitest run", VITEST, "error").container.textContent ?? ""
+    expect(row.match(/failed/g)?.length).toBe(1)
+  })
+
+  it("keeps the command legible in the row", () => {
+    const { container } = showClosed("pnpm --filter @starbase/ui test", VITEST, "error")
+    expect(container.textContent).toContain("pnpm")
+    expect(container.textContent).toContain("@starbase/ui")
   })
 })
 
@@ -483,6 +568,7 @@ describe("every harness's bash call", () => {
     // away — every opencode bash call silently loses what it printed.
     const { container } = render(<MessageTurn message={opencodeBash("vitest run", VITEST)} />)
     expect(widgetIn(container)).toBe("test-runner")
+    open(container)
     expect(screen.getByText("128")).toBeDefined()
   })
 
@@ -495,7 +581,6 @@ describe("every harness's bash call", () => {
   it("says nothing was printed only when nothing was", () => {
     const { container } = show("true", "", "success")
     expect(widgetIn(container)).toBe("generic")
-    fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(screen.getByText("No output.")).toBeDefined()
   })
 })

@@ -194,7 +194,7 @@ export function GitOpWidget(p: GitOpProps) {
     >
       <WidgetBody className="gap-2.5">
         {p.sha && (
-          <div className="font-mono text-[11.5px] text-muted-foreground">
+          <div className="text-muted-foreground">
             <span className="text-dim">[</span>
             {p.branch && <span className="text-blue">{p.branch} </span>}
             <span className="text-yellow">{p.sha}</span>
@@ -203,29 +203,29 @@ export function GitOpWidget(p: GitOpProps) {
         )}
 
         {p.files.length > 0 && (
-          <div className="flex flex-col gap-1 font-mono text-[11.5px]">
+          <div className="flex flex-col">
             {p.files.map((f) => (
               <div key={f.path} className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-text">{f.path}</span>
-                <DiffStat added={f.added} removed={f.removed} className="flex-none text-[11.5px]" />
+                <DiffStat added={f.added} removed={f.removed} className="flex-none" />
               </div>
             ))}
           </div>
         )}
 
         {p.filesChanged !== null && (
-          <div className="flex items-center gap-1.5 font-mono text-[11px] text-dim">
+          <div className="flex items-center gap-1.5 text-dim">
             <span>
               {p.filesChanged} {p.filesChanged === 1 ? "file" : "files"} changed ·
             </span>
-            <DiffStat added={p.insertions ?? 0} removed={p.deletions ?? 0} className="text-[11px]" />
+            <DiffStat added={p.insertions ?? 0} removed={p.deletions ?? 0} className="" />
           </div>
         )}
 
         {p.push && (
           <div
             className={cn(
-              "flex items-center gap-2 font-mono text-[11.5px]",
+              "flex items-center gap-2",
               // The commit is the event; the push is where it went. The rule
               // says so without another heading.
               (p.sha || p.files.length > 0) && "border-t border-line/25 pt-[9px]"

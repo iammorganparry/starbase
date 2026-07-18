@@ -191,9 +191,9 @@ export const parseTestRun = (ctx: ParseContext): TestRunProps | null => {
 
 const glyphFor = (s: SuiteFile["status"]) =>
   s === "running" ? (
-    <Spinner size={12} tone="working" />
+    <Spinner size={10} tone="working" />
   ) : (
-    <span className={cn("w-3 text-center", s === "fail" ? "text-red" : "text-green")}>
+    <span className={cn("w-3 flex-none text-center", s === "fail" ? "text-red" : "text-green")}>
       {s === "fail" ? "✗" : "✓"}
     </span>
   )
@@ -217,6 +217,12 @@ export function TestRunWidget(p: TestRunProps) {
           <span className="text-dim">{p.duration}</span>
         )
       }
+      /*
+       * The badge already says "2 failed"; the default row summary would be
+       * exitLabel, which with no adapter code is the bare word "failed" — the
+       * same fact a second time. The run's duration is the fact it doesn't have.
+       */
+      summary={p.duration && !running ? <span className="text-dim">{p.duration}</span> : null}
       footer={
         p.watch ? (
           <span className="flex items-center gap-2">
@@ -230,21 +236,20 @@ export function TestRunWidget(p: TestRunProps) {
       }
       footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
-      <WidgetBody className="gap-[14px]">
-        <div className="flex items-end gap-[22px]">
+      <WidgetBody>
+        <div className="flex items-baseline gap-3">
           <StatCount value={p.passed} label="passed" tone="green" />
           <StatCount value={p.failed} label="failed" tone={p.failed > 0 ? "red" : "dim"} />
           <StatCount value={p.skipped} label="skipped" tone="dim" />
           <div className="flex-1" />
-          <span className="text-right font-mono text-[11px] leading-[1.5] text-muted-foreground">
+          <span className="flex-none text-dim">
             {p.total !== null && (
               <>
-                {done}
-                <span className="text-dim"> / {p.total} tests</span>
-                <br />
+                <span className="tabular-nums text-muted-foreground">{done}</span> / {p.total} tests
               </>
             )}
-            {p.fileCount !== null && <span className="text-dim">{p.fileCount} files</span>}
+            {p.total !== null && p.fileCount !== null && " · "}
+            {p.fileCount !== null && `${p.fileCount} files`}
           </span>
         </div>
 
@@ -258,17 +263,17 @@ export function TestRunWidget(p: TestRunProps) {
         />
 
         {p.files.length > 0 && (
-          <div className="flex flex-col gap-px font-mono">
+          <div className="flex flex-col">
             {p.files.map((f) => (
               <div
                 key={f.path}
                 className={cn(
-                  "flex items-center gap-2.5 rounded-md px-0.5 py-1.5 text-[12px]",
+                  "flex items-center gap-2 rounded px-0.5 py-[1px]",
                   f.status === "running" && "bg-blue/[0.05]"
                 )}
               >
                 {glyphFor(f.status)}
-                <FileIcon path={f.path} size={14} />
+                <FileIcon path={f.path} size={12} />
                 <span className={cn("min-w-0 flex-1 truncate", f.status === "pass" ? "text-text" : "text-text-bright")}>
                   {f.path}
                 </span>
