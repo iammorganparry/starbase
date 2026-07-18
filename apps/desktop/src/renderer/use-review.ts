@@ -225,11 +225,31 @@ export function useReview(session: Session): ReviewState {
           text: `Please address these code review comments:\n\n${summary}`
         })
       } else {
-        void rpc.githubComment(session.id, `**Code review**\n\n${summary}`, true).catch(() => {})
+        // Post as a review carrying INLINE comments, not one flattened top-level
+        // blob: a draft written on a line has to come back from GitHub on that
+        // same line, or Starbase and the PR disagree after any refresh.
+        //
+        // `line` is the range END (GitHub's orientation, see `ReviewComment`),
+        // which is why `endLine` maps to it and `line` becomes `startLine`.
+        void rpc
+          .githubSubmitReview(
+            session.id,
+            current.map((d) => ({
+              path: d.path,
+              line: d.endLine !== null && d.endLine > d.line ? d.endLine : d.line,
+              startLine: d.endLine !== null && d.endLine > d.line ? d.line : null,
+              body: d.body
+            }))
+          )
+          // The new threads only exist on GitHub until the PR is refetched, and
+          // this key is shared with the Pull Request tab — so both panes pick
+          // them up from one invalidation.
+          .then(() => qc.invalidateQueries({ queryKey: ["github", "pr", session.id] }))
+          .catch(() => {})
       }
       setDrafts([])
     },
-    [drafts, session.id]
+    [drafts, session, qc]
   )
 
   const refetchLocal = () => qc.invalidateQueries({ queryKey: localKey(session.id) })

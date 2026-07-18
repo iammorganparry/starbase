@@ -1,5 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
-import { Callout } from "../components/callout.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
 import { cn } from "../lib/cn.js"
 import { exitLabel, invokes, scrapeDuration } from "./command.js"
@@ -145,7 +144,7 @@ export function BuildWidget(p: BuildProps) {
   const running = p.status === "running"
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       headerMeta={
         running ? (
@@ -167,20 +166,20 @@ export function BuildWidget(p: BuildProps) {
       }
       footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
-      <WidgetBody className="gap-2.5 font-mono text-[13px]">
+      <WidgetBody>
         {p.tool && (
-          <div className="text-[11.5px] leading-[1.5] text-muted-foreground">
+          <div className="text-muted-foreground">
             <span className="text-purple">{p.tool}</span> <span className="text-dim">{p.toolVersion}</span> building
             for production…
           </div>
         )}
 
         {p.modules !== null && (
-          <div className="text-[11.5px] leading-[1.5] text-green">✓ {p.modules.toLocaleString("en-US")} modules transformed</div>
+          <div className="text-green">✓ {p.modules.toLocaleString("en-US")} modules transformed</div>
         )}
 
         {shown.length > 0 && (
-          <div className="flex flex-col gap-1 text-[11.5px] leading-[1.5]">
+          <div className="flex flex-col">
             {shown.map((a) => (
               <div key={a.path} className="flex items-baseline gap-2">
                 <span className={cn("min-w-0 flex-1 truncate", nameColour(a.path))}>{a.path}</span>
@@ -192,14 +191,18 @@ export function BuildWidget(p: BuildProps) {
                 </span>
               </div>
             ))}
-            {more > 0 && <div className="text-[11.5px] leading-[1.5] text-dim">+{more} more</div>}
+            {more > 0 && <div className="text-dim">+{more} more</div>}
           </div>
         )}
 
+        {/* A left rule, matching a test failure and a SQL inset — NOT `Callout`.
+            Callout is the app's bordered, tinted notice for dialogs and panels;
+            dropped into a flat tool-call body it reads as a card floating on a
+            card, and it was the last boxed thing left among the ten. */}
         {p.warnings.map((w) => (
-          <Callout key={w} tone="yellow" glyph="(!)">
+          <div key={w} className="border-l-2 border-yellow/50 pl-2.5 text-yellow">
             {w}
-          </Callout>
+          </div>
         ))}
       </WidgetBody>
     </CommandWidget>

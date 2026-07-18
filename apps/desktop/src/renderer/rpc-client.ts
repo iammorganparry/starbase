@@ -38,6 +38,7 @@ import type {
   PullRequest,
   QuestionAnswer,
   Repo,
+  ReviewComment,
   ReviewSubmitKind,
   Session,
   SettledSessionStatus,
@@ -259,6 +260,15 @@ export const rpc = {
     run((c) => c.Github.comment({ sessionId, body, toGithub })),
   githubReview: (sessionId: string, kind: ReviewSubmitKind, body: string): Promise<void> =>
     run((c) => c.Github.review({ sessionId, kind, body })),
+  /**
+   * Post the reviewer's drafts to the PR as line-anchored inline comments.
+   * Resolves to the number that couldn't be anchored (folded into the review
+   * body instead) — 0 when everything landed on a line.
+   */
+  githubSubmitReview: (
+    sessionId: string,
+    comments: ReadonlyArray<ReviewComment>
+  ): Promise<number> => run((c) => c.Github.submitReview({ sessionId, comments })),
   githubResolveThread: (sessionId: string, threadId: string, resolved: boolean): Promise<void> =>
     run((c) => c.Github.resolveThread({ sessionId, threadId, resolved })),
   githubReplyToThread: (sessionId: string, commentId: number, body: string): Promise<void> =>

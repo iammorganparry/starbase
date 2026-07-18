@@ -44,7 +44,7 @@ export interface LogLinesProps {
 export function LogLines({ lines, numbered = true, className }: LogLinesProps) {
   const gutter = String(lines.length).length
   return (
-    <div className={cn("font-mono text-[11.5px] leading-[1.75] text-muted-foreground", className)}>
+    <div className={cn("font-mono text-[11px] leading-[1.5] text-muted-foreground", className)}>
       {lines.map((line, i) => (
         <div key={i} className="flex gap-2">
           {numbered && (

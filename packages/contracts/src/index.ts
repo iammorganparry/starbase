@@ -32,6 +32,7 @@ import {
   PullRequest,
   QuestionAnswer,
   Repo,
+  ReviewComment,
   ReviewSubmitKind,
   Session,
   SettledSessionStatus,
@@ -609,6 +610,24 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Github.comment", {
     error: GhError,
     payload: { sessionId: Schema.String, body: Schema.String, toGithub: Schema.Boolean }
+  }),
+
+  /**
+   * Submit the reviewer's drafts to the session's PR as a COMMENT review
+   * carrying real, line-anchored inline comments.
+   *
+   * Distinct from `Github.comment` (one top-level blob) and `Github.review` (a
+   * body and nothing else): this is the only path that produces inline threads,
+   * so a comment written in Starbase comes back from GitHub on the same line.
+   *
+   * Returns how many drafts couldn't be anchored to a line in the PR's current
+   * diff — those are folded into the review body rather than dropped, so a
+   * non-zero count is informational, not a failure.
+   */
+  Rpc.make("Github.submitReview", {
+    success: Schema.Number,
+    error: GhError,
+    payload: { sessionId: Schema.String, comments: Schema.Array(ReviewComment) }
   }),
 
   /** Submit a review (comment / approve / request-changes) on the session's PR. */

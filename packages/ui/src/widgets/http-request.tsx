@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { LogLines } from "../components/log-lines.js"
 import { Pill } from "../components/pill.js"
 import { StatusDot } from "../components/status-dot.js"
@@ -264,7 +264,7 @@ function JsonBody({ value }: { value: unknown }) {
   const shown = all.slice(0, MAX_LINES)
   const more = all.length - shown.length
   return (
-    <div className="rounded-lg border border-line/25 bg-hairline px-3 py-2.5 font-mono text-[11.5px] leading-[1.65]">
+    <div className="border-l-2 border-line pl-2.5 font-mono text-[11px] leading-[1.5]">
       {shown.map((l, i) => (
         <div key={i} style={{ paddingLeft: l.depth * 12 }}>
           {l.content}
@@ -278,7 +278,7 @@ function JsonBody({ value }: { value: unknown }) {
 export function HttpRequestWidget(p: HttpRequestProps) {
   return (
     <CommandWidget
-      tone={toneOf(p.status)}
+      status={p.status}
       command={p.command}
       /*
        * The glyph tracks the *response*, not the process: curl exits 0 having
@@ -308,13 +308,13 @@ export function HttpRequestWidget(p: HttpRequestProps) {
       footerMeta={exitLabel(p.status, p.exit) ?? undefined}
     >
       <WidgetBody className="gap-2.5">
-        <div className="flex items-center gap-2 font-mono text-[11.5px]">
+        <div className="flex items-center gap-2">
           <span className="flex-none text-purple">{p.method}</span>
           {p.url && <span className="min-w-0 flex-1 truncate text-text">{p.url}</span>}
         </div>
 
         {(p.code !== null || p.bytes !== null) && (
-          <div className="flex items-center gap-2 font-mono text-[11px]">
+          <div className="flex items-center gap-2">
             {p.code !== null && (
               <Pill tone={toneOfCode(p.code)} dot={false} className="font-semibold">
                 {p.code} {p.reason}
@@ -328,7 +328,7 @@ export function HttpRequestWidget(p: HttpRequestProps) {
         )}
 
         {p.headers.length > 0 && (
-          <div className="flex flex-col gap-[3px] font-mono text-[11px] text-dim">
+          <div className="flex flex-col text-dim">
             {pickHeaders(p.headers).map((h) => (
               <div key={h.name} className="flex gap-2">
                 <span className="w-[170px] flex-none text-muted-foreground">{h.name}</span>
@@ -342,7 +342,7 @@ export function HttpRequestWidget(p: HttpRequestProps) {
           (p.json !== undefined ? (
             <JsonBody value={p.json} />
           ) : (
-            <div className="max-h-[220px] overflow-auto rounded-lg border border-line/25 bg-hairline px-3 py-2.5">
+            <div className="max-h-[220px] overflow-auto border-l-2 border-line pl-2.5">
               <LogLines lines={p.body.split("\n")} numbered={false} />
             </div>
           ))}

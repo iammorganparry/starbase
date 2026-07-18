@@ -1,4 +1,4 @@
-import { CommandWidget, WidgetBody, toneOf } from "../composites/command-widget.js"
+import { CommandWidget, WidgetBody } from "../composites/command-widget.js"
 import { KeyValueRow } from "../components/kv-row.js"
 import { StatusDot } from "../components/status-dot.js"
 import type { ToolCallStatus } from "../composites/tool-call.js"
@@ -134,10 +134,11 @@ export function DevServerWidget(p: DevServerProps) {
    * A server that's listening isn't pending — it has finished starting and is
    * doing its job. Once it exits, the tone is the exit's business again.
    */
-  const tone = listening ? "done" : toneOf(p.status)
+  // A listening server is a success even though the process is still running.
+  const status = listening ? "success" : p.status
   return (
     <CommandWidget
-      tone={tone}
+      status={status}
       command={p.command}
       icon={listening ? <StatusDot tone="bg-green" size={9} pulse glow /> : undefined}
       headerMeta={
@@ -159,7 +160,7 @@ export function DevServerWidget(p: DevServerProps) {
     >
       <WidgetBody className="gap-[9px]">
         {(p.tool || p.readyIn) && (
-          <div className="font-mono text-[11.5px] leading-[1.6]">
+          <div>
             {p.tool && <span className="text-purple">{p.tool}</span>}
             {p.version && <span className="text-dim"> v{p.version}</span>}
             {p.readyIn && <span className="text-green">{p.tool ? " " : ""}ready in {p.readyIn}</span>}
@@ -184,7 +185,7 @@ export function DevServerWidget(p: DevServerProps) {
         )}
 
         {(p.logs.length > 0 || listening) && (
-          <div className="flex flex-col gap-[5px] border-t border-line/25 pt-[9px] font-mono text-[11px] leading-[1.6]">
+          <div className="flex flex-col border-t border-line/25 pt-1.5">
             {p.logs.map((l, i) => (
               <div key={i} className="flex items-center gap-2">
                 <span className="flex-none text-dim tabular-nums">{l.time}</span>
