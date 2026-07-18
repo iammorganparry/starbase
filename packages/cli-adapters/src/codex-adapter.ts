@@ -4,6 +4,7 @@ import type { ApprovalMode, SandboxMode, ThreadEvent } from "@openai/codex-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
+import { requireWorktree } from "./cwd.js"
 
 /**
  * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
@@ -184,7 +185,9 @@ export const runCodex = (
         const { Codex } = await import("@openai/codex-sdk")
         const codex = new Codex({ codexPathOverride: spec.binPath ?? undefined })
         const threadOptions = {
-          workingDirectory: spec.cwd || undefined,
+          // See `requireWorktree`: inheriting the app's cwd would run this
+          // session against an unrelated repository.
+          workingDirectory: requireWorktree(spec.cwd, `session ${sessionId}`),
           skipGitRepoCheck: true,
           ...(spec.model ? { model: spec.model } : {}),
           ...mapCodexPolicy(spec.mode, spec.readOnly ?? false)

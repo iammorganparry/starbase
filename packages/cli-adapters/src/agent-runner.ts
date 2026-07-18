@@ -16,6 +16,7 @@ import {
   assistantMessage,
   defaultModel,
   findApprovedPlan,
+  isBackgroundTaskEvent,
   isSubagentEvent,
   resumePlanPrompt,
   setQuestionAnswers,
@@ -27,11 +28,12 @@ import type { CommandExecutor } from "@effect/platform"
 import { Cause, Deferred, Effect, Fiber, Mailbox, Ref, Stream } from "effect"
 import { AppPaths } from "./app-paths.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
-import type { PermissionDecision, PermissionRequest, SessionSpec } from "./adapter.js"
+import type { PermissionDecision, PermissionRequest, SessionSpec, StopBackgroundTask } from "./adapter.js"
 import { readDefaultMode } from "./default-mode.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
 import { TranscriptStore } from "./transcripts.js"
+import { BackgroundTaskStore } from "./background-tasks.js"
 import { PlanStore } from "./plan-store.js"
 
 /** Tools that write to disk — a successful one advances the matching plan step. */
@@ -185,6 +187,7 @@ type PromptEnv =
   | CliAdapter
   | SessionStore
   | TranscriptStore
+  | BackgroundTaskStore
   | PlanStore
   | DiscoveryService
   | CommandExecutor.CommandExecutor
@@ -486,10 +489,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           const binPath =
             (yield* DiscoveryService.list().pipe(Effect.orElseSucceed(() => [])))
               .find((c) => c.kind === cli)?.binPath ?? null
-          // The agent always runs in the session's isolated worktree. (Every
-          // session has one; the fallback keeps the type total and, since the
-          // adapter maps "" → the process cwd, an empty value is never silently
-          // "correct" — it would fail loudly on a missing worktree.)
+          // The agent always runs in the session's isolated worktree.
+          //
+          // This comment used to claim an empty value "would fail loudly on a
+          // missing worktree". It did the exact opposite: the adapters mapped
+          // `"" || undefined` to *no* cwd, so the harness inherited the Electron
+          // main process's working directory — in development, whichever worktree
+          // `pnpm dev` was launched from. An agent for repo A would then read and
+          // edit repo B, most likely Starbase's own source. The adapters now call
+          // `requireWorktree`, which throws rather than inheriting.
           const worktreePath = session?.worktreePath ?? ""
           // Saved plans for this worktree, so a "implement/continue the plan" turn
           // can be pointed at the plan file on disk (best-effort — never blocks).
@@ -515,7 +523,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Capture the persistence services so `emit`/`run` handed to the
           // adapter have no residual requirements (R = never).
           const env = yield* Effect.context<
-            TranscriptStore | SessionStore | PlanStore | FileSystem.FileSystem | Path.Path | AppPaths
+            | TranscriptStore
+            | SessionStore
+            | PlanStore
+            | BackgroundTaskStore
+            | FileSystem.FileSystem
+            | Path.Path
+            | AppPaths
           >()
 
           const now = yield* Effect.sync(() => new Date().toISOString())
@@ -634,6 +648,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Runs on the single producer fiber, so transcript order is preserved.
           const emit = (event: StreamEvent): Effect.Effect<void> =>
             Effect.gen(function* () {
+              // Background tasks are SESSION-level: they outlive this turn, so
+              // they fold into the session's task registry (one statechart per
+              // task) rather than into the transcript. Surfaced downstream too so
+              // the dock updates live, but never persisted onto a message —
+              // that would pin a still-running task to a finished turn.
+              if (isBackgroundTaskEvent(event)) {
+                yield* BackgroundTaskStore.ingest(sessionId, event).pipe(Effect.provide(env), Effect.ignore)
+                yield* out.offer(event)
+                return
+              }
               // Sub-agent events drive live-only tabs, not the persisted main turn.
               // Surface them downstream (the renderer keeps per-sub-agent
               // transcripts) but never fold them into the main assistant message —
@@ -752,7 +776,19 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           /** Identifies THIS run, so its cleanup can't evict a successor's fiber. */
           const token: RunToken = {}
 
-          const run = adapter.run(sessionId, spec, { emit, canUseTool, askQuestion, proposePlan }).pipe(
+          // Publish this run's per-task stop handle. Registering also orphans
+          // anything the previous harness process left running — the live set is
+          // per-process, so those ids no longer resolve to anything stoppable.
+          const registerBackgroundStop = (stop: StopBackgroundTask) =>
+            BackgroundTaskStore.registerStop(sessionId, stop).pipe(Effect.provide(env), Effect.ignore)
+
+          const run = adapter.run(sessionId, spec, {
+            emit,
+            canUseTool,
+            askQuestion,
+            proposePlan,
+            registerBackgroundStop
+          }).pipe(
             // An operator stop arrives as an interruption. Record it as the turn's
             // terminal event so the message settles (and the transcript says why)
             // rather than being left mid-stream forever. Finalizers run

@@ -87,6 +87,9 @@ if (!gotPrimaryLock) {
 
   const focusMainWindow = (): void => {
     if (!mainWindow) return
+    // Deep-link handling focuses the window; under headless e2e that would undo
+    // the whole point (the auth specs drive deep links repeatedly).
+    if (process.env.STARBASE_E2E_HEADLESS === "1") return
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
   }
@@ -123,7 +126,19 @@ if (!gotPrimaryLock) {
     })
     mainWindow = window
 
-    window.on("ready-to-show", () => window.show())
+    // Headless e2e: never show the window and never take the dock/focus.
+    //
+    // The Playwright suite launches a real Electron app dozens of times, and each
+    // `show()` steals focus from whatever the developer is doing — which makes
+    // running the suite locally (the ONLY place it runs; it's not in CI)
+    // incompatible with using the machine. The renderer still loads and is fully
+    // drivable while hidden, and `toBeVisible()` asserts DOM visibility, not
+    // window visibility, so specs behave identically.
+    if (process.env.STARBASE_E2E_HEADLESS === "1") {
+      app.dock?.hide()
+    } else {
+      window.on("ready-to-show", () => window.show())
+    }
     window.on("closed", () => {
       if (mainWindow === window) mainWindow = null
     })

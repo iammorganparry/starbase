@@ -356,7 +356,12 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
             ),
           canUseTool: () => Effect.succeed("deny" as const),
           askQuestion: () => Effect.succeed([]),
-          proposePlan: () => Effect.succeed(PlanDecision.Reject())
+          proposePlan: () => Effect.succeed(PlanDecision.Reject()),
+          // Deliberately dropped. The reviewer is a nested, read-only run against
+          // the SAME session id, so registering its stop handle would overwrite
+          // the real agent's — and the dock's Stop button would then be aiming at
+          // the reviewer's harness instead of the one that owns the task.
+          registerBackgroundStop: () => Effect.void
         }
 
         // Clear the previous run's replay buffer. Deliberately here, AFTER the

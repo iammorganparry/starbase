@@ -14,6 +14,7 @@ import type {
   McpServerStatus,
   ModelOption,
   OpencodeProviderInfo,
+  PrState,
   PrSummary,
   ProviderConfig,
   ProvidersConfig,
@@ -66,6 +67,8 @@ export interface StarbaseAppProps {
   ghStatus?: GhStatus
   /** What each session's agent is doing right now ("Running npm test"), keyed by id. */
   liveActivity?: Record<string, SessionActivity>
+  /** Live linked-PR state per session id, badged onto sidebar rows. */
+  prStates?: Record<string, PrState>
   /** Live per-session worktree diff totals, for the Changes tab badge. */
   liveDiff?: Record<string, DiffStat>
   /** Provider usage snapshot for the Usage & limits modal. */
@@ -184,6 +187,7 @@ export function StarbaseApp({
   defaultRepoPath,
   ghStatus,
   liveActivity,
+  prStates,
   liveDiff,
   usage,
   onLoadUsage,
@@ -356,6 +360,7 @@ export function StarbaseApp({
         showEmpty={showEmpty}
         patch={patch}
         liveActivity={liveActivity}
+        prStates={prStates}
         liveDiff={liveDiff}
         onNewSession={onCreateSession ? () => setNewOpen(true) : undefined}
         user={user}

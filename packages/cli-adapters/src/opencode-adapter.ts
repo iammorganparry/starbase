@@ -5,6 +5,7 @@ import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
 import { stopChild, trackChild } from "./child-registry.js"
+import { requireWorktree } from "./cwd.js"
 
 /**
  * Real opencode harness, driven by `@opencode-ai/sdk`'s CLIENT against a server
@@ -614,7 +615,9 @@ const driveOpencode = async (
   // this server, which outlives the app and keeps its port.
   const proc = trackChild(
     spawn(spec.binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
-      cwd: spec.cwd || undefined,
+      // See `requireWorktree`: inheriting the app's cwd would run this session
+      // against an unrelated repository.
+      cwd: requireWorktree(spec.cwd, `session ${sessionId}`),
       env: {
         ...process.env,
         // Layers OVER the user's own opencode config rather than replacing it, so

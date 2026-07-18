@@ -4,6 +4,7 @@ import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKM
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { startTeeStream, type TeeStream } from "./bash-tee.js"
+import { requireWorktree } from "./cwd.js"
 import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
@@ -391,9 +392,46 @@ export interface ToolMemo {
  * `tool_use` with its later `tool_result` so an edit's diff/preview can be
  * attached at completion. Deterministic given (msg, tools) — unit tested.
  */
+/** Task metadata remembered from `task_started`, used if the task is backgrounded. */
+interface TaskMemo {
+  readonly description: string
+  readonly taskType: string
+  readonly subagentType: string | null
+  readonly toolUseId: string | null
+}
+
+/**
+ * Per-run background-task bookkeeping, threaded through `streamEventsFor`.
+ *
+ * `live` mirrors the harness's level signal (the current set). `ever` is every
+ * id we have promoted to the dock, and is what settles are keyed on — an id
+ * leaves `live` the instant it finishes, often before its bookend arrives.
+ * `meta` holds `task_started` details for tasks that may never be backgrounded.
+ *
+ * Per-run and in-memory by design: the harness's live set is per-process, so
+ * carrying it across a restart would strand rows whose ids no longer resolve.
+ */
+export interface BackgroundTaskState {
+  readonly meta: Map<string, TaskMemo>
+  readonly live: Set<string>
+  readonly ever: Set<string>
+}
+
+export const backgroundTaskState = (): BackgroundTaskState => ({
+  meta: new Map(),
+  live: new Set(),
+  ever: new Set()
+})
+
 export const streamEventsFor = (
   msg: SDKMessage,
-  tools: Map<string, ToolMemo>
+  tools: Map<string, ToolMemo>,
+  /**
+   * Omitted by callers that only rebuild transcripts (see the backfill script):
+   * background-task events are session-level and have no place in a message
+   * fold, so without this the mapping stays exactly as it was.
+   */
+  bg?: BackgroundTaskState
 ): ReadonlyArray<StreamEvent> => {
   // The SDK stamps a sub-agent's own messages with the spawning `Task` tool_use
   // id. When set, this message's content belongs to that sub-agent's live tab,
@@ -403,6 +441,70 @@ export const streamEventsFor = (
 
   switch (msg.type) {
     case "system": {
+      // ── Background tasks ────────────────────────────────────────────────
+      // `background_tasks_changed` carries the full live set and is the ONLY
+      // reliable answer to "is this task backgrounded". `task_started` fires for
+      // foreground tasks too — every synchronous sub-agent — so emitting a
+      // background event off it would fill the dock with ordinary delegated work
+      // that is not backgrounded at all. The level therefore GATES the edges: we
+      // remember every task's metadata, but only promote a task to the dock once
+      // the harness lists it as live in the background.
+      if (msg.subtype === "background_tasks_changed" && bg) {
+        const tasks = Array.isArray(msg.tasks) ? msg.tasks : []
+        const ids = tasks.map((t) => String(t.task_id))
+        const out: StreamEvent[] = []
+        for (const task of tasks) {
+          const id = String(task.task_id)
+          if (bg.ever.has(id)) continue
+          bg.ever.add(id)
+          // Prefer the metadata `task_started` gave us; the level's own fields
+          // are the fallback when we never saw (or already discarded) that edge.
+          const meta = bg.meta.get(id)
+          out.push({
+            _tag: "BackgroundTaskStarted",
+            id,
+            description: meta?.description ?? String(task.description ?? "Background task"),
+            taskType: meta?.taskType ?? String(task.task_type ?? "unknown"),
+            subagentType: meta?.subagentType ?? null,
+            toolUseId: meta?.toolUseId ?? null
+          })
+        }
+        bg.live.clear()
+        for (const id of ids) bg.live.add(id)
+        out.push({ _tag: "BackgroundTasksChanged", ids })
+        return out
+      }
+
+      // Metadata only. A task that is never backgrounded never reaches the dock;
+      // one that IS gets promoted above with the details remembered here.
+      if (msg.subtype === "task_started" && bg) {
+        const id = strOf(msg.task_id)
+        if (!id) return []
+        bg.meta.set(id, {
+          description: strOf(msg.description) ?? "Background task",
+          taskType: strOf(msg.task_type) ?? (strOf(msg.subagent_type) ? "subagent" : "unknown"),
+          subagentType: strOf(msg.subagent_type),
+          toolUseId: strOf(msg.tool_use_id)
+        })
+        return []
+      }
+
+      if (msg.subtype === "task_progress" && bg) {
+        const id = strOf(msg.task_id)
+        if (!id || !bg.live.has(id)) return []
+        return [
+          {
+            _tag: "BackgroundTaskProgress",
+            id,
+            description: strOf(msg.description) ?? "Background task",
+            tokens: numOf(msg.usage?.total_tokens),
+            toolUses: numOf(msg.usage?.tool_uses),
+            durationMs: numOf(msg.usage?.duration_ms),
+            lastTool: strOf(msg.last_tool_name)
+          }
+        ]
+      }
+
       // A task's terminal bookend, and the AUTHORITATIVE completion for a
       // sub-agent. It is the only correct signal for a BACKGROUNDED Task, whose
       // `tool_result` arrives ~150ms after the spawn carrying just an "Async
@@ -410,10 +512,29 @@ export const streamEventsFor = (
       // It fires for SYNCHRONOUS Tasks too (just before their tool_result), so
       // settling here — rather than on the tool_result — is right either way.
       if (msg.subtype === "task_notification") {
+        const out: StreamEvent[] = []
+        const taskId = strOf(msg.task_id)
+        // Settle the dock row for a task we ever promoted. Keyed on `ever`, not
+        // `live`: the id leaves the live set the moment it finishes, and the
+        // level may well arrive before this bookend.
+        if (taskId && bg?.ever.has(taskId)) {
+          bg.live.delete(taskId)
+          out.push({
+            _tag: "BackgroundTaskSettled",
+            id: taskId,
+            // `stopped` is the operator's own kill — not a failure to report.
+            status:
+              msg.status === "completed" ? "completed" : msg.status === "stopped" ? "stopped" : "failed",
+            summary: strOf(msg.summary),
+            outputFile: strOf(msg.output_file)
+          })
+        }
         // Ambient/workflow tasks carry no tool_use_id: no tab to settle.
         const id = strOf(msg.tool_use_id)
-        if (!id) return []
-        return [{ _tag: "SubagentEnded", id, status: msg.status === "completed" ? "done" : "error" }]
+        if (id) {
+          out.push({ _tag: "SubagentEnded", id, status: msg.status === "completed" ? "done" : "error" })
+        }
+        return out
       }
       if (msg.subtype !== "init") return []
       const model = strOf(msg.model)
@@ -546,6 +667,7 @@ export const runClaude = (
       try: async () => {
         const { query } = await import("@anthropic-ai/claude-agent-sdk")
         const tools = new Map<string, ToolMemo>()
+        const bgState = backgroundTaskState()
 
         // ── Live bash output via tee (see bash-tee.ts) ──────────────────────
         // claude has no partial-output event, so an allowed Bash command is
@@ -664,7 +786,10 @@ export const runClaude = (
         const iterator = query({
           prompt: buildPromptInput(spec, resumeId),
           options: {
-            cwd: spec.cwd || undefined,
+            // Never `|| undefined`: an empty cwd makes the SDK inherit the app's
+            // working directory, pointing the agent at whatever repo Starbase itself
+            // was launched from instead of the session's worktree.
+            cwd: requireWorktree(spec.cwd, `session ${sessionId}`),
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
@@ -686,7 +811,7 @@ export const runClaude = (
             if (!spec.fresh && typeof sid === "string" && sid.length > 0) {
               resume.set(sessionId, sid)
             }
-            for (const event of streamEventsFor(msg, tools)) {
+            for (const event of streamEventsFor(msg, tools, bgState)) {
               // A command has finished: its ToolEnd carries the authoritative
               // output, so stop tailing and drop the temp file BEFORE emitting —
               // otherwise a late poll could re-open the settled card. A no-op for

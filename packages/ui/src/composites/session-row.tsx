@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import type { Session, SessionActivity } from "@starbase/core"
+import type { PrState, Session, SessionActivity } from "@starbase/core"
 import { activityLabel, displayStatusOf } from "@starbase/core"
 import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -16,6 +16,7 @@ import { displayStatusLabel, displayStatusTone, statusTextClass } from "../token
 export function SessionRow({
   session,
   activity,
+  prState,
   active = false,
   onSelect,
   onRename,
@@ -30,6 +31,13 @@ export function SessionRow({
    * falls back to the persisted `session.status`.
    */
   activity?: SessionActivity
+  /**
+   * Live state of the session's linked PR. A merged/closed PR badges the row
+   * rather than retiring the session: one session can outlive several PRs (open
+   * one, merge it, open the next off the same worktree), so merging PR #204 says
+   * nothing about whether the WORK is done. Archiving is the operator's call.
+   */
+  prState?: PrState
   active?: boolean
   onSelect?: (id: string) => void
   /** Manual rename (double-click the title) — pins the auto-generated name. */
@@ -236,8 +244,12 @@ export function SessionRow({
             </Badge>
           )}
           {session.prNumber !== null && (
-            <Badge tone="neutral" size="sm">
+            <Badge
+              tone={prState === "merged" ? "purple" : prState === "closed" ? "red" : "neutral"}
+              size="sm"
+            >
               ⑂ #{session.prNumber}
+              {prState === "merged" ? " Merged" : prState === "closed" ? " Closed" : ""}
             </Badge>
           )}
           <DiffStat added={session.diff.added} removed={session.diff.removed} />

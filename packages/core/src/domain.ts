@@ -23,6 +23,18 @@ export const CliInfo = Schema.Struct({
   version: Schema.NullOr(Schema.String),
   available: Schema.Boolean,
   /**
+   * Whether this harness exposes BACKGROUND TASKS the operator can see and stop
+   * individually. Only Claude does today: it reports a live task set plus
+   * per-task start/progress/settle signals and accepts a per-task stop. Codex and
+   * OpenCode can only abort a whole turn, so the dock stays hidden for them
+   * rather than offering a Stop button that cannot target anything.
+   *
+   * OPTIONAL for the same reason `ToolCall.output` is: this decodes persisted and
+   * in-flight payloads written before the field existed, and a required field
+   * would reject them.
+   */
+  backgroundTasks: Schema.optional(Schema.Boolean),
+  /**
    * Why an *installed* CLI is nonetheless unavailable — e.g. "opencode 1.0.220
    * found; Starbase needs ≥1.18". Absent when the CLI is usable, or simply not
    * installed (nothing to explain). Without this a too-old binary is

@@ -19,7 +19,8 @@
     "@opencode-ai/sdk": "1.18.3",
     "@starbase/core": "workspace:*",
     "effect": "^3.21.4",
-    "smol-toml": "^1.7.0"
+    "smol-toml": "^1.7.0",
+    "xstate": "^5.32.4"
   },
   "devDependencies": {
     "@effect/platform-node": "^0.107.0",

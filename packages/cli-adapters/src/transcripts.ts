@@ -57,9 +57,21 @@ export class TranscriptStore extends Effect.Service<TranscriptStore>()(
           const encoded = yield* Schema.encode(MessageArray)(messages).pipe(
             Effect.orElseSucceed(() => messages)
           )
+          // Write-then-rename, NOT a direct overwrite. `writeFileString` truncates
+          // the target before writing, so killing the main process mid-write (an
+          // electron-vite dev restart does exactly this, and we rewrite the whole
+          // file on nearly every stream event) leaves a 0-byte transcript and the
+          // session's entire history is gone. `rename` is atomic within a
+          // filesystem: readers see either the old file or the new one, never a
+          // half-written one.
+          const tmp = `${file}.tmp`
           yield* fs
-            .writeFileString(file, JSON.stringify(encoded, null, 2))
-            .pipe(Effect.ignore)
+            .writeFileString(tmp, JSON.stringify(encoded, null, 2))
+            .pipe(
+              Effect.andThen(fs.rename(tmp, file)),
+              Effect.tapError(() => fs.remove(tmp).pipe(Effect.ignore)),
+              Effect.ignore
+            )
         })
 
       const list = (sessionId: string) => readAll(sessionId)

@@ -32,6 +32,7 @@ import {
   setOpencodeAuth,
   SkillsService,
   TerminalService,
+  BackgroundTaskStore,
   TranscriptStore,
   UsageService,
   WorkspaceService
@@ -52,6 +53,7 @@ import type {
   SettledSessionStatus
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
+import { FileSystem } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -376,6 +378,24 @@ export const githubPrState = (sessionId: string) =>
     const session = yield* resolveSession(sessionId)
     if (!session?.worktreePath || session.prNumber === null) return null
     return yield* GhService.prState(session.worktreePath, session.prNumber)
+  })
+
+/**
+ * `BackgroundTasks.output` handler — a settled task's transcript.
+ *
+ * Best-effort by design, matching every other read path in the app: a task whose
+ * `output_file` is missing, unreadable, or not yet reported yields "" rather than
+ * an error. The file is written by the harness and can be cleaned up underneath
+ * us, and a failed read must not take down the dock the operator is using to
+ * stop something.
+ */
+export const backgroundTaskOutput = (sessionId: string, taskId: string) =>
+  Effect.gen(function* () {
+    const tasks = yield* BackgroundTaskStore.list(sessionId)
+    const file = tasks.find((t) => t.id === taskId)?.outputFile
+    if (!file) return ""
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))
   })
 
 /** `Sessions.archive` handler — archive a session and return the updated record. */
@@ -859,6 +879,11 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(TerminalService, (t) => t.kill(terminalId)),
   "Terminal.list": ({ sessionId }) =>
     Effect.flatMap(TerminalService, (t) => t.list(sessionId)),
+
+  // Background tasks — harness work that outlives the turn that started it.
+  "BackgroundTasks.list": ({ sessionId }) => BackgroundTaskStore.list(sessionId),
+  "BackgroundTasks.stop": ({ sessionId, taskId }) => BackgroundTaskStore.stop(sessionId, taskId),
+  "BackgroundTasks.output": ({ sessionId, taskId }) => backgroundTaskOutput(sessionId, taskId),
 
   // Browser preview — a native WebContentsView over a localhost dev server,
   // driven from the renderer's preview pane (bounds streamed to stay aligned).

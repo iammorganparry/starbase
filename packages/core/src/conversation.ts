@@ -401,6 +401,80 @@ export const Subagent = Schema.Struct({
 })
 export type Subagent = Schema.Schema.Type<typeof Subagent>
 
+// ── Background tasks (work that outlives the turn that started it) ───────────
+
+/**
+ * Lifecycle of a background task — the states of `backgroundTaskMachine`, which
+ * is the single source of truth for legal transitions between them.
+ *
+ * `stopped` is distinct from `failed`: it means the OPERATOR killed it, which is
+ * not an error to report. `stopping` is the interval between asking the harness
+ * to stop a task and it confirming — without it the Stop button reads as broken,
+ * because stopping is never instant.
+ */
+export const BackgroundTaskStatus = Schema.Literal(
+  "running",
+  "stopping",
+  "completed",
+  "failed",
+  "stopped"
+)
+export type BackgroundTaskStatus = Schema.Schema.Type<typeof BackgroundTaskStatus>
+
+/**
+ * A unit of work the harness is running in the background — a backgrounded shell
+ * command or a backgrounded sub-agent.
+ *
+ * Distinct from `Subagent`, and deliberately NOT folded into it. A `Subagent` is
+ * a live watch-only tab scoped to ONE run: the list resets when the next run
+ * starts, which is right for a tab showing that turn's delegated work. A
+ * background task's defining property is that it OUTLIVES its turn — it keeps
+ * running after the turn ends, and the operator needs to see and stop it while
+ * later turns come and go. So these live in a session-scoped registry in the
+ * main process, not in the renderer's per-run conversation state.
+ *
+ * Provider support is uneven and this model is the common denominator: only
+ * Claude exposes real background tasks (start/progress/settle events, a live
+ * set, and per-task stop). Codex and OpenCode can cancel a whole turn but have
+ * no per-task handle, so they report the capability as unsupported and no dock
+ * is shown. `CliInfo.backgroundTasks` carries that flag.
+ */
+export const BackgroundTask = Schema.Struct({
+  /** The harness's task id — the handle `stop` needs. */
+  id: Schema.String,
+  /** The session this task belongs to. */
+  sessionId: Schema.String,
+  /** One-line description of what the task is doing. */
+  description: Schema.String,
+  /** Harness-reported kind, e.g. "bash" / "subagent" / "local_workflow". */
+  taskType: Schema.String,
+  /** For sub-agent tasks, the agent type (e.g. "Explore"); null otherwise. */
+  subagentType: Schema.NullOr(Schema.String),
+  status: BackgroundTaskStatus,
+  /** The tool_use block that spawned it, when the harness reports one. */
+  toolUseId: Schema.NullOr(Schema.String),
+  /** Context tokens consumed so far (0 until the first progress report). */
+  tokens: Schema.Number,
+  /** How many tools it has run so far. */
+  toolUses: Schema.Number,
+  /** Wall-clock duration in ms, as last reported. */
+  durationMs: Schema.Number,
+  /** The tool it most recently started, for a live "what is it doing" line. */
+  lastTool: Schema.NullOr(Schema.String),
+  /** The harness's own summary — only set once the task settles. */
+  summary: Schema.NullOr(Schema.String),
+  /**
+   * Path to the task's full transcript on disk, reported when it settles. This
+   * is what "View" opens for a finished task; while running there is no output
+   * stream, only the progress fields above.
+   */
+  outputFile: Schema.NullOr(Schema.String),
+  startedAt: Schema.String,
+  /** When it settled, or null while running. */
+  endedAt: Schema.NullOr(Schema.String)
+})
+export type BackgroundTask = Schema.Schema.Type<typeof BackgroundTask>
+
 // ── Normalized stream events (the harness-agnostic seam) ──────────────────────
 
 /**
@@ -477,6 +551,43 @@ export const StreamEvent = Schema.Union(
   }),
   /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
   Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
+  /** A background task started — it will keep running after this turn ends. */
+  Schema.TaggedStruct("BackgroundTaskStarted", {
+    id: Schema.String,
+    description: Schema.String,
+    taskType: Schema.String,
+    subagentType: Schema.NullOr(Schema.String),
+    toolUseId: Schema.NullOr(Schema.String)
+  }),
+  /** A running background task reported progress (tokens/tools/duration). */
+  Schema.TaggedStruct("BackgroundTaskProgress", {
+    id: Schema.String,
+    description: Schema.String,
+    tokens: Schema.Number,
+    toolUses: Schema.Number,
+    durationMs: Schema.Number,
+    lastTool: Schema.NullOr(Schema.String)
+  }),
+  /** A background task finished, was killed, or failed. */
+  Schema.TaggedStruct("BackgroundTaskSettled", {
+    id: Schema.String,
+    status: BackgroundTaskStatus,
+    summary: Schema.NullOr(Schema.String),
+    /** The task's transcript on disk — what "View" opens once it settles. */
+    outputFile: Schema.NullOr(Schema.String)
+  }),
+  /**
+   * The FULL set of live background task ids, emitted whenever membership
+   * changes. A level signal, not an edge: consumers replace their set wholesale.
+   *
+   * This is what keeps the dock honest. Pairing start/settle edges means one
+   * dropped event wedges a task as permanently "running" — and the harness
+   * explicitly does not guarantee ordering between the level and the edges. So
+   * the level is authoritative for MEMBERSHIP; the edges only enrich detail.
+   */
+  Schema.TaggedStruct("BackgroundTasksChanged", {
+    ids: Schema.Array(Schema.String)
+  }),
   /** The latest main-agent context-window size reported by the harness. */
   Schema.TaggedStruct("Usage", { tokens: Schema.Number }),
   /** Terminal context size, or 0 when the harness cannot report it. */
@@ -734,6 +845,16 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
     Match.tag("SubagentStarted", () => msg),
     Match.tag("SubagentEnded", () => msg),
 
+    // Background tasks are SESSION-level, not turn-level — that's the whole
+    // point of them (they outlive the turn that spawned them). They fold into
+    // the session's task registry, which drives one `backgroundTaskMachine` per
+    // task; putting them in a message would tie a task to a turn that has
+    // already ended.
+    Match.tag("BackgroundTaskStarted", () => msg),
+    Match.tag("BackgroundTaskProgress", () => msg),
+    Match.tag("BackgroundTaskSettled", () => msg),
+    Match.tag("BackgroundTasksChanged", () => msg),
+
     // Live usage is run-level analytics (tracked in the machine/session), not part
     // of the transcript — no-op in the per-message fold.
     Match.tag("Usage", () => msg),
@@ -752,6 +873,20 @@ export const isSubagentEvent = (event: StreamEvent): boolean =>
   event._tag === "SubagentStarted" ||
   event._tag === "SubagentEnded" ||
   ("agentId" in event && event.agentId != null)
+
+/**
+ * Whether this event belongs to the session's background-task registry rather
+ * than to any single turn. Checked BEFORE `isSubagentEvent` in the runner: a
+ * backgrounded sub-agent is both, and routing it to the per-run tab list alone
+ * would lose the row as soon as the next turn cleared that list.
+ */
+export const isBackgroundTaskEvent = (
+  event: StreamEvent
+): event is Extract<StreamEvent, { _tag: `BackgroundTask${string}` }> =>
+  event._tag === "BackgroundTaskStarted" ||
+  event._tag === "BackgroundTaskProgress" ||
+  event._tag === "BackgroundTaskSettled" ||
+  event._tag === "BackgroundTasksChanged"
 
 /**
  * The direct children of `parentId` (null = the sub-agents the MAIN agent
@@ -880,6 +1015,7 @@ export const applySubagentEvent = (
   }
   return subagents
 }
+
 
 /**
  * The reserved tab id for the adversarial reviewer. It is not a harness sub-agent
