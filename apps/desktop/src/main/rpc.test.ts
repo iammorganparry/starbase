@@ -27,6 +27,7 @@ import {
   configGet,
   createTerminal,
   githubDetectPr,
+  githubSubmitReview,
   githubPr,
   modelsCatalog,
   modelsList,
@@ -272,6 +273,94 @@ describe("RPC handlers", () => {
       expect(pr).toBeNull()
       const detected = await Effect.runPromise(githubDetectPr("nope").pipe(Effect.provide(gh)))
       expect(detected).toBeNull()
+    })
+  })
+
+  describe("Github.submitReview", () => {
+    // Unlike the reads above, submitting is a user-initiated write: silently
+    // succeeding on a session with no PR would swallow the reviewer's drafts
+    // with no sign they went nowhere.
+    it("fails rather than silently dropping drafts when no PR is linked", async () => {
+      const gh = Layer.mergeAll(base, SessionStore.Default, GhService.Default)
+      const exit = await Effect.runPromiseExit(
+        githubSubmitReview({
+          sessionId: "nope",
+          comments: [{ path: "a.ts", line: 2, startLine: null, body: "c" }]
+        }).pipe(Effect.provide(gh))
+      )
+      expect(exit._tag).toBe("Failure")
+    })
+
+    /**
+     * The whole point of the handler: a draft written on a line becomes an
+     * INLINE comment on that line, anchored to the PR's current head. Asserting
+     * the JSON that actually reaches `gh` is the only way to know that — every
+     * layer above it can look correct while posting a flattened blob.
+     */
+    it("posts anchorable drafts inline and folds the rest into the body", async () => {
+      mkdirSync(root, { recursive: true })
+      writeFileSync(
+        join(root, "sessions.json"),
+        JSON.stringify([
+          {
+            id: "s1",
+            repo: "widget",
+            branch: "feature",
+            title: "Feature",
+            status: "idle",
+            cli: "claude",
+            diff: { added: 0, removed: 0 },
+            prNumber: 42,
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: "2026-07-16T10:00:00.000Z",
+            worktreePath: join(root, "worktrees", "s1"),
+            baseBranch: "main"
+          }
+        ])
+      )
+
+      let posted: { commit_id: string; body: string; comments: ReadonlyArray<Record<string, unknown>> } | null = null
+      const gh = Layer.mergeAll(
+        base,
+        SessionStore.Default,
+        GhService.Default,
+        fakeCommandExecutor((cmd, args, stdin) => {
+          if (cmd !== "gh") return { stdout: "" }
+          if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: "headsha" }) }
+          // a.ts gains new-side lines 1-2; nothing else is in the diff.
+          if (args[1] === "diff") {
+            return {
+              stdout: ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -1,1 +1,2 @@", " const x = 1", "+const y = 2"].join("\n")
+            }
+          }
+          if (args[0] === "api") {
+            posted = JSON.parse(stdin)
+            return { exitCode: 0, stdout: "{}" }
+          }
+          return { stdout: "" }
+        })
+      )
+
+      const unanchored = await Effect.runPromise(
+        githubSubmitReview({
+          sessionId: "s1",
+          comments: [
+            { path: "a.ts", line: 2, startLine: null, body: "on the diff" },
+            { path: "a.ts", line: 99, startLine: null, body: "moved off the diff" }
+          ]
+        }).pipe(Effect.provide(gh))
+      )
+
+      expect(unanchored).toBe(1)
+      expect(posted).not.toBeNull()
+      expect(posted!.commit_id).toBe("headsha")
+      expect(posted!.comments).toStrictEqual([
+        { path: "a.ts", line: 2, side: "RIGHT", body: "on the diff" }
+      ])
+      // The stale one keeps its words instead of 422-ing the whole review.
+      expect(posted!.body).toContain("moved off the diff")
+      expect(posted!.body).toContain("a.ts:99")
     })
   })
 

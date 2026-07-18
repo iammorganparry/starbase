@@ -643,12 +643,24 @@ export const Issue = Schema.Struct({
 })
 export type Issue = Schema.Schema.Type<typeof Issue>
 
-/** A pending inline review comment anchored to a file + line. */
+/**
+ * A pending inline review comment anchored to a file + line — the payload the
+ * renderer sends when it submits its review drafts to the PR.
+ *
+ * `line` is the END of the range and `startLine` the beginning, matching how
+ * GitHub anchors a multi-line comment (and the inverse of how `ReviewFinding`
+ * names them). Null `startLine` means a single-line comment.
+ *
+ * There is no `side`: everything Starbase posts is a comment on the NEW side of
+ * the diff, and `prReviewComments` hardcodes `RIGHT` accordingly. A LEFT-side
+ * anchor would need `postableLines` to track old-side lines too, which it
+ * deliberately does not.
+ */
 export const ReviewComment = Schema.Struct({
   path: Schema.String,
   line: Schema.Number,
-  body: Schema.String,
-  side: Schema.optional(Schema.Literal("LEFT", "RIGHT"))
+  startLine: Schema.NullOr(Schema.Number),
+  body: Schema.String
 })
 export type ReviewComment = Schema.Schema.Type<typeof ReviewComment>
 

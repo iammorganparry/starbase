@@ -169,10 +169,16 @@ export interface FakeCommandResult {
  * Returning `undefined` means "not matched" → falls through to a default of
  * `{ exitCode: 0, stdout: "" }`, which mimics a command that ran but printed
  * nothing (e.g. `which` for an absent binary is handled by matching, not here).
+ *
+ * `stdin` carries anything the command was `Command.feed`-ed, decoded to a
+ * string ("" when nothing was). This is the only way to observe a `gh api
+ * --input -` payload: the body is deliberately kept out of argv (see
+ * `runGhInput`), so an argv-only handler sees a POST with no content.
  */
 export type FakeCommandHandler = (
   command: string,
-  args: ReadonlyArray<string>
+  args: ReadonlyArray<string>,
+  stdin: string
 ) => FakeCommandResult | undefined
 
 const encoder = new TextEncoder()
@@ -195,6 +201,22 @@ const makeProcess = (result: FakeCommandResult): CommandExecutor.Process => {
   return proc as unknown as CommandExecutor.Process
 }
 
+const decoder = new TextDecoder()
+
+/**
+ * Decode a command's fed stdin to a string.
+ *
+ * `Command.feed` stores the body as a `Stream` on the Command itself, so it is
+ * readable here — unlike the process's `stdin` sink, which this fake drains.
+ * "pipe"/"inherit" (the un-fed cases) carry no body and decode to "".
+ */
+const stdinOf = (stdin: unknown): Effect.Effect<string> =>
+  typeof stdin !== "object" || stdin === null
+    ? Effect.succeed("")
+    : Stream.runFold(stdin as Stream.Stream<Uint8Array, never>, "", (acc, chunk) => acc + decoder.decode(chunk)).pipe(
+        Effect.orElseSucceed(() => "")
+      )
+
 /**
  * A `CommandExecutor` layer that never spawns real processes — every command is
  * resolved through `handler`. Only `start` is implemented; `makeExecutor`
@@ -203,13 +225,13 @@ const makeProcess = (result: FakeCommandResult): CommandExecutor.Process => {
 export const fakeCommandExecutor = (
   handler: FakeCommandHandler
 ): Layer.Layer<CommandExecutor.CommandExecutor> => {
-  const executor = CommandExecutor.makeExecutor((command: Command.Command) => {
-    if (command._tag !== "StandardCommand") {
-      return Effect.succeed(makeProcess({ exitCode: 0 }))
-    }
-    const result = handler(command.command, command.args) ?? { exitCode: 0, stdout: "" }
-    return Effect.succeed(makeProcess(result))
-  })
+  const executor = CommandExecutor.makeExecutor((command: Command.Command) =>
+    Effect.gen(function* () {
+      if (command._tag !== "StandardCommand") return makeProcess({ exitCode: 0 })
+      const stdin = yield* stdinOf(command.stdin)
+      return makeProcess(handler(command.command, command.args, stdin) ?? { exitCode: 0, stdout: "" })
+    })
+  )
   return Layer.succeed(CommandExecutor.CommandExecutor, executor)
 }
 
