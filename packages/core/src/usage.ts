@@ -2,10 +2,9 @@ import { Schema } from "effect"
 import { CliKind } from "./domain.js"
 
 /**
- * Provider usage / rate-limit model for the "Usage & limits" widget. Providers
- * expose limited data today — Claude reports each window's reset time + a status
- * (and a utilization % when available) via `rate_limit_event`s captured during
- * runs; other harnesses report nothing yet (`available: false`).
+ * Provider usage / rate-limit model for the "Usage & limits" widget. Claude and
+ * Codex report utilization and reset times through their local harness APIs;
+ * unsupported providers use `available: false`.
  */
 
 /** How close a window is to its limit. */

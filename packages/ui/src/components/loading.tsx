@@ -1,30 +1,11 @@
 import { cn } from "../lib/cn.js"
 
-/**
- * A small One Dark spinner.
- *
- * `tone="working"` is the command-widget variant — a yellow arc on the card's
- * line colour, marking the one row of a list that is mid-run. It reads as
- * activity against a dark card, where the default's transparent gap reads as a
- * gap. Distinct from `StatusDot pulse`, which says "this whole card is live":
- * a test-suite card uses both at once.
- */
-export function Spinner({
-  size = 14,
-  tone = "loading",
-  className
-}: {
-  size?: number
-  tone?: "loading" | "working"
-  className?: string
-}) {
+/** A small One Dark spinner. */
+export function Spinner({ size = 14, className }: { size?: number; className?: string }) {
   return (
     <span
       className={cn(
-        // flex-none: it has an explicit size, so it must never be the thing a
-        // flex row shrinks.
-        "inline-block flex-none rounded-full border-2 [animation:var(--animate-spin-fast)]",
-        tone === "working" ? "border-line border-t-yellow" : "border-dim border-t-transparent",
+        "inline-block rounded-full border-2 border-dim border-t-transparent [animation:var(--animate-spin-fast)]",
         className
       )}
       style={{ width: size, height: size }}

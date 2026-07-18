@@ -477,12 +477,9 @@ export const StreamEvent = Schema.Union(
   }),
   /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
   Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
-  /**
-   * A LIVE cumulative token count for the running turn (harness-agnostic), so the
-   * UI can show consumption as it grows — not just the final `Done` total. Emitted
-   * as the harness reports usage mid-run.
-   */
+  /** The latest main-agent context-window size reported by the harness. */
   Schema.TaggedStruct("Usage", { tokens: Schema.Number }),
+  /** Terminal context size, or 0 when the harness cannot report it. */
   Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )

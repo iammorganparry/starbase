@@ -356,9 +356,28 @@ const toolResultOutput = (name: string | undefined, content: unknown): string | 
   return text ? capOutput(text) : undefined
 }
 
-const totalTokens = (usage: unknown): number => {
-  const u = (usage ?? {}) as Record<string, unknown>
-  return numOf(u.input_tokens) + numOf(u.output_tokens)
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+/**
+ * Tokens occupying Claude's context window after the latest sampling iteration.
+ *
+ * Cached input still occupies context even though it is billed differently. A
+ * response can also contain several server-side iterations; their top-level
+ * usage is cumulative consumption, while the SDK explicitly defines the final
+ * iteration as the source of truth for current context size.
+ */
+const contextTokens = (usage: unknown): number => {
+  const aggregate = isRecord(usage) ? usage : {}
+  const iterations = Array.isArray(aggregate.iterations) ? aggregate.iterations : []
+  const last = iterations.at(-1)
+  const current = isRecord(last) ? last : aggregate
+  return (
+    numOf(current.input_tokens) +
+    numOf(current.cache_creation_input_tokens) +
+    numOf(current.cache_read_input_tokens) +
+    numOf(current.output_tokens)
+  )
 }
 
 /** Remembers a tool call's name/input between its `tool_use` and `tool_result`. */
@@ -450,11 +469,10 @@ export const streamEventsFor = (
           out.push({ _tag: "ToolStart", id, name, target: toolTarget(name, input), ...forAgent })
         }
       }
-      // Live token count: the SDK stamps cumulative turn usage on each assistant
-      // message, so surface it as it grows (the final `Done` still carries the
-      // authoritative total). Only the main agent's usage drives the readout.
+      // Each assistant message exposes the latest context window. Only the main
+      // agent's context drives the readout; sub-agents have independent windows.
       if (agentId === undefined) {
-        const tokens = totalTokens((msg.message as { usage?: unknown }).usage)
+        const tokens = contextTokens(msg.message.usage)
         if (tokens > 0) out.push({ _tag: "Usage", tokens })
       }
       return out
@@ -494,7 +512,9 @@ export const streamEventsFor = (
         {
           _tag: "Done",
           costUsd: numOf((msg as { total_cost_usd?: unknown }).total_cost_usd),
-          tokens: totalTokens((msg as { usage?: unknown }).usage)
+          // Fallback for harnesses/runs where no live Usage event arrived. The
+          // renderer keeps a live context reading in preference to this result.
+          tokens: contextTokens(msg.usage)
         }
       ]
 

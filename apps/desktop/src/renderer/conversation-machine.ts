@@ -83,7 +83,7 @@ export interface ConversationContext {
    * turn starts.
    */
   readonly resumePlanId: string | null
-  /** Cumulative tokens for the current turn (live analytics), 0 between turns. */
+  /** Tokens currently occupying the main agent's context window. */
   readonly tokens: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   readonly runStartedAt: number | null
@@ -340,9 +340,10 @@ export const conversationMachine = setup({
       if (isSubagentEvent(e)) {
         return { subagents: applySubagentEvent(context.subagents, e) }
       }
-      // Live analytics: token count grows monotonically as usage arrives.
+      // This is the latest context size, not a high-water mark. Compaction can
+      // legitimately make it smaller during a run.
       if (e._tag === "Usage") {
-        return { tokens: Math.max(context.tokens, e.tokens) }
+        return { tokens: e.tokens }
       }
       // A `PlanUpdated` addresses a plan by id, and that plan part lives in the
       // message of the turn it was PROPOSED in — which, once execution runs on
@@ -365,7 +366,8 @@ export const conversationMachine = setup({
       // spinner. The spinner is driven by the message's `streaming` flag, NOT by
       // `status`, so the rolling message has to settle too — flipping the status
       // alone left the dots pulsing forever. The list resets when the next run
-      // starts (`clearSubagents`). Stamp the final token count and stop the timer.
+      // starts (`clearSubagents`). Keep a live context reading when one arrived;
+      // Done's tokens are only a fallback for harnesses that report at turn end.
       const settled = context.subagents.map((s) =>
         s.status === "working"
           ? { ...s, status: "done" as const, message: settleStreaming(s.message) }
@@ -375,7 +377,7 @@ export const conversationMachine = setup({
         return {
           messages,
           subagents: settled,
-          tokens: Math.max(context.tokens, e.tokens),
+          tokens: context.tokens > 0 ? context.tokens : e.tokens,
           runStartedAt: null
         }
       }

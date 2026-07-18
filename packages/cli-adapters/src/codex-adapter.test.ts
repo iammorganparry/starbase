@@ -116,13 +116,13 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([{ _tag: "Thinking", text: "planning", seconds: null, done: true }])
   })
 
-  it("maps turn.completed to Done with summed tokens and turn.failed to Failed", () => {
+  it("does not present aggregate turn usage as current context size", () => {
     expect(
       codexEventToStreamEvents(
         ev({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 10 } }),
         "s1"
       )
-    ).toStrictEqual([{ _tag: "Done", costUsd: 0, tokens: 140 }])
+    ).toStrictEqual([{ _tag: "Done", costUsd: 0, tokens: 0 }])
     expect(
       codexEventToStreamEvents(ev({ type: "turn.failed", error: { message: "boom" } }), "s1")
     ).toStrictEqual([{ _tag: "Failed", message: "boom" }])

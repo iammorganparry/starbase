@@ -63,7 +63,7 @@ export interface ConversationViewProps {
   onStop?: () => void
   /** The agent is producing a turn — the composer queues messages instead of blocking. */
   busy?: boolean
-  /** Cumulative tokens for the current/last run (live analytics readout). */
+  /** Tokens currently occupying the main agent's context window. */
   tokens?: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   runStartedAt?: number | null
@@ -280,8 +280,8 @@ export function ConversationView({
         {/* Same gutter + centered max-width as the transcript column above. */}
         <div className="flex-none px-[30px] pb-[18px] pt-[11px]">
           <div className="mx-auto w-full max-w-[760px]">
-          {/* Live session analytics — elapsed + token consumption, right above the
-              composer so the session's cost/time sits with where you type. */}
+          {/* Live session analytics — elapsed time + current context size, right
+              above the composer so it stays visible while the user works. */}
           {!archived && (busy || runStartedAt !== null || tokens > 0) && (
             <div className="mb-1.5 flex items-center justify-end">
               <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />

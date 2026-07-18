@@ -1,6 +1,7 @@
 import type { CliInfo, CliKind, ProviderUsage, Usage } from "@starbase/core"
 import { Effect } from "effect"
 import { fetchClaudeUsage, toClaudeProviderUsage } from "./claude-usage.js"
+import { fetchCodexUsage, toCodexProviderUsage } from "./codex-usage.js"
 import { isScriptedEnv } from "./scripted.js"
 
 /** Short provider names for the usage modal. */
@@ -12,7 +13,6 @@ const NAME: Record<CliKind, string> = {
   opencode: "opencode"
 }
 
-
 const unavailable = (cli: CliKind, name?: string): ProviderUsage => ({
   cli,
   name: name ?? NAME[cli] ?? cli,
@@ -22,11 +22,10 @@ const unavailable = (cli: CliKind, name?: string): ProviderUsage => ({
 })
 
 /**
- * Assembles the Usage snapshot for the modal. Claude's windows are read live
- * from the SDK's structured `/usage` control request each time (real utilization
- * + reset + subscription); a failed read (not logged in, API-key session, or
- * scripted mode) degrades to "not available". Other harnesses expose no usage
- * data yet.
+ * Assembles the Usage snapshot for the modal. Claude reads its SDK `/usage`
+ * control request; Codex reads `account/rateLimits/read` from its app server.
+ * Failed reads and scripted mode degrade to "not available" without making the
+ * modal itself fail.
  */
 export class UsageService extends Effect.Service<UsageService>()("@starbase/UsageService", {
   accessors: true,
@@ -41,6 +40,13 @@ export class UsageService extends Effect.Service<UsageService>()("@starbase/Usag
               return Effect.tryPromise(() => fetchClaudeUsage(c.binPath)).pipe(
                 Effect.map(toClaudeProviderUsage),
                 Effect.catchAll(() => Effect.succeed(unavailable("claude")))
+              )
+            }
+            if (c.kind === "codex" && !scripted) {
+              return Effect.promise(() => fetchCodexUsage(c.binPath)).pipe(
+                Effect.map((usage) =>
+                  usage ? toCodexProviderUsage(usage) : unavailable("codex")
+                )
               )
             }
             return Effect.succeed(unavailable(c.kind, NAME[c.kind] ?? c.label))

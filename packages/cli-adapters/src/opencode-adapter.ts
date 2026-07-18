@@ -272,18 +272,21 @@ export const promptError = (error: unknown): string => {
 }
 
 /**
- * Total tokens for a finished turn. opencode's runtime reports a `total`, but the
- * SDK's type doesn't declare one — read it when present and fall back to the sum
- * so this can't silently report 0 if either side changes.
+ * Current context size for one model step. opencode's runtime reports `total`;
+ * older SDKs omitted it, so fall back to the same calculation opencode uses for
+ * context-overflow checks. Cached reads occupy context, while reasoning is
+ * already included in output.
  */
 export const totalTokens = (tokens: {
+  total?: number
   input: number
   output: number
   reasoning: number
   cache?: { read: number; write: number }
 }): number => {
-  const declared = (tokens as { total?: unknown }).total
-  return typeof declared === "number" ? declared : tokens.input + tokens.output + tokens.reasoning
+  return typeof tokens.total === "number"
+    ? tokens.total
+    : tokens.input + tokens.output + (tokens.cache?.read ?? 0)
 }
 
 /**
@@ -311,7 +314,8 @@ export const totalTokens = (tokens: {
  *
  * `Done` is NOT emitted from `session.idle`: that fires after `session.prompt`
  * has already resolved, so the turn is over before it lands. The prompt's own
- * response carries the authoritative cost/tokens instead (see `driveOpencode`).
+ * response carries the authoritative cost/context reading instead (see
+ * `driveOpencode`).
  * A CHILD's idle is a different thing entirely — that subagent finishing.
  */
 export interface OpencodeMapper {
@@ -334,8 +338,6 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
    * lineage (`parentID`) and the agent's identity (`agent`, `title`).
    */
   const subagents = new Map<string, string>()
-  let tokens = 0
-
   /**
    * Which agent a session's output belongs to — undefined for the run itself,
    * else the sub-session's own id, used verbatim as the `agentId`.
@@ -451,13 +453,12 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
       }
 
       case "step-finish": {
-        // A live, growing count for the UI mid-turn; the FINAL total comes from
-        // the prompt response, not from here. Only the RUN's own steps count —
-        // the readout is the turn's, and a subagent's usage rolls up into the
-        // parent's total anyway (Claude's adapter draws the same line).
+        // Each step is a new model request whose token record is that request's
+        // context size. Never add steps: their inputs already contain the prior
+        // conversation, so summing them double-counts context. Only the run's
+        // own window drives this readout; sub-agents have independent windows.
         if (agentId !== undefined) return []
-        tokens += totalTokens(part.tokens)
-        return [{ _tag: "Usage", tokens }]
+        return [{ _tag: "Usage", tokens: totalTokens(part.tokens) }]
       }
 
       default:
@@ -716,7 +717,7 @@ const driveOpencode = async (
 
       // The turn is over the moment this resolves — `session.idle` lands AFTER
       // it, so waiting for the bus would mean never emitting `Done` at all. The
-      // response's own message is the authoritative cost/token record.
+      // response's own message is the authoritative final context record.
       const info = result.data?.info
       if (!signal.aborted) {
         await runP(

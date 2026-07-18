@@ -194,15 +194,41 @@ describe("streamEventsFor", () => {
     expect(tools.get("tu_1")?.name).toBe("Edit")
   })
 
-  it("emits a live Usage event from the assistant message's cumulative token usage", () => {
+  it("reports the latest full context, including cached input", () => {
     const events = streamEventsFor(
       msg({
         type: "assistant",
-        message: { content: [{ type: "text", text: "hi" }], usage: { input_tokens: 1200, output_tokens: 340 } }
+        message: {
+          content: [{ type: "text", text: "hi" }],
+          usage: {
+            // These top-level values are cumulative across the request's server
+            // loop. The final iteration is the actual context window.
+            input_tokens: 1800,
+            output_tokens: 500,
+            cache_creation_input_tokens: 200,
+            cache_read_input_tokens: 1200,
+            iterations: [
+              {
+                type: "message",
+                input_tokens: 100,
+                output_tokens: 20,
+                cache_creation_input_tokens: 10,
+                cache_read_input_tokens: 700
+              },
+              {
+                type: "message",
+                input_tokens: 150,
+                output_tokens: 30,
+                cache_creation_input_tokens: 20,
+                cache_read_input_tokens: 1100
+              }
+            ]
+          }
+        }
       }),
       new Map()
     )
-    expect(events).toStrictEqual([{ _tag: "Usage", tokens: 1540 }])
+    expect(events).toStrictEqual([{ _tag: "Usage", tokens: 1300 }])
   })
 
   it("does not emit Usage for a sub-agent's assistant message (only the main run drives the readout)", () => {
@@ -320,12 +346,22 @@ describe("streamEventsFor", () => {
     expect(events[0]).toMatchObject({ _tag: "ToolStart", target: "verify" })
   })
 
-  it("maps the result message to Done with cost + total tokens", () => {
+  it("maps the result message to Done with cost + terminal context", () => {
     const events = streamEventsFor(
-      msg({ type: "result", subtype: "success", total_cost_usd: 0.42, usage: { input_tokens: 100, output_tokens: 40 } }),
+      msg({
+        type: "result",
+        subtype: "success",
+        total_cost_usd: 0.42,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 40,
+          cache_creation_input_tokens: 10,
+          cache_read_input_tokens: 500
+        }
+      }),
       new Map()
     )
-    expect(events).toStrictEqual([{ _tag: "Done", costUsd: 0.42, tokens: 140 }])
+    expect(events).toStrictEqual([{ _tag: "Done", costUsd: 0.42, tokens: 650 }])
   })
 })
 
