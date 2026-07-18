@@ -22,6 +22,7 @@ import {
   filterVisible,
   GhService,
   ModelsService,
+  planDraftPost,
   planReviewPost,
   retitleSession,
   ReviewService,
@@ -45,6 +46,7 @@ import type {
   IssueAutomations,
   IssueSummary,
   PrMergeMethod,
+  ReviewComment,
   ReviewSubmitKind,
   SettledSessionStatus
 } from "@starbase/core"
@@ -577,6 +579,44 @@ export const githubComment = (input: { sessionId: string; body: string; toGithub
     yield* GhService.prComment(session.worktreePath, session.prNumber, input.body)
   })
 
+/**
+ * `Github.submitReview` handler — post the reviewer's drafts as ONE COMMENT
+ * review carrying line-anchored inline comments.
+ *
+ * Anchors against the PR's CURRENT diff and head sha rather than whatever the
+ * renderer was looking at: a draft written minutes ago may sit on a line the
+ * agent has since pushed over, and GitHub rejects the whole review over a single
+ * stale line. `planDraftPost` folds those into the body instead.
+ *
+ * Returns the unanchored count so the renderer can say so.
+ */
+export const githubSubmitReview = (input: {
+  sessionId: string
+  comments: ReadonlyArray<ReviewComment>
+}) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to review" }))
+    }
+    const headSha = yield* GhService.prHeadSha(session.worktreePath, session.prNumber)
+    if (headSha === null) {
+      return yield* Effect.fail(
+        new GhError({ message: "Couldn't resolve the pull request's head commit to anchor comments against" })
+      )
+    }
+    const diff = yield* GhService.prDiff(session.worktreePath, session.prNumber)
+    const plan = planDraftPost(input.comments, diff)
+    if (plan === null) return 0
+
+    yield* GhService.prReviewComments(session.worktreePath, session.prNumber, {
+      commitSha: headSha,
+      body: plan.body,
+      comments: plan.comments
+    })
+    return plan.unanchoredCount
+  })
+
 /** `Github.review` handler — submit a review (comment/approve/request-changes). */
 export const githubReview = (input: {
   sessionId: string
@@ -753,6 +793,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),
+  "Github.submitReview": (input) => githubSubmitReview(input),
   "Github.resolveThread": (input) => githubResolveThread(input),
   "Github.replyToThread": (input) => githubReplyToThread(input),
   "Github.merge": (input) => githubMerge(input),
