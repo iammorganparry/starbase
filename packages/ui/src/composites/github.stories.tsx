@@ -3,10 +3,14 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import type {
   AdversarialReview,
   PrFileChange,
-  PullRequest as PullRequestData
+  PullRequest as PullRequestData,
+  PrReviewThread,
+  ReviewFinding,
+  ReviewSeverity
 } from "@starbase/core"
 import { PullRequestView } from "./pull-request-view.js"
 import { CodeReviewView, type ReviewSource } from "./code-review-view.js"
+import { ReviewFindingRow } from "./review-findings.js"
 import { SettingsDialog } from "./settings-dialog.js"
 
 const meta: Meta = { title: "GitHub", parameters: { layout: "fullscreen" } }
@@ -151,6 +155,9 @@ const adversarialReview: AdversarialReview = {
   model: "claude-fable-5",
   createdAt: "2026-07-16T10:00:00.000Z",
   note: null,
+  routedAt: "2026-07-16T10:00:04.000Z",
+  postedAt: "2026-07-16T10:00:05.000Z",
+  postError: null,
   findings: [
     {
       id: "f1",
@@ -206,6 +213,53 @@ export const PullRequestAdversarialReview: Story = {
       />
     </div>
   )
+}
+
+/**
+ * Every severity against every outcome — the matrix the redesign has to hold up
+ * across. Routing is automatic now, so a card's job is to report what became of
+ * it: critical/major say "Sent to agent", minor/nit say "Posted to PR", and a
+ * failed post says so without hiding the finding.
+ */
+export const ReviewFindingCards: Story = {
+  render: () => {
+    const base = adversarialReview.findings[0]!
+    const card = (severity: ReviewSeverity, title: string, over: Partial<ReviewFinding> = {}) => ({
+      ...base,
+      id: `${severity}-${title}`,
+      severity,
+      title,
+      ...over
+    })
+    const column = (label: string, review: AdversarialReview, findings: ReviewFinding[]) => (
+      <div className="flex w-[340px] flex-col gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.4px] text-dim">{label}</span>
+        {findings.map((f) => (
+          <ReviewFindingRow key={f.id} finding={f} sent={false} canRoute review={review} />
+        ))}
+      </div>
+    )
+    const all: ReviewFinding[] = [
+      card("critical", "Session token compared with ==="),
+      card("major", "Refresh retries forever on a 401", { endLine: 94 }),
+      card("minor", "Duplicated retry helper", { suggestion: null }),
+      card("nit", "Unanchored — no test covers this", { path: null, line: null, suggestion: null })
+    ]
+    return (
+      <div className="flex min-h-screen gap-6 bg-editor p-6">
+        {column("Routed + posted", adversarialReview, all)}
+        {column(
+          "Post failed",
+          { ...adversarialReview, postedAt: null, postError: "HTTP 422: line must be part of the diff" },
+          all
+        )}
+        {/* Unstamped (e.g. a review persisted before auto-routing existed):
+            every card offers "Send to agent" rather than spinning — the operator
+            decides, nothing fires on its own. */}
+        {column("Unstamped → manual", { ...adversarialReview, routedAt: null, postedAt: null }, all)}
+      </div>
+    )
+  }
 }
 
 /** A clean review — the reviewer argued and found nothing. */
@@ -355,6 +409,78 @@ export const CodeReviewWithFindings: Story = {
           }}
           onSendFindingToAgent={() => {}}
           sentFindingIds={new Set(["f2"])}
+        />
+      </div>
+    )
+  }
+}
+
+/**
+ * The file list's feedback markers and its filter.
+ *
+ * `session.ts` carries a finding, a draft AND an unresolved thread (3);
+ * `refresh.ts` carries only a finding (1); `untouched.ts` carries nothing and is
+ * what the filter hides. The resolved thread on `untouched.ts` is deliberate —
+ * it must NOT count, or the filter never empties.
+ */
+export const CodeReviewFeedbackFilter: Story = {
+  render: () => {
+    const [source, setSource] = useState<ReviewSource>("pr")
+    const [activePath, setActivePath] = useState<string | null>("src/auth/session.ts")
+    const withUntouched: ReadonlyArray<PrFileChange> = [
+      ...files,
+      { path: "src/untouched.ts", additions: 2, deletions: 1, commentCount: 0, viewed: false }
+    ]
+    const thread = (path: string, isResolved: boolean): PrReviewThread => ({
+      id: `t-${path}`,
+      reviewId: null,
+      path,
+      line: 31,
+      startLine: null,
+      originalLine: null,
+      originalStartLine: null,
+      diffHunk: "",
+      isResolved,
+      isOutdated: false,
+      resolvedBy: null,
+      comments: []
+    })
+    return (
+      <div className="flex h-screen bg-editor">
+        <CodeReviewView
+          files={withUntouched}
+          reviewThreads={[thread("src/auth/session.ts", false), thread("src/untouched.ts", true)]}
+          activePath={activePath}
+          fileDiffs={withUntouched.map((f) => ({ path: f.path, diff: fileDiff }))}
+          drafts={[
+            {
+              id: "d1",
+              path: "src/auth/session.ts",
+              line: 33,
+              endLine: null,
+              body: "Worth a comment.",
+              routeToAgent: false
+            }
+          ]}
+          routeTargetSession="Refactor auth flow"
+          connected
+          source={source}
+          prAvailable
+          localAvailable
+          onSetSource={setSource}
+          onSelectFile={setActivePath}
+          onToggleViewed={() => {}}
+          onAddDraft={() => {}}
+          onRemoveDraft={() => {}}
+          onFinishReview={() => {}}
+          review={{
+            ...adversarialReview,
+            findings: [
+              { ...adversarialReview.findings[0]!, path: "src/auth/session.ts", line: 31 },
+              { ...adversarialReview.findings[1]!, path: "src/auth/refresh.ts", line: 31, endLine: null }
+            ]
+          }}
+          onSendFindingToAgent={() => {}}
         />
       </div>
     )

@@ -1,6 +1,6 @@
 import * as React from "react"
-import type { Session, SessionActivity, SessionStatus, User } from "@starbase/core"
-import { activityStatus } from "@starbase/core"
+import type { Session, SessionActivity, SessionDisplayStatus, User } from "@starbase/core"
+import { displayStatusOf } from "@starbase/core"
 import { Archive, ChevronRight, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Kbd } from "../components/kbd.js"
@@ -10,6 +10,7 @@ import { StatusDot } from "../components/status-dot.js"
 import { SearchInput } from "../components/search-input.js"
 import { SegmentedControl } from "../components/segmented-control.js"
 import { SessionRow } from "../composites/session-row.js"
+import { displayStatusLabel, displayStatusTone } from "../tokens.js"
 import { UserMenu } from "../composites/user-menu.js"
 
 type GroupBy = "repo" | "status"
@@ -21,19 +22,25 @@ type GroupBy = "repo" | "status"
 export const ARCHIVED_GROUP_KEY = "__archived__"
 
 /**
- * Status groups render in this order (most-active first). "thinking" is absent:
- * `statusOf` folds it into "running" so a session doesn't hop groups every time a
- * tool starts — see there.
+ * Status groups render in this order (most-active first), and are labelled from
+ * the same `displayStatusLabel` the rows use — one vocabulary for one concept.
+ *
+ * "thinking" is absent, and that is NOT an oversight: `statusOf` folds it into
+ * "running" so a session doesn't hop groups every time a tool starts and stops —
+ * see there. A group is a place in a list, and a place that moves every few
+ * seconds is worse than a coarser one that holds still.
+ *
+ * "monitoring" IS its own group, for the mirror-image reason: a watch runs for
+ * minutes, so the group is stable, and "waiting on CI" is genuinely a different
+ * thing to look at than "working". Empty groups don't render (see `groupByStatus`),
+ * so it costs nothing when nothing is watching.
  */
-const STATUS_ORDER: ReadonlyArray<SessionStatus> = ["needs-input", "running", "idle", "done"]
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  "needs-input": "Needs input",
-  thinking: "Thinking",
-  // Covers thinking AND every kind of tool work — the row says which.
-  running: "Working",
-  idle: "Idle",
-  done: "Done"
-}
+const STATUS_ORDER: ReadonlyArray<SessionDisplayStatus> = [
+  "needs-input",
+  "running",
+  "monitoring",
+  "idle"
+]
 
 export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
@@ -115,15 +122,14 @@ export function SessionSidebar({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  // The GROUP a session sits in. Coarser than its row label on purpose: an
-  // activity distinguishes thinking from running moment to moment, so grouping on
-  // that directly would reorder the list every few seconds as tools start and
-  // stop. Both collapse to one "Working" group and the row keeps the fine detail.
+  // The GROUP a session sits in. The row's own five-word rollup, with ONE further
+  // fold: thinking → running. An agent flips between thinking and running every
+  // few seconds as tools start and stop, so grouping on that distinction would
+  // reorder the list under the reader's cursor. The row still says which.
   const statusOf = React.useCallback(
-    (s: Session): SessionStatus => {
-      const activity = liveActivity?.[s.id]
-      const status = activity ? activityStatus(activity.kind) : s.status
-      return status === "thinking" ? "running" : status
+    (s: Session): SessionDisplayStatus => {
+      const display = displayStatusOf(liveActivity?.[s.id], s.status)
+      return display === "thinking" ? "running" : display
     },
     [liveActivity]
   )
@@ -262,7 +268,7 @@ export function SessionSidebar({
                   <>
                     <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
                     {groupBy === "status" ? (
-                      <StatusDot status={key as SessionStatus} size={8} />
+                      <StatusDot status={displayStatusTone[key as SessionDisplayStatus]} size={8} />
                     ) : (
                       <GitBranch size={12} className="text-cyan" />
                     )}
@@ -272,7 +278,7 @@ export function SessionSidebar({
                         groupBy === "status" ? "" : "font-mono"
                       )}
                     >
-                      {groupBy === "status" ? STATUS_LABEL[key as SessionStatus] : key}
+                      {groupBy === "status" ? displayStatusLabel[key as SessionDisplayStatus] : key}
                     </span>
                   </>
                 )}
@@ -406,9 +412,9 @@ function groupByRepo(sessions: ReadonlyArray<Session>): ReadonlyArray<readonly [
 /** Group by effective status, ordered most-active first; empty statuses omitted. */
 function groupByStatus(
   sessions: ReadonlyArray<Session>,
-  statusOf: (s: Session) => SessionStatus
+  statusOf: (s: Session) => SessionDisplayStatus
 ): ReadonlyArray<readonly [string, ReadonlyArray<Session>]> {
-  const map = new Map<SessionStatus, Session[]>()
+  const map = new Map<SessionDisplayStatus, Session[]>()
   for (const s of sessions) {
     const status = statusOf(s)
     const list = map.get(status) ?? []

@@ -1,6 +1,6 @@
 import type { AdversarialReview, ReviewFinding } from "@starbase/core"
 import { describe, expect, it } from "vitest"
-import { resolveSentIds } from "./review-routing.js"
+import { agentBatchPrompt, resolveSentIds, reviewQueryKey } from "./review-routing.js"
 
 /**
  * `resolveSentIds` is the pure seam behind the "Sent to agent" state. It turns
@@ -23,7 +23,11 @@ const finding = (id: string): ReviewFinding => ({
   suggestion: null
 })
 
-const review = (headSha: string, ids: string[]): AdversarialReview => ({
+const review = (
+  headSha: string,
+  ids: string[],
+  over: Partial<AdversarialReview> = {}
+): AdversarialReview => ({
   sessionId: "s1",
   prNumber: 1,
   headSha,
@@ -31,7 +35,11 @@ const review = (headSha: string, ids: string[]): AdversarialReview => ({
   model: "claude-fable-5",
   createdAt: "2026-07-16T10:00:00.000Z",
   findings: ids.map(finding),
-  note: null
+  note: null,
+  routedAt: null,
+  postedAt: null,
+  postError: null,
+  ...over
 })
 
 describe("resolveSentIds", () => {
@@ -75,5 +83,77 @@ describe("resolveSentIds", () => {
       new Set(["review:abc:f1", "review:abc:f3"])
     )
     expect([...ids].sort()).toStrictEqual(["f1", "f3"])
+  })
+})
+
+/**
+ * The batch prompt is what an agent acts on with nobody watching, so the
+ * behaviour that matters is: every finding survives into it, and the instruction
+ * to push back survives with them. The reviewer is prompted to argue against the
+ * diff and report even what it doubts — without the push-back clause an agent
+ * would "fix" correct code on a false positive, unsupervised.
+ */
+describe("agentBatchPrompt", () => {
+  const at = (over: Partial<ReviewFinding>): ReviewFinding => ({ ...finding("f1"), ...over })
+
+  it("carries every finding's title, rationale and location", () => {
+    const prompt = agentBatchPrompt([
+      at({ id: "f1", title: "Token compared with ==", rationale: "Timing-unsafe.", path: "src/a.ts", line: 12 }),
+      at({ id: "f2", title: "Unhandled rejection", rationale: "Crashes the run.", path: "src/b.ts", line: 3 })
+    ])
+    expect(prompt).toContain("Token compared with ==")
+    expect(prompt).toContain("Timing-unsafe.")
+    expect(prompt).toContain("src/a.ts:12")
+    expect(prompt).toContain("Unhandled rejection")
+    expect(prompt).toContain("src/b.ts:3")
+  })
+
+  it("tells the agent to push back rather than change correct code", () => {
+    const prompt = agentBatchPrompt([at({})])
+    expect(prompt).toContain("say why rather than changing the code")
+  })
+
+  it("counts the findings, in the plural or not", () => {
+    expect(agentBatchPrompt([at({})])).toContain("raised 1 issue it rated")
+    expect(agentBatchPrompt([at({ id: "f1" }), at({ id: "f2" })])).toContain("raised 2 issues it rated")
+  })
+
+  it("includes a suggestion when the reviewer gave one, and omits it otherwise", () => {
+    expect(agentBatchPrompt([at({ suggestion: "Use timingSafeEqual." })])).toContain(
+      "Suggested fix: Use timingSafeEqual."
+    )
+    expect(agentBatchPrompt([at({ suggestion: null })])).not.toContain("Suggested fix:")
+  })
+
+  it("renders a finding with no file anchor without inventing one", () => {
+    const prompt = agentBatchPrompt([at({ path: null, line: null, title: "No tests" })])
+    expect(prompt).toContain("No tests")
+    expect(prompt).not.toContain("null")
+  })
+
+  it("renders a multi-line range as a range", () => {
+    expect(agentBatchPrompt([at({ path: "src/a.ts", line: 10, endLine: 14 })])).toContain(
+      "src/a.ts:10–14"
+    )
+  })
+
+  it("numbers the findings so the agent can refer to them", () => {
+    const prompt = agentBatchPrompt([at({ id: "f1", title: "First" }), at({ id: "f2", title: "Second" })])
+    expect(prompt).toContain("1. [major] `src/a.ts:1` — First")
+    expect(prompt).toContain("2. [major] `src/a.ts:1` — Second")
+  })
+})
+
+/**
+ * Three call sites must agree on this key: the useQuery that READS a review, and
+ * two setQueryData calls that WRITE one (the auto-review poll's result, and the
+ * routed stamp). A mismatch is silent — react-query treats a write to an unread
+ * key as a no-op — and surfaces only as a card stuck on "Sending…" while routing
+ * re-fires every poll tick. One definition, pinned here.
+ */
+describe("reviewQueryKey", () => {
+  it("is namespaced per session", () => {
+    expect(reviewQueryKey("s1")).toStrictEqual(["review", "s1"])
+    expect(reviewQueryKey("s2")).not.toStrictEqual(reviewQueryKey("s1"))
   })
 })

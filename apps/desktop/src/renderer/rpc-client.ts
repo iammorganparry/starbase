@@ -227,6 +227,12 @@ export const rpc = {
     run((c) => c.Review.run({ sessionId, force })),
   reviewGet: (sessionId: string): Promise<AdversarialReview | null> =>
     run((c) => c.Review.get({ sessionId })),
+  /**
+   * Record that the stored review's critical/major findings reached the agent.
+   * Returns the stamp, or null when there was no stored review to stamp.
+   */
+  reviewMarkRouted: (sessionId: string): Promise<string | null> =>
+    run((c) => c.Review.markRouted({ sessionId })),
   githubCreatePr: (input: {
     sessionId: string
     title: string

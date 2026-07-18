@@ -25,6 +25,7 @@ export function ReviewPane({
   return (
     <CodeReviewView
       files={review.files}
+      reviewThreads={review.reviewThreads}
       activePath={review.activePath}
       fileDiffs={review.fileDiffs}
       drafts={review.drafts}

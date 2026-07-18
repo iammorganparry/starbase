@@ -22,6 +22,7 @@ import {
   filterVisible,
   GhService,
   ModelsService,
+  planReviewPost,
   retitleSession,
   ReviewService,
   ReviewStore,
@@ -36,6 +37,7 @@ import {
 import { homedir } from "node:os"
 import { GhError, GitError, ReviewError, reviewModelFor } from "@starbase/core"
 import type {
+  AdversarialReview,
   CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
@@ -47,6 +49,7 @@ import type {
   SettledSessionStatus
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
+import type { CommandExecutor } from "@effect/platform"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
 import { Effect, Layer, Mailbox, Option, Runtime, Stream } from "effect"
@@ -392,6 +395,29 @@ export const githubDiff = (sessionId: string) =>
 export const reviewGet = (sessionId: string) => ReviewStore.get(sessionId)
 
 /**
+ * `Review.markRouted` handler — record that the stored review's critical/major
+ * findings reached the agent, and return the stamp.
+ *
+ * Idempotent: an already-routed review keeps its original stamp rather than
+ * taking a fresh one. The renderer calls this from an effect, and an effect can
+ * fire twice (StrictMode, a re-render, two panes mounted on the same session) —
+ * the stamp is a fact about the first routing, not about the last call.
+ *
+ * Returns null when there is no stored review to stamp. The renderer treats that
+ * as "don't claim it's routed", which is the safe direction: the alternative is a
+ * review that reads as sent while the agent never heard about it.
+ */
+export const reviewMarkRouted = (sessionId: string) =>
+  Effect.gen(function* () {
+    const review = yield* ReviewStore.get(sessionId)
+    if (review === null) return null
+    if (review.routedAt !== null) return review.routedAt
+    const now = yield* Effect.sync(() => new Date().toISOString())
+    yield* ReviewStore.set(sessionId, { ...review, routedAt: now }).pipe(Effect.ignore)
+    return now
+  })
+
+/**
  * `Review.run` handler — run an adversarial review of the session's linked PR.
  *
  * The head-SHA short-circuit is the load-bearing part: it means an unchanged PR
@@ -442,10 +468,60 @@ export const reviewRun = (sessionId: string, force: boolean) =>
       model,
       diff
     })
+
+    // Post the minor/nit half to the PR as inline comments. The critical/major
+    // half is NOT posted — it goes to the session's agent, which the renderer
+    // does (it owns the conversation actor; this process has no way to reach it).
+    //
+    // Deliberately below the de-dupe: only a FRESH run posts. The short-circuit
+    // above returns `prior` untouched, so a poll tick on an unchanged head can
+    // never re-post the same nits.
+    const posted = yield* postReviewToPr(session.worktreePath, session.prNumber, review, diff)
+
     // Persist best-effort: a review the user can see now matters more than one
     // we can re-read later, and a failed write must not fail the run.
-    yield* ReviewStore.set(sessionId, review).pipe(Effect.ignore)
-    return review
+    yield* ReviewStore.set(sessionId, posted).pipe(Effect.ignore)
+    return posted
+  })
+
+/**
+ * Post a review's low-severity findings to the PR, returning the review stamped
+ * with the outcome.
+ *
+ * **Best-effort by construction.** A review costs real tokens on a frontier
+ * model, and its verdict is just as true whether or not GitHub accepted the
+ * comments — so every failure here lands in `postError` and the findings survive.
+ * Failing the run instead would throw away the whole review over a `gh` hiccup,
+ * and (because the caller persists only on success) leave the auto-trigger
+ * re-running the reviewer on the same head every tick.
+ */
+const postReviewToPr = (
+  cwd: string,
+  prNumber: number,
+  review: AdversarialReview,
+  diff: string
+): Effect.Effect<AdversarialReview, never, GhService | CommandExecutor.CommandExecutor> =>
+  Effect.gen(function* () {
+    const plan = planReviewPost(review, diff)
+    // Nothing low-severity to say. Not an error, and not a failed post — leave
+    // both stamps null so the UI reads it as "there was nothing to post".
+    if (plan === null) return review
+
+    const now = yield* Effect.sync(() => new Date().toISOString())
+    return yield* GhService.prReviewComments(cwd, prNumber, {
+      commitSha: review.headSha,
+      body: plan.body,
+      comments: plan.comments
+    }).pipe(
+      Effect.as({ ...review, postedAt: now, postError: null }),
+      Effect.catchAll((cause) =>
+        Effect.succeed({
+          ...review,
+          postedAt: null,
+          postError: `Couldn't post the low-severity findings to the pull request: ${cause.message}`
+        })
+      )
+    )
   })
 
 /**
@@ -673,6 +749,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Review.watch": ({ sessionId }) =>
     Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId))),
   "Review.get": ({ sessionId }) => reviewGet(sessionId),
+  "Review.markRouted": ({ sessionId }) => reviewMarkRouted(sessionId),
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),

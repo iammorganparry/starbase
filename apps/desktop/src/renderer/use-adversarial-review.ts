@@ -13,9 +13,8 @@ import type { AdversarialReview, ReviewFinding, ReviewPhase, Session } from "@st
 import { rpc } from "./rpc-client.js"
 import { getConversationActor } from "./conversation-registry.js"
 import { markRouted, useRoutedEntries } from "./routed-store.js"
-import { resolveSentIds, routedKey } from "./review-routing.js"
-
-const reviewKey = (sessionId: string) => ["review", sessionId] as const
+import { resolveSentIds, reviewQueryKey, routedKey } from "./review-routing.js"
+import { routeReviewToAgent } from "./auto-route.js"
 
 /** Format a finding as the instruction handed to the session's agent. */
 const findingPrompt = (finding: ReviewFinding): string => {
@@ -66,7 +65,7 @@ export function useAdversarialReview(
   const hasPr = session.prNumber != null
 
   const query = useQuery({
-    queryKey: reviewKey(session.id),
+    queryKey: reviewQueryKey(session.id),
     queryFn: () => rpc.reviewGet(session.id),
     // Nothing to read until there's a PR to have reviewed.
     enabled: hasPr && connected,
@@ -81,7 +80,15 @@ export function useAdversarialReview(
   // fresh opinion, and silently handing back a cached review would read as a bug.
   const runMutation = useMutation({
     mutationFn: () => rpc.reviewRun(session.id, true),
-    onSuccess: (review) => qc.setQueryData(reviewKey(session.id), review)
+    onSuccess: (review) => {
+      qc.setQueryData(reviewQueryKey(session.id), review)
+      // Route here as well as from the auto-review poll: a manual run reaches
+      // this callback directly, and the poll is only mounted when auto-review is
+      // switched ON. Without this, clicking "Review again" with the toggle off
+      // would find critical bugs and hand them to nobody. `routeReviewToAgent`
+      // de-dupes, so the two paths overlapping is harmless.
+      void routeReviewToAgent(session, review, qc)
+    }
   })
 
   const runReview = useCallback(
@@ -98,6 +105,23 @@ export function useAdversarialReview(
   const startedAt = useSelector(actor, (s) => s.context.reviewStartedAt)
 
   const review = query.data ?? null
+
+  // Deliberately NO "route any unrouted stored review on mount" effect here.
+  //
+  // Routing to the agent is an unsupervised action, so it happens ONLY as the
+  // direct result of a review the user asked for: a manual run (`onSuccess`
+  // above) or the auto-review poll (App.tsx), which is gated on the
+  // `autoAdversarialReview` toggle. Merely OPENING a session must not send
+  // anything.
+  //
+  // An earlier version routed every `routedAt: null` review on mount to clear a
+  // "Sending…" spinner. It fired for reviews the user never opted into — heads
+  // that predate the upgrade (findings describing code that has since changed),
+  // findings declined under the old manual flow, and sessions with auto-review
+  // off. The spinner is gone by a different route: an unstamped finding now
+  // reads "Send to agent" (see `outcomeOf`), which is the truth — it was not
+  // sent, and here is how — and hands the choice back to the operator.
+
   const routedKeys = useRoutedEntries(session.id)
 
   // Resolve the namespaced keys down to plain ids for THIS review, so the UI

@@ -18,6 +18,7 @@ import {
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
 import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
+import type { CommandExecutor } from "@effect/platform"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DialogService } from "./dialog.js"
@@ -29,6 +30,8 @@ import {
   githubPr,
   modelsCatalog,
   modelsList,
+  reviewGet,
+  reviewMarkRouted,
   reviewRun,
   sessionDiff,
   skillsList,
@@ -444,6 +447,246 @@ describe("RPC handlers", () => {
       )
       expect(review.model).toBe("claude-opus-4-8")
       expect(spawns[0]!.model).toBe("claude-opus-4-8")
+    })
+
+    /**
+     * Posting the low-severity half to the PR.
+     *
+     * The payload's SHAPE is `planReviewPost`'s business and is pinned there
+     * (review-post.test.ts) — the fake executor drains stdin, so the fed JSON
+     * isn't observable here anyway. What these pin is the handler's job: does it
+     * call GitHub at all, on which path, and what does it stamp on the review.
+     */
+    describe("posting to the PR", () => {
+      /** A diff whose new side has lines 1–3, so a finding can actually anchor. */
+      const POSTABLE_DIFF = [
+        "diff --git a/a.ts b/a.ts",
+        "--- a/a.ts",
+        "+++ b/a.ts",
+        "@@ -1 +1,3 @@",
+        " one",
+        "+two",
+        "+three"
+      ].join("\n")
+
+      /** `gh` that records every invocation, and can fail the review POST. */
+      const recordingGh = (headSha: string, opts: { postFails?: boolean } = {}) => {
+        const calls: Array<ReadonlyArray<string>> = []
+        const layer = fakeCommandExecutor((cmd, args) => {
+          if (cmd === "which" || cmd === "where") {
+            return args[0] === "claude" ? { stdout: "/usr/local/bin/claude" } : { stdout: "" }
+          }
+          if (cmd !== "gh") return { stdout: "2.1.0" }
+          calls.push([...args])
+          if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: headSha }) }
+          if (args[1] === "diff") return { stdout: POSTABLE_DIFF }
+          if (args[0] === "api" && args.includes("--method")) {
+            return opts.postFails
+              ? { exitCode: 1, stderr: "HTTP 422: line must be part of the diff" }
+              : { stdout: "{}" }
+          }
+          return { stdout: "" }
+        })
+        return { calls, layer }
+      }
+
+      /** A reviewer stub reporting exactly `findings`. */
+      const adapterReporting = (findings: ReadonlyArray<Record<string, unknown>>) =>
+        Layer.succeed(
+          CliAdapter,
+          CliAdapter.of({
+            run: ((_id: string, _spec: SessionSpec, ctx: AgentContext) =>
+              ctx.emit({
+                _tag: "Assistant",
+                text: `\`\`\`json\n${JSON.stringify({ findings })}\n\`\`\``
+              })) as CliAdapterShape["run"],
+            stop: () => Effect.void
+          })
+        )
+
+      const envWith = (gh: Layer.Layer<CommandExecutor.CommandExecutor>, adapter: Layer.Layer<CliAdapter>) =>
+        Layer.mergeAll(Layer.succeed(AppPaths, appPathsFor(root)), NodeContext.layer, gh).pipe(
+          (leaf) =>
+            Layer.mergeAll(
+              ConfigService.Default,
+              SessionStore.Default,
+              GhService.Default,
+              ReviewStore.Default,
+              ReviewService.Default,
+              DiscoveryService.Default,
+              adapter
+            ).pipe(Layer.provideMerge(leaf))
+        )
+
+      const isReviewPost = (args: ReadonlyArray<string>) =>
+        args[0] === "api" && args.some((a) => a.endsWith("/reviews"))
+
+      it("posts the minor/nit findings and stamps postedAt", async () => {
+        withSession()
+        const { calls, layer: gh } = recordingGh("sha-one")
+        const review = await Effect.runPromise(
+          reviewRun("s1", false).pipe(
+            Effect.provide(
+              envWith(gh, adapterReporting([{ title: "Prefer const", severity: "nit", path: "a.ts", line: 2 }]))
+            )
+          )
+        )
+        expect(calls.filter(isReviewPost)).toHaveLength(1)
+        expect(review.postedAt).not.toBeNull()
+        expect(review.postError).toBeNull()
+      })
+
+      // The critical/major half belongs to the agent. Posting it here would both
+      // duplicate it and turn the reviewer into a PR spammer.
+      it("posts nothing when every finding is critical or major", async () => {
+        withSession()
+        const { calls, layer: gh } = recordingGh("sha-one")
+        const review = await Effect.runPromise(
+          reviewRun("s1", false).pipe(
+            Effect.provide(
+              envWith(gh, adapterReporting([{ title: "Data loss", severity: "critical", path: "a.ts", line: 2 }]))
+            )
+          )
+        )
+        expect(calls.filter(isReviewPost)).toHaveLength(0)
+        expect(review.postedAt).toBeNull()
+        expect(review.postError).toBeNull()
+      })
+
+      /**
+       * The best-effort guarantee. Failing the run instead would throw away a
+       * review that cost real tokens AND (because the caller only persists on
+       * success) leave the auto-trigger re-spawning the reviewer every tick.
+       */
+      it("keeps the review and records postError when GitHub rejects the post", async () => {
+        withSession()
+        const { layer: gh } = recordingGh("sha-one", { postFails: true })
+        const review = await Effect.runPromise(
+          reviewRun("s1", false).pipe(
+            Effect.provide(
+              envWith(gh, adapterReporting([{ title: "Prefer const", severity: "nit", path: "a.ts", line: 2 }]))
+            )
+          )
+        )
+        expect(review.findings).toHaveLength(1)
+        expect(review.postedAt).toBeNull()
+        expect(review.postError).toContain("HTTP 422")
+      })
+
+      it("persists the failed post so the UI still sees it after a reload", async () => {
+        withSession()
+        const { layer: gh } = recordingGh("sha-one", { postFails: true })
+        const env = envWith(
+          gh,
+          adapterReporting([{ title: "Prefer const", severity: "nit", path: "a.ts", line: 2 }])
+        )
+        await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+        const stored = await Effect.runPromise(reviewGet("s1").pipe(Effect.provide(env)))
+        expect(stored?.postError).toContain("HTTP 422")
+      })
+
+      /**
+       * The de-dupe path must not re-post. Without this the auto-review poll
+       * would add the same nits to the PR every 60 seconds, forever.
+       */
+      it("does not re-post when the head is unchanged", async () => {
+        withSession()
+        const { calls, layer: gh } = recordingGh("sha-one")
+        const env = envWith(
+          gh,
+          adapterReporting([{ title: "Prefer const", severity: "nit", path: "a.ts", line: 2 }])
+        )
+        await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+        await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+        await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(env)))
+        expect(calls.filter(isReviewPost)).toHaveLength(1)
+      })
+    })
+
+    /**
+     * The stamp that makes auto-routing idempotent across reloads. The renderer
+     * does the routing (it owns the conversation actor); main only remembers.
+     */
+    describe("Review.markRouted", () => {
+      const env = () =>
+        Layer.mergeAll(Layer.succeed(AppPaths, appPathsFor(root)), NodeContext.layer, fakeGh("sha-one")).pipe(
+          (leaf) =>
+            Layer.mergeAll(
+              ConfigService.Default,
+              SessionStore.Default,
+              GhService.Default,
+              ReviewStore.Default,
+              ReviewService.Default,
+              DiscoveryService.Default,
+              countingAdapter().layer
+            ).pipe(Layer.provideMerge(leaf))
+        )
+
+      it("stamps an unrouted review and persists it", async () => {
+        withSession()
+        const layer = env()
+        await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(layer)))
+        const stamp = await Effect.runPromise(reviewMarkRouted("s1").pipe(Effect.provide(layer)))
+        expect(stamp).not.toBeNull()
+        const stored = await Effect.runPromise(reviewGet("s1").pipe(Effect.provide(layer)))
+        expect(stored?.routedAt).toBe(stamp)
+      })
+
+      /**
+       * The renderer calls this from an effect, and an effect can fire twice
+       * (StrictMode, two panes on one session). The stamp is a fact about the
+       * FIRST routing — a second call must not move it.
+       */
+      it("keeps the original stamp when called again", async () => {
+        withSession()
+        const layer = env()
+        await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(layer)))
+        const first = await Effect.runPromise(reviewMarkRouted("s1").pipe(Effect.provide(layer)))
+        const second = await Effect.runPromise(reviewMarkRouted("s1").pipe(Effect.provide(layer)))
+        expect(second).toBe(first)
+      })
+
+      // Null, not a stamp: claiming "routed" for a review that doesn't exist
+      // would leave findings reading as sent that no agent ever heard about.
+      it("returns null when there is no stored review", async () => {
+        withSession()
+        const stamp = await Effect.runPromise(reviewMarkRouted("s1").pipe(Effect.provide(env())))
+        expect(stamp).toBeNull()
+      })
+
+      /**
+       * The end-to-end refutation of "a failed persist makes markRouted return
+       * null forever, so routing re-sends indefinitely".
+       *
+       * It can't. `ReviewStore.set` updates its in-memory mirror UNCONDITIONALLY
+       * (that write is the de-dupe's brake and provably cannot fail), and only
+       * the DISK write is best-effort. So a `reviewRun` whose reviews dir is
+       * unwritable still leaves the mirror holding the review — and
+       * `reviewMarkRouted`, which reads through the same process's mirror, stamps
+       * it just fine. The disk failure costs durability across a restart, not the
+       * stamp; and across a restart the renderer re-reads null too, so it never
+       * routes a review main has forgotten.
+       */
+      it("stamps a routedAt even when the reviews dir is unwritable", async () => {
+        withSession()
+        // A file where the reviews DIRECTORY should be → every write beneath it
+        // fails, exactly like a permissions/full-disk failure.
+        mkdirSync(root, { recursive: true })
+        writeFileSync(join(root, "reviews"), "not a directory")
+        // BOTH calls under ONE layer build, which is the whole point: production
+        // runs every RPC on a single `ManagedRuntime.make(AppLayer)`, so the
+        // ReviewStore — and its in-memory mirror — is a process singleton shared
+        // across reviewRun and reviewMarkRouted. Providing the layer per
+        // `runPromise` would build a fresh, empty mirror each time and prove
+        // nothing about the real code.
+        const stamp = await Effect.runPromise(
+          Effect.gen(function* () {
+            yield* reviewRun("s1", false)
+            return yield* reviewMarkRouted("s1")
+          }).pipe(Effect.provide(env()))
+        )
+        expect(stamp).not.toBeNull()
+      })
     })
   })
 })

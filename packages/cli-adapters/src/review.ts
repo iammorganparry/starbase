@@ -405,7 +405,15 @@ export class ReviewService extends Effect.Service<ReviewService>()("@starbase/Re
           // A reviewer that ran but emitted no parseable block still produced a
           // review — a refusal, or prose. Surface the text so the user sees why,
           // rather than an empty list that reads as "no bugs found".
-          note: findings === null ? nonEmpty(text) ?? "The reviewer produced no output." : null
+          note: findings === null ? nonEmpty(text) ?? "The reviewer produced no output." : null,
+          // Routing and posting are the CALLER's business, not the reviewer's.
+          // This service's one job is the verdict — it has no GhService and no
+          // conversation to send to, and keeping it that way is what lets it be
+          // driven from a test without a GitHub in sight. The `Review.run`
+          // handler stamps these once it has acted on the split.
+          routedAt: null,
+          postedAt: null,
+          postError: null
         }
       })
 

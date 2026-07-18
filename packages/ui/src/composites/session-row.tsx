@@ -1,7 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import type { Session, SessionActivity } from "@starbase/core"
-import { activityLabel, activityStatus } from "@starbase/core"
+import { activityLabel, displayStatusOf } from "@starbase/core"
 import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { relativeTime } from "../lib/relative-time.js"
@@ -10,7 +10,7 @@ import { Badge } from "../components/badge.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { ProviderIcon } from "../components/provider-icon.js"
 import { ContextMenu, type ContextMenuItem } from "../components/context-menu.js"
-import { statusLabel, statusTextClass } from "../tokens.js"
+import { displayStatusLabel, displayStatusTone, statusTextClass } from "../tokens.js"
 
 /** A session row for the sidebar list. Active state gets the blue ring. */
 export function SessionRow({
@@ -42,10 +42,16 @@ export function SessionRow({
   onDelete?: (id: string) => void
   className?: string
 }) {
-  // A live activity rolls up to a status (for the dot's colour) but keeps its own
-  // richer label — "Running npm test" rather than a bare "thinking…".
-  const status = activity ? activityStatus(activity.kind) : session.status
-  const label = activity ? activityLabel(activity) : statusLabel[status]
+  // One rollup, three jobs: what the row says, what colour it says it in, and
+  // whether it dims. The label is one of five words — never the tool or target.
+  const display = displayStatusOf(activity, session.status)
+  const status = displayStatusTone[display]
+  const label = displayStatusLabel[display]
+  // The detail the label no longer shows ("Running npm test -- auth") survives on
+  // hover. It's genuinely useful when you want it, and it was the reason the
+  // label used to be unbounded — a title attribute gives it a home that can't
+  // push the branch name out of the row.
+  const detail = activity ? activityLabel(activity) : label
   const [draft, setDraft] = useState<string | null>(null)
 
   // Quick actions — archive/restore + delete — surfaced on hover and via a
@@ -153,7 +159,9 @@ export function SessionRow({
     )
   }
 
-  const idle = status === "idle"
+  // Off the display rollup, not the raw status, so the row that SAYS "Idle" is
+  // the row that dims — including a "done" session, which folds to idle.
+  const idle = display === "idle"
   const hasMeta =
     session.prNumber !== null ||
     session.issueNumber != null ||
@@ -212,14 +220,11 @@ export function SessionRow({
         </span>
         <div className="flex-1" />
         {/*
-          An activity label carries a target ("Running npm test -- auth"), so cap
-          it and ellipsize rather than shoving the branch out of the row. The full
-          text stays available on hover.
+          One of five fixed words, so it needs no width cap and cannot ellipsize —
+          the branch beside it gets all the room the label used to take. `detail`
+          carries what the label dropped, on hover.
         */}
-        <span
-          title={label}
-          className={cn("max-w-[62%] flex-none truncate", statusTextClass[status])}
-        >
+        <span title={detail} className={cn("flex-none", statusTextClass[status])}>
           {label}
         </span>
       </div>

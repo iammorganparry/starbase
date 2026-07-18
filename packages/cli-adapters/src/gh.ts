@@ -21,7 +21,7 @@ import { GhError, PrAuthorAssociation } from "@starbase/core"
 import { Command } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect, Option, Schema, Stream } from "effect"
-import { runGh, runString, which } from "./command.js"
+import { runGh, runGhInput, runString, which } from "./command.js"
 
 const UNAVAILABLE: GhStatus = {
   available: false,
@@ -559,6 +559,105 @@ const REVIEW_FLAG: Record<ReviewSubmitKind, string> = {
   "request-changes": "--request-changes"
 }
 
+/**
+ * A hunk header — `@@ -12,7 +14,9 @@`. Group 1 is the new-side START line; group
+ * 2 is the new-side LENGTH (the `,9`), which is optional and defaults to 1 when
+ * absent (`@@ -12 +14 @@` is a single-line hunk). The old-side `-12,7` is not
+ * captured — only the new side can be commented on.
+ */
+const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/
+
+/**
+ * The NEW-side (`side: "RIGHT"`) line numbers GitHub will accept a review
+ * comment on, per repo-relative path.
+ *
+ * **Why this exists at all.** `POST /pulls/{n}/reviews` is all-or-nothing: name
+ * one line outside the diff and GitHub 422s the ENTIRE review, so a single
+ * mis-anchored nit silently takes every other nit down with it. The reviewer is
+ * a language model reporting line numbers it read off a diff — it gets one wrong
+ * often enough that "just trust it" is not a strategy. Callers check against
+ * this map first and fold whatever fails into the review body, where a line
+ * number is a nice-to-have rather than a precondition.
+ *
+ * Only `+` (added) and ` ` (context) lines count. A `-` line exists solely on
+ * the LEFT side; commenting on it with `side: "RIGHT"` is exactly the 422 above.
+ */
+export const postableLines = (diff: string): ReadonlyMap<string, ReadonlySet<number>> => {
+  const out = new Map<string, Set<number>>()
+  let path: string | null = null
+  let newLine = 0
+  // New-side lines still expected in the current hunk, from the header's `+c,d`
+  // length. Decremented on each context/added line; at 0 the hunk's new side is
+  // spent. This is the diff's OWN declared bound, and it is what keeps counting
+  // honest — see the trailing-line note below.
+  let remaining = 0
+  // Whether we're inside a hunk body. Load-bearing for diffs-of-diffs (a PR that
+  // touches a .patch fixture, or this very repo's tests): inside a hunk, a line
+  // reading `+++ b/x` is an ADDED LINE whose content is `++ b/x`, not a file
+  // header. Only a line at column 0 outside a hunk can be a header — and a real
+  // `diff --git` can never appear inside one, because every hunk line is
+  // prefixed with ` `, `+`, or `-`.
+  let inHunk = false
+
+  for (const raw of diff.split("\n")) {
+    if (raw.startsWith("diff --git ")) {
+      path = null
+      inHunk = false
+      continue
+    }
+    if (!inHunk && raw.startsWith("+++ ")) {
+      const target = raw.slice(4).trim()
+      // A deletion's new side is /dev/null — nothing to comment on.
+      path = target === "/dev/null" ? null : target.replace(/^b\//, "")
+      continue
+    }
+    if (!inHunk && raw.startsWith("--- ")) continue
+    const hunk = HUNK_RE.exec(raw)
+    if (hunk !== null) {
+      inHunk = true
+      newLine = Number(hunk[1])
+      // The `,d` length, or 1 when omitted.
+      remaining = hunk[2] === undefined ? 1 : Number(hunk[2])
+      continue
+    }
+    if (!inHunk || path === null) continue
+
+    if (raw.startsWith("-")) {
+      // Left side only — advances nothing on the right, and consumes none of the
+      // new-side budget.
+      continue
+    }
+
+    if (raw.startsWith("+") || raw.startsWith(" ") || raw.length === 0) {
+      // Bounded by the header's declared new-side length. Past it, a line that
+      // still LOOKS like hunk body is not one — most commonly the empty final
+      // element `diff.split("\n")` yields for `gh pr diff`'s trailing newline.
+      // Counting it would admit a phantom line number one past the file's end —
+      // the classic end-of-file off-by-one — and a finding mis-anchored there
+      // would 422 the whole review, the exact failure this function prevents.
+      if (remaining <= 0) {
+        inHunk = false
+        continue
+      }
+      // A bare empty line is a context line whose single space was stripped —
+      // `gh pr diff` and the REST `patch` field both emit these. Counting it is
+      // what keeps every subsequent line number in the hunk aligned.
+      let lines = out.get(path)
+      if (lines === undefined) {
+        lines = new Set()
+        out.set(path, lines)
+      }
+      lines.add(newLine)
+      newLine += 1
+      remaining -= 1
+    } else {
+      // "\ No newline at end of file", or we've fallen out of the hunk body.
+      if (!raw.startsWith("\\")) inHunk = false
+    }
+  }
+  return out
+}
+
 /** Run a command capturing exit code + combined stdout/stderr; never fails. */
 const capture = (
   bin: string,
@@ -825,6 +924,58 @@ export class GhService extends Effect.Service<GhService>()(
         body: string
       ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
         runGh(cwd, ["pr", "comment", String(number), "--body", body]).pipe(Effect.asVoid),
+
+      /**
+       * Submit a COMMENT review on `number` carrying inline, line-anchored
+       * comments — the shape `gh pr review` cannot express (it takes a body and
+       * nothing else).
+       *
+       * Every comment's `line` MUST be a NEW-side line present in the diff at
+       * `commitSha` (see `postableLines`) — GitHub rejects the whole review
+       * otherwise, not just the offending comment.
+       *
+       * `comments` may be empty: that degrades to a plain body-only review,
+       * which is the right outcome when nothing anchored.
+       */
+      prReviewComments: (
+        cwd: string,
+        number: number,
+        input: {
+          /** The head commit the comments are anchored against. */
+          readonly commitSha: string
+          readonly body: string
+          readonly comments: ReadonlyArray<{
+            readonly path: string
+            readonly line: number
+            /** Start of a multi-line range, or null for a single line. */
+            readonly startLine: number | null
+            readonly body: string
+          }>
+        }
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGhInput(
+          cwd,
+          ["api", "--method", "POST", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--input", "-"],
+          JSON.stringify({
+            commit_id: input.commitSha,
+            body: input.body,
+            // COMMENT, never REQUEST_CHANGES: these are nits and minors by
+            // construction (the critical/major half went to the agent), and a
+            // bot blocking a PR over a nit is how a reviewer gets muted.
+            event: "COMMENT",
+            comments: input.comments.map((c) => ({
+              path: c.path,
+              line: c.line,
+              // Omitted rather than null when absent: GitHub 422s an explicit
+              // `start_line: null`, and rejects a start_line equal to line.
+              ...(c.startLine === null || c.startLine >= c.line
+                ? {}
+                : { start_line: c.startLine, start_side: "RIGHT" }),
+              side: "RIGHT",
+              body: c.body
+            }))
+          })
+        ).pipe(Effect.asVoid),
 
       /** Submit a review (comment / approve / request-changes) on `number`. */
       prReview: (
