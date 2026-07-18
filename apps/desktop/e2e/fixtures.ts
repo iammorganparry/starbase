@@ -63,6 +63,32 @@ export interface LaunchOptions {
    */
   readonly signedIn?: boolean
   /**
+   * Seed a fake harness home for CLAUDE (`~/.claude.json`, `~/.claude/settings.json`)
+   * and point the app at it with `STARBASE_HARNESS_HOME`. Codex/cursor/opencode
+   * seeding does not exist yet — add it here when a spec needs those harnesses.
+   *
+   * Needed because MCP config lives under the operator's REAL home, not
+   * `STARBASE_HOME` — without this override an MCP spec would read the developer's
+   * own `~/.claude.json` and say something different on every machine.
+   */
+  readonly mcp?: {
+    /** Written to `<fake home>/.claude.json` as top-level `mcpServers` (user scope). */
+    readonly userServers?: Record<string, unknown>
+    /** Written to `<fake home>/.claude/settings.json` (user-level settings). */
+    readonly settings?: Record<string, unknown>
+    /**
+     * Written to `<repo>/.claude/settings.local.json` — where Claude actually
+     * records `.mcp.json` approvals in the mainstream flow, so this is the path
+     * that matters for the project-server gate.
+     */
+    readonly projectSettings?: Record<string, unknown>
+    /** Written to `~/.claude.json` as `projects[<repo>]` (what the interactive prompt writes). */
+    readonly projectEntry?: Record<string, unknown>
+    /** Written to `<repo>/.mcp.json` as `mcpServers` (project scope). */
+    readonly projectServers?: Record<string, unknown>
+  }
+
+  /**
    * Install a deterministic fake `opencode` on PATH so discovery, the version
    * gate, the model catalogue and the provider list all run offline — instead of
    * depending on whether this host happens to have opencode installed.
@@ -116,6 +142,88 @@ export interface LaunchOptions {
       updatedAt?: string
     }>
   }
+}
+
+/**
+ * Install a fake harness in the pinned discovery dir that only answers `--version`.
+ *
+ * Discovery is pinned to that dir (`STARBASE_DISCOVERY_BIN_DIR`), so without this
+ * the suite would find NO harness and every flow gated on one — creating a
+ * session, the harness picker, the model chip — would skip. A shim is enough
+ * because `STARBASE_SCRIPTED_AGENT` routes actual turns to the scripted harness:
+ * the binary is only ever asked for its version.
+ *
+ * This is what makes those specs both hermetic AND still run. Previously they
+ * depended on the developer having the real CLI installed, which meant the suite
+ * tested something different on every machine — and on CI, nothing at all. The
+ * provider-switch spec is the clearest case: it skipped unless you personally had
+ * Codex installed, and its own comment conceded "there's no fixture for it".
+ */
+const installVersionOnlyHarness = (binDir: string, bin: string, version: string): void => {
+  mkdirSync(binDir, { recursive: true })
+  const shim = `#!/usr/bin/env node
+// Discovery runs \`--version\`. Anything else (e.g. the codex app-server model
+// probe) exits immediately, so the catalogue degrades to the static fallback
+// list rather than hanging — deterministic either way.
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  process.stdout.write("${version}\\n")
+}
+process.exit(0)
+`
+  const path = join(binDir, bin)
+  writeFileSync(path, shim)
+  chmodSync(path, 0o755)
+}
+
+/**
+ * Install a fake `codex` that answers `--version` AND speaks enough of the
+ * app-server JSON-RPC protocol to serve a model catalogue.
+ *
+ * A version-only shim isn't enough: the provider-switch spec picks a Codex model
+ * by its displayed label, and without a catalogue the chip falls back to the
+ * static list — whose ids are lowercase, so the spec's `/^GPT-5\./` finds nothing.
+ * That regex was written against the REAL CLI's labels, which is precisely the
+ * machine-dependence being removed here, so the fixture reproduces the real
+ * response rather than the assertion being relaxed to fit a weaker fake.
+ */
+const installFakeCodex = (binDir: string): void => {
+  mkdirSync(binDir, { recursive: true })
+  const shim = `#!/usr/bin/env node
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  process.stdout.write("codex-cli 0.5.0\\n")
+  process.exit(0)
+}
+if (process.argv[2] !== "app-server") process.exit(0)
+
+// Newline-delimited JSON-RPC over stdio, matching codex-models.ts: ack
+// \`initialize\` (id 1), then answer \`model/list\` (id 2) with the shape its
+// \`CodexModel\` parser expects.
+const models = [
+  { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", isDefault: true },
+  { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
+  { id: "gpt-5.5", displayName: "GPT-5.5" }
+]
+let buffer = ""
+process.stdin.on("data", (chunk) => {
+  buffer += chunk.toString()
+  let index = buffer.indexOf("\\n")
+  while (index !== -1) {
+    const line = buffer.slice(0, index).trim()
+    buffer = buffer.slice(index + 1)
+    if (line) {
+      const msg = JSON.parse(line)
+      if (msg.id === 1) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }) + "\\n")
+      if (msg.id === 2) {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { data: models } }) + "\\n")
+      }
+    }
+    index = buffer.indexOf("\\n")
+  }
+})
+`
+  const path = join(binDir, "codex")
+  writeFileSync(path, shim)
+  chmodSync(path, 0o755)
 }
 
 /**
@@ -445,6 +553,39 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       // when the app first scans them.
       options.seed?.({ reposDir, repoPath })
 
+      // Fake harness home for MCP config. Written before launch so the first read
+      // sees it; `STARBASE_HARNESS_HOME` below points the main process here.
+      let mcpEnv: Record<string, string> = {}
+      if (options.mcp) {
+        const harnessHome = join(home, "harness-home")
+        mkdirSync(join(harnessHome, ".claude"), { recursive: true })
+        writeFileSync(
+          join(harnessHome, ".claude.json"),
+          JSON.stringify({
+            mcpServers: options.mcp.userServers ?? {},
+            ...(options.mcp.projectEntry ? { projects: { [repoPath]: options.mcp.projectEntry } } : {})
+          })
+        )
+        writeFileSync(
+          join(harnessHome, ".claude", "settings.json"),
+          JSON.stringify(options.mcp.settings ?? {})
+        )
+        if (options.mcp.projectSettings) {
+          mkdirSync(join(repoPath, ".claude"), { recursive: true })
+          writeFileSync(
+            join(repoPath, ".claude", "settings.local.json"),
+            JSON.stringify(options.mcp.projectSettings)
+          )
+        }
+        if (options.mcp.projectServers) {
+          writeFileSync(
+            join(repoPath, ".mcp.json"),
+            JSON.stringify({ mcpServers: options.mcp.projectServers })
+          )
+        }
+        mcpEnv = { STARBASE_HARNESS_HOME: harnessHome }
+      }
+
       // Optional fake `gh` / `opencode` on PATH (offline + deterministic). Both
       // land in the same bin dir, which is prefixed onto PATH so the shims win
       // over any real install on this host — that's what makes these tests say
@@ -461,6 +602,21 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         opencodeEnv = installFakeOpencode(binDir, options.opencode)
         pathPrefix = `${binDir}:`
       }
+
+      /**
+       * Harness discovery is PINNED to this dir, so the suite can never find the
+       * developer's real `claude`/`opencode`. That matters for more than speed:
+       * `withOpencodeServer` inherits the environment untouched (the BYOK
+       * contract), so an unpinned run boots the developer's own opencode against
+       * their own credentials — and spawns one per launch.
+       *
+       * A fake `claude` always goes in, because pinning an EMPTY dir would make
+       * every harness-gated flow (create-session, harness picker, model chip)
+       * silently skip. Specs that want opencode install their own shim above.
+       */
+      installVersionOnlyHarness(binDir, "claude", "2.0.0 (Claude Code)")
+      installFakeCodex(binDir)
+      pathPrefix = `${binDir}:`
 
       // Offline auth backend. Signed-in by default: seed the token file that the
       // e2e plaintext SecretStore reads, so the app boots past the wall.
@@ -489,8 +645,17 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
           ...process.env,
           ...ghEnv,
           ...opencodeEnv,
+          ...mcpEnv,
           PATH: `${pathPrefix}${process.env.PATH ?? ""}`,
           STARBASE_HOME: home,
+          // Pin harness discovery to the fixture's own bin dir. PATH alone can't
+          // do this: `CLI_SPECS.candidates` hardcodes absolute install paths
+          // (/opt/homebrew/bin/opencode), so a real install would still be found.
+          STARBASE_DISCOVERY_BIN_DIR: binDir,
+          // The Anthropic model catalogue is a live HTTP call whenever this is
+          // set. Blank it so the suite falls back to the static list instead of
+          // hitting the network with the developer's key.
+          ANTHROPIC_API_KEY: "",
           ELECTRON_RENDERER_URL: "",
           // Auth: talk to the offline fake backend, and store the token as a plain
           // file (no OS keychain prompts under headless Playwright).

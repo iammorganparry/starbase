@@ -4,6 +4,7 @@ import type { Event, Part } from "@opencode-ai/sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
+import { stopChild, trackChild } from "./child-registry.js"
 
 /**
  * Real opencode harness, driven by `@opencode-ai/sdk`'s CLIENT against a server
@@ -608,22 +609,24 @@ const driveOpencode = async (
   if (spec.binPath === null) throw new Error("opencode binary not found")
 
   // `--port=0` → the OS picks a free port, so parallel sessions never collide.
-  const proc = spawn(spec.binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
-    cwd: spec.cwd || undefined,
-    env: {
-      ...process.env,
-      // Layers OVER the user's own opencode config rather than replacing it, so
-      // their providers/keys/levers survive and we only pin what this run needs.
-      OPENCODE_CONFIG_CONTENT: JSON.stringify({
-        permission: mapOpencodePermission(spec.mode, spec.readOnly ?? false)
-      })
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  })
+  // Tracked so `before-quit` can reap it — a quit mid-run would otherwise orphan
+  // this server, which outlives the app and keeps its port.
+  const proc = trackChild(
+    spawn(spec.binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
+      cwd: spec.cwd || undefined,
+      env: {
+        ...process.env,
+        // Layers OVER the user's own opencode config rather than replacing it, so
+        // their providers/keys/levers survive and we only pin what this run needs.
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: mapOpencodePermission(spec.mode, spec.readOnly ?? false)
+        })
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    })
+  )
 
-  const kill = (): void => {
-    if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGTERM")
-  }
+  const kill = (): void => stopChild(proc)
   signal.addEventListener("abort", kill, { once: true })
 
   try {

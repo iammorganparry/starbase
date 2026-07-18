@@ -7,6 +7,7 @@ import {
   ConfigService,
   DiscoveryService,
   GhService,
+  McpService,
   ModelsService,
   ReviewService,
   ReviewStore,
@@ -29,6 +30,8 @@ import {
   githubDetectPr,
   githubSubmitReview,
   githubPr,
+  mcpList,
+  mcpStatus,
   modelsCatalog,
   modelsList,
   reviewGet,
@@ -206,6 +209,77 @@ describe("RPC handlers", () => {
       expect(skills.map((s) => s.name)).not.toContain("/plan")
       expect(skills.map((s) => s.name)).not.toContain("/test")
       expect(skills.map((s) => s.name)).not.toContain("/commit")
+    })
+  })
+
+  /**
+   * MCP handlers resolve the harness's OWN config dir. `STARBASE_HARNESS_HOME`
+   * points them at a seeded fake `~` so these tests never read the developer's real
+   * `~/.claude.json` — `STARBASE_HOME` can't do that job, since harness config lives
+   * outside Starbase's state dir.
+   */
+  describe("Mcp.list / Mcp.status", () => {
+    let harnessHome: string
+    beforeEach(() => {
+      harnessHome = join(dir, "fake-home")
+      mkdirSync(harnessHome, { recursive: true })
+      process.env.STARBASE_HARNESS_HOME = harnessHome
+    })
+    afterEach(() => {
+      delete process.env.STARBASE_HARNESS_HOME
+    })
+
+    const env = () => Layer.mergeAll(base, SessionStore.Default, McpService.Default)
+
+    const writeClaudeConfig = (servers: Record<string, unknown>) =>
+      writeFileSync(join(harnessHome, ".claude.json"), JSON.stringify({ mcpServers: servers }))
+
+    it("reads the seeded harness home rather than the real one", async () => {
+      writeClaudeConfig({ seeded: { url: "https://seeded/mcp" } })
+      const servers = await Effect.runPromise(mcpList(null, "claude").pipe(Effect.provide(env())))
+      expect(servers.map((s) => s.name)).toStrictEqual(["seeded"])
+    })
+
+    /** Settings has no session: it passes cli explicitly and must still work. */
+    it("resolves the harness from cli when there is no session", async () => {
+      mkdirSync(join(harnessHome, ".cursor"), { recursive: true })
+      writeFileSync(join(harnessHome, ".cursor", "mcp.json"), JSON.stringify({ mcpServers: { c: { url: "https://c" } } }))
+      const servers = await Effect.runPromise(mcpList(null, "cursor").pipe(Effect.provide(env())))
+      expect(servers.map((s) => s.name)).toStrictEqual(["c"])
+      expect(servers[0]?.cli).toBe("cursor")
+    })
+
+    // An unknown session must not error — it falls back to Claude with no worktree.
+    it("resolves for an unknown session rather than failing", async () => {
+      writeClaudeConfig({ seeded: { url: "https://seeded/mcp" } })
+      const servers = await Effect.runPromise(mcpList("nope", undefined).pipe(Effect.provide(env())))
+      expect(servers.map((s) => s.name)).toStrictEqual(["seeded"])
+    })
+
+    it("returns [] when the harness has no MCP config at all", async () => {
+      const servers = await Effect.runPromise(mcpList(null, "claude").pipe(Effect.provide(env())))
+      expect(servers).toStrictEqual([])
+    })
+
+    /** The redaction contract, asserted at the boundary the renderer actually sees. */
+    it("never sends env values across the RPC boundary", async () => {
+      writeClaudeConfig({ secretive: { command: "srv", env: { API_KEY: "sk-live-DO-NOT-LEAK" } } })
+      const servers = await Effect.runPromise(mcpList(null, "claude").pipe(Effect.provide(env())))
+      expect(JSON.stringify(servers)).not.toContain("sk-live-DO-NOT-LEAK")
+      expect(servers[0]?.envKeys).toStrictEqual(["API_KEY"])
+    })
+
+    it("reports status for a server that cannot be reached, without failing", async () => {
+      writeClaudeConfig({ dead: { command: "/nonexistent/mcp-server" } })
+      const statuses = await Effect.runPromise(mcpStatus(null, "claude", false).pipe(Effect.provide(env())))
+      expect(statuses).toHaveLength(1)
+      expect(statuses[0]?.name).toBe("dead")
+      expect(statuses[0]?.state).toBe("failed")
+    })
+
+    it("returns [] from status when nothing is configured", async () => {
+      const statuses = await Effect.runPromise(mcpStatus(null, "claude", false).pipe(Effect.provide(env())))
+      expect(statuses).toStrictEqual([])
     })
   })
 

@@ -19,6 +19,7 @@ import {
   ReviewService,
   ReviewStore,
   SessionStore,
+  McpService,
   SkillsService,
   TerminalService,
   TranscriptStore,
@@ -77,6 +78,7 @@ const AppLayer = RpcServerLive.pipe(
   // reaches the same instance directly (deep-link token storage in index.ts).
   Layer.provideMerge(SecretStoreLayer),
   Layer.provide(SkillsService.Default),
+  Layer.provide(McpService.Default),
   // provideMerge: the `Models.*` handlers consume ModelsService AND the startup
   // prefetch reaches the very same instance — a different one would warm a cache
   // nobody reads, so the merge is what makes the prefetch actually count.

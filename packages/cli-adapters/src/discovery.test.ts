@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { DiscoveryService, meetsMinVersion } from "./discovery.js"
 import { fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
@@ -13,6 +13,98 @@ const run = (handler: FakeCommandHandler) =>
   runExit(DiscoveryService.list().pipe(Effect.provide(DiscoveryService.Default)), fakeCommandExecutor(handler))
 
 const basename = (command: string) => command.split("/").pop() ?? command
+
+/**
+ * The e2e hermeticity guard.
+ *
+ * `STARBASE_DISCOVERY_BIN_DIR` pins discovery to one directory so a test run can
+ * never find the developer's real harnesses — booting them is slow, varies per
+ * machine, and (since `withOpencodeServer` inherits the environment untouched)
+ * runs them against the developer's own credentials.
+ *
+ * The handlers below deliberately report a REAL install via both other routes —
+ * `which` resolves, and the absolute candidates answer `--version` — so each test
+ * proves the pin overrides them rather than merely coinciding with an empty host.
+ */
+describe("DiscoveryService.list — pinned bin dir", () => {
+  const PIN = "/tmp/starbase-pinned-bin"
+
+  afterEach(() => {
+    delete process.env.STARBASE_DISCOVERY_BIN_DIR
+  })
+
+  /** A host where every harness is genuinely installed, by both discovery routes. */
+  const fullyInstalled: FakeCommandHandler = (command, args) => {
+    if (command === "which" || command === "where") return { stdout: `/opt/homebrew/bin/${args[0]}` }
+    if (args.includes("--version")) return { stdout: "9.9.9" }
+    return { stdout: "" }
+  }
+
+  /** Delegate to `fullyInstalled`, forwarding every argument the handler receives. */
+  const orInstalled = (
+    ...params: Parameters<FakeCommandHandler>
+  ): ReturnType<FakeCommandHandler> => fullyInstalled(...params)
+
+  it("finds nothing when the pinned dir is empty, despite a real install on PATH", async () => {
+    process.env.STARBASE_DISCOVERY_BIN_DIR = PIN
+    const exit = await run((...params) => {
+      const [command] = params
+      // The pinned probe runs `<pin>/<bin> --version`; that binary doesn't exist.
+      if (command.startsWith(PIN)) return { stdout: "" }
+      return orInstalled(...params)
+    })
+
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value.every((c) => !c.available)).toBe(true)
+    expect(exit.value.every((c) => c.binPath === null)).toBe(true)
+  })
+
+  it("finds only what the pinned dir contains", async () => {
+    process.env.STARBASE_DISCOVERY_BIN_DIR = PIN
+    const exit = await run((...params) => {
+      const [command, args] = params
+      if (command === `${PIN}/claude` && args.includes("--version")) return { stdout: "2.0.0 (Claude Code)" }
+      if (command.startsWith(PIN)) return { stdout: "" }
+      return orInstalled(...params)
+    })
+
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const byKind = Object.fromEntries(exit.value.map((c) => [c.kind, c]))
+    expect(byKind.claude).toMatchObject({ available: true, binPath: `${PIN}/claude` })
+    // The others are installed on this fake host, and must still be invisible.
+    expect(byKind.codex?.available).toBe(false)
+    expect(byKind.opencode?.available).toBe(false)
+    expect(byKind.cursor?.available).toBe(false)
+  })
+
+  /** PATH scrubbing alone could never do this — the candidates are absolute. */
+  it("ignores the hardcoded absolute candidates while pinned", async () => {
+    process.env.STARBASE_DISCOVERY_BIN_DIR = PIN
+    const exit = await run((command) => {
+      if (command.startsWith(PIN)) return { stdout: "" }
+      // Every absolute candidate answers, as it would on a real dev machine.
+      if (command.includes("/opt/homebrew/bin/") || command.includes("/.local/bin/")) {
+        return { stdout: "9.9.9" }
+      }
+      return { stdout: "" }
+    })
+
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value.every((c) => !c.available)).toBe(true)
+  })
+
+  it("still probes the real host when the pin is unset or blank", async () => {
+    process.env.STARBASE_DISCOVERY_BIN_DIR = ""
+    const exit = await run(fullyInstalled)
+
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value.some((c) => c.available)).toBe(true)
+  })
+})
 
 describe("DiscoveryService.list", () => {
   it("marks a PATH-resolvable CLI available with its version, others unavailable", async () => {
