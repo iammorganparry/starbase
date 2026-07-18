@@ -489,10 +489,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           const binPath =
             (yield* DiscoveryService.list().pipe(Effect.orElseSucceed(() => [])))
               .find((c) => c.kind === cli)?.binPath ?? null
-          // The agent always runs in the session's isolated worktree. (Every
-          // session has one; the fallback keeps the type total and, since the
-          // adapter maps "" → the process cwd, an empty value is never silently
-          // "correct" — it would fail loudly on a missing worktree.)
+          // The agent always runs in the session's isolated worktree.
+          //
+          // This comment used to claim an empty value "would fail loudly on a
+          // missing worktree". It did the exact opposite: the adapters mapped
+          // `"" || undefined` to *no* cwd, so the harness inherited the Electron
+          // main process's working directory — in development, whichever worktree
+          // `pnpm dev` was launched from. An agent for repo A would then read and
+          // edit repo B, most likely Starbase's own source. The adapters now call
+          // `requireWorktree`, which throws rather than inheriting.
           const worktreePath = session?.worktreePath ?? ""
           // Saved plans for this worktree, so a "implement/continue the plan" turn
           // can be pointed at the plan file on disk (best-effort — never blocks).

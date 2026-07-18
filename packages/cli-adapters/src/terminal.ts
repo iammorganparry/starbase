@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto"
 import { TerminalError } from "@starbase/core"
 import type { TerminalChunk, TerminalInfo } from "@starbase/core"
 import { Effect, Exit, Mailbox, Stream } from "effect"
+import { neutralCwd } from "./cwd.js"
 
 /** Last-N-bytes of output kept for re-attach replay (per terminal). */
 const RING_CAP = 256 * 1024
@@ -156,7 +157,10 @@ export class TerminalService extends Effect.Service<TerminalService>()("@starbas
       Effect.try({
         try: () => {
           const shell = defaultShell()
-          const cwd = input.cwd ?? process.cwd()
+          // A terminal with no session anchors to the user's home, NOT the app's
+          // cwd — which in dev is whichever worktree Starbase was launched from,
+          // so commands typed here would run inside an unrelated repo.
+          const cwd = input.cwd?.trim() || neutralCwd()
           const pty = spawn(shell, shellArgs(), {
             name: "xterm-256color",
             cols: Math.max(1, input.cols || 80),

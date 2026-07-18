@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   AppPaths,
@@ -332,9 +332,15 @@ describe("RPC handlers", () => {
       expect(info.sessionId).toBe("s1")
     })
 
-    it("falls back to the process cwd for an unknown session with no cwd", async () => {
+    it("anchors a session-less terminal to home, NOT the app's own directory", async () => {
+      // This test used to assert the opposite — that the terminal fell back to
+      // `process.cwd()`. That was the bug written down as a guarantee: the app's
+      // cwd is, in development, whichever worktree `pnpm dev` was launched from,
+      // so a terminal with no worktree opened *inside an unrelated repo* and
+      // anything typed there ran against that repo's files.
       const info = await runCreate({ sessionId: "nope", cols: 80, rows: 24 })
-      expect(info.cwd).toBe(process.cwd())
+      expect(info.cwd).toBe(homedir())
+      expect(info.cwd).not.toBe(process.cwd())
     })
   })
 

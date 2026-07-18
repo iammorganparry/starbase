@@ -4,6 +4,7 @@ import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKM
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { startTeeStream, type TeeStream } from "./bash-tee.js"
+import { requireWorktree } from "./cwd.js"
 import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
@@ -785,7 +786,10 @@ export const runClaude = (
         const iterator = query({
           prompt: buildPromptInput(spec, resumeId),
           options: {
-            cwd: spec.cwd || undefined,
+            // Never `|| undefined`: an empty cwd makes the SDK inherit the app's
+            // working directory, pointing the agent at whatever repo Starbase itself
+            // was launched from instead of the session's worktree.
+            cwd: requireWorktree(spec.cwd, `session ${sessionId}`),
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),

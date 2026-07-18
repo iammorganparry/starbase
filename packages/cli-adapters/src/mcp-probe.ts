@@ -5,6 +5,7 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { Duration, Effect } from "effect"
 import type { McpLaunch, ParsedMcpServer } from "./mcp-config.js"
+import { neutralCwd } from "./cwd.js"
 
 /**
  * Live probing: does a configured MCP server actually answer?
@@ -51,8 +52,18 @@ const makeTransport = (launch: McpLaunch, cwd: string | null) => {
        * which would look like a broken server rather than a broken probe.
        */
       env: { ...getDefaultEnvironment(), ...launch.env },
-      // Project servers may use relative paths, so probe from the session's worktree.
-      ...(cwd === null ? {} : { cwd }),
+      /**
+       * Project servers may use relative paths, so probe from the session's
+       * worktree — and when there ISN'T one (a user-scope server probed from
+       * Settings), from an explicitly neutral directory.
+       *
+       * Never omit `cwd`. Omitting it makes the server inherit the Electron main
+       * process's cwd, which in development is whichever worktree `pnpm dev` was
+       * launched from. A server that writes a relative path then creates files
+       * inside an unrelated repo's checkout — which is exactly how a wowlogs-mcp
+       * SQLite database ended up as an untracked file in the starbase repo.
+       */
+      cwd: cwd ?? neutralCwd(),
       // The server's stderr is noise here; we report the handshake result, not its logs.
       stderr: "ignore"
     })
