@@ -40,12 +40,18 @@ describe("DiscoveryService.list — pinned bin dir", () => {
     return { stdout: "" }
   }
 
+  /** Delegate to `fullyInstalled`, forwarding every argument the handler receives. */
+  const orInstalled = (
+    ...params: Parameters<FakeCommandHandler>
+  ): ReturnType<FakeCommandHandler> => fullyInstalled(...params)
+
   it("finds nothing when the pinned dir is empty, despite a real install on PATH", async () => {
     process.env.STARBASE_DISCOVERY_BIN_DIR = PIN
-    const exit = await run((command, args) => {
+    const exit = await run((...params) => {
+      const [command] = params
       // The pinned probe runs `<pin>/<bin> --version`; that binary doesn't exist.
       if (command.startsWith(PIN)) return { stdout: "" }
-      return fullyInstalled(command, args)
+      return orInstalled(...params)
     })
 
     expect(exit._tag).toBe("Success")
@@ -56,10 +62,11 @@ describe("DiscoveryService.list — pinned bin dir", () => {
 
   it("finds only what the pinned dir contains", async () => {
     process.env.STARBASE_DISCOVERY_BIN_DIR = PIN
-    const exit = await run((command, args) => {
+    const exit = await run((...params) => {
+      const [command, args] = params
       if (command === `${PIN}/claude` && args.includes("--version")) return { stdout: "2.0.0 (Claude Code)" }
       if (command.startsWith(PIN)) return { stdout: "" }
-      return fullyInstalled(command, args)
+      return orInstalled(...params)
     })
 
     expect(exit._tag).toBe("Success")
