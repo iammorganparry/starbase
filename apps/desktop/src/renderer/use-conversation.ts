@@ -54,7 +54,7 @@ export interface Conversation {
   readonly queued: ReadonlyArray<QueuedMessage>
   /** Live sub-agents (harness `Task` spawns) for the current turn — watch-only tabs. */
   readonly subagents: ReadonlyArray<Subagent>
-  /** Cumulative tokens for the current/last turn (live analytics). */
+  /** Tokens currently occupying the main agent's context window. */
   readonly tokens: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   readonly runStartedAt: number | null

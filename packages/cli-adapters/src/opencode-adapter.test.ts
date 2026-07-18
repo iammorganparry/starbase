@@ -154,13 +154,13 @@ describe("totalTokens", () => {
   /**
    * The runtime sends a `total`; the SDK's type doesn't declare one. Prefer it,
    * but fall back to the sum so a change on either side can't silently report 0.
-   */
+  */
   it("prefers the runtime's total", () => {
-    expect(totalTokens({ total: 36313, input: 34508, output: 4, reasoning: 9 } as never)).toBe(36313)
+    expect(totalTokens({ total: 36313, input: 34508, output: 4, reasoning: 9 })).toBe(36313)
   })
 
-  it("falls back to the sum when total is absent", () => {
-    expect(totalTokens({ input: 100, output: 20, reasoning: 5 })).toBe(125)
+  it("falls back to the full context when total is absent", () => {
+    expect(totalTokens({ input: 100, output: 20, reasoning: 5, cache: { read: 400, write: 10 } })).toBe(520)
   })
 })
 
@@ -589,7 +589,7 @@ describe("createOpencodeMapper", () => {
     ])
   })
 
-  it("accumulates a running token count across steps", () => {
+  it("reports the latest step's context instead of adding contexts together", () => {
     const m = mapper()
     const step = (total: number) =>
       part({
@@ -601,7 +601,7 @@ describe("createOpencodeMapper", () => {
         tokens: { total, input: total, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
       })
     expect(m.apply(step(100))).toStrictEqual([{ _tag: "Usage", tokens: 100 }])
-    expect(m.apply(step(50))).toStrictEqual([{ _tag: "Usage", tokens: 150 }])
+    expect(m.apply(step(50))).toStrictEqual([{ _tag: "Usage", tokens: 50 }])
   })
 
   /**

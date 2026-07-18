@@ -116,6 +116,44 @@ beforeEach(() => {
   h.reviewCb = null
 })
 
+describe("conversationMachine — context size", () => {
+  it("tracks the latest context and does not replace it with the final run total", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "inspect the repo" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    emit({ _tag: "Usage", tokens: 120_000 })
+    expect(actor.getSnapshot().context.tokens).toBe(120_000)
+
+    // Compaction genuinely shrinks the context. A high-water mark would keep
+    // lying that the old, larger context was still loaded.
+    emit({ _tag: "Usage", tokens: 45_000 })
+    expect(actor.getSnapshot().context.tokens).toBe(45_000)
+
+    // Done can carry a terminal context reading for adapters without a live
+    // event. It must not overwrite the newer live reading we already received.
+    emit({ _tag: "Done", costUsd: 0, tokens: 300_000 })
+    await waitFor(actor, (s) => s.matches(idle))
+    expect(actor.getSnapshot().context.tokens).toBe(45_000)
+    actor.stop()
+  })
+
+  it("uses Done as a fallback when a harness has no live context event", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "inspect the repo" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "Done", costUsd: 0, tokens: 42_000 })
+    await waitFor(actor, (s) => s.matches(idle))
+
+    expect(actor.getSnapshot().context.tokens).toBe(42_000)
+    actor.stop()
+  })
+})
+
 describe("conversationMachine — queue while busy", () => {
   it("queues a message sent mid-run and replays it once the run completes", async () => {
     const actor = start()

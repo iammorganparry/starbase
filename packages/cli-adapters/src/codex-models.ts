@@ -1,6 +1,5 @@
 import type { ModelOption } from "@starbase/core"
-import { spawn } from "node:child_process"
-import { stopChild, trackChild } from "./child-registry.js"
+import { requestCodexAppServer } from "./codex-app-server.js"
 
 /**
  * Codex's model catalogue, read from the Codex CLI itself.
@@ -42,89 +41,27 @@ export const toModelOptions = (models: ReadonlyArray<CodexModel>): ReadonlyArray
     .sort((a, b) => Number(b.isDefault ?? false) - Number(a.isDefault ?? false))
     .map((m) => ({ id: m.id, label: m.displayName ?? m.id }))
 
-/** How long the whole handshake gets before we give up and use the fallback. */
-const TIMEOUT_MS = 8000
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+const isCodexModel = (value: unknown): value is CodexModel =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  (value.displayName === undefined || typeof value.displayName === "string") &&
+  (value.hidden === undefined || typeof value.hidden === "boolean") &&
+  (value.isDefault === undefined || typeof value.isDefault === "boolean")
 
 /**
  * Ask a Codex binary for its models. Resolves `null` on *any* problem (binary
  * missing, protocol drift, timeout, not logged in) — never rejects, never hangs.
  */
-export const fetchCodexModels = (binPath?: string | null): Promise<ReadonlyArray<ModelOption> | null> =>
-  new Promise((resolve) => {
-    let settled = false
-    /** Resolve once, and always tear the child down with it. */
-    const finish = (result: ReadonlyArray<ModelOption> | null) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      // The app-server runs until its stdin closes; kill it so a failed probe
-      // can't leave an orphaned process behind the desktop app.
-      stopChild(child)
-      resolve(result)
-    }
-
-    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
-
-    let child: ReturnType<typeof spawn>
-    try {
-      // Tracked so a quit mid-probe can't orphan it.
-      child = trackChild(
-        spawn(binPath || "codex", ["app-server"], { stdio: ["pipe", "pipe", "ignore"] })
-      )
-    } catch {
-      clearTimeout(timer)
-      resolve(null)
-      return
-    }
-
-    // A missing binary surfaces here rather than as a throw from spawn().
-    child.on("error", () => finish(null))
-    child.on("exit", () => finish(null))
-    // Writing to the stdin of a child that has already exited fails ASYNCHRONOUSLY
-    // — the EPIPE arrives as an 'error' event on the pipe, which `send`'s
-    // try/catch cannot see. With no listener that becomes an unhandled exception
-    // and takes the whole process down. A broken pipe just means the child is
-    // gone, which is exactly what `finish(null)` is for.
-    child.stdin?.on("error", () => finish(null))
-
-    const send = (id: number, method: string, params: unknown) => {
-      try {
-        child.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
-      } catch {
-        // Only catches a synchronous throw (e.g. the stream already destroyed);
-        // the async path is handled by the 'error' listener above.
-        finish(null)
-      }
-    }
-
-    let buffer = ""
-    child.stdout?.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString()
-      // Responses are newline-delimited JSON; a chunk may hold several or half.
-      let newline: number
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newline)
-        buffer = buffer.slice(newline + 1)
-        if (!line.trim()) continue
-
-        let message: { id?: number; result?: { data?: ReadonlyArray<CodexModel> } }
-        try {
-          message = JSON.parse(line)
-        } catch {
-          continue // notifications / partial noise we don't care about
-        }
-
-        // `initialize` acked → now ask for the catalogue.
-        if (message.id === 1) send(2, "model/list", {})
-
-        if (message.id === 2) {
-          const models = message.result?.data
-          if (!Array.isArray(models)) return finish(null)
-          const options = toModelOptions(models)
-          return finish(options.length > 0 ? options : null)
-        }
-      }
-    })
-
-    send(1, "initialize", { clientInfo: { name: "starbase", version: "1" } })
-  })
+export const fetchCodexModels = async (
+  binPath?: string | null
+): Promise<ReadonlyArray<ModelOption> | null> => {
+  const response = await requestCodexAppServer(binPath, "model/list", {})
+  if (!isRecord(response) || !Array.isArray(response.data) || !response.data.every(isCodexModel)) {
+    return null
+  }
+  const options = toModelOptions(response.data)
+  return options.length > 0 ? options : null
+}

@@ -4,11 +4,11 @@ import { describe, expect, it } from "vitest"
 import { UsageService } from "./usage.js"
 
 /**
- * UsageService assembly. The live Claude path spawns the real SDK, so here we
- * drive it in scripted mode (STARBASE_SCRIPTED_AGENT) to assert the hermetic
+ * UsageService assembly. The live provider paths spawn their local harnesses, so
+ * here we drive scripted mode (STARBASE_SCRIPTED_AGENT) to assert the hermetic
  * behaviour: installed harnesses appear, none claim live data, uninstalled ones
- * are dropped, and a `fetchedAt` stamp is always set. The live read is covered
- * by claude-usage.test.ts.
+ * are dropped, and a `fetchedAt` stamp is always set. Live reads are covered by
+ * the provider-specific usage tests.
  */
 
 const cli = (kind: CliInfo["kind"], available: boolean): CliInfo => ({

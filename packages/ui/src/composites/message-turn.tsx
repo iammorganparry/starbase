@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from "react"
+import { type ReactNode, useState } from "react"
 import type { CliKind, ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -12,7 +12,6 @@ import { PlanCard } from "./plan-card.js"
 import { QuestionSummary } from "./question-summary.js"
 import { ThoughtBlock } from "./thought-block.js"
 import { ToolCall } from "./tool-call.js"
-import { renderCommandWidget } from "../widgets/registry.js"
 
 // Parts fill the transcript's centered content column (width is owned by
 // ConversationView), so nothing here caps its own width.
@@ -48,18 +47,6 @@ const PATH_TOOLS: ReadonlySet<string> = new Set([
 const pathOf = (tool: ToolCallModel): string | null =>
   tool.target && PATH_TOOLS.has(tool.name) ? tool.target : null
 
-/**
- * What a bash call printed, wherever its harness happened to put it.
- *
- * The claude and codex adapters fill `output`; the opencode adapter reports
- * every tool's result as `preview` instead — the field the schema reserves for
- * an edit's diff snippet — because a diff peek was the only renderer available
- * when it was written. A Bash call never has a diff, so reading both is
- * unambiguous, and without it an opencode command renders "No output." while
- * what it printed sits one field away.
- */
-const bashOutput = (tool: ToolCallModel): string | undefined => tool.output ?? tool.preview ?? undefined
-
 /** A pulsing dots indicator shown while an assistant turn is still streaming. */
 function Working() {
   return (
@@ -75,29 +62,6 @@ function Working() {
 const HUNK_PREVIEW_LINES = 12
 
 function ToolCardView({ tool }: { tool: ToolCallModel }) {
-  /*
-   * A bash call gets a rich widget when we can actually read what it ran and
-   * printed; everything else falls through to the plain card below.
-   *
-   * The registry returns null for output it doesn't recognise, which is the
-   * property that makes this safe to add: an unparseable command renders
-   * exactly as it does today rather than as an empty widget. Memoised because
-   * parsing is regex over up to 6KB and the transcript re-renders on scroll.
-   */
-  const widget = useMemo(
-    () =>
-      tool.name === "Bash" && tool.target
-        ? renderCommandWidget({
-            command: tool.target,
-            output: bashOutput(tool),
-            status: tool.status,
-            // codex sends the true exit code (and opencode a failed call's error)
-            // only here; without it the card fabricates `exit 1`.
-            meta: tool.meta
-          })
-        : null,
-    [tool.name, tool.target, tool.output, tool.preview, tool.meta, tool.status]
-  )
   const [expanded, setExpanded] = useState(false)
   const lines = tool.preview ? tool.preview.replace(/\n+$/, "").split("\n") : []
   const clipped = lines.length > HUNK_PREVIEW_LINES && !expanded
@@ -107,14 +71,6 @@ function ToolCardView({ tool }: { tool: ToolCallModel }) {
   // else — a command and what it printed — only fits once opened.
   const openable = !tool.preview && (tool.output !== undefined || (tool.target?.length ?? 0) > 0)
   const path = pathOf(tool)
-  // data-command-widget names which spec took the command — a handle for tests
-  // and for anyone debugging why a card looks the way it does.
-  if (widget)
-    return (
-      <div className={WIDTH} data-command-widget={widget.id}>
-        {widget.node}
-      </div>
-    )
   return (
     <ToolCall
       status={tool.status}

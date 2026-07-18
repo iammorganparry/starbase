@@ -8,10 +8,9 @@ const fmtTokens = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n)
 
 /**
- * Live session analytics — elapsed time (ticking while running) + cumulative
- * token consumption, harness-agnostic (both are fed from the normalized stream:
- * `runStartedAt` from the turn start, `tokens` from `Usage`/`Done`). Renders
- * nothing when there's no run and no tokens to show.
+ * Live session analytics — elapsed time (ticking while running) + the number of
+ * tokens currently occupying the main agent's context window. Renders nothing
+ * when there's no run and no context size to show.
  */
 export function RunStats({
   startedAt,
@@ -49,7 +48,7 @@ export function RunStats({
       {elapsed && tokens > 0 && <span className="text-dim">·</span>}
       {tokens > 0 && (
         <span>
-          ↓ {fmtTokens(tokens)} <span className="text-dim">tokens</span>
+          {fmtTokens(tokens)} <span className="text-dim">context tokens</span>
         </span>
       )}
     </span>

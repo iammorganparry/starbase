@@ -8,14 +8,8 @@ export type ToolCallStatus = "success" | "running" | "error"
 
 export interface ToolCallProps {
   status: ToolCallStatus
-  /**
-   * Tool name, e.g. "Read", "Grep", "Bash".
-   *
-   * Optional because a command row names itself: `❯ vitest run` already says
-   * what it is, and a "Bash" label in front of it is a word of chrome between
-   * the glyph and the only thing worth reading.
-   */
-  name?: string
+  /** Tool name, e.g. "Read", "Grep", "Bash". */
+  name: string
   /** Primary target — file path or query. */
   target?: ReactNode
   /** Trailing meta, e.g. line count or "exit 1". */
@@ -25,14 +19,6 @@ export interface ToolCallProps {
   /** Inline body under the header — e.g. a `DiffPeek` for an edit. */
   children?: ReactNode
   icon?: ReactNode
-  /**
-   * Replaces the leading ✓ / ✗ / pulsing dot.
-   *
-   * For rows whose status is better told by a mark of their own — a database
-   * glyph, a green "listening" beacon — and which would otherwise render that
-   * mark *beside* a redundant tick.
-   */
-  statusIcon?: ReactNode
   /**
    * Make the header a toggle. The host owns the open state (so it can keep
    * rendering the right body); given this, the whole header becomes a button.
@@ -80,21 +66,16 @@ export function ToolCall({
   filePath,
   children,
   icon,
-  statusIcon,
   expanded = false,
   onToggle,
   className
 }: ToolCallProps) {
   const header = (
     <>
-      {statusIcon ?? (
-        <>
-          {status === "success" && <span className="text-green">✓</span>}
-          {status === "error" && <span className="text-red">✗</span>}
-          {status === "running" && <StatusDot tone="bg-yellow" size={8} pulse />}
-        </>
-      )}
-      {name && <span className="text-muted-foreground">{name}</span>}
+      {status === "success" && <span className="text-green">✓</span>}
+      {status === "error" && <span className="text-red">✗</span>}
+      {status === "running" && <StatusDot tone="bg-yellow" size={8} pulse />}
+      <span className="text-muted-foreground">{name}</span>
       {icon}
       {filePath && <FileIcon path={filePath} />}
       {filePath ? (

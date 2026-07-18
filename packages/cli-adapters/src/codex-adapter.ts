@@ -142,7 +142,10 @@ export const codexEventToStreamEvents = (
         {
           _tag: "Done",
           costUsd: 0,
-          tokens: event.usage.input_tokens + event.usage.output_tokens
+          // The exec SDK exposes aggregate turn consumption, not the current
+          // thread context size. Zero means "unavailable" to the renderer; a
+          // turn total labelled as context would be worse than no number.
+          tokens: 0
         }
       ]
 
