@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, lstatSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect } from "effect"
@@ -113,6 +113,41 @@ describe("GitService.createWorktree", () => {
       encoding: "utf-8"
     })
     expect(localLog).not.toContain("remote-only-commit")
+  })
+
+  it("leaves the session branch with NO upstream, so a bare push can't land on the base branch", async () => {
+    /*
+     * The regression this pins is a foot-gun, not a cosmetic one.
+     *
+     * Forking off `origin/main` makes git DWIM an upstream of `origin/main` onto
+     * the new branch. The worktree then reports "up to date with origin/main",
+     * and a bare `git push` in it — by the user, or by an agent granted push —
+     * resolves `@{u}` to `origin/main` and puts the session's commits directly on
+     * the base branch, unreviewed. A fresh session branch isn't on the remote
+     * yet, so it must have no upstream at all until something pushes it.
+     */
+    const repoPath = join(repos.dir, "upstream")
+    initGitRepoWithOrigin(repoPath)
+
+    const exit = await create(repoPath, "upstream")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    const config = (key: string) => {
+      const r = spawnSync("git", ["config", "--get", key], { cwd: exit.value.path, encoding: "utf-8" })
+      return r.stdout.trim()
+    }
+    expect(config(`branch.${exit.value.branch}.remote`)).toBe("")
+    expect(config(`branch.${exit.value.branch}.merge`)).toBe("")
+
+    // The operative assertion: `@{u}` must not resolve at all. Asserting the two
+    // config keys alone would still pass if some other mechanism supplied one.
+    const upstream = spawnSync("git", ["rev-parse", "--abbrev-ref", "@{u}"], {
+      cwd: exit.value.path,
+      encoding: "utf-8"
+    })
+    expect(upstream.status).not.toBe(0)
+    expect(upstream.stdout).not.toContain("origin/main")
   })
 
   it("still creates the worktree when origin is unreachable (fetch is best-effort)", async () => {

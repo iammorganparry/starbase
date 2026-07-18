@@ -151,6 +151,25 @@ export class GitService extends Effect.Service<GitService>()(
           yield* runGit(input.repoPath, [
             "worktree",
             "add",
+            /*
+             * --no-track, and it is load-bearing.
+             *
+             * The start point is normally `origin/<base>`, and creating a branch
+             * off a remote-tracking ref triggers git's DWIM: it writes
+             * `branch.starbase/<slug>.remote=origin` and `merge=refs/heads/main`.
+             * The session branch then reports "up to date with origin/main", and
+             * a bare `git push` inside the worktree — from the user OR from an
+             * agent that has been granted push — resolves `@{u}` to `origin/main`
+             * and pushes the session's commits STRAIGHT ONTO THE BASE BRANCH,
+             * with no PR and no review. The whole point of a session is an
+             * isolated branch; silently wiring it to push to main defeats it.
+             *
+             * A branch that does not exist on the remote yet has no upstream, so
+             * none is the correct state. `git push -u` / `gh pr create` set it to
+             * the branch's OWN remote ref on first push, which is what everything
+             * downstream expects.
+             */
+            "--no-track",
             "-b",
             branch,
             worktreePath,
