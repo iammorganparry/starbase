@@ -242,6 +242,11 @@ export function Composer({
 
   // Read dropped/pasted/picked image files into base64 attachments (capped).
   const addFiles = async (files: ReadonlyArray<File>) => {
+    // The single choke point for every route in — button, paste and drop. The
+    // button is disabled in Gigaplan, but paste and drop never touch it, so
+    // guarding only the control would still let a dragged screenshot through to
+    // a round that cannot carry it.
+    if (orchestrated) return
     const read = await Promise.all(
       files.map((f) => readAttachment(f, `att_${(attachIdRef.current += 1)}`))
     )
@@ -415,7 +420,7 @@ export function Composer({
                 className="size-[58px]"
               />
             ))}
-            {attachments.length < MAX_ATTACHMENTS && (
+            {attachments.length < MAX_ATTACHMENTS && !orchestrated && (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -457,11 +462,21 @@ export function Composer({
           }}
         />
         <div className="flex items-center gap-2">
+{/* Disabled in Gigaplan, not silently ignored. `Plan.adversarial` takes
+              only a brief — its payload has no images — so an attachment made
+              here would be dropped on the way to the round while still
+              rendering in the transcript, which reads as "the model saw my
+              screenshot" when it did not. Better to refuse the gesture and say
+              why than to accept it and discard it. */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={paused}
-            title="Attach an image"
+            disabled={paused || orchestrated}
+            title={
+              orchestrated
+                ? "Gigaplan plans from the written brief — images aren't sent to a planning round"
+                : "Attach an image"
+            }
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ImagePlus size={14} />

@@ -47,7 +47,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { GhError, GitError, PlanError, planningReadiness, reachableVendors, resolveOrchestrator, ReviewError, reviewModelFor, TASK_KINDS } from "@starbase/core"
+import { applyStreamEvent, assistantMessage, GhError, GitError, PlanError, planningReadiness, reachableVendors, resolveOrchestrator, ReviewError, reviewModelFor, TASK_KINDS, userMessage } from "@starbase/core"
 import type {
   AdversarialReview,
   CliKind,
@@ -487,7 +487,7 @@ export const reviewGet = (sessionId: string) => ReviewStore.get(sessionId)
 const planningVendors = Effect.gen(function* () {
   const clis = yield* DiscoveryService.list()
   const catalog = yield* ModelsService.catalog(clis)
-  return { clis, vendors: reachableVendors(catalog) }
+  return { clis, catalog, vendors: reachableVendors(catalog) }
 })
 
 /**
@@ -518,12 +518,17 @@ export const billingPaths = Effect.gen(function* () {
     })
 })
 
-/** `Plan.readiness` handler — can we offer adversarial planning, and if not, why not? */
-export const planReadiness = Effect.gen(function* () {
-  const clis = yield* DiscoveryService.list()
-  const catalog = yield* ModelsService.catalog(clis)
-  return planningReadiness(catalog)
-})
+/**
+ * `Plan.readiness` handler — can we offer adversarial planning, and if not, why not?
+ *
+ * Derived from `planningVendors` rather than re-running discovery, so the claim
+ * the button makes and the vendors the round actually gets are the same
+ * computation. Duplicating those two lines is exactly how a readiness check
+ * drifts from the run it describes.
+ */
+export const planReadiness = Effect.map(planningVendors, ({ catalog }) =>
+  planningReadiness(catalog)
+)
 
 type PlanExecuteEnv =
   | AppPaths
@@ -606,6 +611,7 @@ type PlanAdversarialEnv =
   | ConfigService
   | GitService
   | SessionStore
+  | TranscriptStore
   | DiscoveryService
   | ModelsService
   | AdversarialPlanService
@@ -644,6 +650,43 @@ export const planAdversarial = (
       const storeCtx = yield* Effect.context<
         PlanRoundStore | FileSystem.FileSystem | Path.Path | AppPaths
       >()
+      // The transcript needs the same treatment, and for a sharper reason: the
+      // round's plan has to LAND there. `Plan.execute` deliberately re-reads the
+      // approved plan from the transcript rather than trusting the renderer's
+      // copy, so a round that streams to the screen without persisting produces
+      // a plan the operator can see, approve, and then be told is "no longer in
+      // this session" — and loses the whole round on reopen. Streaming is not
+      // persistence; `AgentRunner` is the only other thing that writes here, and
+      // a round never goes through it.
+      const txCtx = yield* Effect.context<
+        TranscriptStore | FileSystem.FileSystem | Path.Path | AppPaths
+      >()
+      const now = yield* Effect.sync(() => new Date().toISOString())
+      // Seed past any id already in the transcript, for the reason `AgentRunner`
+      // does: ids are positional, and a round after a restart would otherwise
+      // collide with earlier turns and stack rows keyed by the same id.
+      const prior = yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => []))
+      const maxN = prior.reduce((max, m) => {
+        const n = Number(m.id.split("_").pop())
+        return Number.isFinite(n) && n > max ? n : max
+      }, 0)
+      // The brief, then an empty turn for the round to fold into — the same two
+      // messages an ordinary send appends.
+      yield* TranscriptStore.append(
+        sessionId,
+        userMessage(`u_${sessionId}_${maxN + 1}`, brief, now, [])
+      ).pipe(Effect.ignore)
+      const assistantId = `a_${sessionId}_${maxN + 2}`
+      yield* TranscriptStore.append(sessionId, assistantMessage(assistantId, now)).pipe(
+        Effect.ignore
+      )
+      const persist = (event: StreamEvent) =>
+        // By id, not `patchLast`: the round is long, and nothing guarantees this
+        // turn is still the final message by the time an event lands.
+        TranscriptStore.patchById(sessionId, assistantId, (m) => applyStreamEvent(m, event)).pipe(
+          Effect.provide(txCtx),
+          Effect.ignore
+        )
       const binPathFor = (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null
       return service.run({
         sessionId,
@@ -657,7 +700,13 @@ export const planAdversarial = (
         // Persistence is wired in here rather than inside the service so the
         // round logic stays free of the filesystem and testable without one.
         onRound: (round: PlanRound) => PlanRoundStore.set(round).pipe(Effect.provide(storeCtx))
-      })
+      }).pipe(
+        // Best-effort, like every other transcript write: a round the operator
+        // watched succeed must not fail because a file could not be written.
+        // `ToolDelta` is skipped for the reason `AgentRunner` skips it — it
+        // ticks constantly and each patch rewrites the whole file.
+        Stream.tap((event) => (event._tag === "ToolDelta" ? Effect.void : persist(event)))
+      )
     })
   )
 
