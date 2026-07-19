@@ -73,6 +73,8 @@ export interface ConversationViewProps {
    */
   contextTriggerAt?: number | null
   /** A digest is prepared; the next turn will reseed the conversation. */
+  /** A summary is being built right now. */
+  contextPreparing?: boolean
   contextDigestReady?: boolean
   /** Compact this session now, ahead of the budget. */
   onCompactNow?: () => void
@@ -154,6 +156,7 @@ export function ConversationView({
   busy = false,
   tokens = 0,
   contextTriggerAt = null,
+  contextPreparing = false,
   contextDigestReady = false,
   onCompactNow,
   runStartedAt = null,
@@ -301,6 +304,7 @@ export function ConversationView({
               <ContextMeter
                 tokens={tokens}
                 triggerAt={contextTriggerAt}
+                preparing={contextPreparing}
                 digestReady={contextDigestReady}
                 onCompactNow={onCompactNow}
               />

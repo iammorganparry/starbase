@@ -80,27 +80,45 @@ export function ConversationPane({
   const contextReporting =
     clisQuery.data?.find((c) => c.kind === convo.cli)?.contextReporting ?? false
   /**
-   * True from the moment a compaction is requested until a digest is ready.
+   * The session's context accounting.
    *
-   * Needed because the digest is built on a BACKGROUND fiber with no push
-   * channel back to the renderer — `Context.compactNow` returns the instant the
-   * request is accepted, so a single refetch after it resolves always reads
-   * `digestReady: false`. Without this the meter sat unchanged after a click and
-   * the feature looked broken, even though it was working.
+   * Keyed on the session ALONE, deliberately. Keying it on the live token count
+   * seemed natural — refetch whenever usage moves — but every `Usage` event then
+   * produced a new cache entry whose `data` starts `undefined`, so `triggerAt`
+   * went null and the meter UNMOUNTED. Mid-run, where usage updates constantly,
+   * it could never appear at all. It also fired one RPC per token update.
+   *
+   * The live number comes from `convo.tokens` instead; this query supplies only
+   * the slow-moving parts (the trigger point, and whether a digest is in flight).
    */
-  const [compacting, setCompacting] = useState(false)
+  const [requested, setRequested] = useState(false)
   const contextQuery = useQuery({
-    queryKey: ["context", session.id, convo.tokens],
+    queryKey: ["context", session.id],
     queryFn: () => rpc.contextState(session.id),
     enabled: contextReporting,
-    // Poll only while something is actually in flight; an idle session's meter
-    // moves on `Usage` events alone and needs no timer.
-    refetchInterval: compacting ? 700 : false
+    /**
+     * Poll while a compaction could be happening.
+     *
+     * The digest runs on a background fiber with no push channel to the
+     * renderer, so polling is the only way to see it start or finish. Scoped to
+     * when something might actually be in flight — a session sitting well inside
+     * its budget needs no timer.
+     */
+    refetchInterval: (query) =>
+      requested || query.state.data?.preparing || convo.busy ? 1500 : false
   })
+  const preparing = contextQuery.data?.preparing ?? false
   const digestReady = contextQuery.data?.digestReady ?? false
+  // The manual request is only needed until the manager reports the fiber it
+  // started; after that `preparing` is the authoritative signal.
   useEffect(() => {
-    if (digestReady) setCompacting(false)
-  }, [digestReady])
+    if (preparing || digestReady) setRequested(false)
+  }, [preparing, digestReady])
+  // A turn crossing the budget starts a digest, so re-read once it settles.
+  useEffect(() => {
+    if (!convo.busy && contextReporting) void contextQuery.refetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convo.busy, contextReporting])
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null)
   const [taskOutput, setTaskOutput] = useState("")
   const viewingTask = bgTasks.tasks.find((t) => t.id === viewingTaskId) ?? null
@@ -231,10 +249,11 @@ export function ConversationPane({
           busy={convo.busy}
           tokens={convo.tokens}
           contextTriggerAt={contextQuery.data?.triggerAt ?? null}
-          contextDigestReady={contextQuery.data?.digestReady ?? false}
+          contextPreparing={preparing || requested}
+          contextDigestReady={digestReady}
           onCompactNow={() => {
-            setCompacting(true)
-            void rpc.contextCompactNow(session.id).catch(() => setCompacting(false))
+            setRequested(true)
+            void rpc.contextCompactNow(session.id).catch(() => setRequested(false))
           }}
           runStartedAt={convo.runStartedAt}
           queued={convo.queued}

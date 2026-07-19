@@ -204,6 +204,15 @@ export const ContextSnapshot = Schema.Struct({
   triggerAt: Schema.NullOr(Schema.Number),
   phase: Schema.Literal("unknown", "idle", "prepare", "swap"),
   /**
+   * A digest is being built RIGHT NOW on a background fiber.
+   *
+   * Load-bearing for the UI, not diagnostics. Without it an automatic
+   * compaction is completely invisible while it runs: the meter would sit on
+   * "compacting soon" for however long the summary takes, with no sign anything
+   * was happening — which reads as the feature being stuck rather than working.
+   */
+  preparing: Schema.Boolean,
+  /**
    * A digest is built and waiting to be applied on the next turn.
    *
    * Distinct from `phase`: a manual "Compact now" can leave a session holding a

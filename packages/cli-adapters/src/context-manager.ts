@@ -369,6 +369,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
               auto: settings?.auto ?? false,
               digestReady: state.digest !== null
             }),
+            preparing: state.status === "preparing",
             digestReady: state.digest !== null,
             lastCompactedAt: state.lastCompactedAt,
             compactions: state.compactions

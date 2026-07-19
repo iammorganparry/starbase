@@ -9,6 +9,8 @@ export interface ContextMeterProps {
   tokens: number
   /** Where compaction fires: `min(budget, window × safety)`. Null = unmeasurable. */
   triggerAt: number | null
+  /** A summary is being built right now, on a background fiber. */
+  preparing?: boolean
   /** A digest is built and the next turn will reseed. */
   digestReady?: boolean
   /**
@@ -39,6 +41,7 @@ export interface ContextMeterProps {
 export function ContextMeter({
   tokens,
   triggerAt,
+  preparing = false,
   digestReady = false,
   onCompactNow,
   className
@@ -54,22 +57,46 @@ export function ContextMeter({
   // cheaper — so the top of the range is "warm", never red. Red would train the
   // user to intervene in something that handles itself.
   const tone =
-    ratio >= 1 ? "bg-amber-400/70" : ratio >= 0.8 ? "bg-amber-400/45" : "bg-fg/25"
+    preparing || digestReady
+      ? "bg-blue/60"
+      : ratio >= 1
+        ? "bg-amber-400/70"
+        : ratio >= 0.8
+          ? "bg-amber-400/45"
+          : "bg-fg/25"
 
-  const label = digestReady
-    ? "compacting next turn"
-    : ratio >= 1
-      ? "compacting soon"
-      : "context"
+  /**
+   * Four states, in the order they actually occur.
+   *
+   * `preparing` is the one that matters most and was missing: an automatic
+   * compaction takes as long as a summary takes, and without a word for it the
+   * meter sat on "compacting soon" throughout, which reads as stuck rather than
+   * working. It is also the only state the user cannot cause themselves, so it
+   * is the one they most need told about.
+   */
+  const label = preparing
+    ? "compacting…"
+    : digestReady
+      ? "compacts next turn"
+      : ratio >= 1
+        ? "compacting soon"
+        : "context"
 
   const title = `${tokens.toLocaleString()} of ~${triggerAt.toLocaleString()} tokens before Starbase compacts this session${
-    onCompactNow && !digestReady ? " · click to compact now" : ""
+    preparing
+      ? " · summarising in the background"
+      : digestReady
+        ? " · the next turn starts from a summary"
+        : onCompactNow
+          ? " · click to compact now"
+          : ""
   }`
 
   // A plain span when there is nothing to click, so the meter never presents a
   // button that does nothing (a digest is already queued, or the harness gave
   // the host no handler).
-  const Tag = onCompactNow && !digestReady ? "button" : "span"
+  const busy = preparing || digestReady
+  const Tag = onCompactNow && !busy ? "button" : "span"
 
   return (
     <Tag
@@ -85,7 +112,13 @@ export function ContextMeter({
     >
       <span className="relative h-1 w-10 overflow-hidden rounded-full bg-fg/10">
         <span
-          className={cn("absolute inset-y-0 left-0 rounded-full transition-[width]", tone)}
+          className={cn(
+            "absolute inset-y-0 left-0 rounded-full transition-[width]",
+            tone,
+            // Only while a summary is genuinely in flight — a pulse that never
+            // stops is noise, and one that stops says "done".
+            preparing && "animate-pulse"
+          )}
           style={{ width: `${Math.max(pct, 2)}%` }}
         />
       </span>

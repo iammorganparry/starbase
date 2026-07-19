@@ -177,6 +177,7 @@ describe("wire types", () => {
       budget: 300_000,
       triggerAt: 300_000,
       phase: "prepare",
+      preparing: false,
       digestReady: false,
       lastCompactedAt: null,
       compactions: 0

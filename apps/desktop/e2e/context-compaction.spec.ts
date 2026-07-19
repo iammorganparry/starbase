@@ -61,9 +61,11 @@ test("compacts a session and keeps its history intact", async ({ launchApp }) =>
   // ── Compact ──
   await meter.click()
 
-  // The digest is built in the background, so the meter flips to say the next
-  // turn will reseed rather than blocking on it.
-  await expect(window.getByText("compacting next turn")).toBeVisible({ timeout: 20_000 })
+  // The widget must SAY a compaction is happening — the state the user cannot
+  // cause themselves and previously had no word for. It resolves to "compacts
+  // next turn" once the summary lands.
+  await expect(window.getByText(/compacting…|compacts next turn/)).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByText("compacts next turn")).toBeVisible({ timeout: 20_000 })
 
   // ── The next turn runs on the reseeded conversation ──
   await composer.click()

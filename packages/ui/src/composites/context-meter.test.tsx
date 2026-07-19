@@ -50,7 +50,48 @@ describe("ContextMeter", () => {
 
   it("says the next turn will reseed once a digest is ready", () => {
     render(<ContextMeter tokens={310_000} triggerAt={300_000} digestReady />)
-    expect(screen.getByText("compacting next turn")).toBeDefined()
+    expect(screen.getByText("compacts next turn")).toBeDefined()
+  })
+
+  /**
+   * The state that was missing, and the one the user cannot cause themselves.
+   * An automatic compaction takes as long as a summary takes; with no word for
+   * it the meter sat on "compacting soon" throughout, which reads as stuck.
+   */
+  it("says a summary is being built while one is in flight", () => {
+    render(<ContextMeter tokens={310_000} triggerAt={300_000} preparing />)
+    expect(screen.getByText("compacting…")).toBeDefined()
+  })
+
+  it("shows compacting even when the session is still inside its budget", () => {
+    // A manual "Compact now" runs well below the trigger — the label has to come
+    // from the actual state, not from how full the bar is.
+    render(<ContextMeter tokens={50_000} triggerAt={300_000} preparing />)
+    expect(screen.getByText("compacting…")).toBeDefined()
+  })
+
+  it("pulses only while a summary is genuinely in flight", () => {
+    const { container: busy } = render(<ContextMeter tokens={50_000} triggerAt={300_000} preparing />)
+    expect(busy.innerHTML).toContain("animate-pulse")
+    cleanup()
+    const { container: done } = render(
+      <ContextMeter tokens={50_000} triggerAt={300_000} digestReady />
+    )
+    expect(done.innerHTML).not.toContain("animate-pulse")
+  })
+
+  // A compaction already under way cannot be started again, so the meter stops
+  // being a button rather than offering one that does nothing.
+  it("is not clickable while compacting", () => {
+    render(<ContextMeter tokens={50_000} triggerAt={300_000} preparing onCompactNow={() => {}} />)
+    expect(screen.queryByRole("button")).toBeNull()
+  })
+
+  it("explains the in-flight state on hover", () => {
+    const { container } = render(<ContextMeter tokens={50_000} triggerAt={300_000} preparing />)
+    expect((container.firstChild as HTMLElement).getAttribute("title")).toContain(
+      "summarising in the background"
+    )
   })
 
   // Crossing the trigger is the system WORKING — a digest is being prepared and

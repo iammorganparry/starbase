@@ -149,6 +149,7 @@ describe("Settings → Context", () => {
             budget: 300_000,
             triggerAt: 170_000,
             phase: "idle",
+            preparing: false,
             digestReady: false,
             lastCompactedAt: null,
             compactions: 0
