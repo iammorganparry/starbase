@@ -59,7 +59,7 @@ export interface SessionSpec {
    */
   readonly readOnly?: boolean
   /**
-   * Refuse any tool call naming an absolute path outside `cwd`.
+   * Refuse any FILE TOOL call naming an absolute path outside `cwd`.
    *
    * For UNATTENDED agents — planning roles, the judge, plan steps — where there
    * is nobody watching the transcript to notice a stray read. Read tools are
@@ -68,10 +68,26 @@ export interface SessionSpec {
    * doing exactly that, pulling 403 lines of an unrelated private repository
    * into its context.
    *
+   * NAMED FOR WHAT IT ACTUALLY COVERS. It inspects the path arguments of file
+   * tools (`Read`/`Edit`/`Glob`/`Grep`/…) and nothing else. It does NOT confine
+   * a shell: `Bash` takes a command string, not a path, so an agent that can run
+   * commands can still reach the whole filesystem. That matters for exactly one
+   * caller — the plan executor, which needs Bash to build and test — so a step
+   * is confined for file tools and unconfined for shell. Calling this
+   * `confineToCwd` implied a guarantee it never gave.
+   *
+   * Confining the shell properly needs the harness's own sandbox rather than
+   * string inspection of commands (quoting, `$HOME`, `cd &&` and subshells make
+   * that a losing game). The Claude SDK has `sandbox`, but with two catches
+   * worth knowing before reaching for it: filesystem limits there come from
+   * permission RULES rather than the sandbox settings, and `failIfUnavailable`
+   * defaults to true, so enabling it would hard-fail execution on a host
+   * missing the dependencies rather than degrade.
+   *
    * Deliberately NOT set for the operator's own session: they are watching, and
    * a coding agent that cannot read a sibling repo on request is less useful.
    */
-  readonly confineToCwd?: boolean
+  readonly confineFileToolsToCwd?: boolean
 }
 
 /** What the agent is asking permission to do, surfaced before it acts. */

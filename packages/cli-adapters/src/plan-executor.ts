@@ -142,9 +142,12 @@ const runStep = (
       // models — the second would inherit the first's framing.
       fresh: true,
       readOnly: false,
-      // Writes are the work, but they belong in THIS worktree. An unattended
-      // step editing a sibling repository is the failure worth preventing.
-      confineToCwd: true
+      // File tools are held to this worktree. Note what that does NOT cover: a
+      // step legitimately needs Bash to build and test, and Bash takes a command
+      // string rather than a path, so the shell is not confined. An approved
+      // plan is trusted code execution — the confinement here narrows careless
+      // reads and writes, it is not a sandbox.
+      confineFileToolsToCwd: true
     }
 
     const ctx: AgentContext = {
@@ -172,7 +175,11 @@ const runStep = (
     yield* emit({
       _tag: "SubagentStarted",
       id: agentId,
-      name: attempt === 1 ? `${step.number} ${step.title}` : `${step.number} ${step.title} (try ${attempt})`,
+      // No attempt suffix: `applySubagentEvent` ignores a `SubagentStarted`
+      // whose id it already holds, and retries reuse the step's id on purpose so
+      // they share one tab. A computed "(try 2)" would be silently discarded.
+      // Retries are surfaced by the blocker line the loop emits instead.
+      name: `${step.number} ${step.title}`,
       description: `${runner.cli} · ${runner.model}`,
       parentId: null
     })

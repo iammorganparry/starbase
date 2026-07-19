@@ -56,3 +56,20 @@ describe("escapingPath", () => {
     expect(escapingPath("", { file_path: "/anywhere" })).toBeNull()
   })
 })
+
+describe("what confinement does NOT cover", () => {
+  it("does not inspect shell commands, which is why the flag is named for FILE tools", () => {
+    // `Bash` takes a command string, not a path, so an agent that can run
+    // commands reaches the whole filesystem regardless of this check. The plan
+    // executor is the one caller that needs Bash — to build and test — so its
+    // steps are confined for file tools and unconfined for shell.
+    //
+    // Pinned as a test rather than left as a comment because the previous name
+    // (`confineToCwd`) implied a guarantee this never gave, and a reader who
+    // assumes total confinement will make an unsafe decision somewhere else.
+    // Confining the shell needs the harness's own sandbox, not string
+    // inspection of commands.
+    expect(escapingPath(CWD, { command: "cat /etc/passwd" })).toBeNull()
+    expect(escapingPath(CWD, { command: "cd ~ && rm -rf notes" })).toBeNull()
+  })
+})

@@ -750,7 +750,7 @@ export const runClaude = (
           // Confinement first, and ahead of `toPermissionRequest`: read tools
           // are never gated, so a check that ran after it would miss exactly the
           // case this exists for.
-          if (spec.confineToCwd === true) {
+          if (spec.confineFileToolsToCwd === true) {
             const escaped = escapingPath(spec.cwd, input)
             if (escaped !== null) {
               return {

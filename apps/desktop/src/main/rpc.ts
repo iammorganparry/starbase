@@ -27,6 +27,7 @@ import {
   planDraftPost,
   billingPath,
   hasSubscriptionAuth,
+  resetSubscriptionCache,
   METERED_ENV_KEYS,
   PlanExecutor,
   PlanRoundStore,
@@ -496,6 +497,10 @@ const planningVendors = Effect.gen(function* () {
  * list of exceptions.
  */
 export const billingPaths = Effect.gen(function* () {
+  // Re-probe rather than trust the memo. Signing in happens in a terminal and
+  // does not restart the app, so a cached "not signed in" would outlive the fact
+  // — on the one screen whose whole job is to report it accurately.
+  resetSubscriptionCache()
   const clis = yield* DiscoveryService.list()
   return clis
     .filter((c) => c.available && c.kind !== "starbase")

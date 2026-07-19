@@ -86,8 +86,12 @@ export const billingPath = (
  * only working credential. The failure mode of a false negative is "we changed
  * nothing"; of a false positive, "we broke your auth".
  *
- * Memoised because it is consulted on every run and the answer only changes when
- * the operator logs in or out — at which point the app restarts anyway.
+ * Memoised because it is consulted on every run and a Keychain probe spawns a
+ * process. The memo is NOT permanent: signing in with `claude login` or `codex
+ * login` happens in a terminal and does not restart Starbase, so a cache held
+ * for the app's lifetime would keep reporting "not signed in" — and, worse, keep
+ * passing a metered key through to a harness that had since gained a plan.
+ * `Billing.paths` clears it, so opening the settings pane re-probes.
  */
 const cache = new Map<CliKind, boolean>()
 
