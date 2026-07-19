@@ -67,6 +67,23 @@ export function ConversationPane({
   const backgroundTasksSupported =
     clisQuery.data?.find((c) => c.kind === convo.cli)?.backgroundTasks ?? false
   const bgTasks = useBackgroundTasks(session.id, backgroundTasksSupported)
+
+  /**
+   * Context accounting for the meter.
+   *
+   * Re-read when the live token count changes rather than polled: `convo.tokens`
+   * moves on every `Usage` event, so keying the query on it gives a meter that
+   * tracks the run without a timer running against every open session. Gated on
+   * the harness reporting context at all — the meter renders nothing when
+   * `triggerAt` is null, and asking for a snapshot we would not draw is waste.
+   */
+  const contextReporting =
+    clisQuery.data?.find((c) => c.kind === convo.cli)?.contextReporting ?? false
+  const contextQuery = useQuery({
+    queryKey: ["context", session.id, convo.tokens],
+    queryFn: () => rpc.contextState(session.id),
+    enabled: contextReporting
+  })
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null)
   const [taskOutput, setTaskOutput] = useState("")
   const viewingTask = bgTasks.tasks.find((t) => t.id === viewingTaskId) ?? null
@@ -196,6 +213,8 @@ export function ConversationPane({
           paused={convo.paused}
           busy={convo.busy}
           tokens={convo.tokens}
+          contextTriggerAt={contextQuery.data?.triggerAt ?? null}
+          contextDigestReady={contextQuery.data?.digestReady ?? false}
           runStartedAt={convo.runStartedAt}
           queued={convo.queued}
           onUnqueue={convo.unqueue}

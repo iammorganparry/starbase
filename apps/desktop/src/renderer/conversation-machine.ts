@@ -345,6 +345,17 @@ export const conversationMachine = setup({
       if (e._tag === "Usage") {
         return { tokens: e.tokens }
       }
+      // A compaction reseeds the harness, so the working set restarts from the
+      // primer. Reset the reading immediately rather than waiting for the next
+      // `Usage`: leaving the old number up means the meter sits pinned at full
+      // through the very turn that fixed it, which reads as the feature not
+      // working. It also folds into the transcript, so the marker renders.
+      if (e._tag === "ContextCompacted") {
+        return {
+          tokens: 0,
+          messages: patchLast(context.messages, (last) => applyStreamEvent(last, e))
+        }
+      }
       // A `PlanUpdated` addresses a plan by id, and that plan part lives in the
       // message of the turn it was PROPOSED in — which, once execution runs on
       // into later turns, is not the last message. Folding it with `patchLast`
