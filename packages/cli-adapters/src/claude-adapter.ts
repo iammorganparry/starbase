@@ -664,6 +664,13 @@ export const streamEventsFor = (
  * the SDK session id in `resume` so the next prompt continues the conversation.
  * Interrupting the Effect aborts the underlying run.
  */
+/**
+ * How long an interrupted run is given to actually unwind before we stop
+ * waiting. Long enough for a child process to be killed and reaped, short
+ * enough that a wedged one doesn't hold the app.
+ */
+const TEARDOWN_GRACE = "15 seconds"
+
 export const runClaude = (
   sessionId: string,
   spec: SessionSpec,
@@ -674,6 +681,20 @@ export const runClaude = (
     const runtime = yield* Effect.runtime<never>()
     const runP = <A>(effect: Effect.Effect<A>): Promise<A> => Runtime.runPromise(runtime)(effect)
     const abort = new AbortController()
+    /**
+     * Resolved once the SDK loop has actually unwound.
+     *
+     * Aborting only ASKS the run to stop; the `for await` loop and any in-flight
+     * tool call keep going until they notice. `onInterrupt` used to fire the
+     * abort and return immediately, so a timed-out plan step was reported ended
+     * while its Bash command was still writing — and the executor, which runs
+     * steps sequentially precisely because they share ONE worktree, started the
+     * retry into those pending writes. Interruption now waits for the unwind.
+     */
+    let markSettled: () => void = () => {}
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve
+    })
 
     yield* Effect.tryPromise({
       try: async () => {
@@ -860,6 +881,7 @@ export const runClaude = (
           // any watcher still open — a command whose ToolEnd never arrived, or the
           // operator stopping mid-command — so no timer or temp file outlives it.
           for (const id of [...teeStreams.keys()]) stopTee(id)
+          markSettled()
         }
       },
       catch: (cause) =>
@@ -867,5 +889,17 @@ export const runClaude = (
           kind: spec.cli,
           message: cause instanceof Error ? cause.message : String(cause)
         })
-    }).pipe(Effect.onInterrupt(() => Effect.sync(() => abort.abort())))
+    }).pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => abort.abort()).pipe(
+          Effect.andThen(Effect.promise(() => settled)),
+          // Bounded: a wedged child process must not hang the app forever. If it
+          // outlives this, the retry races it again — but a bounded wait closes
+          // the common case, and an unbounded one trades a rare corruption for a
+          // guaranteed hang.
+          Effect.timeout(TEARDOWN_GRACE),
+          Effect.ignore
+        )
+      )
+    )
   })

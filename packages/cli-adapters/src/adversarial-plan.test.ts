@@ -2,6 +2,7 @@ import type { Plan, StreamEvent, VendorReach } from "@starbase/core"
 import { CliExecError } from "@starbase/core"
 import { Effect, Fiber, Layer, Stream, TestClock, TestContext } from "effect"
 import { describe, expect, it } from "vitest"
+import type { ParsedCritique } from "./adversarial-plan.js"
 import { CliAdapter } from "./adapter.js"
 import {
   AdversarialPlanService,
@@ -183,6 +184,65 @@ describe("applyChallenges", () => {
     const out = applyChallenges(plan, { challenges: [], targets: [] }, new Map())
     expect(out.steps[0]!.challenges).toEqual([])
     expect(markUnchallenged(plan).steps[1]!.challenges).toEqual([])
+  })
+
+  it("follows the step through a renumbering revision", () => {
+    // The revision inserts a step, so the challenged step slides 03 -> 04.
+    // Keying by number pinned the challenge to whatever now sits at 03 and gave
+    // the real step `[]` — "examined and survived" — which is the exact
+    // inversion of what the adversary said.
+    const proposal = {
+      steps: [
+        { id: "a", number: "01", title: "Add the column" },
+        { id: "b", number: "02", title: "Backfill from billing" },
+        { id: "c", number: "03", title: "Drop the old table" }
+      ]
+    } as unknown as Plan
+    const revised = {
+      steps: [
+        { id: "a", number: "01", title: "Add the column" },
+        { id: "x", number: "02", title: "Take a snapshot" },
+        { id: "b", number: "03", title: "Backfill from billing" },
+        { id: "c", number: "04", title: "Drop the old table" }
+      ]
+    } as unknown as Plan
+    const critique = {
+      challenges: [
+        { id: "c1", severity: "critical", title: "No rollback", rationale: "r", status: "open" }
+      ],
+      targets: ["03"]
+    } as unknown as ParsedCritique
+
+    const out = applyChallenges(revised, critique, new Map(), proposal)
+    const byTitle = new Map(out.steps.map((s) => [s.title, s.challenges]))
+
+    // The challenge follows the WORK, not the ordinal.
+    expect(byTitle.get("Drop the old table")).toHaveLength(1)
+    expect(byTitle.get("Backfill from billing")).toStrictEqual([])
+  })
+
+  it("never reports a step the adversary never saw as examined-and-clean", () => {
+    // A step the revision invented was reviewed by nobody. `[]` would claim it
+    // survived scrutiny; absent is the honest answer, and `wasChallenged`
+    // depends on the distinction.
+    const proposal = {
+      steps: [{ id: "a", number: "01", title: "Add the column" }]
+    } as unknown as Plan
+    const revised = {
+      steps: [
+        { id: "a", number: "01", title: "Add the column" },
+        { id: "x", number: "02", title: "Take a snapshot" }
+      ]
+    } as unknown as Plan
+
+    const out = applyChallenges(
+      revised,
+      { challenges: [], targets: [] } as unknown as ParsedCritique,
+      new Map(),
+      proposal
+    )
+    expect(out.steps[0]!.challenges).toStrictEqual([])
+    expect(out.steps[1]!.challenges).toBeUndefined()
   })
 })
 

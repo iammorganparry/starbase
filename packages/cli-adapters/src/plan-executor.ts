@@ -116,7 +116,9 @@ const runStep = (
   runner: { readonly cli: CliKind; readonly model: string },
   attempt: number,
   previousBlocker: string | null,
-  emit: (event: StreamEvent) => Effect.Effect<void>
+  emit: (event: StreamEvent) => Effect.Effect<void>,
+  /** Run-level spend accumulator — see the `Done` branch in `ctx.emit`. */
+  spend: Ref.Ref<{ costUsd: number; tokens: number }>
 ): Effect.Effect<StepVerdict, PlanError, CliAdapter> =>
   Effect.gen(function* () {
     const adapter = yield* CliAdapter
@@ -153,10 +155,23 @@ const runStep = (
     const ctx: AgentContext = {
       emit: (event) =>
         Effect.zipRight(
-          // A step's own `Started`/`Done`/`Failed` never reaches the parent —
-          // see `isChildLifecycle`. Forwarding them ends the whole run at the
-          // first step that succeeds.
-          isChildLifecycle(event) ? Effect.void : emit(scopeTo(event, agentId)),
+          Effect.zipRight(
+            // A step's `Done` is dropped as a lifecycle event, but it is also
+            // the ONLY carrier of what the step cost. Dropping it outright made
+            // a two-hour twelve-step run report a spend of exactly zero — in a
+            // feature whose sibling machinery exists precisely because silent
+            // spend is the failure being fixed. Accrue before discarding.
+            event._tag === "Done"
+              ? Ref.update(spend, (t) => ({
+                  costUsd: t.costUsd + (Number.isFinite(event.costUsd) ? event.costUsd : 0),
+                  tokens: t.tokens + (Number.isFinite(event.tokens) ? event.tokens : 0)
+                }))
+              : Effect.void,
+            // A step's own `Started`/`Done`/`Failed` never reaches the parent —
+            // see `isChildLifecycle`. Forwarding them ends the whole run at the
+            // first step that succeeds.
+            isChildLifecycle(event) ? Effect.void : emit(scopeTo(event, agentId))
+          ),
           event._tag === "Assistant" && event.agentId === undefined
             ? Ref.update(collected, (acc) => [...acc, event.text])
             : Effect.void
@@ -256,6 +271,7 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
             }
 
             const done = yield* Ref.make(0)
+            const spend = yield* Ref.make({ costUsd: 0, tokens: 0 })
             for (const step of order) {
               const runner = resolveRunner(step, input.available, input.fallback)
               if (runner === null) {
@@ -273,7 +289,15 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
               let blocker: string | null = null
               let settled = false
               for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
-                const verdict: StepVerdict = yield* runStep(input, step, runner, attempt, blocker, emit)
+                const verdict: StepVerdict = yield* runStep(
+                  input,
+                  step,
+                  runner,
+                  attempt,
+                  blocker,
+                  emit,
+                  spend
+                )
                 if (verdict.status === "done") {
                   settled = true
                   break
@@ -307,12 +331,15 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
             }
 
             const count = yield* Ref.get(done)
+            const total = yield* Ref.get(spend)
             yield* emit({
               _tag: "Assistant",
               text: `Ran ${count} of ${order.length} step${order.length === 1 ? "" : "s"}.`,
               agentId: undefined
             })
-            yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+            // The run's real spend, summed from the steps rather than asserted
+            // as zero.
+            yield* emit({ _tag: "Done", costUsd: total.costUsd, tokens: total.tokens })
           })
 
           yield* Effect.forkScoped(

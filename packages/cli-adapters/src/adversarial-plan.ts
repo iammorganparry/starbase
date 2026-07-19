@@ -159,24 +159,58 @@ export const parseResponses = (text: string): ChallengeResponses => {
 export const applyChallenges = (
   plan: Plan,
   critique: ParsedCritique,
-  responses: ChallengeResponses
+  responses: ChallengeResponses,
+  /**
+   * The plan the critique was actually written against.
+   *
+   * Load-bearing when `plan` is the REVISION. The adversary's targets are step
+   * NUMBERS against the proposal, and a revision is free to renumber — insert a
+   * step at 02 and the old 03 becomes 04. Keying the revised plan by number
+   * then pinned "the migration has no rollback" to whatever now sits at 03, and
+   * handed the actual migration `challenges: []` — which this codebase defines
+   * as "examined and survived". The highest-value signal in the round, attached
+   * to the wrong step and endorsing the right one.
+   *
+   * Titles survive renumbering far better than numbers do, so targets are
+   * resolved number → title against the source, then title → step in `plan`.
+   * Omit it when `plan` IS what the critique reviewed.
+   */
+  source?: Plan
 ): Plan => {
   const resolved = critique.challenges.map((c): PlanChallenge => {
     const answer = responses.get(c.id)
     if (answer === undefined) return c
     return { ...c, status: answer.status, defence: answer.defence }
   })
+  // What the adversary reviewed, keyed the way it referred to steps.
+  const reviewed = source ?? plan
+  const titleOf = new Map(reviewed.steps.map((s) => [s.number, s.title]))
+  const key = (s: PlanStep): string => (source === undefined ? s.number : s.title)
+
   const byStep = new Map<string, PlanChallenge[]>()
   resolved.forEach((c, i) => {
     const target = critique.targets[i]
     if (target === null || target === undefined) return
-    byStep.set(target, [...(byStep.get(target) ?? []), c])
+    const k = source === undefined ? target : titleOf.get(target)
+    if (k === undefined) return
+    byStep.set(k, [...(byStep.get(k) ?? []), c])
   })
+
+  // Titles the adversary actually saw. A step absent from this set is NEW in
+  // the revision — nothing examined it — so it gets `undefined`, not `[]`.
+  // `wasChallenged` reads the difference, and collapsing the two would let an
+  // unreviewed step read as an endorsed one.
+  const examined = new Set(reviewed.steps.map((s) => (source === undefined ? s.number : s.title)))
+
   return {
     ...plan,
-    steps: plan.steps.map(
-      (s): PlanStep => ({ ...s, challenges: byStep.get(s.number) ?? [] })
-    )
+    steps: plan.steps.map((s): PlanStep => {
+      const found = byStep.get(key(s))
+      if (found !== undefined) return { ...s, challenges: found }
+      return examined.has(key(s))
+        ? { ...s, challenges: [] }
+        : { ...s, challenges: undefined }
+    })
   }
 }
 
@@ -615,7 +649,7 @@ export class AdversarialPlanService extends Effect.Service<AdversarialPlanServic
                 proposer
               )
               const answered = annotateAssignees(
-                applyChallenges(revised, parsed, parseResponses(revisionText.right)),
+                applyChallenges(revised, parsed, parseResponses(revisionText.right), proposal),
                 input.affinity ?? []
               )
               yield* emit({ _tag: "PlanProposed", plan: answered })

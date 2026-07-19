@@ -642,7 +642,31 @@ export const planExecute = (
         // The orchestrator's own model backs any step the plan left unassigned —
         // the same identity Gigaplan speaks as, rather than an arbitrary pick.
         fallback: resolveOrchestrator(config),
-        binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null
+        binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null,
+        // Wired, not just declared. `onStepDone` documents itself as the thing
+        // that makes progress survive a crash mid-run, and nothing was passing
+        // it — so a 12-step plan killed after step 9 came back with the plan
+        // already marked `approved` (we do that before starting, so it can't be
+        // re-approved), no record of which steps had run, and a half-applied
+        // worktree. Ticking the step on the stored plan is what that comment
+        // was promising.
+        onStepDone: (step) =>
+          TranscriptStore.patchById(sessionId, located.messageId, (m) => ({
+            ...m,
+            parts: m.parts.map((p) =>
+              p._tag === "Plan" && p.plan.id === planId
+                ? ({
+                    _tag: "Plan",
+                    plan: {
+                      ...p.plan,
+                      steps: p.plan.steps.map((st) =>
+                        st.id === step.id ? { ...st, status: "done" as const } : st
+                      )
+                    }
+                  } as const)
+                : p
+            )
+          })).pipe(Effect.provide(txCtx), Effect.ignore)
       }).pipe(
         // `ToolDelta` excluded for the reason `AgentRunner` excludes it: it ticks
         // constantly and every patch rewrites the whole transcript.

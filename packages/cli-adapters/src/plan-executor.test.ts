@@ -415,3 +415,47 @@ describe("a child run's lifecycle events", () => {
     expect(said).toMatch(/Ran 2 of 2 steps/)
   })
 })
+
+describe("what the run reports it spent", () => {
+  it("sums the steps' spend instead of reporting zero", async () => {
+    // A step's `Done` is dropped as a child lifecycle event, but it is the only
+    // carrier of cost. Dropping it outright meant a twelve-step run on a
+    // flagship model reported a spend of exactly 0 — in a feature whose sibling
+    // machinery (subscription.ts, addUsage) exists because silent spend is the
+    // failure being fixed.
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, _spec, ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+          yield* ctx.emit({ _tag: "Done", costUsd: 0.25, tokens: 1_000 })
+        }),
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const plan = planOf([step({ id: "s_01", number: "01" }), step({ id: "s_02", number: "02" })])
+    const events: Array<StreamEvent> = []
+    await Effect.gen(function* () {
+      const executor = yield* PlanExecutor
+      yield* executor
+        .run({
+          sessionId: "s1",
+          repo: "widget",
+          branch: "b",
+          cwd: "/tmp/wt",
+          plan,
+          available: [{ cli: "claude" as const, model: "opus" }],
+          fallback: { cli: "claude" as const, model: "opus" },
+          binPathFor: () => null
+        })
+        .pipe(Stream.runForEach((e) => Effect.sync(() => events.push(e))))
+    }).pipe(Effect.provide(Layer.mergeAll(PlanExecutor.Default, layer)), Effect.runPromise)
+
+    const done = events.find((e) => e._tag === "Done")
+    expect(done).toBeDefined()
+    if (done?._tag === "Done") {
+      expect(done.costUsd).toBeCloseTo(0.5, 5)
+      expect(done.tokens).toBe(2_000)
+    }
+  })
+})
+

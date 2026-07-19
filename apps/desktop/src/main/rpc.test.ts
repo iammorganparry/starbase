@@ -1093,11 +1093,24 @@ describe("Gigaplan round persistence", () => {
   const fakeExecutor = Layer.succeed(
     PlanExecutor,
     new PlanExecutor({
-      run: () =>
-        Stream.fromIterable([
-          { _tag: "Assistant", text: "ran step 01" } as unknown as StreamEvent,
-          { _tag: "Done", costUsd: 0, tokens: 0 } as unknown as StreamEvent
-        ])
+      run: (input: {
+        plan: Plan
+        onStepDone?: (step: Plan["steps"][number]) => Effect.Effect<void>
+      }) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            // A real executor reports each finished step; the fake does too, or
+            // the wiring under test is never exercised.
+            const first = input.plan.steps[0]
+            if (first !== undefined && input.onStepDone !== undefined) {
+              yield* input.onStepDone(first)
+            }
+            return Stream.fromIterable([
+              { _tag: "Assistant", text: "ran step 01" } as unknown as StreamEvent,
+              { _tag: "Done", costUsd: 0, tokens: 0 } as unknown as StreamEvent
+            ])
+          })
+        )
     } as unknown as ConstructorParameters<typeof PlanExecutor>[0])
   )
 
@@ -1182,5 +1195,27 @@ describe("Gigaplan round persistence", () => {
 
     // The seeded plan turn, plus the approval turn and the run's own turn.
     expect(roles).toStrictEqual(["assistant", "user", "assistant"])
+  })
+
+  it("ticks a finished step on the stored plan, so a crash mid-run loses only the tail", () => {
+    // `planExecute` marks the plan `approved` BEFORE the run so it can't be
+    // approved twice. Without per-step persistence that combination is the
+    // worst of both: an approved plan, a half-applied worktree, and no record
+    // of which steps actually ran.
+    return Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      const stored = messages.flatMap((m) =>
+        m.parts.flatMap((p) => (p._tag === "Plan" && p.plan.id === PLAN.id ? [p.plan] : []))
+      )[0]
+      expect(stored?.steps[0]?.status).toBe("done")
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
   })
 })
