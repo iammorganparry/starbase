@@ -18,20 +18,11 @@ import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
-import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
-import { PlanProgressRail } from "../composites/plan-progress-rail.js"
 import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { ArchivedBanner } from "../composites/archived-banner.js"
 import { RunStats } from "../composites/run-stats.js"
-
-/**
- * Plan statuses the progress rail is FOR — an approved plan being executed, or a
- * stale one whose run died mid-flight (its progress so far is still the truth).
- * A proposed/revising plan belongs to the inline card; a rejected one is over.
- */
-const EXECUTING: ReadonlySet<PlanStatus> = new Set<PlanStatus>(["approved", "stale"])
 
 /**
  * Shift+Tab cycles through the HITL modes, Claude-Code style. Plan mode is
@@ -223,9 +214,6 @@ export function ConversationView({
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }, [])
 
-  // Declared unconditionally (hook order) even when there's no plan to show.
-  const rail = useResizableWidth({ storageKey: "sb.plan.rail", initial: 260, min: 200, max: 400 })
-
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
@@ -388,24 +376,11 @@ export function ConversationView({
       </div>
 
       {/*
-        The plan's step progress, beside the transcript. Only mounts for a plan
-        that's actually BEING EXECUTED — a plain conversation is untouched, a
-        rejected plan doesn't leave a dead 0/N meter, and while a plan is still
-        proposed the inline card already carries this (the rail would just repeat
-        it). Kept outside the scrolling column so the virtualizer measures against
-        a stable width.
+        The step-progress rail used to live here. It was a lossy summary of Plan
+        Review shown in a column too narrow to act on, so it has been replaced by
+        the split view (see `session-conversation`), which puts the REAL plan
+        beside the transcript instead of a second, worse copy of it.
       */}
-      {plan && EXECUTING.has(plan.status) && plan.steps.length > 0 && (
-        <>
-          <ResizeHandle aria-label="Resize plan steps" onResize={(dx) => rail.adjust(-dx)} />
-          <div
-            style={{ width: rail.width }}
-            className="flex min-h-0 flex-none flex-col overflow-hidden border-l border-hairline"
-          >
-            <PlanProgressRail plan={plan} onSelect={(stepId) => onOpenPlanReview?.(stepId)} />
-          </div>
-        </>
-      )}
     </div>
   )
 }

@@ -17,7 +17,8 @@ const finding = (severity: ReviewSeverity): ReviewFinding => ({
   severity,
   title: "t",
   rationale: "r",
-  suggestion: null
+  suggestion: null,
+  resolvedBy: null
 })
 
 const review = (over: Partial<AdversarialReview> = {}): AdversarialReview => ({
@@ -99,5 +100,40 @@ describe("outcomeOf — manual sends", () => {
 
   it("offers the button when there is no review at all", () => {
     expect(outcomeOf(finding("critical"), null, opts).kind).toBe("manual")
+  })
+})
+
+describe("outcomeOf — resolved", () => {
+  const fixed = (severity: ReviewSeverity): ReviewFinding => ({
+    ...finding(severity),
+    resolvedBy: { sha: "9f2c1ab4e7d8", subject: "fix(auth): use timingSafeEqual", at: "2026-07-19T00:00:00.000Z" }
+  })
+
+  it("reports the resolving commit, whatever the severity", () => {
+    for (const severity of ["critical", "major", "minor", "nit"] as const) {
+      const outcome = outcomeOf(fixed(severity), review(), opts)
+      expect(outcome).toStrictEqual({
+        kind: "resolved",
+        sha: "9f2c1ab4e7d8",
+        subject: "fix(auth): use timingSafeEqual"
+      })
+    }
+  })
+
+  it("outranks a failed post", () => {
+    // How a finding was DELIVERED stops mattering once it's fixed. Leaving
+    // "Couldn't post to PR" on a resolved card reads as outstanding work.
+    const r = review({ postError: "HTTP 422: line must be part of the diff" })
+    expect(outcomeOf(fixed("nit"), r, opts).kind).toBe("resolved")
+  })
+
+  it("outranks routed and posted", () => {
+    const r = review({ routedAt: "2026-07-17T10:00:01.000Z", postedAt: "2026-07-17T10:00:02.000Z" })
+    expect(outcomeOf(fixed("critical"), r, opts).kind).toBe("resolved")
+    expect(outcomeOf(fixed("nit"), r, opts).kind).toBe("resolved")
+  })
+
+  it("outranks a manual send, and needs no review to do it", () => {
+    expect(outcomeOf(fixed("critical"), null, { sent: true }).kind).toBe("resolved")
   })
 })

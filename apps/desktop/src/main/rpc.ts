@@ -21,6 +21,7 @@ import {
   fetchOpencodeProviders,
   filterVisible,
   GhService,
+  GitService,
   McpService,
   ModelsService,
   planDraftPost,
@@ -38,7 +39,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { GhError, GitError, ReviewError, reviewModelFor } from "@starbase/core"
+import { GhError, GitError, ReviewError, resolveFindings, reviewModelFor } from "@starbase/core"
 import type {
   AdversarialReview,
   CliKind,
@@ -485,6 +486,41 @@ export const reviewMarkRouted = (sessionId: string) =>
   })
 
 /**
+ * `Review.reconcile` handler — credit the commits that fixed outstanding findings.
+ *
+ * Returns null when nothing changed, which is the common case and the whole
+ * reason the RPC is shaped this way: the renderer calls it on every settled turn,
+ * and a non-null answer is its signal to publish. See the contract's doc.
+ *
+ * Everything here degrades to "leave it alone" rather than to an error. A review
+ * that can't be reconciled (no worktree, an unreachable head SHA after a force
+ * push, an unwritable reviews dir) should show its findings as still outstanding
+ * — which is exactly what the stored review already says.
+ *
+ * Exported for tests.
+ */
+export const reviewReconcile = (sessionId: string) =>
+  Effect.gen(function* () {
+    const review = yield* ReviewStore.get(sessionId)
+    if (review === null) return null
+    const session = yield* resolveSession(sessionId).pipe(
+      Effect.catchAll(() => Effect.succeed(null))
+    )
+    if (!session?.worktreePath) return null
+
+    const commits = yield* GitService.commitsSince(session.worktreePath, review.headSha)
+    const now = yield* Effect.sync(() => new Date().toISOString())
+    const findings = resolveFindings(review.findings, commits, now)
+    // Identity, not deep equality: `resolveFindings` hands back the same array
+    // when it attributed nothing, which is the fast path this leans on.
+    if (findings === review.findings) return null
+
+    const next = { ...review, findings }
+    yield* ReviewStore.set(sessionId, next).pipe(Effect.ignore)
+    return next
+  })
+
+/**
  * `Review.run` handler — run an adversarial review of the session's linked PR.
  *
  * The head-SHA short-circuit is the load-bearing part: it means an unchanged PR
@@ -744,6 +780,16 @@ export const githubMarkReady = (input: { sessionId: string }) =>
     yield* GhService.prReady(session.worktreePath, session.prNumber)
   })
 
+/** `Github.updateBranch` handler — merge the base into the PR's head on GitHub. */
+export const githubUpdateBranch = (input: { sessionId: string }) =>
+  Effect.gen(function* () {
+    const session = yield* resolveSession(input.sessionId)
+    if (!session?.worktreePath || session.prNumber === null) {
+      return yield* Effect.fail(new GhError({ message: "No linked pull request to update" }))
+    }
+    yield* GhService.prUpdateBranch(session.worktreePath, session.prNumber)
+  })
+
 /**
  * `Terminal.create` handler. Resolves the terminal's working directory: an
  * explicit `cwd` wins, else the session's worktree, else the main-process cwd
@@ -857,6 +903,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Stream.unwrap(Effect.map(ReviewService, (r) => r.watch(sessionId))),
   "Review.get": ({ sessionId }) => reviewGet(sessionId),
   "Review.markRouted": ({ sessionId }) => reviewMarkRouted(sessionId),
+  "Review.reconcile": ({ sessionId }) => reviewReconcile(sessionId),
   "Github.createPr": (input) => githubCreatePr(input),
   "Github.comment": (input) => githubComment(input),
   "Github.review": (input) => githubReview(input),
@@ -865,6 +912,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.replyToThread": (input) => githubReplyToThread(input),
   "Github.merge": (input) => githubMerge(input),
   "Github.markReady": (input) => githubMarkReady(input),
+  "Github.updateBranch": (input) => githubUpdateBranch(input),
 
   // Terminal — PTY lifecycle is unary; the coalesced output path is a stream,
   // unwrapped from the service like `Agent.run`.
@@ -883,6 +931,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   // Background tasks — harness work that outlives the turn that started it.
   "BackgroundTasks.list": ({ sessionId }) => BackgroundTaskStore.list(sessionId),
   "BackgroundTasks.stop": ({ sessionId, taskId }) => BackgroundTaskStore.stop(sessionId, taskId),
+  "BackgroundTasks.dismiss": ({ sessionId, taskId }) => BackgroundTaskStore.dismiss(sessionId, taskId),
   "BackgroundTasks.output": ({ sessionId, taskId }) => backgroundTaskOutput(sessionId, taskId),
 
   // Browser preview — a native WebContentsView over a localhost dev server,

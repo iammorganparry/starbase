@@ -70,10 +70,20 @@ export const useBackgroundTasks = (sessionId: string, supported: boolean) => {
     [sessionId]
   )
 
+  const dismiss = useCallback(
+    (taskId: string) => {
+      // Drop the row locally first: dismissal is the operator's own decision, so
+      // there is nothing to confirm and waiting a poll to see it obey feels broken.
+      setTasks((prev) => prev.filter((t) => t.id !== taskId))
+      void rpc.backgroundTasksDismiss(sessionId, taskId).catch(() => {})
+    },
+    [sessionId]
+  )
+
   const output = useCallback(
     (taskId: string) => rpc.backgroundTasksOutput(sessionId, taskId).catch(() => ""),
     [sessionId]
   )
 
-  return { tasks, stop, output, refresh }
+  return { tasks, stop, dismiss, output, refresh }
 }

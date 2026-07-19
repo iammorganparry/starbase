@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react"
 import type { AdversarialReview, ReviewFinding, ReviewPhase, ReviewSeverity } from "@starbase/core"
-import { destinationOf, findingLocation, partitionFindings } from "@starbase/core"
-import { AlertTriangle, CornerDownRight, type LucideIcon, MessageSquare } from "lucide-react"
+import { destinationOf, findingLocation, partitionFindings, resolvedCount } from "@starbase/core"
+import {
+  AlertTriangle,
+  CornerDownRight,
+  GitCommitHorizontal,
+  type LucideIcon,
+  MessageSquare
+} from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { Spinner } from "../components/loading.js"
@@ -36,6 +42,7 @@ const PHASE_LABEL: Record<ReviewPhase, string> = {
  * question is which one.
  */
 export type FindingOutcome =
+  | { readonly kind: "resolved"; readonly sha: string; readonly subject: string }
   | { readonly kind: "routed" } // sent to the agent
   | { readonly kind: "posted" } // posted to the PR
   | { readonly kind: "post-failed"; readonly message: string }
@@ -63,6 +70,12 @@ export const outcomeOf = (
   review: AdversarialReview | null,
   opts: { readonly sent: boolean }
 ): FindingOutcome => {
+  // Outranks every other outcome, including a failed post. How a finding was
+  // DELIVERED stops mattering the moment it's fixed — "Couldn't post to PR" on a
+  // resolved finding reads as an outstanding problem when there is none.
+  if (finding.resolvedBy !== null) {
+    return { kind: "resolved", sha: finding.resolvedBy.sha, subject: finding.resolvedBy.subject }
+  }
   if (review === null) return opts.sent ? { kind: "routed" } : { kind: "manual" }
   const destination = destinationOf(finding.severity)
   if (destination === "agent") {
@@ -106,7 +119,7 @@ export const rankFindings = (
  * for it.
  */
 const OUTCOME_META: Record<
-  Exclude<FindingOutcome["kind"], "manual">,
+  Exclude<FindingOutcome["kind"], "manual" | "resolved">,
   { Icon: LucideIcon; label: string; tone: string }
 > = {
   routed: { Icon: CornerDownRight, label: "Sent to agent", tone: "text-green" },
@@ -117,6 +130,22 @@ const OUTCOME_META: Record<
 /** The outcome footer — an icon, a word, and nothing else unless it went wrong. */
 function OutcomeLine({ outcome }: { outcome: FindingOutcome }) {
   if (outcome.kind === "manual") return null
+  // Resolved carries evidence, so it gets its own line rather than a label: the
+  // abbreviated SHA is the pointer to what actually fixed it, and the full
+  // subject rides in the tooltip. Attribution is inferred (see `resolveFindings`),
+  // so naming the commit is what lets the operator check the claim.
+  if (outcome.kind === "resolved") {
+    return (
+      <div
+        className="flex items-center gap-[5px] text-[10.5px] leading-none text-green"
+        title={`${outcome.sha.slice(0, 7)} — ${outcome.subject}`}
+      >
+        <GitCommitHorizontal size={11} strokeWidth={2.25} />
+        <span>Resolved in</span>
+        <span className="font-mono text-muted-foreground">{outcome.sha.slice(0, 7)}</span>
+      </div>
+    )
+  }
   const meta = OUTCOME_META[outcome.kind]
   return (
     <div
@@ -157,11 +186,19 @@ export function ReviewFindingRow({
   const accent = severityAccent[finding.severity]
   const location = findingLocation(finding)
   const outcome = outcomeOf(finding, review, { sent })
+  const resolved = outcome.kind === "resolved"
   return (
     <div
+      data-testid={`finding-${finding.id}`}
+      data-resolved={resolved ? "true" : undefined}
       className={cn(
         "group flex flex-col gap-[7px] rounded-[6px] rounded-l-[3px] border border-l-2 border-hairline bg-surface/30 px-[11px] py-[9px] transition-colors hover:bg-surface/50",
-        accent.rail
+        accent.rail,
+        // Recedes rather than disappears. A resolved finding still holds its place
+        // above the file's diff — it is the record that this was raised and dealt
+        // with — but it must not compete with the ones still outstanding. Full
+        // opacity returns on hover, so the text stays readable when you go looking.
+        resolved && "opacity-55 hover:opacity-100"
       )}
     >
       <div className="flex items-baseline gap-[7px]">
@@ -179,7 +216,12 @@ export function ReviewFindingRow({
         )}
       </div>
 
-      <span className="text-[12.5px] font-semibold leading-[1.35] text-text-bright">
+      <span
+        className={cn(
+          "text-[12.5px] font-semibold leading-[1.35]",
+          resolved ? "text-muted-foreground line-through decoration-dim" : "text-text-bright"
+        )}
+      >
         {finding.title}
       </span>
 
@@ -201,7 +243,7 @@ export function ReviewFindingRow({
             with no live conversation to route through. Shown on hover so it
             doesn't compete with the outcome line in the common case.
           */}
-          {onSendToAgent && outcome.kind !== "routed" && (
+          {onSendToAgent && outcome.kind !== "routed" && !resolved && (
             <button
               type="button"
               disabled={!canRoute}
@@ -258,6 +300,7 @@ export function ReviewFindings({
   const findings = review === null ? [] : rankFindings(review.findings)
   const elapsed = useTicker(running && startedAt !== null, startedAt)
   const split = review === null ? null : partitionFindings(review.findings)
+  const resolved = review === null ? 0 : resolvedCount(review.findings)
 
   return (
     <div className="flex flex-col gap-3">
@@ -324,6 +367,22 @@ export function ReviewFindings({
               <span className="tabular-nums text-text">{split.toPr.length}</span>
               <span>on the PR</span>
             </span>
+          )}
+          {/*
+            Progress, not just distribution. Once the agent starts landing fixes
+            this is the number the operator is actually tracking — how much of the
+            review is still outstanding — and without it the summary keeps
+            describing the review as it was dispatched, never as it stands.
+          */}
+          {resolved > 0 && (
+            <>
+              <span className="text-dim">·</span>
+              <span className="flex items-center gap-[5px]">
+                <GitCommitHorizontal size={12} strokeWidth={2.25} className="text-green" />
+                <span className="tabular-nums text-text">{resolved}</span>
+                <span>resolved</span>
+              </span>
+            </>
           )}
         </div>
       )}

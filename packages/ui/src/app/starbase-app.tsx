@@ -129,7 +129,7 @@ export interface StarbaseAppProps {
    */
   renderConversation?: (
     session: Session,
-    view: "conversation" | "plan",
+    view: "conversation" | "plan" | "split",
     ctx: ConversationPaneCtx
   ) => ReactNode
   /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
@@ -294,7 +294,7 @@ export function StarbaseApp({
   // same pane serves both the Conversation and Plan tabs (see SessionConversation).
   const renderConversationPane =
     active && renderConversation
-      ? (view: "conversation" | "plan", ctx: ConversationPaneCtx) => (
+      ? (view: "conversation" | "plan" | "split", ctx: ConversationPaneCtx) => (
           <div key={active.id} className="flex min-h-0 min-w-0 flex-1">
             {renderConversation(active, view, ctx)}
           </div>

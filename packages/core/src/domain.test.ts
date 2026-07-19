@@ -115,7 +115,8 @@ describe("AdversarialReview", () => {
         severity: "critical",
         title: "Token compared with ==",
         rationale: "Timing-unsafe comparison lets an attacker probe the token byte by byte.",
-        suggestion: "Use timingSafeEqual."
+        suggestion: "Use timingSafeEqual.",
+        resolvedBy: null
       }
     ],
     note: null,

@@ -1,5 +1,5 @@
 import type { StreamEvent } from "@starbase/core"
-import { Effect } from "effect"
+import { Effect, TestClock, TestContext } from "effect"
 import { describe, expect, it } from "vitest"
 import { BackgroundTaskStore } from "./background-tasks.js"
 
@@ -13,6 +13,19 @@ import { BackgroundTaskStore } from "./background-tasks.js"
 
 const run = <A>(effect: Effect.Effect<A, never, BackgroundTaskStore>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BackgroundTaskStore.Default)))
+
+/**
+ * Same, but with a TestClock — the store reads `Clock.currentTimeMillis` for both
+ * the timestamps it stamps tasks with and the `now` it ages them against, so
+ * `TestClock.adjust` moves the grace period without any real elapsed time.
+ */
+const runClocked = <A>(effect: Effect.Effect<A, never, BackgroundTaskStore>) =>
+  Effect.runPromise(
+    effect.pipe(Effect.provide(BackgroundTaskStore.Default), Effect.provide(TestContext.TestContext))
+  )
+
+const settled = (id: string, status: "completed" | "failed" | "stopped") =>
+  ({ _tag: "BackgroundTaskSettled", id, status, summary: null, outputFile: null }) satisfies StreamEvent
 
 const started = (id: string, over: Partial<Extract<StreamEvent, { _tag: "BackgroundTaskStarted" }>> = {}) =>
   ({
@@ -162,6 +175,66 @@ describe("BackgroundTaskStore", () => {
       })
     )
     expect(task).toMatchObject({ status: "completed", summary: "done", outputFile: "/tmp/t1.jsonl" })
+  })
+
+  it("keeps a settled task briefly, then evicts it", async () => {
+    // The dock used to grow forever — nothing ever removed a finished task, so a
+    // long session accumulated dozens of dead rows. It must still linger long
+    // enough to be READ, hence a grace period rather than an instant drop.
+    const [duringGrace, afterGrace] = await runClocked(
+      Effect.gen(function* () {
+        yield* BackgroundTaskStore.ingest("s1", started("t1"))
+        yield* BackgroundTaskStore.ingest("s1", settled("t1", "completed"))
+        yield* TestClock.adjust("5 seconds")
+        const during = yield* BackgroundTaskStore.list("s1")
+        yield* TestClock.adjust("6 seconds")
+        return [during, yield* BackgroundTaskStore.list("s1")] as const
+      })
+    )
+    expect(duringGrace).toHaveLength(1)
+    expect(afterGrace).toStrictEqual([])
+  })
+
+  it("never evicts a running task, however long it runs", async () => {
+    const tasks = await runClocked(
+      Effect.gen(function* () {
+        yield* BackgroundTaskStore.ingest("s1", started("t1"))
+        yield* TestClock.adjust("1 hour")
+        return yield* BackgroundTaskStore.list("s1")
+      })
+    )
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({ status: "running" })
+  })
+
+  it("holds a failed task indefinitely, until it is dismissed", async () => {
+    // An error nobody saw is the one outcome worth insisting on, so a failure
+    // outlives the grace period and leaves only by the operator's own hand.
+    const [held, dismissed] = await runClocked(
+      Effect.gen(function* () {
+        yield* BackgroundTaskStore.ingest("s1", started("t1"))
+        yield* BackgroundTaskStore.ingest("s1", settled("t1", "failed"))
+        yield* TestClock.adjust("1 hour")
+        const stillThere = yield* BackgroundTaskStore.list("s1")
+        yield* BackgroundTaskStore.dismiss("s1", "t1")
+        return [stillThere, yield* BackgroundTaskStore.list("s1")] as const
+      })
+    )
+    expect(held).toHaveLength(1)
+    expect(dismissed).toStrictEqual([])
+  })
+
+  it("dismissing an unknown task is a no-op", async () => {
+    // A click racing the poll that just evicted the row must not fail.
+    const tasks = await runClocked(
+      Effect.gen(function* () {
+        yield* BackgroundTaskStore.ingest("s1", started("t1"))
+        yield* BackgroundTaskStore.dismiss("s1", "ghost")
+        yield* BackgroundTaskStore.dismiss("nope", "t1")
+        return yield* BackgroundTaskStore.list("s1")
+      })
+    )
+    expect(tasks).toHaveLength(1)
   })
 
   it("drops a deleted session's tasks entirely", async () => {
