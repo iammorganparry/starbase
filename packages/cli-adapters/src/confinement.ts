@@ -47,10 +47,15 @@ const PATH_FIELDS = ["file_path", "path", "notebook_path"] as const
 /**
  * The first path in a tool call that leaves `cwd`, or null when it stays inside.
  *
- * Relative paths are resolved against `cwd` and so can never escape by
- * construction; only absolute ones are judged. Returning the offending path
- * rather than a boolean is deliberate — the denial message names it, because
- * "denied" with no subject is unactionable for whoever reads the transcript.
+ * Relative paths are judged too, resolved against `cwd` first. An earlier
+ * version skipped them on the reasoning that they "cannot escape by
+ * construction" — which is simply false: `../../.ssh` resolves straight out,
+ * and `Grep`/`Glob` take a relative `path` happily. That was the whole
+ * protection defeated by two dots.
+ *
+ * Returning the offending path rather than a boolean is deliberate — the denial
+ * message names it, because "denied" with no subject is unactionable for
+ * whoever reads the transcript.
  */
 export const escapingPath = (
   cwd: string,
@@ -60,8 +65,8 @@ export const escapingPath = (
   for (const field of PATH_FIELDS) {
     const value = input[field]
     if (typeof value !== "string" || value.length === 0) continue
-    if (!isAbsolute(value)) continue
-    if (!within(cwd, value)) return value
+    const candidate = isAbsolute(value) ? value : resolve(cwd, value)
+    if (!within(cwd, candidate)) return value
   }
   return null
 }

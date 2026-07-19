@@ -177,4 +177,29 @@ describe("resolveRunner", () => {
   it("reports that nothing can run it rather than guessing", () => {
     expect(resolveRunner(step({ id: "a", number: "01" }), [], null)).toBeNull()
   })
+
+  it("refuses a fallback harness that isn't installed here", () => {
+    // The fallback has to clear the same bar as an assignee. Returning an
+    // uninstalled orchestrator sent the step to a harness with no binary, which
+    // fails three times and reports "stuck after 3 attempts" — hiding the real
+    // and actionable cause, which is that nothing here can run it.
+    const step = { id: "s1", number: "01", title: "t", assignee: undefined } as unknown as PlanStep
+    const usable = [{ cli: "codex" as const, model: "gpt-5" }]
+    expect(resolveRunner(step, usable, { cli: "claude", model: "opus" })).toStrictEqual({
+      cli: "codex",
+      model: "gpt-5"
+    })
+  })
+
+  it("still uses the fallback when it IS installed", () => {
+    const step = { id: "s1", number: "01", title: "t", assignee: undefined } as unknown as PlanStep
+    const usable = [
+      { cli: "codex" as const, model: "gpt-5" },
+      { cli: "claude" as const, model: "opus" }
+    ]
+    expect(resolveRunner(step, usable, { cli: "claude", model: "opus" })).toStrictEqual({
+      cli: "claude",
+      model: "opus"
+    })
+  })
 })

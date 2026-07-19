@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   streamCb: null as null | ((event: unknown) => void),
   agentRunCalls: [] as Array<{ sessionId: string; text: string; images: unknown }>,
   execCalls: [] as Array<{ sessionId: string; planId: string }>,
+  resumeCalls: [] as Array<{ sessionId: string; planId: string }>,
   diffValue: "diff-0",
   diffCalls: 0,
   statusWrites: [] as Array<string>,
@@ -75,6 +76,13 @@ vi.mock("./rpc-client.js", () => ({
     planReadiness: async () => {
       await h.readinessGate
       return h.readiness
+    },
+    agentResumePlan: (sessionId: string, planId: string, onEvent: (event: unknown) => void) => {
+      h.resumeCalls.push({ sessionId, planId })
+      h.streamCb = onEvent
+      return () => {
+        h.streamCb = null
+      }
     },
     planExecute: (sessionId: string, planId: string, onEvent: (event: unknown) => void) => {
       h.execCalls.push({ sessionId, planId })
@@ -142,6 +150,7 @@ beforeEach(() => {
   h.reviewCb = null
   h.planCalls.length = 0
   h.execCalls.length = 0
+  h.resumeCalls.length = 0
   h.readinessGate = Promise.resolve()
   h.readiness = { ready: true, vendors: [], reason: null }
 })
@@ -994,5 +1003,11 @@ describe("conversationMachine — approving a plan after the mode changed", () =
     // Whatever it does, it must not sit in idle doing nothing.
     await waitFor(actor, (s) => s.matches("running"))
     expect(h.execCalls).toEqual([])
+    // The assertion that matters, and the one this test originally lacked:
+    // it asserted only ABSENCES, so it passed while the machine quietly started
+    // a second full planning round — two flagship models — on an approval.
+    expect(h.planCalls).toHaveLength(1)
+    // And it actually re-drove, rather than merely not-doing-the-wrong-thing.
+    expect(h.resumeCalls).toEqual([{ sessionId: "s1", planId: "p_plain" }])
   })
 })

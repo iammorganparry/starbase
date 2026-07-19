@@ -31,10 +31,23 @@ describe("escapingPath", () => {
     )
   })
 
-  it("leaves relative paths alone — they cannot escape by construction", () => {
-    // They resolve against cwd, so judging them would only produce false
-    // positives on ordinary tool calls.
+  it("allows an ordinary relative path", () => {
     expect(escapingPath(CWD, { file_path: "src/a.ts" })).toBeNull()
+    expect(escapingPath(CWD, { path: "./packages/core" })).toBeNull()
+  })
+
+  it("catches a RELATIVE traversal — the case that used to walk straight through", () => {
+    // This test previously asserted the opposite, on the reasoning that relative
+    // paths "cannot escape by construction". They can, and `Grep`/`Glob` accept
+    // them: `../../.ssh` is two dots away from the operator's private keys, and
+    // read tools are never gated by the permission prompt.
+    expect(escapingPath(CWD, { path: "../other" })).toBe("../other")
+    expect(escapingPath(CWD, { path: "../../.ssh" })).toBe("../../.ssh")
+    expect(escapingPath(CWD, { file_path: "../../../etc/passwd" })).toBe("../../../etc/passwd")
+    // Mixed in with legitimate-looking prefix.
+    expect(escapingPath(CWD, { file_path: "src/../../other/secret.txt" })).toBe(
+      "src/../../other/secret.txt"
+    )
   })
 
   it("treats /tmp and /private/tmp as the same place", () => {

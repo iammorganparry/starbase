@@ -48,6 +48,17 @@ export const CREDENTIAL_DIRS: ReadonlyArray<string> = [
   ".netrc",
   ".config/gh",
   ".config/gcloud",
+  // The OTHER place a GitHub token lives, in plaintext
+  // (`https://user:ghp_xxx@github.com`), on a machine that by definition uses
+  // git. Denying `.config/gh` without this covered one of the two.
+  ".git-credentials",
+  ".config/git/credentials",
+  // Holds `oauthAccount` and MCP server definitions whose `env` blocks
+  // routinely carry third-party API keys.
+  ".claude.json",
+  // opencode is a harness Starbase drives — same argument as .claude/.codex.
+  ".local/share/opencode/auth.json",
+  ".pgpass",
   ".claude/.credentials.json",
   ".codex/auth.json"
 ]

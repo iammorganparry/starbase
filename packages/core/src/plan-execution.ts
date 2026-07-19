@@ -155,6 +155,18 @@ export const resolveRunner = (
     // smaller divergence than running on a different vendor entirely.
     if (exact !== undefined) return { cli: assignee.cli, model: assignee.model }
   }
-  if (fallback !== null && fallback.cli !== "starbase") return fallback
+  // The fallback must clear the SAME bar as an assignee: installed here. It
+  // used to be returned on the `starbase` check alone, so on a Codex-only host
+  // the default orchestrator (claude/opus) was handed to steps that had no
+  // assignee — the harness isn't there, the step burns all three attempts, and
+  // the run dies with "stuck after 3 attempts" instead of the accurate "no
+  // installed harness can run this step" that this function exists to produce.
+  if (
+    fallback !== null &&
+    fallback.cli !== "starbase" &&
+    usable.some((a) => a.cli === fallback.cli)
+  ) {
+    return fallback
+  }
   return usable[0] ?? null
 }

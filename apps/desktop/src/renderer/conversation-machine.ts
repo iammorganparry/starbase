@@ -371,6 +371,13 @@ export const conversationMachine = setup({
       const id = stamp()
       return {
         resumePlanId: event.planId,
+        // Both cleared, because `agentStream` picks its RPC by checking these in
+        // order and `adversarialBrief` wins. Leaving the finished round's brief
+        // set meant approving its plan started a WHOLE SECOND ROUND — two
+        // flagship models and minutes of wall clock — instead of re-driving.
+        // Every other run-starting action clears them; this one didn't.
+        adversarialBrief: null,
+        executePlanId: null,
         pendingText: "",
         pendingImages: [],
         // A fresh run (the plan re-drive) starts with no sub-agents carried over.

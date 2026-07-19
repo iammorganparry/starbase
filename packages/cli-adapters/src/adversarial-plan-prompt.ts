@@ -298,9 +298,12 @@ export const revisionPrompt = (input: {
     "",
     asData("your plan", input.plan),
     "",
-    "Challenges:",
-    "",
-    list,
+    // Fenced like every other untrusted insertion in this file, and for a
+    // sharper reason than most: the adversary wrote this text AFTER reading the
+    // worktree, so a file in a repo that accepts issues or PRs can reach the
+    // proposer's prompt through a challenge rationale. This was the one
+    // insertion here that went in raw.
+    asData("the challenges raised", list),
     "",
     "Re-emit the COMPLETE plan — every step, not only the ones you changed.",
     "",
