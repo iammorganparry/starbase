@@ -17,6 +17,7 @@ import { conversationMachine } from "./conversation-machine.js"
 const h = vi.hoisted(() => ({
   streamCb: null as null | ((event: unknown) => void),
   agentRunCalls: [] as Array<{ sessionId: string; text: string; images: unknown }>,
+  execCalls: [] as Array<{ sessionId: string; planId: string }>,
   diffValue: "diff-0",
   diffCalls: 0,
   statusWrites: [] as Array<string>,
@@ -74,6 +75,13 @@ vi.mock("./rpc-client.js", () => ({
     planReadiness: async () => {
       await h.readinessGate
       return h.readiness
+    },
+    planExecute: (sessionId: string, planId: string, onEvent: (event: unknown) => void) => {
+      h.execCalls.push({ sessionId, planId })
+      h.streamCb = onEvent
+      return () => {
+        h.streamCb = null
+      }
     },
     planAdversarial: (sessionId: string, brief: string, onEvent: (event: unknown) => void) => {
       h.planCalls.push({ sessionId, brief })
@@ -133,6 +141,7 @@ beforeEach(() => {
   h.transcriptGate = Promise.resolve()
   h.reviewCb = null
   h.planCalls.length = 0
+  h.execCalls.length = 0
   h.readinessGate = Promise.resolve()
   h.readiness = { ready: true, vendors: [], reason: null }
 })
@@ -910,5 +919,80 @@ describe("conversationMachine — adversarial planning", () => {
 
     expect(h.planCalls).toHaveLength(1)
     expect(h.agentRunCalls).toHaveLength(1)
+  })
+})
+
+/**
+ * Approving is a fact about the PLAN, not about the composer.
+ *
+ * The approve button lives on the plan review screen, which outlives the mode
+ * chip: a round finishes, the operator flips back to `accept-edits` to read
+ * something, then approves. Guarding approval on the live mode meant that click
+ * was swallowed — no run, no error, a button that simply did nothing.
+ */
+describe("conversationMachine — approving a plan after the mode changed", () => {
+  const assignedPlan = {
+    id: "p_assigned",
+    summary: "Ship it",
+    steps: [
+      {
+        id: "s1",
+        number: "01",
+        title: "Do the thing",
+        intent: "i",
+        approach: [],
+        kind: "step",
+        condition: null,
+        parentId: null,
+        dependsOn: [],
+        blocks: [],
+        files: [],
+        guards: [],
+        code: null,
+        diff: null,
+        status: "proposed",
+        flagged: false,
+        assignee: { cli: "codex", model: "gpt-5", reason: "best at schema work" }
+      }
+    ],
+    comments: [],
+    status: "proposed",
+    structured: true,
+    raw: "x"
+  } as unknown as Plan
+
+  const seed = (actor: ReturnType<typeof start>, plan: Plan) => {
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "b" })
+    h.streamCb?.({ _tag: "PlanProposed", plan })
+    h.streamCb?.({ _tag: "Done", costUsd: 0, tokens: 0 })
+  }
+
+  it("still runs an assigned plan per-step once the operator left Gigaplan", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    seed(actor, assignedPlan)
+    await waitFor(actor, (s) => s.matches(idle))
+
+    // The exact sequence that used to drop the click.
+    actor.send({ type: "SET_MODE", mode: "accept-edits" })
+    actor.send({ type: "APPROVE_PLAN", planId: assignedPlan.id })
+
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.execCalls).toEqual([{ sessionId: "s1", planId: "p_assigned" }])
+  })
+
+  it("never swallows the click — an unassigned plan re-drives instead", async () => {
+    const plain = { ...assignedPlan, id: "p_plain", steps: [] } as unknown as Plan
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    seed(actor, plain)
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SET_MODE", mode: "accept-edits" })
+    actor.send({ type: "APPROVE_PLAN", planId: "p_plain" })
+
+    // Whatever it does, it must not sit in idle doing nothing.
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.execCalls).toEqual([])
   })
 })

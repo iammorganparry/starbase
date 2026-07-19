@@ -15,6 +15,7 @@ import type {
   GateDecision,
   Message,
   PermissionMode,
+  Plan,
   PlanComment,
   ProviderModels,
   QuestionAnswer,
@@ -303,6 +304,33 @@ export const conversationMachine = setup({
     orchestrates: ({ context }) =>
       context.mode === "gigaplan" && context.planReadiness?.ready === true,
 
+    /**
+     * Whether THIS plan needs the per-step executor — asked of the plan, not of
+     * the composer.
+     *
+     * `orchestrates` is the right question for a SEND, which is about what the
+     * operator is doing now. It is the wrong question for approving a plan,
+     * which is about what an earlier round already produced: a Gigaplan whose
+     * steps carry assignees still has to run per-step even if the operator has
+     * since flipped the mode chip, and readiness can go false simply by a
+     * harness disappearing. Guarding approval on the live mode silently dropped
+     * the click in both cases — the plan sat there with a button that did
+     * nothing.
+     */
+    planExecutesPerStep: ({ context, event }) => {
+      if (event.type !== "APPROVE_PLAN" && event.type !== "RESUME_PLAN") return false
+      const planId = event.planId
+      const plan = context.messages.reduce<Plan | null>(
+        (found, m) =>
+          m.parts.reduce<Plan | null>(
+            (inner, p) => (p._tag === "Plan" && p.plan.id === planId ? p.plan : inner),
+            found
+          ),
+        null
+      )
+      return plan !== null && plan.steps.some((st) => st.assignee !== undefined)
+    },
+
   },
   actions: {
     appendTurns: assign(({ context, event }) => {
@@ -334,7 +362,11 @@ export const conversationMachine = setup({
     // turn, and flag the run so `agentStream` calls `resumePlan` (which restores
     // the exec mode + prompts the agent with the plan embedded).
     startResumePlan: assign(({ context, event }) => {
-      if (event.type !== "RESUME_PLAN") return {}
+      // Also the fallback for APPROVE_PLAN on a plan with no per-step
+      // assignees — an ordinary plan approved in an ordinary mode. Re-driving it
+      // on the session's own harness is the honest behaviour; dropping the click
+      // is not.
+      if (event.type !== "RESUME_PLAN" && event.type !== "APPROVE_PLAN") return {}
       const now = new Date().toISOString()
       const id = stamp()
       return {
@@ -870,9 +902,14 @@ export const conversationMachine = setup({
         // re-drives a stale plan on the session's own harness. Both arrive here
         // rather than in `running` because neither has a live run to resume:
         // the round ended, or the app was restarted.
-        APPROVE_PLAN: { guard: "orchestrates", target: "running", actions: "beginPlanExecution" },
+        // Two arms, never zero: a single guarded transition meant a click that
+        // failed the guard was swallowed with nothing on screen to explain it.
+        APPROVE_PLAN: [
+          { guard: "planExecutesPerStep", target: "running", actions: "beginPlanExecution" },
+          { target: "running", actions: "startResumePlan" }
+        ],
         RESUME_PLAN: [
-          { guard: "orchestrates", target: "running", actions: "beginPlanExecution" },
+          { guard: "planExecutesPerStep", target: "running", actions: "beginPlanExecution" },
           { target: "running", actions: "startResumePlan" }
         ],
         SET_MODE: { actions: "persistMode" },

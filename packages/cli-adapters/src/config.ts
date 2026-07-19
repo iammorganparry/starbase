@@ -55,6 +55,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.collapsedRepos ? { collapsedRepos: existing.collapsedRepos } : {}),
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...(existing?.providers ? { providers: existing.providers } : {}),
+            ...(existing?.orchestrator ? { orchestrator: existing.orchestrator } : {}),
             // MANDATORY: omit a section here and every unrelated save silently
             // drops it, because `patch` is a whole-object read-modify-write.
             ...patch

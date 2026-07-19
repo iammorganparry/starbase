@@ -13,6 +13,7 @@ import {
   ReviewService,
   ReviewStore,
   AdversarialPlanService,
+  PlanExecutor,
   PlanRoundStore,
   SessionStore,
   TranscriptStore,
@@ -47,6 +48,7 @@ import {
   skillsList,
   workspaceRevertFile,
   planAdversarial,
+  planExecute,
   workspaceRevertLines
 } from "./rpc.js"
 
@@ -1087,6 +1089,20 @@ describe("Gigaplan round persistence", () => {
   }
 
   /** Stands in for the round: emits the plan the real service would produce. */
+  /** The executor is faked: this is about persistence, not about running steps. */
+  const fakeExecutor = Layer.succeed(
+    PlanExecutor,
+    new PlanExecutor({
+      run: () =>
+        Stream.fromIterable([
+          { _tag: "Assistant", text: "ran step 01" } as unknown as StreamEvent,
+          { _tag: "Done", costUsd: 0, tokens: 0 } as unknown as StreamEvent
+        ])
+    } as unknown as ConstructorParameters<typeof PlanExecutor>[0])
+  )
+
+  const execLayer = (r: string) => Layer.mergeAll(roundLayer(r), fakeExecutor)
+
   const fakeService = Layer.succeed(
     AdversarialPlanService,
     new AdversarialPlanService({
@@ -1120,5 +1136,51 @@ describe("Gigaplan round persistence", () => {
     }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
 
     expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
+  })
+
+  /**
+   * Approving is a durable act, not a screen state.
+   *
+   * `settleLoaded` rewrites a still-`proposed` plan to `stale` on the next
+   * transcript load. So a plan that was approved and RAN, but whose approval was
+   * only ever held in the renderer, comes back looking like one that never
+   * started — and can be approved a second time, running the whole thing again.
+   */
+  it("records the approval, so a completed plan doesn't come back as stale", async () => {
+    const status = await Effect.gen(function* () {
+      // Seed the approved-from plan the way a finished round leaves it.
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.flatMap((m) =>
+        m.parts.flatMap((p) => (p._tag === "Plan" && p.plan.id === PLAN.id ? [p.plan.status] : []))
+      )
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
+
+    expect(status).toStrictEqual(["approved"])
+  })
+
+  it("persists the execution's own turns, so the run survives a reopen", async () => {
+    const roles = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.map((m) => m.role)
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
+
+    // The seeded plan turn, plus the approval turn and the run's own turn.
+    expect(roles).toStrictEqual(["assistant", "user", "assistant"])
   })
 })

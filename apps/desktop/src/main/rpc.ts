@@ -567,17 +567,21 @@ export const planExecute = (
       const messages = yield* TranscriptStore.list(sessionId).pipe(
         Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
       )
-      const plan = messages.reduce<Plan | null>(
+      const located = messages.reduce<{ plan: Plan; messageId: string } | null>(
         (found, m) =>
-          m.parts.reduce<Plan | null>(
-            (inner, part) => (part._tag === "Plan" && part.plan.id === planId ? part.plan : inner),
+          m.parts.reduce<{ plan: Plan; messageId: string } | null>(
+            (inner, part) =>
+              part._tag === "Plan" && part.plan.id === planId
+                ? { plan: part.plan, messageId: m.id }
+                : inner,
             found
           ),
         null
       )
-      if (plan === null) {
+      if (located === null) {
         return Stream.fail(new PlanError({ message: "That plan is no longer in this session." }))
       }
+      const plan = located.plan
 
       const clis = yield* DiscoveryService.list()
       const catalog = yield* ModelsService.catalog(clis)
@@ -588,6 +592,45 @@ export const planExecute = (
         p.models.length > 0 ? [{ cli: p.cli, model: p.models[0]!.id }] : []
       )
       const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+
+      // Approval and the run itself have to reach disk, for two separate
+      // reasons. The plan is still `proposed` on the record until we say
+      // otherwise, and `settleLoaded` rewrites a proposed plan to `stale` on the
+      // next transcript load — so a plan that ran to completion would come back
+      // looking like one that never started, and could be approved a second
+      // time. The execution's own output needs persisting for the same reason
+      // the round's did: streaming to the renderer is not a record of anything.
+      const txCtx = yield* Effect.context<
+        TranscriptStore | FileSystem.FileSystem | Path.Path | AppPaths
+      >()
+      yield* TranscriptStore.patchById(sessionId, located.messageId, (m) => ({
+        ...m,
+        parts: m.parts.map((p) =>
+          p._tag === "Plan" && p.plan.id === planId
+            ? ({ _tag: "Plan", plan: { ...p.plan, status: "approved" as const } } as const)
+            : p
+        )
+      })).pipe(Effect.ignore)
+
+      const now = yield* Effect.sync(() => new Date().toISOString())
+      const maxN = messages.reduce((max, m) => {
+        const n = Number(m.id.split("_").pop())
+        return Number.isFinite(n) && n > max ? n : max
+      }, 0)
+      yield* TranscriptStore.append(
+        sessionId,
+        userMessage(`u_${sessionId}_${maxN + 1}`, `Approved: ${plan.summary}`, now, [])
+      ).pipe(Effect.ignore)
+      const assistantId = `a_${sessionId}_${maxN + 2}`
+      yield* TranscriptStore.append(sessionId, assistantMessage(assistantId, now)).pipe(
+        Effect.ignore
+      )
+      const persist = (event: StreamEvent) =>
+        TranscriptStore.patchById(sessionId, assistantId, (m) => applyStreamEvent(m, event)).pipe(
+          Effect.provide(txCtx),
+          Effect.ignore
+        )
+
       const executor = yield* PlanExecutor
       return executor.run({
         sessionId,
@@ -600,7 +643,11 @@ export const planExecute = (
         // the same identity Gigaplan speaks as, rather than an arbitrary pick.
         fallback: resolveOrchestrator(config),
         binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null
-      })
+      }).pipe(
+        // `ToolDelta` excluded for the reason `AgentRunner` excludes it: it ticks
+        // constantly and every patch rewrites the whole transcript.
+        Stream.tap((event) => (event._tag === "ToolDelta" ? Effect.void : persist(event)))
+      )
     })
   )
 

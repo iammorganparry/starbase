@@ -187,4 +187,27 @@ describe("ConfigService", () => {
       expect(exit.value?.providers).toBeUndefined()
     }
   })
+
+  /**
+   * `patch` is a whole-object read-modify-write, so a section it forgets to
+   * carry forward is erased by the next unrelated save. The orchestrator is the
+   * expensive one to lose silently: `resolveOrchestrator` falls back to a
+   * curated default, so Gigaplan would quietly start planning on a different
+   * harness and model than the operator chose, with nothing on screen to say so.
+   */
+  it("keeps the orchestrator when an unrelated setting is saved", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setReposDir("/repos")
+        yield* ConfigService.setOrchestrator("codex", "gpt-5")
+        // Any other setter would do — the bug is in the shared read-modify-write.
+        yield* ConfigService.setLastRepoPath("/repos/widget")
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.orchestrator).toStrictEqual({ cli: "codex", model: "gpt-5" })
+    }
+  })
 })
