@@ -117,7 +117,11 @@ const GATES_PROJECT_SERVERS: Record<CliKind, boolean> = {
   claude: true,
   codex: true,
   cursor: false,
-  opencode: false
+  opencode: false,
+  // The orchestrator runs no MCP server itself — each step inherits the gate of
+  // whichever harness actually runs it, which is the harness the operator
+  // consented to. Answering `true` here would claim a consent nobody gave.
+  starbase: false
 }
 
 /**

@@ -106,6 +106,23 @@ export class ReviewError extends Schema.TaggedError<ReviewError>()(
 ) {}
 
 /**
+ * An adversarial planning round could not produce a plan at all.
+ *
+ * Reserved for the cases where there is genuinely nothing to show: fewer than
+ * two labs reachable, or the proposer itself failing. A missing or unhelpful
+ * ADVERSARY is not an error — the round degrades to an unchallenged plan and
+ * says so, because a plan that got less scrutiny than intended is still worth
+ * having.
+ */
+export class PlanError extends Schema.TaggedError<PlanError>()(
+  "PlanError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown)
+  }
+) {}
+
+/**
  * Raised when a PTY-backed terminal cannot be spawned (bad cwd, shell missing,
  * fork failure). A `Schema.TaggedError` — it is the `Terminal.create` error
  * channel. Write/resize/kill/attach never fail (they no-op on an unknown id).

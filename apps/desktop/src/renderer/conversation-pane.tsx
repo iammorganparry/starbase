@@ -214,6 +214,8 @@ export function ConversationPane({
           onStop={convo.stop}
           onDecideGate={convo.decideGate}
           onSetMode={convo.setMode}
+          adversarialPlanning={convo.adversarialPlanning ?? undefined}
+          onPlanAdversarially={convo.planAdversarially}
           question={convo.question}
           onAnswerQuestion={convo.answerQuestion}
           onApprovePlan={(id) => convo.approvePlan(id)}

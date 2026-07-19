@@ -31,6 +31,18 @@ export interface AppPathsShape {
    */
   readonly plansDir: string
   /**
+   * `~/starbase/plan-rounds` — the last adversarial planning round per session,
+   * at `<planRoundsDir>/<sessionId>.json`.
+   *
+   * Separate from `plansDir` (which holds plan markdown keyed by worktree)
+   * because this is the audit trail rather than the artefact: it keeps the
+   * pre-revision proposal and the critique, so "did the critic actually attack,
+   * and did the proposer engage or cave?" stays answerable after the fact. Kept
+   * out of the transcript for the same reason reviews are — a critique carries
+   * an unbounded challenge list.
+   */
+  readonly planRoundsDir: string
+  /**
    * `~/starbase/auth.enc` — the signed-in session token, encrypted with the OS
    * credential vault (Electron `safeStorage`). Only ever ciphertext is written
    * here; see `SecretStore`.

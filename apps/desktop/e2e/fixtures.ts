@@ -573,7 +573,14 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
 
       // Fake harness home for MCP config. Written before launch so the first read
       // sees it; `STARBASE_HARNESS_HOME` below points the main process here.
-      let mcpEnv: Record<string, string> = {}
+      // A harness home is seeded for EVERY launch, not only the MCP specs.
+      // Anything that probes the harness's own config — MCP servers, and now the
+      // subscription-auth check behind the billing panel — otherwise reads the
+      // developer's real `~` and reports whatever they happen to be signed into,
+      // so the same test says different things on different machines.
+      let mcpEnv: Record<string, string> = {
+        STARBASE_HARNESS_HOME: join(home, "harness-home")
+      }
       if (options.mcp) {
         const harnessHome = join(home, "harness-home")
         mkdirSync(join(harnessHome, ".claude"), { recursive: true })

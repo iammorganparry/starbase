@@ -13,6 +13,7 @@
  * Electron's structured-clone IPC.)
  */
 import {
+  AdversarialPlanService,
   AgentRunner,
   AuthService,
   ConfigService,
@@ -24,6 +25,12 @@ import {
   McpService,
   ModelsService,
   planDraftPost,
+  billingPath,
+  hasSubscriptionAuth,
+  METERED_ENV_KEYS,
+  PlanExecutor,
+  PlanRoundStore,
+  GitService,
   planReviewPost,
   retitleSession,
   ReviewService,
@@ -38,10 +45,15 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { GhError, GitError, ReviewError, reviewModelFor } from "@starbase/core"
+import { GhError, GitError, PlanError, planningReadiness, reachableVendors, resolveOrchestrator, ReviewError, reviewModelFor, TASK_KINDS } from "@starbase/core"
 import type {
   AdversarialReview,
   CliKind,
+  Message,
+  Plan,
+  PlanRound,
+  StreamEvent,
+  VendorReach,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
@@ -53,7 +65,8 @@ import type {
   SettledSessionStatus
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
-import { FileSystem } from "@effect/platform"
+import { AppPaths, CliAdapter } from "@starbase/cli-adapters"
+import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
@@ -462,6 +475,187 @@ export const githubDiff = (sessionId: string) =>
 export const reviewGet = (sessionId: string) => ReviewStore.get(sessionId)
 
 /**
+ * The live model catalogue, folded down to the labs this machine can reach.
+ *
+ * Shared by `Plan.readiness` and `Plan.adversarial` so the entry the operator
+ * sees and the round that actually runs can never disagree about which vendors
+ * exist — a readiness check computed from a different source than the run is a
+ * button that lies.
+ */
+const planningVendors = Effect.gen(function* () {
+  const clis = yield* DiscoveryService.list()
+  const catalog = yield* ModelsService.catalog(clis)
+  return { clis, vendors: reachableVendors(catalog) }
+})
+
+/**
+ * `Billing.paths` handler — what each installed harness is charged to.
+ *
+ * Reports every available harness, including ones with no metered key of their
+ * own (opencode), so the pane can be read as a complete picture rather than a
+ * list of exceptions.
+ */
+export const billingPaths = Effect.gen(function* () {
+  const clis = yield* DiscoveryService.list()
+  return clis
+    .filter((c) => c.available && c.kind !== "starbase")
+    .map((c) => {
+      const subscription = hasSubscriptionAuth(c.kind)
+      const keys = METERED_ENV_KEYS[c.kind] ?? []
+      return {
+        cli: c.kind,
+        path: billingPath(c.kind, process.env, subscription),
+        // A key WAS present and we withheld it — the case worth naming, because
+        // it is the one that silently cost money before.
+        keyWithheld: subscription && keys.some((k) => (process.env[k] ?? "").length > 0)
+      }
+    })
+})
+
+/** `Plan.readiness` handler — can we offer adversarial planning, and if not, why not? */
+export const planReadiness = Effect.gen(function* () {
+  const clis = yield* DiscoveryService.list()
+  const catalog = yield* ModelsService.catalog(clis)
+  return planningReadiness(catalog)
+})
+
+type PlanExecuteEnv =
+  | AppPaths
+  | CommandExecutor.CommandExecutor
+  | ConfigService
+  | SessionStore
+  | TranscriptStore
+  | DiscoveryService
+  | ModelsService
+  | PlanExecutor
+  | CliAdapter
+  | FileSystem.FileSystem
+  | Path.Path
+
+/**
+ * `Plan.execute` handler — run an approved plan, step by step.
+ *
+ * The payoff for everything the round does: it decides WHO should do each piece
+ * of work, and until this runs that decision is decoration.
+ *
+ * The plan is read back from the session's own transcript rather than passed in
+ * from the renderer. The renderer holds a copy that may have been edited on
+ * screen, and executing anything other than the artifact the operator actually
+ * approved would make the audit trail a lie.
+ */
+export const planExecute = (
+  sessionId: string,
+  planId: string
+): Stream.Stream<StreamEvent, PlanError, PlanExecuteEnv> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const session = yield* resolveSession(sessionId)
+      if (!session?.worktreePath) {
+        return Stream.fail(new PlanError({ message: "This session has no worktree to work in." }))
+      }
+      const messages = yield* TranscriptStore.list(sessionId).pipe(
+        Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
+      )
+      const plan = messages.reduce<Plan | null>(
+        (found, m) =>
+          m.parts.reduce<Plan | null>(
+            (inner, part) => (part._tag === "Plan" && part.plan.id === planId ? part.plan : inner),
+            found
+          ),
+        null
+      )
+      if (plan === null) {
+        return Stream.fail(new PlanError({ message: "That plan is no longer in this session." }))
+      }
+
+      const clis = yield* DiscoveryService.list()
+      const catalog = yield* ModelsService.catalog(clis)
+      // What this host can actually run, as (harness, model) pairs. The plan's
+      // assignee is only a recommendation — it was written on whatever machine
+      // reviewed the plan, and cannot conjure an install here.
+      const available = catalog.flatMap((p) =>
+        p.models.length > 0 ? [{ cli: p.cli, model: p.models[0]!.id }] : []
+      )
+      const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+      const executor = yield* PlanExecutor
+      return executor.run({
+        sessionId,
+        repo: session.repo,
+        branch: session.branch,
+        cwd: session.worktreePath,
+        plan,
+        available,
+        // The orchestrator's own model backs any step the plan left unassigned —
+        // the same identity Gigaplan speaks as, rather than an arbitrary pick.
+        fallback: resolveOrchestrator(config),
+        binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null
+      })
+    })
+  )
+
+/** The persisted round for a session — proposal, critique and revision. */
+export const planRound = (sessionId: string) => PlanRoundStore.get(sessionId)
+
+type PlanAdversarialEnv =
+  | ConfigService
+  | GitService
+  | SessionStore
+  | DiscoveryService
+  | ModelsService
+  | AdversarialPlanService
+  | PlanRoundStore
+  | CliAdapter
+  | CommandExecutor.CommandExecutor
+  | FileSystem.FileSystem
+  | Path.Path
+  | AppPaths
+
+/**
+ * `Plan.adversarial` handler — run a planning round and stream its events.
+ *
+ * Resolves the session's worktree up front and fails fast without one: the roles
+ * run read-only *in the repo*, and a round that can't read the code would produce
+ * a plan invented from the brief alone, which is worse than no plan.
+ */
+export const planAdversarial = (
+  sessionId: string,
+  brief: string
+): Stream.Stream<StreamEvent, PlanError, PlanAdversarialEnv> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const session = yield* resolveSession(sessionId)
+      if (!session?.worktreePath) {
+        return Stream.fail(
+          new PlanError({ message: "This session has no worktree to plan against." })
+        )
+      }
+      const { clis, vendors } = yield* planningVendors
+      const service = yield* AdversarialPlanService
+      // Capture the store's context here so the persistence hook the service
+      // calls later — on its own fiber, with only the adapter in scope — is a
+      // fully-provided effect rather than one demanding an environment the
+      // round doesn't have.
+      const storeCtx = yield* Effect.context<
+        PlanRoundStore | FileSystem.FileSystem | Path.Path | AppPaths
+      >()
+      const binPathFor = (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null
+      return service.run({
+        sessionId,
+        repo: session.repo,
+        branch: session.branch,
+        cwd: session.worktreePath,
+        brief,
+        vendors,
+        binPathFor,
+        assignAgents: true,
+        // Persistence is wired in here rather than inside the service so the
+        // round logic stays free of the filesystem and testable without one.
+        onRound: (round: PlanRound) => PlanRoundStore.set(round).pipe(Effect.provide(storeCtx))
+      })
+    })
+  )
+
+/**
  * `Review.markRouted` handler — record that the stored review's critical/major
  * findings reached the agent, and return the stamp.
  *
@@ -769,6 +963,7 @@ export const createTerminal = (input: {
  * `AppLayer` satisfies with the Node platform layer.
  */
 const HandlersLayer = StarbaseRpcs.toLayer({
+  "Billing.paths": () => billingPaths,
   "Discovery.list": () => DiscoveryService.list(),
   "Config.get": configGet,
   "Setup.chooseReposDir": chooseReposDir,
@@ -839,6 +1034,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setStarredRepos": ({ paths }) => ConfigService.setStarredRepos(paths),
   "Config.setCollapsedRepos": ({ paths }) => ConfigService.setCollapsedRepos(paths),
   "Config.setLastRepoPath": ({ path }) => ConfigService.setLastRepoPath(path),
+  "Config.setOrchestrator": ({ cli, model }) => ConfigService.setOrchestrator(cli, model),
   "Config.setProvider": ({ cli, provider }) => ConfigService.setProvider(cli, provider),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
   "Github.prState": ({ sessionId }) => githubPrState(sessionId),
@@ -850,6 +1046,10 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
+  "Plan.adversarial": ({ sessionId, brief }) => planAdversarial(sessionId, brief),
+  "Plan.round": ({ sessionId }) => planRound(sessionId),
+  "Plan.readiness": () => planReadiness,
+  "Plan.execute": ({ sessionId, planId }) => planExecute(sessionId, planId),
   "Review.run": ({ sessionId, force }) => reviewRun(sessionId, force),
   // Unwrapped from the service like `Terminal.attach` — the reviewer outlives any
   // one watcher, so the stream attaches to it rather than starting it.

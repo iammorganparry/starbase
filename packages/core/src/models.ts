@@ -68,7 +68,12 @@ export const FALLBACK_MODELS: Record<CliKind, ReadonlyArray<ModelOption>> = {
     { id: "opencode/big-pickle", label: "big-pickle" },
     { id: "opencode/north-mini-code-free", label: "north-mini-code-free" },
     { id: "opencode/hy3-free", label: "hy3-free" }
-  ]
+  ],
+  // Starbase picks the model per step from the plan and the repo's knowledge
+  // base, so there is exactly one choice to offer: let it choose. This is not a
+  // placeholder for a real catalogue — offering a fixed model here would
+  // contradict the whole point of selecting the orchestrator.
+  starbase: [{ id: "auto", label: "orchestrate" }]
 }
 
 /** The default model id for a harness (the first fallback option). */
@@ -97,9 +102,31 @@ export const DEFAULT_REVIEW_MODEL: Record<CliKind, string> = {
   // user picks otherwise. Live discovery surfaces the real catalogue — and for
   // opencode that is the widest of any harness (models.dev spans 167 providers),
   // so the Settings override is where a serious reviewer model gets chosen.
-  opencode: "opencode/big-pickle"
+  opencode: "opencode/big-pickle",
+  // Never read: a review runs on the harness that wrote the diff, and the
+  // orchestrator writes none of it — its steps run on real harnesses, which is
+  // what a review attributes to. Present only to keep the record total.
+  starbase: "auto"
 }
 
 /** The reviewer's model for `cli`, honouring the user's override when set. */
 export const reviewModelFor = (cli: CliKind, configured?: string): string =>
   configured && configured.length > 0 ? configured : DEFAULT_REVIEW_MODEL[cli]
+
+/**
+ * Split a provider-qualified model id into the `{providerID, modelID}` pair
+ * opencode's API wants. Only the FIRST slash separates them: the provider id
+ * never contains a slash but the model id routinely does —
+ * `openrouter/anthropic/claude-opus-4.5` is provider `openrouter`, model
+ * `anthropic/claude-opus-4.5`. A naive `split("/")` silently mangles every
+ * OpenRouter model.
+ *
+ * Lives here rather than in the opencode adapter so `vendor.ts` can resolve a
+ * model id to the lab behind it without `core` depending on `cli-adapters`.
+ */
+export const splitModelId = (id: string): { providerID: string; modelID: string } => {
+  const i = id.indexOf("/")
+  return i === -1
+    ? { providerID: id, modelID: "" }
+    : { providerID: id.slice(0, i), modelID: id.slice(i + 1) }
+}

@@ -6,6 +6,7 @@ import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape } from "./adapter.js"
+import { ConfigService } from "./config.js"
 import { AgentRunner } from "./agent-runner.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -34,6 +35,7 @@ const SESSION = "s_test"
 const runPrompt = (mode: PermissionMode, decision: GateDecision) => {
   const base = Layer.mergeAll(
     AgentRunner.Default,
+    ConfigService.Default,
     SessionStore.Default,
     TranscriptStore.Default,
     BackgroundTaskStore.Default,
@@ -136,6 +138,7 @@ describe("AgentRunner sub-agents", () => {
   const runSubagentPrompt = () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -179,6 +182,7 @@ describe("AgentRunner image attachments", () => {
   it("persists attached images on the user turn alongside the text", async () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -210,6 +214,7 @@ describe("AgentRunner AskUserQuestion", () => {
   it("emits QuestionRequested, resumes on answer, and records it in the transcript", async () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -260,6 +265,7 @@ describe("AgentRunner ids", () => {
   it("does not reuse message ids across a runner restart", async () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -296,6 +302,7 @@ describe("AgentRunner allowlist", () => {
   it('"always allow" a command means the next run does not gate it', async () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -334,6 +341,7 @@ describe("AgentRunner plan mode", () => {
   const base = () =>
     Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -618,6 +626,7 @@ describe("AgentRunner model", () => {
 
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -681,6 +690,7 @@ describe("AgentRunner plan library", () => {
     seedSessionWithWorktree("plan")
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -714,6 +724,7 @@ describe("AgentRunner plan library", () => {
     const captured: { prompt: string | null } = { prompt: null }
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -750,6 +761,7 @@ describe("AgentRunner plan library", () => {
     const captured: { prompt: string | null } = { prompt: null }
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -814,6 +826,7 @@ describe("AgentRunner resume across restarts", () => {
     const captured: { resumeId: string | null } = { resumeId: null }
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -916,6 +929,7 @@ describe("AgentRunner plan progress across turns", () => {
   const runTwoTurns = (edit: string, plan?: (p: Plan) => Plan) => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -1053,6 +1067,7 @@ describe("AgentRunner stop", () => {
       const interrupted = yield* Deferred.make<boolean>()
       const base = Layer.mergeAll(
         AgentRunner.Default,
+        ConfigService.Default,
         SessionStore.Default,
         TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -1125,6 +1140,7 @@ describe("AgentRunner live tool output", () => {
   it("streams ToolDelta to the consumer but never persists it to the transcript", async () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
+      ConfigService.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -1159,5 +1175,80 @@ describe("AgentRunner live tool output", () => {
       .find((p) => p._tag === "Tool" && p.tool.id === "bash-1")
     expect(toolPart && toolPart._tag === "Tool" && toolPart.tool.status).toBe("success")
     expect(toolPart && toolPart._tag === "Tool" && toolPart.tool.output).toBeUndefined()
+  })
+})
+
+describe("AgentRunner on the Starbase harness", () => {
+  /**
+   * A session whose harness is the orchestrator must run on a REAL one.
+   *
+   * `starbase` is us, not something that can execute a turn, so without a
+   * substitution the dispatcher falls through to the scripted stub and the
+   * session silently does nothing — looking, from the outside, exactly like a
+   * broken app. This asserts the spec the adapter actually receives.
+   */
+  const captureSpec = (sessionCli: "starbase" | "claude") =>
+    Effect.gen(function* () {
+      let seen: { cli: string; model: string | null } | null = null
+      const capturing: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+        run: (_id, spec, ctx) => {
+          seen = { cli: spec.cli, model: spec.model }
+          return ctx.emit({ _tag: "Assistant", text: "ok", agentId: undefined })
+        },
+        stop: () => Effect.void
+      } as CliAdapterShape)
+
+      const base = Layer.mergeAll(
+        AgentRunner.Default,
+        ConfigService.Default,
+        SessionStore.Default,
+        TranscriptStore.Default,
+        BackgroundTaskStore.Default,
+        PlanStore.Default,
+        capturing,
+        noHarnesses,
+        temp.layer
+      )
+      // Seeded on disk rather than through the store's `create`, which forks a
+      // real git worktree — irrelevant here, and slow.
+      mkdirSync(temp.root, { recursive: true })
+      writeFileSync(
+        join(temp.root, "sessions.json"),
+        JSON.stringify([
+          {
+            id: SESSION,
+            repo: "widget",
+            branch: "starbase/x",
+            title: "t",
+            status: "idle",
+            cli: sessionCli,
+            diff: { added: 0, removed: 0 },
+            prNumber: null,
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: "2026-07-19T00:00:00.000Z",
+            worktreePath: temp.root,
+            model: "sonnet"
+          }
+        ])
+      )
+      yield* Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.prompt(SESSION, "hello").pipe(Stream.runDrain)
+      }).pipe(Effect.provide(base))
+      return seen as { cli: string; model: string | null } | null
+    }).pipe(Effect.runPromise)
+
+  it("runs a Starbase session on the orchestrator's model, not on 'starbase'", async () => {
+    // Defaults to Claude Opus, and deliberately IGNORES the session's own stored
+    // model: the orchestrator has one identity, chosen in settings, so a stale
+    // per-session model must not quietly change who you are talking to.
+    expect(await captureSpec("starbase")).toStrictEqual({ cli: "claude", model: "opus" })
+  })
+
+  it("leaves an ordinary session's harness and model exactly alone", async () => {
+    // The substitution must be scoped to the orchestrator; everyone else keeps
+    // the model they picked.
+    expect(await captureSpec("claude")).toStrictEqual({ cli: "claude", model: "sonnet" })
   })
 })

@@ -1,5 +1,5 @@
 import type { PermissionMode, StreamEvent } from "@starbase/core"
-import { CliExecError } from "@starbase/core"
+import { CliExecError, splitModelId } from "@starbase/core"
 import type { Event, Part } from "@opencode-ai/sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
@@ -35,18 +35,11 @@ import { requireWorktree } from "./cwd.js"
 // ── Pure helpers (the testable seam) ─────────────────────────────────────────
 
 /**
- * Split an opencode model id into the `{providerID, modelID}` pair its API
- * wants. Only the FIRST slash separates them: the provider id never contains a
- * slash but the model id routinely does — `openrouter/anthropic/claude-opus-4.5`
- * is provider `openrouter`, model `anthropic/claude-opus-4.5`. A naive
- * `split("/")` silently mangles every OpenRouter model.
+ * Re-exported from `@starbase/core`, where it moved so `vendor.ts` can resolve a
+ * model id to the lab behind it without `core` depending on this package. Kept
+ * exported here because it reads as an opencode concern at every call site.
  */
-export const splitModelId = (id: string): { providerID: string; modelID: string } => {
-  const i = id.indexOf("/")
-  return i === -1
-    ? { providerID: id, modelID: "" }
-    : { providerID: id.slice(0, i), modelID: id.slice(i + 1) }
-}
+export { splitModelId }
 
 /**
  * opencode's permission config for a run. Values are `"ask" | "allow" | "deny"`.

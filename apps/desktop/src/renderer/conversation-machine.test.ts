@@ -31,6 +31,13 @@ const h = vi.hoisted(() => ({
   // Lets a test hold the transcript load, to drive the "typed before it lands" race.
   transcriptGate: Promise.resolve() as Promise<void>,
   setHarnessCalls: [] as Array<{ sessionId: string; cli: string; model: string }>,
+  planCalls: [] as Array<{ sessionId: string; brief: string }>,
+  readinessGate: Promise.resolve() as Promise<void>,
+  readiness: { ready: true, vendors: [], reason: null } as {
+    ready: boolean
+    vendors: ReadonlyArray<unknown>
+    reason: string | null
+  },
   catalog: [
     { cli: "claude", label: "Claude Code", models: [{ id: "opus", label: "opus" }] },
     { cli: "codex", label: "Codex CLI", models: [{ id: "gpt-5.6-sol", label: "GPT-5.6-Sol" }] }
@@ -59,6 +66,17 @@ vi.mock("./rpc-client.js", () => ({
     },
     agentRun: (sessionId: string, text: string, onEvent: (event: unknown) => void, images: unknown) => {
       h.agentRunCalls.push({ sessionId, text, images })
+      h.streamCb = onEvent
+      return () => {
+        h.streamCb = null
+      }
+    },
+    planReadiness: async () => {
+      await h.readinessGate
+      return h.readiness
+    },
+    planAdversarial: (sessionId: string, brief: string, onEvent: (event: unknown) => void) => {
+      h.planCalls.push({ sessionId, brief })
       h.streamCb = onEvent
       return () => {
         h.streamCb = null
@@ -114,6 +132,9 @@ beforeEach(() => {
   h.skillsGate = Promise.resolve()
   h.transcriptGate = Promise.resolve()
   h.reviewCb = null
+  h.planCalls.length = 0
+  h.readinessGate = Promise.resolve()
+  h.readiness = { ready: true, vendors: [], reason: null }
 })
 
 describe("conversationMachine — context size", () => {
@@ -802,5 +823,92 @@ describe("conversationMachine — stop", () => {
     expect(h.stopCalls).toContain("s1")
     expect(actor.getSnapshot().context.queued).toEqual([])
     actor.stop()
+  })
+})
+
+describe("conversationMachine — adversarial planning", () => {
+  it("routes the round through the planning RPC, not a normal turn", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: "Add a tier column" }])
+    // Crucially NOT an Agent.run — a planning round is not a turn.
+    expect(h.agentRunCalls).toEqual([])
+  })
+
+  it("refuses to start when only one lab is reachable", async () => {
+    // The entry is disabled in the UI, but a stale readiness or a keyboard path
+    // must not start a round the service would only refuse.
+    h.readiness = { ready: false, vendors: [], reason: "needs a second provider" }
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    expect(actor.getSnapshot().matches(idle)).toBe(true)
+    expect(h.planCalls).toEqual([])
+  })
+
+  it("does not start before readiness has loaded", async () => {
+    // Null readiness means "we do not know yet". Starting on an assumption would
+    // burn two flagship runs to arrive at a refusal.
+    let release = () => {}
+    h.readinessGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "x" })
+    expect(h.planCalls).toEqual([])
+
+    release()
+    await waitFor(actor, (s) => s.context.planReadiness !== null)
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "x" })
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.planCalls).toHaveLength(1)
+  })
+
+  it("folds the round's plan through the path a single-agent plan already uses", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    emit({
+      _tag: "PlanProposed",
+      plan: {
+        id: "p1",
+        summary: "Add a tier column",
+        steps: [],
+        comments: [],
+        status: "proposed",
+        structured: true,
+        raw: "# plan"
+      }
+    })
+    const plans = actor
+      .getSnapshot()
+      .context.messages.flatMap((m) => m.parts.filter((p) => p._tag === "Plan"))
+    expect(plans).toHaveLength(1)
+  })
+
+  it("clears the brief so the next normal turn is not another round", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    await waitFor(actor, (s) => s.matches("running"))
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "now build it" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    expect(h.planCalls).toHaveLength(1)
+    expect(h.agentRunCalls).toHaveLength(1)
   })
 })

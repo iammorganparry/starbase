@@ -10,7 +10,11 @@ const NAME: Record<CliKind, string> = {
   codex: "Codex",
   cursor: "Cursor",
   // Lowercase is the product's own styling, not a typo.
-  opencode: "opencode"
+  opencode: "opencode",
+  // Never surfaced: the orchestrator holds no subscription of its own. What a
+  // Starbase session spends is spent by the harnesses it drives, and those
+  // report their own usage under their own names.
+  starbase: "Starbase"
 }
 
 const unavailable = (cli: CliKind, name?: string): ProviderUsage => ({

@@ -4,6 +4,8 @@ import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKM
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { startTeeStream, type TeeStream } from "./bash-tee.js"
+import { escapingPath } from "./confinement.js"
+import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { requireWorktree } from "./cwd.js"
 import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
@@ -76,6 +78,10 @@ const READ_ONLY_DISALLOWED: ReadonlyArray<string> = [
  * restores "default" mid-run (see `setPermissionMode` below).
  */
 export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
+  // `gigaplan` maps to "default" (ask-like) rather than anything permissive.
+  // It is only ever seen here on the fall-through path — a Gigaplan send whose
+  // readiness check failed, running as an ordinary turn — and the cautious
+  // reading is the right one for a turn the operator expected to be a plan.
   mode === "accept-edits" ? "acceptEdits" : mode === "plan" ? "plan" : "default"
 
 /**
@@ -741,6 +747,20 @@ export const runClaude = (
               message: decision._tag === "Revise" ? decision.feedback : "Plan rejected by the operator."
             }
           }
+          // Confinement first, and ahead of `toPermissionRequest`: read tools
+          // are never gated, so a check that ran after it would miss exactly the
+          // case this exists for.
+          if (spec.confineToCwd === true) {
+            const escaped = escapingPath(spec.cwd, input)
+            if (escaped !== null) {
+              return {
+                behavior: "deny",
+                message:
+                  `Denied: ${escaped} is outside this session's worktree. ` +
+                  "Work only within the repository you were given."
+              }
+            }
+          }
           // AskUserQuestion arrives as a PERMISSION request (not a dialog) in this
           // SDK — running it headlessly just skips. So we intercept it: dock our
           // question card, collect the picks, and hand them back. `canUseTool` can
@@ -791,6 +811,10 @@ export const runClaude = (
             // was launched from instead of the session's worktree.
             cwd: requireWorktree(spec.cwd, `session ${sessionId}`),
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
+            // Run on the operator's Claude plan where they have one. The SDK
+            // REPLACES the child environment with this rather than merging, so
+            // `harnessEnv` returns a complete copy. See `subscription.ts`.
+            env: harnessEnv("claude", process.env, hasSubscriptionAuth("claude")),
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "plan" ? { planModeInstructions } : {}),

@@ -5,6 +5,7 @@ import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
 import { requireWorktree } from "./cwd.js"
+import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 
 /**
  * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
@@ -183,7 +184,13 @@ export const runCodex = (
     yield* Effect.tryPromise({
       try: async () => {
         const { Codex } = await import("@openai/codex-sdk")
-        const codex = new Codex({ codexPathOverride: spec.binPath ?? undefined })
+        const codex = new Codex({
+          codexPathOverride: spec.binPath ?? undefined,
+          // Run on the operator's ChatGPT plan where they have one. The SDK does
+          // not inherit `process.env` when this is given, so it is a complete
+          // copy minus the metered key. See `subscription.ts`.
+          env: harnessEnv("codex", process.env, hasSubscriptionAuth("codex"))
+        })
         const threadOptions = {
           // See `requireWorktree`: inheriting the app's cwd would run this
           // session against an unrelated repository.

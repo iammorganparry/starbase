@@ -62,6 +62,20 @@ const CLI_SPECS: Record<CliKind, CliSpec> = {
     // own binary sidesteps that entirely.
     minVersion: [1, 18],
     upgradeWith: "opencode upgrade"
+  },
+  // Us, and deliberately LAST. There is no binary to probe for, so
+  // `bins`/`candidates` are empty and `probe` short-circuits on this kind before
+  // it ever touches the filesystem — an empty candidate list would otherwise
+  // report the orchestrator as "not installed" on every host.
+  //
+  // Order matters beyond cosmetics: callers take the first available harness as
+  // the default for a NEW session, and defaulting to the orchestrator would put
+  // every new session through a multi-minute, multi-model planning round nobody
+  // asked for. Selecting Starbase must stay a deliberate act.
+  starbase: {
+    label: "Starbase",
+    bins: [],
+    candidates: []
   }
 }
 
@@ -133,6 +147,24 @@ const probe = (
   spec: CliSpec
 ): Effect.Effect<CliInfo, never, CommandExecutor.CommandExecutor> =>
   Effect.gen(function* () {
+    // Starbase ships WITH the app, so "is it installed" is always yes and there
+    // is nothing on disk to look for. Availability here means exactly that;
+    // whether a round can actually run on this host is a different question with
+    // a different answer (`planningReadiness` — it needs two independent
+    // vendors), and the picker renders that as a disabled entry with the reason.
+    // Conflating the two here would report the orchestrator as "not installed",
+    // which is both false and unactionable.
+    if (kind === "starbase") {
+      return {
+        kind,
+        label: spec.label,
+        binPath: null,
+        version: null,
+        available: true,
+        backgroundTasks: false
+      }
+    }
+
     // Found a binary — accept it only if it clears `minVersion`. A too-old CLI is
     // reported unavailable *with a note*, so the UI can say "upgrade" rather than
     // pretend nothing is installed.

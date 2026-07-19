@@ -1,5 +1,9 @@
 import {
   AdversarialReview,
+  PlanError,
+  HarnessBilling,
+  PlanningReadiness,
+  PlanRound,
   ArchiveReason,
   Attachment,
   AuthProvider,
@@ -67,6 +71,17 @@ import { Schema } from "effect"
  */
 export class StarbaseRpcs extends RpcGroup.make(
   /** List every known coding CLI and whether it is installed on this host. */
+  /**
+   * What each installed harness will actually be billed to.
+   *
+   * Read-only and cheap. Exists because the failure it reports was silent: an
+   * exported API key overriding a paid subscription, with nothing on screen to
+   * say so.
+   */
+  Rpc.make("Billing.paths", {
+    success: Schema.Array(HarnessBilling)
+  }),
+
   Rpc.make("Discovery.list", {
     success: Schema.Array(CliInfo),
     error: DiscoveryError
@@ -450,6 +465,20 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /** Persist one CLI's provider defaults (model, mode, reasoning, …). */
+  /** Turn learning from finished work on or off. Absent config ⇒ off. */
+  /**
+   * Which harness+model Gigaplan itself runs on.
+   *
+   * One fixed model rather than a per-message choice — the intelligence this
+   * feature is for is spent choosing a model per PLAN STEP, which is the only
+   * place the right answer varies.
+   */
+  Rpc.make("Config.setOrchestrator", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { cli: CliKind, model: Schema.String }
+  }),
+
   Rpc.make("Config.setProvider", {
     success: WorkspaceConfig,
     error: ConfigError,
@@ -465,6 +494,62 @@ export class StarbaseRpcs extends RpcGroup.make(
    * returns that review without spawning an agent, unless `force`. That is what
    * lets the auto-review trigger fire off a poll loop safely.
    */
+  /**
+   * Run an adversarial planning round: one flagship proposes a plan, a model
+   * from a DIFFERENT lab attacks it, and the proposer answers.
+   *
+   * Streams rather than returning the plan, because the three phases take
+   * minutes between them and each runs as a surfaced sub-agent — so the operator
+   * watches "proposing / attacking / revising" happen instead of staring at one
+   * spinner. The settled plan arrives as a `PlanProposed` event and folds into
+   * the transcript through the same path a single-agent plan does.
+   */
+  Rpc.make("Plan.adversarial", {
+    success: StreamEvent,
+    stream: true,
+    error: PlanError,
+    payload: { sessionId: Schema.String, brief: Schema.String }
+  }),
+
+  /**
+   * The last planning round for a session, or null — the audit trail behind a
+   * plan, holding the pre-revision proposal beside the critique. Never errors:
+   * a missing or stale round costs an unavailable audit trail, not a broken tab.
+   */
+  Rpc.make("Plan.round", {
+    success: Schema.NullOr(PlanRound),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * Whether adversarial planning is worth offering here, and if not, what would
+   * fix it.
+   *
+   * The renderer needs the REASON, not just a boolean: the entry is rendered
+   * disabled with an explanation rather than hidden, so a user with one provider
+   * learns why and what to install instead of never discovering the feature.
+   */
+  Rpc.make("Plan.readiness", {
+    success: PlanningReadiness,
+    payload: {}
+  }),
+
+  /**
+   * Run an approved plan, step by step, each on the harness it was assigned.
+   *
+   * A stream for the same reason `Agent.run` is: the operator watches steps go
+   * past as subagents. Takes only the plan's ID — main reads the artifact back
+   * from the session's transcript, because the renderer's copy may have been
+   * edited on screen and executing anything other than what was approved would
+   * make the audit trail a lie.
+   */
+  Rpc.make("Plan.execute", {
+    success: StreamEvent,
+    error: PlanError,
+    payload: { sessionId: Schema.String, planId: Schema.String },
+    stream: true
+  }),
+
   Rpc.make("Review.run", {
     success: AdversarialReview,
     error: ReviewError,
