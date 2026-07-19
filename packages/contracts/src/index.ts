@@ -1,5 +1,6 @@
 import {
   AdversarialReview,
+  LearningConfig,
   PlanError,
   HarnessBilling,
   PlanningReadiness,
@@ -466,6 +467,12 @@ export class StarbaseRpcs extends RpcGroup.make(
 
   /** Persist one CLI's provider defaults (model, mode, reasoning, …). */
   /** Turn learning from finished work on or off. Absent config ⇒ off. */
+  Rpc.make("Config.setLearning", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { config: LearningConfig }
+  }),
+
   /**
    * Which harness+model Gigaplan itself runs on.
    *

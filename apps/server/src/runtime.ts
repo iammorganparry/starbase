@@ -9,8 +9,11 @@
  */
 import { Layer, ManagedRuntime } from "effect"
 import { Database } from "./db/database.js"
+import { LearningsRepository } from "./db/repositories/learnings-repository.js"
 import { UserRepository } from "./db/repositories/user-repository.js"
 
-const AppLayer = UserRepository.Default.pipe(Layer.provideMerge(Database.Default))
+const AppLayer = Layer.mergeAll(UserRepository.Default, LearningsRepository.Default).pipe(
+  Layer.provideMerge(Database.Default)
+)
 
 export const runtime = ManagedRuntime.make(AppLayer)

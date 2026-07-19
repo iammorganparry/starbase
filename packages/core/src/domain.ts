@@ -228,6 +228,46 @@ export const GithubConfig = Schema.Struct({
 })
 export type GithubConfig = Schema.Schema.Type<typeof GithubConfig>
 
+/**
+ * Whether Starbase may learn from your finished work.
+ *
+ * OFF by default, and "off" means the daemon does not run — not that it collects
+ * quietly and withholds. Nothing is read, scored, or written until this is
+ * switched on. Everything it produces stays under `~/starbase`.
+ *
+ * `Schema.optional` on `WorkspaceConfig` so a config written before this existed
+ * still decodes, and every field optional within it for the same reason.
+ */
+export const LearningConfig = Schema.Struct({
+  /** Master switch. Absent or false ⇒ the daemon is inert. */
+  enabled: Schema.Boolean,
+  /**
+   * Minutes between ticks. Only a hint — the daemon jitters around it and skips
+   * entirely while a session is running, so it never competes with the agent the
+   * operator is actually waiting on.
+   */
+  intervalMinutes: Schema.optional(Schema.Number),
+  /**
+   * Pool learnings with your organisation. Nested under `enabled`, and
+   * FAIL-CLOSED: turning learning off disables sharing regardless of this flag,
+   * because a stale `true` here would otherwise keep sending after the operator
+   * believed they had switched everything off.
+   *
+   * Absent means off, like every other switch that moves data.
+   */
+  sharing: Schema.optional(Schema.Boolean),
+  /**
+   * Let a small model judge quality that CI and review findings cannot see.
+   *
+   * Its own switch AND fail-closed under `enabled`, because unlike the rest of
+   * the loop this one SPENDS: it runs a model against the operator's
+   * subscription. Absent means off.
+   */
+  evalJudge: Schema.optional(Schema.Boolean),
+  /** Most judgements per day. Bounds the spend even when left on. */
+  evalJudgeDailyBudget: Schema.optional(Schema.Number)
+})
+export type LearningConfig = Schema.Schema.Type<typeof LearningConfig>
 
 /** The user's git behaviour preferences. Persisted inside `WorkspaceConfig`. */
 export const GitConfig = Schema.Struct({
@@ -371,6 +411,7 @@ export const WorkspaceConfig = Schema.Struct({
    * Whether Starbase may learn from finished work. Absent on older configs, and
    * absent means OFF — the safe direction for anything that reads your history.
    */
+  learning: Schema.optional(LearningConfig),
   /**
    * Which harness+model the ORCHESTRATOR itself runs on.
    *

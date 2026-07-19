@@ -5,6 +5,9 @@ import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
 import { AppPaths } from "./app-paths.js"
 import { gitLine, runGit, runString } from "./command.js"
+import type { RepoKey } from "@starbase/core"
+import { repoKeyFrom } from "@starbase/core"
+import { createHash } from "node:crypto"
 
 /** Parameters for forking an isolated worktree from a repo. */
 export interface CreateWorktreeInput {
@@ -31,6 +34,9 @@ type GitEnv =
  * `node_modules` is symlinked to the origin repo's `node_modules` (best-effort;
  * a session that later changes deps simply installs locally over the link).
  */
+/** The digest `repo-key.ts` builds keys with; supplied here because core is also bundled into the renderer. */
+const sha256Hex = (input: string): string => createHash("sha256").update(input).digest("hex")
+
 export class GitService extends Effect.Service<GitService>()(
   "@starbase/GitService",
   {
@@ -193,6 +199,34 @@ export class GitService extends Effect.Service<GitService>()(
         })
 
       /** The current branch name checked out at `cwd`, or null (detached / error). */
+      /**
+       * The repository's stable identity — see `repo-key.ts` for why this is the
+       * root commit rather than a path, a name, or a remote.
+       *
+       * Reads the remote too, as the fallback for a shallow clone: `rev-list
+       * --max-parents=0` on a shallow clone returns the SHALLOW BOUNDARY rather
+       * than a true root, and that boundary differs by clone depth — so two
+       * teammates would derive different "strong" keys for one repo and their
+       * evidence would silently shard. `--is-shallow-repository` is what tells
+       * the two cases apart; without it the fallback would never fire.
+       */
+      const repoKey = (
+        repoPath: string
+      ): Effect.Effect<RepoKey | null, never, CommandExecutor.CommandExecutor> =>
+        Effect.gen(function* () {
+          const shallow = yield* gitLine(repoPath, "rev-parse", "--is-shallow-repository")
+          const roots =
+            shallow === "true"
+              ? []
+              : ((yield* runString("git", "-C", repoPath, "rev-list", "--max-parents=0", "HEAD")) ??
+                  "")
+                  .split("\n")
+                  .map((l) => l.trim())
+                  .filter((l) => l.length > 0)
+          const remote = yield* gitLine(repoPath, "config", "--get", "remote.origin.url")
+          return repoKeyFrom({ roots, remote }, sha256Hex)
+        })
+
       const branchAt = (
         cwd: string
       ): Effect.Effect<string | null, never, CommandExecutor.CommandExecutor> =>
@@ -245,6 +279,7 @@ export class GitService extends Effect.Service<GitService>()(
         createWorktree,
         createDetachedWorktree,
         branchAt,
+        repoKey,
         checkoutBranch,
         removeWorktreeAt
       }

@@ -4,7 +4,10 @@
  * function (`api/[[...route]].ts` via `@hono/vercel`). Keeping the app here (and
  * the runtimes thin) means the exact same routing runs in both places.
  */
-import { Effect, Option } from "effect"
+import { Effect, Option, Schema } from "effect"
+import { LearningsRepository } from "./db/repositories/learnings-repository.js"
+import { canShareLearnings } from "./entitlements.js"
+import { CliKind, SizeBucket, TaskKind } from "@starbase/core"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { auth } from "./auth.js"
@@ -38,6 +41,114 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw))
  * row is then loaded through `UserRepository` (via the Effect runtime) — the
  * canonical shape for any DB-backed endpoint we add (billing, usage, …).
  */
+/**
+ * What a contribution may contain.
+ *
+ * Every field is a closed literal or a number — there is no free-text field, by
+ * construction, mirroring the desktop's `Outcome`. Validating here rather than
+ * trusting the client means a future client bug cannot smuggle prose into a
+ * shared corpus, and `Schema` is used rather than a hand-rolled check because
+ * `effect` is already a dependency and hand-rolled validators drift.
+ */
+const ContributionPayload = Schema.Struct({
+  outcomes: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      repoKey: Schema.String,
+      taskKind: TaskKind,
+      cli: CliKind,
+      vendor: Schema.String,
+      model: Schema.String,
+      findingsCritical: Schema.Number,
+      findingsMajor: Schema.Number,
+      findingsMinor: Schema.Number,
+      findingsNit: Schema.Number,
+      ciPassed: Schema.NullOr(Schema.Boolean),
+      merged: Schema.NullOr(Schema.Boolean),
+      filesReverted: Schema.Number,
+      planRevisions: Schema.Number,
+      sizeBucket: SizeBucket,
+      score: Schema.Number,
+      occurredOn: Schema.String
+    })
+  )
+})
+
+/**
+ * How many outcomes one member may contribute per day.
+ *
+ * The first rate limit on this server, and this is the endpoint that needed it:
+ * `/api/me` is a single indexed read, while a contribution writes rows a whole
+ * team then reads. Capping per member per day also bounds how far one heavy user
+ * — or one bad actor — can move a shared cell.
+ */
+const DAILY_CONTRIBUTION_CAP = 500
+
+/**
+ * Resolve the caller and the organisation they are acting in.
+ *
+ * Both are required for every learnings route: sharing is a team feature, and a
+ * signed-in user with no active organisation has no pool to read from or
+ * contribute to.
+ */
+const requireOrgMember = async (
+  headers: Headers
+): Promise<{ userId: string; organizationId: string } | null> => {
+  const session = await auth.api.getSession({ headers }).catch(() => null)
+  const organizationId = session?.session?.activeOrganizationId
+  if (!session?.user || !(await runtime.runPromise(canShareLearnings(organizationId)))) return null
+  return { userId: session.user.id, organizationId: organizationId as string }
+}
+
+/** Contribute scored outcomes to the caller's organisation. */
+app.post("/api/learnings/outcomes", async (c) => {
+  const who = await requireOrgMember(c.req.raw.headers)
+  if (!who) return c.json({ error: "Unauthorized" }, 401)
+
+  const body = await c.req.json().catch(() => null)
+  const decoded = Schema.decodeUnknownEither(ContributionPayload)(body)
+  // A malformed body is the client's bug, not ours — 400, never a 500.
+  if (decoded._tag === "Left") return c.json({ error: "Invalid payload" }, 400)
+
+  const used = await runtime
+    .runPromise(LearningsRepository.contributedToday(who.organizationId, who.userId))
+    .catch(() => 0)
+  if (used >= DAILY_CONTRIBUTION_CAP) return c.json({ error: "Daily limit reached" }, 429)
+
+  const accepted = decoded.right.outcomes.slice(0, DAILY_CONTRIBUTION_CAP - used)
+  const recorded = await runtime
+    .runPromise(LearningsRepository.record(who.organizationId, who.userId, accepted))
+    .catch(() => null)
+  if (recorded === null) return c.json({ error: "Could not record outcomes" }, 500)
+  return c.json({ recorded })
+})
+
+/** The organisation's pooled view of one repository. */
+app.get("/api/learnings/affinity", async (c) => {
+  const who = await requireOrgMember(c.req.raw.headers)
+  if (!who) return c.json({ error: "Unauthorized" }, 401)
+
+  const repoKey = c.req.query("repoKey")
+  if (!repoKey) return c.json({ error: "repoKey is required" }, 400)
+
+  const rows = await runtime
+    .runPromise(LearningsRepository.affinity(who.organizationId, repoKey))
+    .catch(() => null)
+  if (rows === null) return c.json({ error: "Could not read learnings" }, 500)
+  return c.json({ rows })
+})
+
+/** Delete everything the caller contributed to this organisation. */
+app.post("/api/learnings/purge", async (c) => {
+  const who = await requireOrgMember(c.req.raw.headers)
+  if (!who) return c.json({ error: "Unauthorized" }, 401)
+  const purged = await runtime
+    .runPromise(LearningsRepository.purge(who.organizationId, who.userId))
+    .catch(() => null)
+  if (purged === null) return c.json({ error: "Could not purge" }, 500)
+  return c.json({ purged })
+})
+
 app.get("/api/me", async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers }).catch(() => null)
   if (!session?.user) return c.json({ error: "Unauthorized" }, 401)

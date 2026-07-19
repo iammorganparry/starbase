@@ -15,6 +15,13 @@
       "when": 1784103205381,
       "tag": "0001_quick_wonder_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784406134681,
+      "tag": "0002_sloppy_quentin_quire",
+      "breakpoints": true
     }
   ]
 }

@@ -43,6 +43,15 @@ export interface AppPathsShape {
    */
   readonly planRoundsDir: string
   /**
+   * `~/starbase/outcomes` — scored outcomes per repository, at
+   * `<outcomesDir>/<repoKey>.jsonl`.
+   *
+   * Keyed by repo rather than session because learnings are repo-scoped: "which
+   * model is good at schema work" has no universal answer, and a file per repo
+   * is also the unit a purge and a future export both operate on.
+   */
+  readonly outcomesDir: string
+  /**
    * `~/starbase/auth.enc` — the signed-in session token, encrypted with the OS
    * credential vault (Electron `safeStorage`). Only ever ciphertext is written
    * here; see `SecretStore`.
