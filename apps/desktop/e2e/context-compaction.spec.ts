@@ -1,0 +1,108 @@
+import { expect, test } from "./fixtures.js"
+import type { SeedSession } from "./fixtures.js"
+
+/**
+ * Auto-compaction, end to end against the built app.
+ *
+ * The unit suites already prove the policy and the swap. What only this can
+ * prove is that the whole loop survives the REAL boundaries: `ContextSnapshot`
+ * and `ContextDigest` encoding across Electron IPC, the meter reading a live
+ * snapshot, and the compaction marker rendering in a real transcript.
+ *
+ * Driven through "Compact now" rather than by inflating a session past the
+ * budget: the scripted adapter reports a fixed 42k, and a test that faked its
+ * way past the threshold would be testing the fake rather than the feature.
+ */
+
+const seededSessions = ({ repoPath }: { repoPath: string }): ReadonlyArray<SeedSession> => [
+  {
+    id: "s_ctx",
+    repo: "widget",
+    branch: "starbase/context",
+    title: "Long running session",
+    status: "idle",
+    cli: "claude",
+    diff: { added: 0, removed: 0 },
+    prNumber: null,
+    costUsd: 0,
+    tokens: 0,
+    updatedAt: "2026-07-19T00:00:00.000Z",
+    worktreePath: repoPath,
+    mode: "auto"
+  }
+]
+
+test("compacts a session and keeps its history intact", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions
+  })
+
+  const composer = window.getByPlaceholder("Message Claude…")
+  await expect(composer).toBeVisible()
+
+  // ── A first turn, so there is a conversation worth summarising ──
+  await composer.click()
+  await composer.pressSequentially("Add rate limiting to the refund endpoint.")
+  await composer.press("Enter")
+
+  // Wait for the turn to settle — the meter only appears once usage is reported.
+  await expect(window.getByText("src/routes/billing.ts").first()).toBeVisible({ timeout: 20_000 })
+
+  // ── The meter reads a live snapshot across the RPC boundary ──
+  const meter = window.getByRole("button", { name: "Compact now" })
+  await expect(meter).toBeVisible({ timeout: 20_000 })
+  // 42.1k is the scripted adapter's reported context size. Seeing it here proves
+  // the Usage event reached the renderer AND that `Context.state` resolved a
+  // trigger point — the meter renders nothing without one.
+  await expect(meter).toContainText("42.1k")
+
+  // ── Compact ──
+  await meter.click()
+
+  // The digest is built in the background, so the meter flips to say the next
+  // turn will reseed rather than blocking on it.
+  await expect(window.getByText("compacting next turn")).toBeVisible({ timeout: 20_000 })
+
+  // ── The next turn runs on the reseeded conversation ──
+  await composer.click()
+  await composer.pressSequentially("What did we decide about the token bucket?")
+  await composer.press("Enter")
+
+  // The marker lands in the transcript, above the reply that ran on it.
+  await expect(window.getByText("Context compacted")).toBeVisible({ timeout: 20_000 })
+
+  // ── What the user is left with ──
+  // The earlier turn is STILL THERE. This is the property that distinguishes
+  // this from `/compact`: the model's working set shrank, the user's record
+  // did not.
+  await expect(window.getByText("Add rate limiting to the refund endpoint.")).toBeVisible()
+
+  // And the summary is inspectable, so the drop in the meter is explicable.
+  await window.getByText("Context compacted").click()
+  await expect(window.getByText(/full history above is unchanged/)).toBeVisible()
+  await expect(window.getByText(/token bucket/).first()).toBeVisible()
+})
+
+test("exposes the token levers in Settings", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions
+  })
+
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  await window.getByRole("button", { name: "Account menu" }).click()
+  await window.getByRole("menuitem", { name: "Settings" }).click()
+  await expect(window.getByRole("button", { name: "Close settings" })).toBeVisible()
+  await window.getByRole("button", { name: /Context/ }).click()
+
+  // The budget, and — the part that makes it meaningful — what it means per
+  // harness. A 200k Claude compacts at its safety margin, not at the budget.
+  await expect(window.getByText("300k tokens")).toBeVisible()
+  await expect(window.getByText("170k of 200k")).toBeVisible()
+
+  // The cost answer, stated rather than implied.
+  await expect(window.getByText(/no API key/)).toBeVisible()
+})

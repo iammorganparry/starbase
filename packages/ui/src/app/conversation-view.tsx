@@ -74,6 +74,8 @@ export interface ConversationViewProps {
   contextTriggerAt?: number | null
   /** A digest is prepared; the next turn will reseed the conversation. */
   contextDigestReady?: boolean
+  /** Compact this session now, ahead of the budget. */
+  onCompactNow?: () => void
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   runStartedAt?: number | null
   /** Messages the operator queued while the agent was busy (sent FIFO once it's free). */
@@ -153,6 +155,7 @@ export function ConversationView({
   tokens = 0,
   contextTriggerAt = null,
   contextDigestReady = false,
+  onCompactNow,
   runStartedAt = null,
   queued = [],
   onUnqueue,
@@ -299,6 +302,7 @@ export function ConversationView({
                 tokens={tokens}
                 triggerAt={contextTriggerAt}
                 digestReady={contextDigestReady}
+                onCompactNow={onCompactNow}
               />
               <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
             </div>

@@ -11,6 +11,14 @@ export interface ContextMeterProps {
   triggerAt: number | null
   /** A digest is built and the next turn will reseed. */
   digestReady?: boolean
+  /**
+   * Compact this session now, ahead of the budget.
+   *
+   * Attached to the meter rather than hidden in a menu because the meter is
+   * already where someone looks when they wonder about context — the moment
+   * they want the control is the moment they are reading this.
+   */
+  onCompactNow?: () => void
   className?: string
 }
 
@@ -32,6 +40,7 @@ export function ContextMeter({
   tokens,
   triggerAt,
   digestReady = false,
+  onCompactNow,
   className
 }: ContextMeterProps) {
   if (triggerAt === null || triggerAt <= 0) return null
@@ -53,13 +62,26 @@ export function ContextMeter({
       ? "compacting soon"
       : "context"
 
+  const title = `${tokens.toLocaleString()} of ~${triggerAt.toLocaleString()} tokens before Starbase compacts this session${
+    onCompactNow && !digestReady ? " · click to compact now" : ""
+  }`
+
+  // A plain span when there is nothing to click, so the meter never presents a
+  // button that does nothing (a digest is already queued, or the harness gave
+  // the host no handler).
+  const Tag = onCompactNow && !digestReady ? "button" : "span"
+
   return (
-    <span
+    <Tag
+      {...(Tag === "button"
+        ? { type: "button" as const, onClick: onCompactNow, "aria-label": "Compact now" }
+        : {})}
       className={cn(
         "flex items-center gap-1.5 font-mono text-[10.5px] tabular-nums text-muted-foreground",
+        Tag === "button" && "cursor-pointer transition-opacity hover:opacity-80",
         className
       )}
-      title={`${tokens.toLocaleString()} of ~${triggerAt.toLocaleString()} tokens before Starbase compacts this session`}
+      title={title}
     >
       <span className="relative h-1 w-10 overflow-hidden rounded-full bg-fg/10">
         <span
@@ -70,6 +92,6 @@ export function ContextMeter({
       <span>
         {fmtTokens(tokens)} <span className="text-dim">{label}</span>
       </span>
-    </span>
+    </Tag>
   )
 }

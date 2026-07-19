@@ -79,11 +79,28 @@ export function ConversationPane({
    */
   const contextReporting =
     clisQuery.data?.find((c) => c.kind === convo.cli)?.contextReporting ?? false
+  /**
+   * True from the moment a compaction is requested until a digest is ready.
+   *
+   * Needed because the digest is built on a BACKGROUND fiber with no push
+   * channel back to the renderer — `Context.compactNow` returns the instant the
+   * request is accepted, so a single refetch after it resolves always reads
+   * `digestReady: false`. Without this the meter sat unchanged after a click and
+   * the feature looked broken, even though it was working.
+   */
+  const [compacting, setCompacting] = useState(false)
   const contextQuery = useQuery({
     queryKey: ["context", session.id, convo.tokens],
     queryFn: () => rpc.contextState(session.id),
-    enabled: contextReporting
+    enabled: contextReporting,
+    // Poll only while something is actually in flight; an idle session's meter
+    // moves on `Usage` events alone and needs no timer.
+    refetchInterval: compacting ? 700 : false
   })
+  const digestReady = contextQuery.data?.digestReady ?? false
+  useEffect(() => {
+    if (digestReady) setCompacting(false)
+  }, [digestReady])
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null)
   const [taskOutput, setTaskOutput] = useState("")
   const viewingTask = bgTasks.tasks.find((t) => t.id === viewingTaskId) ?? null
@@ -215,6 +232,10 @@ export function ConversationPane({
           tokens={convo.tokens}
           contextTriggerAt={contextQuery.data?.triggerAt ?? null}
           contextDigestReady={contextQuery.data?.digestReady ?? false}
+          onCompactNow={() => {
+            setCompacting(true)
+            void rpc.contextCompactNow(session.id).catch(() => setCompacting(false))
+          }}
           runStartedAt={convo.runStartedAt}
           queued={convo.queued}
           onUnqueue={convo.unqueue}
