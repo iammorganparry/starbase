@@ -76,6 +76,10 @@ export interface Conversation {
   readonly sendPrompt: (text: string, images?: ReadonlyArray<Attachment>) => void
   readonly decideGate: (gateId: string, decision: GateDecision) => void
   readonly setMode: (mode: PermissionMode) => void
+  /** Whether an adversarial planning round can run, and the reason when it can't. */
+  readonly adversarialPlanning: { readonly ready: boolean; readonly reason: string | null } | null
+  /** Start an adversarial planning round for `brief`. */
+  readonly planAdversarially: (brief: string) => void
   /** Picking a model implies its harness, so both are set together. */
   readonly setHarness: (cli: CliKind, model: string) => void
   /**
@@ -149,6 +153,8 @@ export function useConversation(session: Session): Conversation {
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
     answerQuestion: (requestId, answers) => send({ type: "ANSWER_QUESTION", requestId, answers }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),
+    adversarialPlanning: state.context.planReadiness,
+    planAdversarially: (brief) => send({ type: "PLAN_ADVERSARIALLY", brief }),
     setHarness: (c, m) => send({ type: "SET_HARNESS", cli: c, model: m }),
     stop: () => send({ type: "STOP" }),
     refreshDiff: () => send({ type: "REFRESH_DIFF" })

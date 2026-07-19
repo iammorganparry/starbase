@@ -9,8 +9,26 @@ import { Schema } from "effect"
 // ── CLI discovery ────────────────────────────────────────────────────────────
 
 /** The coding CLIs Starbase knows how to wrap. */
-export const CliKind = Schema.Literal("claude", "codex", "cursor", "opencode")
+/**
+ * Every harness a session can run on.
+ *
+ * `starbase` is us: not a CLI on the host but our own orchestrator, which drives
+ * the other harnesses rather than being one. It lives in this union because a
+ * session genuinely runs *on* it — it is what the model picker selects, what
+ * `Session.cli` persists, and what `harness-adapter` dispatches on — so keeping
+ * it out would mean a second, parallel notion of "what is running this session"
+ * for every one of those to consult.
+ *
+ * It is deliberately excluded in three places, each for its own reason:
+ * `vendorOf` (it is not a lab), the plan's step assignees (a step routed back to
+ * the orchestrator would recurse), and discovery's binary probing (there is no
+ * binary to find).
+ */
+export const CliKind = Schema.Literal("claude", "codex", "cursor", "opencode", "starbase")
 export type CliKind = Schema.Schema.Type<typeof CliKind>
+
+/** Every harness kind, for exhaustive iteration and for validating parsed input. */
+export const CLI_KINDS: ReadonlyArray<CliKind> = CliKind.literals
 
 /** The outcome of probing for one CLI on the host. */
 export const CliInfo = Schema.Struct({
@@ -81,9 +99,20 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
  * - `accept-edits` — auto-apply file edits, still pause for shell commands,
  * - `auto` — auto-apply edits and run allowlisted commands without prompting,
  * - `plan` — read-only planning: the agent designs a plan for review and cannot
- *   edit or run commands until the operator approves it (Claude harness only).
+ *   edit or run commands until the operator approves it (Claude harness only),
+ * - `gigaplan` — the orchestrated mode. One flagship proposes a plan, a model
+ *   from a rival lab attacks it, the proposer revises, and on approval each step
+ *   runs on the harness the plan chose for it.
+ *
+ * `gigaplan` sits in this union rather than beside it because it answers the
+ * same question the others do — how much autonomy this turn has, and who is in
+ * the loop. Modelling it separately would mean two competing notions of "how is
+ * this session running" for every consumer to reconcile. It is the one mode that
+ * takes over model selection, which is why the composer hides the model picker
+ * while it is active: Gigaplan chooses per step, so a model chip would be a
+ * control that is silently overridden.
  */
-export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan")
+export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan", "gigaplan")
 export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 
 /**
@@ -198,6 +227,7 @@ export const GithubConfig = Schema.Struct({
   reviewModel: Schema.optional(Schema.String)
 })
 export type GithubConfig = Schema.Schema.Type<typeof GithubConfig>
+
 
 /** The user's git behaviour preferences. Persisted inside `WorkspaceConfig`. */
 export const GitConfig = Schema.Struct({
@@ -336,7 +366,26 @@ export const WorkspaceConfig = Schema.Struct({
    * Providers view. Absent on older configs (each provider falls back to the
    * harness defaults).
    */
-  providers: Schema.optional(ProvidersConfig)
+  providers: Schema.optional(ProvidersConfig),
+  /**
+   * Whether Starbase may learn from finished work. Absent on older configs, and
+   * absent means OFF — the safe direction for anything that reads your history.
+   */
+  /**
+   * Which harness+model the ORCHESTRATOR itself runs on.
+   *
+   * One fixed model, not a per-message choice. Everything Starbase does in its
+   * own voice — general asks, and the planning it drives — runs here, so the
+   * operator has a single, predictable answer to "what am I talking to". The
+   * intelligence this feature is actually for is spent elsewhere: choosing a
+   * model per PLAN STEP, which is the only place the right answer genuinely
+   * varies.
+   *
+   * Absent means the default (see `ORCHESTRATOR_DEFAULT`).
+   */
+  orchestrator: Schema.optional(
+    Schema.Struct({ cli: CliKind, model: Schema.String })
+  )
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 

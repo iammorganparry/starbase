@@ -7,6 +7,7 @@
  * alive for the lifetime of the app.
  */
 import {
+  AdversarialPlanService,
   AgentRunner,
   AuthService,
   ConfigService,
@@ -16,6 +17,8 @@ import {
   HarnessCliAdapterLive,
   ModelsService,
   PlanStore,
+  PlanExecutor,
+  PlanRoundStore,
   ReviewService,
   ReviewStore,
   SessionStore,
@@ -49,7 +52,9 @@ const StoreLayers = Layer.mergeAll(
   TranscriptStore.Default,
   BackgroundTaskStore.Default,
   PlanStore.Default,
-  ReviewStore.Default
+  ReviewStore.Default,
+  PlanExecutor.Default,
+  PlanRoundStore.Default,
 )
 
 /**
@@ -58,7 +63,11 @@ const StoreLayers = Layer.mergeAll(
  * review can run on its own model, read-only, without touching that
  * conversation. Peers — neither depends on the other.
  */
-const HarnessLayers = Layer.mergeAll(AgentRunner.Default, ReviewService.Default)
+const HarnessLayers = Layer.mergeAll(
+  AgentRunner.Default,
+  ReviewService.Default,
+  AdversarialPlanService.Default
+)
 
 // Later `Layer.provide`s satisfy the requirements of earlier ones, so the leaf
 // dependencies (paths, dialog, Node platform) come last.
@@ -69,6 +78,8 @@ const AppLayer = RpcServerLive.pipe(
   // AuthService requires SecretStore, satisfied by SecretStoreLive (merged below).
   Layer.provide(AuthService.Default),
   Layer.provide(WorkspaceService.Default),
+  // Before SessionStore so the stores below satisfy the daemon's requirements —
+  // a stage is provided-to by everything that follows it.
   Layer.provide(SessionStore.Default),
   Layer.provide(StoreLayers),
   Layer.provide(HarnessLayers),
@@ -79,8 +90,9 @@ const AppLayer = RpcServerLive.pipe(
   // provideMerge: the RPC auth handlers consume SecretStore AND the main process
   // reaches the same instance directly (deep-link token storage in index.ts).
   Layer.provideMerge(SecretStoreLayer),
-  Layer.provide(SkillsService.Default),
-  Layer.provide(McpService.Default),
+  // Merged into one stage purely to stay inside `pipe`'s 20-argument limit;
+  // neither depends on the other, so the composition is unchanged.
+  Layer.provide(Layer.mergeAll(SkillsService.Default, McpService.Default)),
   // provideMerge: the `Models.*` handlers consume ModelsService AND the startup
   // prefetch reaches the very same instance — a different one would warm a cache
   // nobody reads, so the merge is what makes the prefetch actually count.

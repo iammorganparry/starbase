@@ -1,6 +1,7 @@
 import { Match, Schema } from "effect"
-import { DiffStat } from "./domain.js"
+import { CliKind, DiffStat, ReviewSeverity } from "./domain.js"
 import type { SessionStatus } from "./domain.js"
+import { TaskKind } from "./task-kind.js"
 
 /**
  * Conversation domain — the transcript model plus the normalized `StreamEvent`
@@ -208,6 +209,84 @@ export const PlanGraph = Schema.Struct({
 })
 export type PlanGraph = Schema.Schema.Type<typeof PlanGraph>
 
+// ── Adversarial planning (a rival vendor attacks the proposal) ───────────────
+
+/**
+ * A participant in an adversarial planning round — which harness, which model,
+ * and which lab the model came from.
+ *
+ * `vendor` is stored rather than re-derived because it is the axis the whole
+ * design turns on (a critic from a *different* lab is the point), and because
+ * `vendorOf` resolves gateway prefixes that can change: a plan read back in six
+ * months should still say which lab argued, even if the model id has since been
+ * re-routed through a different provider.
+ */
+export const PlanParticipant = Schema.Struct({
+  cli: CliKind,
+  /** The RESOLVED model id the harness reported, never an alias like "opus". */
+  model: Schema.String,
+  vendor: Schema.String
+})
+export type PlanParticipant = Schema.Schema.Type<typeof PlanParticipant>
+
+/**
+ * How a challenge ended up after the proposer answered it.
+ *
+ * Three states, not two, because "the proposer thought about this and kept its
+ * approach" is genuinely different from "nobody responded" — and collapsing them
+ * would hide the most useful thing on the screen. A `defended` challenge means
+ * the disagreement is real and a human should adjudicate; an `open` one means
+ * the revision simply didn't engage.
+ */
+export const PlanChallengeStatus = Schema.Literal("open", "addressed", "defended")
+export type PlanChallengeStatus = Schema.Schema.Type<typeof PlanChallengeStatus>
+
+/**
+ * One objection the adversary raised against the proposed plan.
+ *
+ * Reuses `ReviewSeverity` rather than inventing a parallel scale, so "critical"
+ * means the same thing whether it came from the code reviewer or the plan critic
+ * — and so the UI's existing severity ranking works unchanged.
+ */
+export const PlanChallenge = Schema.Struct({
+  id: Schema.String,
+  severity: ReviewSeverity,
+  /** One sentence naming the defect in the plan. */
+  title: Schema.String,
+  /** Why it's wrong — the concrete consequence, not a style opinion. */
+  rationale: Schema.String,
+  status: PlanChallengeStatus,
+  /**
+   * The proposer's reason for keeping its approach, when `defended`; null
+   * otherwise. A `defended` challenge with no reason is indistinguishable from
+   * one that was ignored, which defeats the point of the state.
+   */
+  defence: Schema.NullOr(Schema.String)
+})
+export type PlanChallenge = Schema.Schema.Type<typeof PlanChallenge>
+
+/**
+ * Which agent should build a step, and why.
+ *
+ * `reason` is written by the model, never synthesised by the UI — a chip that
+ * invents its own justification would be lying about where the recommendation
+ * came from. Once learnings land it also carries the evidence behind the pick.
+ */
+export const PlanStepAssignee = Schema.Struct({
+  cli: CliKind,
+  model: Schema.String,
+  reason: Schema.String,
+  /**
+   * How the knowledge base answered, when it informed the pick — e.g.
+   * "repo-model" / "prior". Absent when nothing was consulted, which is exactly
+   * the phase-A case, so the UI can avoid implying evidence that doesn't exist.
+   */
+  evidence: Schema.optional(
+    Schema.Struct({ level: Schema.String, observations: Schema.Number })
+  )
+})
+export type PlanStepAssignee = Schema.Schema.Type<typeof PlanStepAssignee>
+
 /** One node of the plan — an ordered step or a branch/arm. */
 export const PlanStep = Schema.Struct({
   id: Schema.String,
@@ -248,9 +327,44 @@ export const PlanStep = Schema.Struct({
    * exactly what the agent changed to satisfy the operator's feedback. Optional
    * (absent ⇒ unchanged) so pre-existing transcripts + step literals decode cleanly.
    */
-  changed: Schema.optional(Schema.Boolean)
+  changed: Schema.optional(Schema.Boolean),
+  /**
+   * Which model proposed this step, when it came out of an adversarial round.
+   * Absent for an ordinary single-agent plan — every field below is `optional`
+   * for that reason, and it is load-bearing: a required field here would fail to
+   * decode every transcript written before adversarial planning existed, which
+   * blanks the whole conversation rather than degrading. This schema has been
+   * bitten by that three times (`code`, `graph`, `changed`).
+   */
+  origin: Schema.optional(PlanParticipant),
+  /** What kind of work this step is — the key model-affinity learnings use. */
+  taskKind: Schema.optional(TaskKind),
+  /**
+   * The adversary's objections to this step. An empty array means it was
+   * examined and survived; ABSENT means no adversary ever looked, which is a
+   * different claim and must not be rendered as endorsement.
+   */
+  challenges: Schema.optional(Schema.Array(PlanChallenge)),
+  /** Which agent should build this step, and why. */
+  assignee: Schema.optional(PlanStepAssignee)
 })
 export type PlanStep = Schema.Schema.Type<typeof PlanStep>
+
+/**
+ * Challenges on `step` that the revision never engaged with — the highest-value
+ * thing in a reviewed plan, because they are where the two models still
+ * disagree and a human has to decide. A `defended` challenge is deliberately NOT
+ * unresolved: the proposer answered it, and that answer is on the record.
+ */
+export const unresolvedChallenges = (step: PlanStep): ReadonlyArray<PlanChallenge> =>
+  (step.challenges ?? []).filter((c) => c.status === "open")
+
+/**
+ * Whether an adversary ever examined this step. Distinguishes "reviewed, nothing
+ * found" (empty array) from "never reviewed" (absent) — collapsing the two would
+ * let an unreviewed plan read as an endorsed one.
+ */
+export const wasChallenged = (step: PlanStep): boolean => step.challenges !== undefined
 
 export const PlanStatus = Schema.Literal("proposed", "revising", "approved", "rejected", "stale")
 export type PlanStatus = Schema.Schema.Type<typeof PlanStatus>

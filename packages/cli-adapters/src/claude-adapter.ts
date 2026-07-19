@@ -4,6 +4,9 @@ import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKM
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { startTeeStream, type TeeStream } from "./bash-tee.js"
+import { escapingPath } from "./confinement.js"
+import { unattendedSandbox } from "./sandbox.js"
+import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { requireWorktree } from "./cwd.js"
 import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
@@ -76,6 +79,10 @@ const READ_ONLY_DISALLOWED: ReadonlyArray<string> = [
  * restores "default" mid-run (see `setPermissionMode` below).
  */
 export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
+  // `gigaplan` maps to "default" (ask-like) rather than anything permissive.
+  // It is only ever seen here on the fall-through path — a Gigaplan send whose
+  // readiness check failed, running as an ordinary turn — and the cautious
+  // reading is the right one for a turn the operator expected to be a plan.
   mode === "accept-edits" ? "acceptEdits" : mode === "plan" ? "plan" : "default"
 
 /**
@@ -657,6 +664,13 @@ export const streamEventsFor = (
  * the SDK session id in `resume` so the next prompt continues the conversation.
  * Interrupting the Effect aborts the underlying run.
  */
+/**
+ * How long an interrupted run is given to actually unwind before we stop
+ * waiting. Long enough for a child process to be killed and reaped, short
+ * enough that a wedged one doesn't hold the app.
+ */
+const TEARDOWN_GRACE = "15 seconds"
+
 export const runClaude = (
   sessionId: string,
   spec: SessionSpec,
@@ -667,6 +681,20 @@ export const runClaude = (
     const runtime = yield* Effect.runtime<never>()
     const runP = <A>(effect: Effect.Effect<A>): Promise<A> => Runtime.runPromise(runtime)(effect)
     const abort = new AbortController()
+    /**
+     * Resolved once the SDK loop has actually unwound.
+     *
+     * Aborting only ASKS the run to stop; the `for await` loop and any in-flight
+     * tool call keep going until they notice. `onInterrupt` used to fire the
+     * abort and return immediately, so a timed-out plan step was reported ended
+     * while its Bash command was still writing — and the executor, which runs
+     * steps sequentially precisely because they share ONE worktree, started the
+     * retry into those pending writes. Interruption now waits for the unwind.
+     */
+    let markSettled: () => void = () => {}
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve
+    })
 
     yield* Effect.tryPromise({
       try: async () => {
@@ -746,6 +774,20 @@ export const runClaude = (
               message: decision._tag === "Revise" ? decision.feedback : "Plan rejected by the operator."
             }
           }
+          // Confinement first, and ahead of `toPermissionRequest`: read tools
+          // are never gated, so a check that ran after it would miss exactly the
+          // case this exists for.
+          if (spec.unattended === true) {
+            const escaped = escapingPath(spec.cwd, input)
+            if (escaped !== null) {
+              return {
+                behavior: "deny",
+                message:
+                  `Denied: ${escaped} is outside this session's worktree. ` +
+                  "Work only within the repository you were given."
+              }
+            }
+          }
           // AskUserQuestion arrives as a PERMISSION request (not a dialog) in this
           // SDK — running it headlessly just skips. So we intercept it: dock our
           // question card, collect the picks, and hand them back. `canUseTool` can
@@ -796,6 +838,15 @@ export const runClaude = (
             // was launched from instead of the session's worktree.
             cwd: requireWorktree(spec.cwd, `session ${sessionId}`),
             pathToClaudeCodeExecutable: spec.binPath ?? undefined,
+            // Run on the operator's Claude plan where they have one. The SDK
+            // REPLACES the child environment with this rather than merging, so
+            // `harnessEnv` returns a complete copy. See `subscription.ts`.
+            env: harnessEnv("claude", process.env, hasSubscriptionAuth("claude")),
+            // An unattended agent gets the OS-level credential denylist as well
+            // as the file-tool check below — the latter cannot see a shell, and
+            // a plan step needs one. See `sandbox.ts` for what this does and,
+            // more importantly, what it does not.
+            ...(spec.unattended === true ? { sandbox: unattendedSandbox() } : {}),
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "plan" ? { planModeInstructions } : {}),
@@ -830,6 +881,7 @@ export const runClaude = (
           // any watcher still open — a command whose ToolEnd never arrived, or the
           // operator stopping mid-command — so no timer or temp file outlives it.
           for (const id of [...teeStreams.keys()]) stopTee(id)
+          markSettled()
         }
       },
       catch: (cause) =>
@@ -837,5 +889,17 @@ export const runClaude = (
           kind: spec.cli,
           message: cause instanceof Error ? cause.message : String(cause)
         })
-    }).pipe(Effect.onInterrupt(() => Effect.sync(() => abort.abort())))
+    }).pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => abort.abort()).pipe(
+          Effect.andThen(Effect.promise(() => settled)),
+          // Bounded: a wedged child process must not hang the app forever. If it
+          // outlives this, the retry races it again — but a bounded wait closes
+          // the common case, and an unbounded one trades a rare corruption for a
+          // guaranteed hang.
+          Effect.timeout(TEARDOWN_GRACE),
+          Effect.ignore
+        )
+      )
+    )
   })

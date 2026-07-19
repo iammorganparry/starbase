@@ -11,6 +11,7 @@ import {
   Loader
 } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { PlanChallenges, PlanProvenance } from "./plan-challenges.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { DiffStat } from "../components/diff-stat.js"
@@ -203,6 +204,18 @@ export function PlanStepDetail({
                 <Markdown>{`\`\`\`${step.code.lang ?? ""}\n${step.code.body}\n\`\`\``}</Markdown>
               </div>
             </div>
+          </Section>
+        )}
+
+        {(step.origin || step.assignee || step.taskKind) && (
+          <Section title="Provenance & routing">
+            <PlanProvenance step={step} />
+          </Section>
+        )}
+
+        {step.challenges !== undefined && (
+          <Section title="Adversarial review">
+            <PlanChallenges step={step} />
           </Section>
         )}
 

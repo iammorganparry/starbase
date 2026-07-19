@@ -21,12 +21,14 @@ import {
   resumePlanPrompt,
   setQuestionAnswers,
   STOPPED_NOTE,
-  userMessage
+  userMessage,
+  resolveOrchestrator
 } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Cause, Deferred, Effect, Fiber, Mailbox, Ref, Stream } from "effect"
 import { AppPaths } from "./app-paths.js"
+import { ConfigService } from "./config.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
 import type { PermissionDecision, PermissionRequest, SessionSpec, StopBackgroundTask } from "./adapter.js"
 import { readDefaultMode } from "./default-mode.js"
@@ -185,6 +187,7 @@ const buildGate = (id: string, req: PermissionRequest): ApprovalGate =>
 
 type PromptEnv =
   | CliAdapter
+  | ConfigService
   | SessionStore
   | TranscriptStore
   | BackgroundTaskStore
@@ -479,7 +482,19 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             ...((yield* Ref.get(allowlists)).get(sessionId) ?? []),
             ...(session?.allowlist ?? [])
           ])
-          const cli = session?.cli ?? "claude"
+          // `starbase` is not a harness that can run anything — it is us. A
+          // session on the orchestrator runs on the ONE model the operator
+          // configured for it (default Claude Opus), so general asks have a
+          // predictable identity. Resolving it here, before the binary lookup
+          // and the spec, means everything downstream sees a real harness and
+          // needs no idea the orchestrator exists. Without this the dispatcher
+          // falls through to the scripted stub and the session silently does
+          // nothing.
+          const sessionCli = session?.cli ?? "claude"
+          const orchestrator = resolveOrchestrator(
+            yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+          )
+          const cli = sessionCli === "starbase" ? orchestrator.cli : sessionCli
           // Cache the user's configured default exec mode so approving a plan can
           // restore it.
           const execDefault = yield* resolveExecMode(sessionId)
@@ -514,7 +529,10 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             images,
             binPath,
             mode,
-            model: session?.model ?? defaultModel(cli),
+            model:
+              sessionCli === "starbase"
+                ? orchestrator.model
+                : (session?.model ?? defaultModel(cli)),
             // The persisted harness session id, so the adapter resumes the full
             // conversation even after a restart cleared its in-memory resume map.
             resumeId: session?.resumeId ?? null
@@ -675,6 +693,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               if (event._tag === "ToolDelta") {
                 yield* out.offer(event)
                 return
+              }
+              // A finished turn reports what it used. Accrued here rather than
+              // in the adapters so every harness lands in one place — and so a
+              // harness that reports nothing simply adds zero instead of needing
+              // its own bookkeeping.
+              if (event._tag === "Done") {
+                yield* SessionStore.addUsage(sessionId, {
+                  costUsd: event.costUsd,
+                  tokens: event.tokens
+                }).pipe(Effect.provide(env), Effect.ignore)
               }
               const next = applyStreamEvent(yield* Ref.get(acc), event)
               yield* Ref.set(acc, next)
@@ -841,6 +869,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
       )
 
     return {
+      /**
+       * Whether any session is mid-run. Read by the learning daemon so a
+       * background tick never contends for the rate limits the operator is
+       * actively waiting on — the runner already owns this map, so exposing it
+       * beats a second source of truth that could disagree.
+       */
+      anyRunning: Effect.map(Ref.get(fibers), (m) => m.size > 0),
       prompt,
       decideGate,
       answerQuestion,

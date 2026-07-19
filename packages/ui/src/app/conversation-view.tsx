@@ -39,6 +39,14 @@ import { RunStats } from "../composites/run-stats.js"
  */
 const QUEUE_PREVIEW = 5
 
+/**
+ * Shift+Tab cycles these three only.
+ *
+ * `plan` and `gigaplan` are deliberately absent. Both are deliberate acts —
+ * Gigaplan especially, which spends minutes and real money the moment a message
+ * is sent — and landing on either by tapping through a cycle would be an
+ * expensive surprise. They are chosen from the chip, on purpose.
+ */
 const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
 const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
   cli === "claude" ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
@@ -79,6 +87,9 @@ export interface ConversationViewProps {
   onSendNow?: (index: number) => void
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   onSetMode?: (mode: PermissionMode) => void
+  /** Adversarial-planning availability + reason; absent hides the entry entirely. */
+  adversarialPlanning?: { readonly ready: boolean; readonly reason: string | null }
+  onPlanAdversarially?: (brief: string) => void
   /** A pending AskUserQuestion — replaces the composer with the question card. */
   question?: QuestionRequest | null
   onAnswerQuestion?: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
@@ -149,6 +160,8 @@ export function ConversationView({
   onSendNow,
   onDecideGate,
   onSetMode,
+  adversarialPlanning,
+  onPlanAdversarially,
   question,
   onAnswerQuestion,
   onApprovePlan,
@@ -397,6 +410,8 @@ export function ConversationView({
                 onSetHarness={onSetHarness}
                 mode={mode}
                 onSetMode={onSetMode}
+                adversarialPlanning={adversarialPlanning}
+                onPlanAdversarially={onPlanAdversarially}
                 allowPlan={cli === "claude"}
                 mcp={mcp}
                 onOpenMcp={onOpenMcp}

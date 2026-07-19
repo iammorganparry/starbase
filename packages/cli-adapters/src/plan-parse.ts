@@ -1,4 +1,5 @@
 import type {
+  CliKind,
   DiffStat,
   Plan,
   PlanEdge,
@@ -8,8 +9,11 @@ import type {
   PlanNode,
   PlanNodeKind,
   PlanStep,
-  PlanStepCode
+  PlanStepAssignee,
+  PlanStepCode,
+  TaskKind
 } from "@starbase/core"
+import { CLI_KINDS, TASK_KINDS } from "@starbase/core"
 
 /**
  * Turn the plan text Claude produces via `ExitPlanMode` into a structured `Plan`.
@@ -155,6 +159,28 @@ const splitRefs = (v: string): ReadonlyArray<string> => clean(v.split(/[;,]/))
 const RELATION = /^\s*(depends|blocks)\s*:\s*(.*)$/i
 
 /**
+ * Parse an `agent:` field — `<cli> <model> — <why>`.
+ *
+ * The harness and model are separate tokens rather than a single `cli/model`
+ * pair on purpose: opencode's own ids are provider-qualified and routinely
+ * contain slashes (`openrouter/anthropic/claude-opus-4.5`), so splitting on "/"
+ * would tear a model id in half and name a harness that doesn't exist.
+ *
+ * An unknown harness yields null rather than a guess — an assignee naming a CLI
+ * we can't run produces a broken session, which is worse than no assignee.
+ */
+const parseAssignee = (value: string): PlanStepAssignee | null => {
+  const m = /^\s*(\S+)\s+(\S+)\s*(?:[—–-]\s*(.*))?$/.exec(value)
+  if (!m) return null
+  const cli = m[1]!.toLowerCase()
+  if (!(CLI_KINDS as ReadonlyArray<string>).includes(cli)) return null
+  // A step assigned back to the orchestrator would re-enter planning to execute
+  // one step of the plan it just made. Steps run on real harnesses only.
+  if (cli === "starbase") return null
+  return { cli: cli as CliKind, model: m[2]!, reason: (m[3] ?? "").trim() }
+}
+
+/**
  * Peel a trailing relation field out of a value.
  *
  * The format writes both relations on ONE line — `depends: 01; blocks: 03` — so
@@ -286,6 +312,22 @@ const parseBlock = (block: string): { summary: string; steps: PlanStep[] } => {
             s.kind = "branch"
             s.condition = v
             break
+          case "task": {
+            // Only used by adversarial planning; plain plan mode never emits it.
+            // Silently ignored when the model invents a kind outside the closed
+            // vocabulary, because a bogus value would key learnings to a cell
+            // nothing else can ever read.
+            const kind = v.trim().toLowerCase()
+            if ((TASK_KINDS as ReadonlyArray<string>).includes(kind)) {
+              s.taskKind = kind as TaskKind
+            }
+            break
+          }
+          case "agent": {
+            const assignee = parseAssignee(v)
+            if (assignee !== null) s.assignee = assignee
+            break
+          }
         }
       }
       continue

@@ -14,6 +14,8 @@ import type {
   PermissionMode,
   ProviderConfig,
   ProvidersConfig,
+  ProviderModels,
+  HarnessBilling,
   ReasoningEffort
 } from "@starbase/core"
 import { DEFAULT_REVIEW_MODEL, reviewModelFor } from "@starbase/core"
@@ -34,6 +36,8 @@ import { Callout } from "../components/callout.js"
 import { Eyebrow } from "../components/eyebrow.js"
 import { GithubMark } from "../components/github-mark.js"
 import { ProviderIcon, PROVIDER_LABEL } from "../components/provider-icon.js"
+import { ORCHESTRATOR_DEFAULT } from "@starbase/core"
+import { GigaplanSettings } from "./gigaplan-settings.js"
 import {
   Select,
   SelectContent,
@@ -52,6 +56,7 @@ import { ProviderCard } from "./provider-card.js"
 type SectionKey =
   | "general"
   | "providers"
+  | "gigaplan"
   | "agents"
   | "permissions"
   | "mcp"
@@ -69,6 +74,7 @@ interface NavItem {
 const NAV: ReadonlyArray<NavItem> = [
   { key: "general", label: "General", icon: <SlidersHorizontal size={14} />, ready: false },
   { key: "providers", label: "Providers", icon: <Cpu size={14} />, ready: true },
+  { key: "gigaplan", label: "Gigaplan", icon: <Sparkles size={14} />, ready: true },
   { key: "agents", label: "Agents & skills", icon: <Sparkles size={14} />, ready: false },
   { key: "permissions", label: "Permissions", icon: <ShieldCheck size={14} />, ready: false },
   { key: "mcp", label: "MCP servers", icon: <Server size={14} />, ready: true },
@@ -78,6 +84,12 @@ const NAV: ReadonlyArray<NavItem> = [
 
 // ── Provider lever option sets (labels ← design E10) ─────────────────────────
 
+/**
+ * Gigaplan is deliberately absent: this sets the mode NEW sessions start in, and
+ * defaulting every new session to a mode that spends minutes and real money on
+ * its first message would be indefensible. It is chosen per session, from the
+ * composer's chip.
+ */
 const MODE_ITEMS: ReadonlyArray<{ value: PermissionMode; label: string }> = [
   { value: "ask", label: "Ask each time" },
   { value: "accept-edits", label: "Accept edits" },
@@ -390,6 +402,16 @@ export interface SettingsViewProps {
   providers?: ProvidersConfig | null
   /** Persist one CLI's provider config. */
   onSaveProvider: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
+  /** Every installed harness + its models, for the Gigaplan orchestrator picker. */
+  catalog?: ReadonlyArray<ProviderModels>
+  /** The configured orchestrator harness+model, or null for the default. */
+  orchestrator?: { readonly cli: CliKind; readonly model: string } | null
+  /** Persist the orchestrator's harness+model. */
+  onSaveOrchestrator?: (cli: CliKind, model: string) => void
+  /** Why Gigaplan can't run on this host, when it can't. */
+  gigaplanUnavailableReason?: string | null
+  /** What each installed harness is charged to. */
+  billing?: ReadonlyArray<HarnessBilling>
   /** Load the selectable models for a CLI (live discovery). */
   loadModels: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
   /** opencode's resolved providers + credential origins (opencode only). */
@@ -425,6 +447,11 @@ export function SettingsView({
   clis,
   providers,
   onSaveProvider,
+  catalog,
+  orchestrator,
+  onSaveOrchestrator,
+  gigaplanUnavailableReason,
+  billing,
   loadModels,
   loadOpencodeProviders,
   onSetOpencodeAuth,
@@ -498,6 +525,17 @@ export function SettingsView({
           loadOpencodeProviders={loadOpencodeProviders}
           onSetOpencodeAuth={onSetOpencodeAuth}
         />
+      ) : section === "gigaplan" ? (
+        <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor p-6">
+          <GigaplanSettings
+            catalog={catalog ?? []}
+            orchestrator={orchestrator ?? null}
+            defaultOrchestrator={ORCHESTRATOR_DEFAULT}
+            onChange={onSaveOrchestrator ?? (() => {})}
+            unavailableReason={gigaplanUnavailableReason ?? null}
+            billing={billing}
+          />
+        </div>
       ) : section === "mcp" ? (
         <McpSection clis={clis} loadMcpServers={loadMcpServers} loadMcpStatus={loadMcpStatus} />
       ) : section === "github" ? (

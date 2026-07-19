@@ -39,6 +39,15 @@ const MODE_OPTIONS: ReadonlyArray<ChipOption<PermissionMode>> = [
   { value: "accept-edits", label: "accept edits" },
   { value: "auto", label: "auto" }
 ]
+/**
+ * Gigaplan — the orchestrated mode.
+ *
+ * Offered only where it can actually run: it needs two independent model
+ * providers, because the whole point is that a rival lab attacks the plan. On a
+ * one-provider host it is left out rather than shown broken, and the readiness
+ * reason is surfaced beside the chip instead.
+ */
+const GIGAPLAN_OPTION: ChipOption<PermissionMode> = { value: "gigaplan", label: "Gigaplan" }
 /** Plan mode is Claude-only (the other harnesses are autonomous). */
 const PLAN_OPTION: ChipOption<PermissionMode> = { value: "plan", label: "plan" }
 
@@ -73,6 +82,8 @@ export function Composer({
   mode = "accept-edits",
   onSetMode,
   allowPlan = false,
+  adversarialPlanning,
+  onPlanAdversarially,
   mcp,
   onOpenMcp,
   paused = false,
@@ -117,6 +128,16 @@ export function Composer({
   /** Offer the Plan mode option (Claude sessions only). */
   allowPlan?: boolean
   /**
+   * Whether an adversarial planning round can run here, and why not when it
+   * can't. Absent means the caller doesn't offer the feature at all; present
+   * with `ready: false` renders the entry DISABLED carrying its reason, rather
+   * than hiding it — a silently missing control teaches the operator nothing,
+   * and "you need a second provider" is the one message that would.
+   */
+  adversarialPlanning?: { readonly ready: boolean; readonly reason: string | null }
+  /** Start a round for the composer's current text. */
+  onPlanAdversarially?: (brief: string) => void
+  /**
    * MCP status for this session, or undefined until it arrives. The chip stays
    * HIDDEN while undefined rather than rendering "0 servers" — the status lands a
    * beat after mount, same as the model catalogue, and a momentary "no MCP" would
@@ -135,7 +156,20 @@ export function Composer({
   placeholder?: string
   className?: string
 }) {
-  const modeOptions = allowPlan ? [...MODE_OPTIONS, PLAN_OPTION] : MODE_OPTIONS
+  /**
+   * Whether Gigaplan is driving this turn.
+   *
+   * While it is, the model is its decision — taken per step from the plan it had
+   * reviewed — so the model picker comes off the composer rather than sitting
+   * there being silently overridden. Changing mode brings it straight back,
+   * which is why this is derived from `mode` and never stored.
+   */
+  const orchestrated = mode === "gigaplan"
+  const modeOptions = [
+    ...MODE_OPTIONS,
+    ...(allowPlan ? [PLAN_OPTION] : []),
+    ...(adversarialPlanning?.ready === true ? [GIGAPLAN_OPTION] : [])
+  ]
   const accent = modeAccent[mode]
 
   // Menu values are `<cli>:<modelId>`, not a bare model id: ids aren't unique
@@ -208,6 +242,11 @@ export function Composer({
 
   // Read dropped/pasted/picked image files into base64 attachments (capped).
   const addFiles = async (files: ReadonlyArray<File>) => {
+    // The single choke point for every route in — button, paste and drop. The
+    // button is disabled in Gigaplan, but paste and drop never touch it, so
+    // guarding only the control would still let a dragged screenshot through to
+    // a round that cannot carry it.
+    if (orchestrated) return
     const read = await Promise.all(
       files.map((f) => readAttachment(f, `att_${(attachIdRef.current += 1)}`))
     )
@@ -381,7 +420,7 @@ export function Composer({
                 className="size-[58px]"
               />
             ))}
-            {attachments.length < MAX_ATTACHMENTS && (
+            {attachments.length < MAX_ATTACHMENTS && !orchestrated && (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -423,15 +462,36 @@ export function Composer({
           }}
         />
         <div className="flex items-center gap-2">
+{/* Disabled in Gigaplan, not silently ignored. `Plan.adversarial` takes
+              only a brief — its payload has no images — so an attachment made
+              here would be dropped on the way to the round while still
+              rendering in the transcript, which reads as "the model saw my
+              screenshot" when it did not. Better to refuse the gesture and say
+              why than to accept it and discard it. */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={paused}
-            title="Attach an image"
+            disabled={paused || orchestrated}
+            /* The NAME stays constant while the tooltip explains. Letting the
+               explanation be the accessible name made this button answer to
+               "Gigaplan" — the mode chip's name — so a by-name lookup matched
+               two controls. What a control IS shouldn't change with why it's
+               unavailable. */
+            aria-label="Attach an image"
+            title={
+              orchestrated
+                ? "Planning rounds work from the written brief — images aren't sent"
+                : "Attach an image"
+            }
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ImagePlus size={14} />
           </button>
+          {/* Gone while Gigaplan is driving: it assigns a model per step from
+              the plan it had reviewed, so a model chip here would be a control
+              that is silently overridden. It returns the moment the mode
+              changes — nothing about the operator's own choice is discarded. */}
+          {!orchestrated && (
           <ChipMenu
             value={modelValue}
             groups={modelGroups}
@@ -450,6 +510,19 @@ export function Composer({
             }}
             disabled={modelGroups.length === 0}
           />
+          )}
+          {/* Gigaplan is selected on a host that cannot orchestrate. Saying so
+              beats silently degrading to a normal turn, which looks exactly
+              like the feature being broken. Reachable because the mode can be
+              persisted from a machine that DID have two providers. */}
+          {orchestrated && adversarialPlanning?.ready === false && (
+            <span
+              title={adversarialPlanning.reason ?? undefined}
+              className="rounded-full border border-yellow/40 px-2 py-0.5 font-mono text-[10px] tracking-[0.3px] text-yellow"
+            >
+              needs a second provider
+            </span>
+          )}
           <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} className={accent.chip} />
           {mcp !== undefined && mcp.total > 0 && (
             <button
