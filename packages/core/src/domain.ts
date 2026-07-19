@@ -35,6 +35,19 @@ export const CliInfo = Schema.Struct({
    */
   backgroundTasks: Schema.optional(Schema.Boolean),
   /**
+   * Whether this harness reports how much of the context window it is using, via
+   * a `Usage` stream event. Claude, Codex and opencode do; Cursor has no headless
+   * adapter and runs on the scripted fallback, so it reports nothing real.
+   *
+   * Gates BOTH the context meter and auto-compaction: a harness we cannot measure
+   * is one we leave alone, with its own internal limit still the backstop. Showing
+   * a meter fed by a fabricated number would be worse than showing none.
+   *
+   * OPTIONAL for the same reason `backgroundTasks` is: it decodes payloads
+   * persisted before the field existed.
+   */
+  contextReporting: Schema.optional(Schema.Boolean),
+  /**
    * Why an *installed* CLI is nonetheless unavailable — e.g. "opencode 1.0.220
    * found; Starbase needs ≥1.18". Absent when the CLI is usable, or simply not
    * installed (nothing to explain). Without this a too-old binary is

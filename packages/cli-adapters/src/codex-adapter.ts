@@ -39,6 +39,40 @@ export const mapCodexPolicy = (
       ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
       : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
+/**
+ * Tokens occupying Codex's context window after a completed turn.
+ *
+ * A Codex turn resends the whole thread, so the turn's `input_tokens` IS the
+ * conversation as the model saw it; adding the reply gives the size the next
+ * turn inherits. That makes this the direct analogue of Claude's
+ * `contextTokens`, despite arriving through a completely different event.
+ *
+ * The two subset fields are deliberately NOT added:
+ *  - `cached_input_tokens` is part of `input_tokens` (codex itself derives
+ *    non-cached input by subtracting it), and
+ *  - `reasoning_output_tokens` is part of `output_tokens`.
+ * Summing all four double-counts both, inflating the reading by roughly the
+ * cache-hit rate — which on a long, heavily-cached session is most of it. That
+ * error is in the "compact far too early" direction, so it would have looked
+ * like a working feature while quietly halving everyone's usable context.
+ *
+ * This replaces a hard-coded `0`. The old comment was right that a turn TOTAL
+ * mislabelled as context is worse than no number — but `input + output` is not
+ * a turn total, it is the context, and without it Codex sessions could never
+ * participate in auto-compaction at all.
+ */
+export const codexContextTokens = (usage: {
+  readonly input_tokens?: number
+  readonly output_tokens?: number
+  /** Subset of `input_tokens` — accepted so the real payload type-checks, never summed. */
+  readonly cached_input_tokens?: number
+  /** Subset of `output_tokens` — accepted so the real payload type-checks, never summed. */
+  readonly reasoning_output_tokens?: number
+}): number => {
+  const num = (v: number | undefined): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0)
+  return num(usage?.input_tokens) + num(usage?.output_tokens)
+}
+
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
 export const codexEventToStreamEvents = (
   event: ThreadEvent,
@@ -138,17 +172,13 @@ export const codexEventToStreamEvents = (
       }
     }
 
-    case "turn.completed":
+    case "turn.completed": {
+      const tokens = codexContextTokens(event.usage)
       return [
-        {
-          _tag: "Done",
-          costUsd: 0,
-          // The exec SDK exposes aggregate turn consumption, not the current
-          // thread context size. Zero means "unavailable" to the renderer; a
-          // turn total labelled as context would be worse than no number.
-          tokens: 0
-        }
+        { _tag: "Usage", tokens },
+        { _tag: "Done", costUsd: 0, tokens }
       ]
+    }
 
     case "turn.failed":
       return [{ _tag: "Failed", message: event.error.message }]

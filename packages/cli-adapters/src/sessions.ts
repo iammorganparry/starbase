@@ -350,6 +350,31 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Persist the harness session id so the conversation resumes after a restart. */
       const setResumeId = (id: string, resumeId: string) => update(id, (s) => ({ ...s, resumeId }))
 
+      /**
+       * Drop the harness session id so the NEXT turn starts a fresh conversation.
+       *
+       * This is how compaction reseeds: the transcript on disk is untouched, but
+       * the harness is asked to begin again from a summary. `undefined` rather
+       * than null because `resumeId` is `optional` — writing null would persist a
+       * key the schema rejects on the next read.
+       */
+      const clearResumeId = (id: string) => update(id, (s) => ({ ...s, resumeId: undefined }))
+
+      /**
+       * Persist the session's latest context-window occupancy.
+       *
+       * `tokens` was a dead field until now — written as `0` at creation by all
+       * three create paths and never touched again, while the real reading lived
+       * only in renderer XState context and died on reload. Auto-compaction can't
+       * work off a number that resets every time the app restarts: a session
+       * reopened at 290k would read as 0 and happily run to the hard ceiling.
+       *
+       * This is a LATEST reading, never a high-water mark — compaction legitimately
+       * makes it smaller, and that drop is the signal the feature is working.
+       */
+      const setTokens = (id: string, tokens: number) =>
+        update(id, (s) => (Number.isFinite(tokens) && tokens >= 0 ? { ...s, tokens } : s))
+
       /** Persist an auto-generated title (leaves `autoTitle` untouched). */
       const setTitle = (id: string, title: string) => update(id, (s) => ({ ...s, title }))
 
@@ -463,6 +488,8 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         setModel,
         setHarness,
         setResumeId,
+        clearResumeId,
+        setTokens,
         setTitle,
         renameTitle,
         setStatus,
