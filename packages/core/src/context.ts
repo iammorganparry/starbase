@@ -1,5 +1,8 @@
 import { Schema } from "effect"
-import { CliKind } from "./domain.js"
+// TYPE-only on purpose: `domain.ts` imports `ContextConfig` back from here, and a
+// value import would close that loop at module-init time — where `Schema.Struct`
+// calls run — leaving whichever module loaded second holding an undefined schema.
+import type { CliKind } from "./domain.js"
 
 /**
  * ── The quality band ────────────────────────────────────────────────────────

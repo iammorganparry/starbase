@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ContextConfig } from "./context.js"
 
 /**
  * Domain schemas for Starbase. These are Effect `Schema`s so they can be reused
@@ -164,6 +165,15 @@ export const Session = Schema.Struct({
   /** The harness model id for this session; defaults to the harness default. */
   model: Schema.optional(Schema.String),
   /**
+   * Per-session auto-compaction override. Absent = follow the global setting.
+   *
+   * Overrides in BOTH directions on purpose. A user mid-way through something
+   * delicate may want one session pinned open with its full history intact, and
+   * a user who left the global switch off may still want it on for the one
+   * session that has been running all day.
+   */
+  autoCompact: Schema.optional(Schema.Boolean),
+  /**
    * True only for sessions the agent auto-names (refreshed each turn). A manual
    * rename — or a title typed at creation — pins the name (false). Absent is
    * treated as pinned, so legacy/user-named sessions are never auto-overwritten.
@@ -249,8 +259,24 @@ export const ProviderConfig = Schema.Struct({
   defaultMode: PermissionMode,
   /** Default harness model id for new sessions; absent = the harness default. */
   defaultModel: Schema.optional(Schema.String),
-  /** Small/fast model for summaries & side tasks; absent = the harness default. */
+  /**
+   * Small/fast model for summaries & side tasks; absent = the harness default.
+   *
+   * Consumed by the context digest (`digestModelFor`), which runs through the
+   * session's own harness binary — so the summary bills to the user's existing
+   * subscription rather than any separate API credential.
+   */
   backgroundModel: Schema.optional(Schema.String),
+  /**
+   * The model's context-window size in tokens, when Starbase can't infer it.
+   *
+   * Only route to auto-compaction for opencode, whose catalogue is resolved from
+   * the user's own credentials across ~167 providers — there is no honest window
+   * default to invent, so `contextWindowFor` reports unknown and compaction stays
+   * off until the user says how big the window is. Also the escape hatch when a
+   * harness ships a model whose window we don't know yet.
+   */
+  contextWindow: Schema.optional(Schema.Number),
   /** Extended-thinking budget; absent = the harness default. */
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Reply tone/verbosity preset; absent = the harness default. */
@@ -324,6 +350,12 @@ export const WorkspaceConfig = Schema.Struct({
   reposDir: Schema.NullOr(Schema.String),
   /** ISO-8601 timestamp of when the config was first created. */
   createdAt: Schema.String,
+  /**
+   * Auto-compaction levers. Absent on configs written before the feature, which
+   * `DEFAULT_CONTEXT_CONFIG` fills in — so existing users get it switched on
+   * without having to find a setting.
+   */
+  context: Schema.optional(ContextConfig),
   /** GitHub integration prefs; absent until configured (older configs lack it). */
   github: Schema.optional(GithubConfig),
   /** Git behaviour prefs; absent until configured (older configs lack it). */
