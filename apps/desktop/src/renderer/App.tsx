@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
+  ContextConfig,
   CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
@@ -86,6 +87,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const githubConfig = configQuery.data?.github ?? null
   const gitConfig = configQuery.data?.git ?? null
   const providersConfig = configQuery.data?.providers ?? null
+  const contextConfig = configQuery.data?.context ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
   const collapsedRepos = configQuery.data?.collapsedRepos ?? []
   const lastRepoPath = configQuery.data?.lastRepoPath ?? null
@@ -106,6 +108,13 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const saveProvider = (cli: CliKind, config: ProviderConfig) =>
     rpc.configSetProvider(cli, config).then((saved) => {
       qc.setQueryData(["config"], saved)
+    })
+  const saveContextConfig = (config: ContextConfig) =>
+    rpc.configSetContext(config).then((saved) => {
+      qc.setQueryData(["config"], saved)
+      // Every session's trigger point moves with the budget, so drop the cached
+      // snapshots rather than leaving meters reading against the old one.
+      void qc.invalidateQueries({ queryKey: ["context"] })
     })
 
   // Toggle a repo's starred state, persist the whole list, and update the cache.
@@ -419,6 +428,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveGitConfig={saveGitConfig}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
+      contextConfig={contextConfig}
+      onSaveContextConfig={saveContextConfig}
       loadModels={rpc.modelsList}
       loadOpencodeProviders={rpc.opencodeListProviders}
       onSetOpencodeAuth={rpc.opencodeSetAuth}

@@ -14,9 +14,20 @@ import type {
   PermissionMode,
   ProviderConfig,
   ProvidersConfig,
-  ReasoningEffort
+  ReasoningEffort,
+  ContextConfig,
+  ContextSnapshot
 } from "@starbase/core"
-import { DEFAULT_REVIEW_MODEL, reviewModelFor } from "@starbase/core"
+import {
+  BUDGET_RANGE,
+  DEFAULT_CONTEXT_CONFIG,
+  DEFAULT_REVIEW_MODEL,
+  contextWindowFor,
+  digestModelFor,
+  reviewModelFor,
+  triggerAt
+} from "@starbase/core"
+import { ContextMeter } from "./context-meter.js"
 import {
   ChevronRight,
   Cpu,
@@ -24,6 +35,7 @@ import {
   RotateCcw,
   Server,
   ShieldCheck,
+  Gauge,
   SlidersHorizontal,
   Sparkles,
   X
@@ -52,6 +64,7 @@ import { ProviderCard } from "./provider-card.js"
 type SectionKey =
   | "general"
   | "providers"
+  | "context"
   | "agents"
   | "permissions"
   | "mcp"
@@ -69,6 +82,7 @@ interface NavItem {
 const NAV: ReadonlyArray<NavItem> = [
   { key: "general", label: "General", icon: <SlidersHorizontal size={14} />, ready: false },
   { key: "providers", label: "Providers", icon: <Cpu size={14} />, ready: true },
+  { key: "context", label: "Context", icon: <Gauge size={14} />, ready: true },
   { key: "agents", label: "Agents & skills", icon: <Sparkles size={14} />, ready: false },
   { key: "permissions", label: "Permissions", icon: <ShieldCheck size={14} />, ready: false },
   { key: "mcp", label: "MCP servers", icon: <Server size={14} />, ready: true },
@@ -403,6 +417,19 @@ export interface SettingsViewProps {
   loadMcpServers?: (cli: CliKind) => Promise<ReadonlyArray<McpServer>>
   /** Live status for those servers; `refresh` re-probes rather than reading the cache. */
   loadMcpStatus?: (cli: CliKind, refresh: boolean) => Promise<ReadonlyArray<McpServerStatus>>
+  /** Auto-compaction levers (master switch + working-set budget). */
+  context?: ContextConfig | null
+  onSaveContext?: (config: ContextConfig) => void
+  /**
+   * Live context readings per open session, so the budget slider can be set
+   * against what sessions are ACTUALLY using rather than in the abstract.
+   */
+  contextSessions?: ReadonlyArray<{
+    id: string
+    title: string
+    cli: CliKind
+    snapshot: ContextSnapshot
+  }>
   // GitHub section (reused from the old settings modal).
   ghStatus: GhStatus
   github?: GithubConfig | null
@@ -430,6 +457,9 @@ export function SettingsView({
   onSetOpencodeAuth,
   loadMcpServers,
   loadMcpStatus,
+  context,
+  onSaveContext,
+  contextSessions,
   ghStatus,
   github,
   git,
@@ -497,6 +527,15 @@ export function SettingsView({
           loadModels={loadModels}
           loadOpencodeProviders={loadOpencodeProviders}
           onSetOpencodeAuth={onSetOpencodeAuth}
+        />
+      ) : section === "context" ? (
+        <ContextSection
+          clis={clis}
+          context={context}
+          providers={providers ?? undefined}
+          sessions={contextSessions}
+          onSaveContext={onSaveContext}
+          onSaveProvider={onSaveProvider}
         />
       ) : section === "mcp" ? (
         <McpSection clis={clis} loadMcpServers={loadMcpServers} loadMcpStatus={loadMcpStatus} />
@@ -840,6 +879,234 @@ function StubSection({ label }: { label: string }) {
       <span className="max-w-[280px] text-[12px] leading-relaxed text-muted-foreground">
         This section isn&apos;t wired up yet — it&apos;s coming in a later pass.
       </span>
+    </div>
+  )
+}
+
+
+// ── Context section (auto-compaction levers) ─────────────────────────────────
+
+/** "300k" / "1M" — the budget slider's tick labels. */
+const fmtK = (n: number): string =>
+  n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k`
+
+/**
+ * Settings → Context.
+ *
+ * Every token lever in one place, because the numbers only make sense together:
+ * a budget is meaningless without knowing what the sessions are actually using,
+ * and the digest model is meaningless without knowing it runs on the user's own
+ * subscription. Showing them apart would make each look arbitrary.
+ */
+function ContextSection({
+  clis,
+  context,
+  providers,
+  sessions,
+  onSaveContext,
+  onSaveProvider
+}: {
+  clis: ReadonlyArray<CliInfo>
+  context?: ContextConfig | null
+  providers?: ProvidersConfig
+  sessions?: ReadonlyArray<{ id: string; title: string; cli: CliKind; snapshot: ContextSnapshot }>
+  onSaveContext?: (config: ContextConfig) => void
+  onSaveProvider?: (cli: CliKind, config: ProviderConfig) => void
+}) {
+  const [draft, setDraft] = React.useState<ContextConfig>(context ?? DEFAULT_CONTEXT_CONFIG)
+  React.useEffect(() => setDraft(context ?? DEFAULT_CONTEXT_CONFIG), [context])
+
+  const save = (next: ContextConfig) => {
+    setDraft(next)
+    onSaveContext?.(next)
+  }
+
+  const measurable = clis.filter((c) => c.available && c.contextReporting)
+  const unmeasurable = clis.filter((c) => c.available && !c.contextReporting)
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor">
+      <div className="flex max-w-[560px] flex-col gap-4 p-6">
+        <div className="flex items-center gap-2 border-b border-hairline pb-2.5">
+          <Gauge size={14} className="text-text-bright" />
+          <span className="text-[13px] font-semibold text-text-bright">Context</span>
+        </div>
+
+        <Callout tone="blue">
+          Long conversations lose accuracy well before they hit a model&apos;s limit.
+          Starbase summarises a session in the background once it outgrows the
+          budget below, then quietly continues from that summary — your transcript
+          is never truncated.
+        </Callout>
+
+        <div className="divide-y divide-hairline">
+          <ToggleRow
+            label="Compact sessions automatically"
+            description="Summarise and reseed in the background when a session outgrows its budget. Off returns Starbase to relying on each harness's own limit."
+            checked={draft.auto}
+            onChange={(auto) => save({ ...draft, auto })}
+          />
+        </div>
+
+        {/* ── The budget ── */}
+        <div className={draft.auto ? "" : "pointer-events-none opacity-50"}>
+          <div className="flex items-baseline justify-between">
+            <span className="text-[12.5px] font-medium text-text-body">Working-set budget</span>
+            <span className="font-mono text-[12px] tabular-nums text-text-bright">
+              {fmtK(draft.budgetTokens)} tokens
+            </span>
+          </div>
+          <p className="mt-0.5 text-[11px] leading-[1.5] text-muted-foreground">
+            How much conversation a session carries before it is compacted. Lower
+            keeps answers sharper; higher keeps more raw history in play.
+          </p>
+          <input
+            type="range"
+            min={BUDGET_RANGE.min}
+            max={BUDGET_RANGE.max}
+            step={8_000}
+            value={draft.budgetTokens}
+            disabled={!draft.auto}
+            onChange={(e) => save({ ...draft, budgetTokens: Number(e.target.value) })}
+            aria-label="Working-set budget"
+            className="mt-2.5 w-full accent-blue"
+          />
+          <div className="flex justify-between font-mono text-[10px] text-dim">
+            <span>{fmtK(BUDGET_RANGE.min)}</span>
+            <span>sharper ← → more history</span>
+            <span>{fmtK(BUDGET_RANGE.max)}</span>
+          </div>
+        </div>
+
+        {/* ── What that means per harness ── */}
+        <div className="rounded-lg border border-line bg-sunken p-3">
+          <Eyebrow>Compacts at</Eyebrow>
+          <p className="mb-2 mt-1 text-[11px] leading-[1.5] text-muted-foreground">
+            A model whose window is smaller than the budget compacts earlier, so it
+            never reaches its own hard limit.
+          </p>
+          <div className="space-y-1">
+            {measurable.map((cli) => (
+              <div key={cli.kind} className="flex items-center justify-between">
+                <span className="text-[12px] text-text-body">{cli.label}</span>
+                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  {(() => {
+                    const w = contextWindowFor(cli.kind, null, providers?.[cli.kind]?.contextWindow)
+                    return w === null
+                      ? "set a window below"
+                      : `${fmtK(triggerAt(w, draft.budgetTokens))} of ${fmtK(w)}`
+                  })()}
+                </span>
+              </div>
+            ))}
+            {unmeasurable.map((cli) => (
+              <div key={cli.kind} className="flex items-center justify-between">
+                <span className="text-[12px] text-text-body">{cli.label}</span>
+                <span className="font-mono text-[11px] text-dim">reports no usage</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Live sessions ── */}
+        {sessions !== undefined && sessions.length > 0 && (
+          <div className="rounded-lg border border-line bg-sunken p-3">
+            <Eyebrow>Your sessions right now</Eyebrow>
+            <div className="mt-1.5 space-y-1.5">
+              {sessions.map((s) => (
+                <div key={s.id} className="flex items-center justify-between gap-3">
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-text-body">{s.title}</span>
+                  {s.snapshot.triggerAt === null ? (
+                    <span className="font-mono text-[10.5px] text-dim">not measurable</span>
+                  ) : (
+                    <ContextMeter
+                      tokens={s.snapshot.tokens}
+                      triggerAt={s.snapshot.triggerAt}
+                      digestReady={s.snapshot.digestReady}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── The digest model ── */}
+        <div>
+          <div className="text-[12.5px] font-medium text-text-body">Summarised by</div>
+          <p className="mt-0.5 text-[11px] leading-[1.5] text-muted-foreground">
+            Summaries run through the CLI you have already signed in to, on its
+            cheapest tier — no API key, and nothing billed outside your existing
+            plan. This is the same &quot;background model&quot; used for side tasks.
+          </p>
+          <div className="mt-2 space-y-2">
+            {measurable.map((cli) => {
+              const provider = providers?.[cli.kind]
+              return (
+                <div key={cli.kind} className="flex items-center justify-between gap-3">
+                  <span className="text-[12px] text-text-body">{cli.label}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    {digestModelFor(cli.kind, provider?.backgroundModel)}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[10.5px] text-dim">
+            Change these under Providers → Background model.
+          </p>
+        </div>
+
+        {/* ── Window override ── */}
+        {onSaveProvider && (
+          <div>
+            <div className="text-[12.5px] font-medium text-text-body">Context window override</div>
+            <p className="mt-0.5 text-[11px] leading-[1.5] text-muted-foreground">
+              Starbase infers each model&apos;s window, but opencode resolves models
+              from your own credentials across many providers, so there is no
+              reliable default. Set one here to enable auto-compaction for it.
+            </p>
+            <div className="mt-2 space-y-2">
+              {clis
+                // Only harnesses that DO report usage but whose window we cannot
+                // infer. Offering this for Cursor would be a dead control: it
+                // reports no context at all, so a declared window still leaves
+                // nothing to measure against.
+                .filter(
+                  (c) => c.available && c.contextReporting && contextWindowFor(c.kind, null) === null
+                )
+                .map((cli) => {
+                  const provider = providers?.[cli.kind]
+                  return (
+                    <div key={cli.kind} className="flex items-center justify-between gap-3">
+                      <span className="text-[12px] text-text-body">{cli.label}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        placeholder="unknown"
+                        aria-label={`${cli.label} context window`}
+                        defaultValue={provider?.contextWindow ?? ""}
+                        onBlur={(e) => {
+                          const raw = Number(e.target.value)
+                          onSaveProvider(cli.kind, {
+                            enabled: provider?.enabled ?? true,
+                            defaultMode: provider?.defaultMode ?? "accept-edits",
+                            ...provider,
+                            ...(Number.isFinite(raw) && raw > 0
+                              ? { contextWindow: raw }
+                              : { contextWindow: undefined })
+                          })
+                        }}
+                        className="w-[128px] rounded-md border border-line bg-editor px-2 py-1 text-right font-mono text-[11px] tabular-nums text-text-body"
+                      />
+                    </div>
+                  )
+                })}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
