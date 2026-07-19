@@ -180,6 +180,37 @@ export const digestModelFor = (cli: CliKind, configured?: string): string =>
  * ── Wire types ─────────────────────────────────────────────────────────────
  */
 
+/**
+ * The carried-forward summary of a conversation, produced by a background run
+ * over our own transcript and used to seed a fresh harness conversation.
+ *
+ * Deliberately STRUCTURED rather than a prose blob. Structure is what lets the
+ * compaction divider show the user exactly what survived, and what lets a
+ * malformed model reply be rejected wholesale — a half-parsed digest that
+ * silently dropped "decisions" would reseed a session with its own reasoning
+ * amputated, and nothing downstream could tell.
+ */
+export const ContextDigest = Schema.Struct({
+  /** What the user is ultimately trying to achieve in this session. */
+  goal: Schema.String,
+  /** Choices made and why — the part a summary most often destroys. */
+  decisions: Schema.Array(Schema.String),
+  /** Files created or modified, so the fresh conversation knows where it is. */
+  filesTouched: Schema.Array(Schema.String),
+  /** Work explicitly left unfinished. */
+  openThreads: Schema.Array(Schema.String),
+  /** Standing instructions the user gave that must keep applying. */
+  preferences: Schema.Array(Schema.String),
+  /**
+   * The last message this digest covers. Everything AFTER it is replayed
+   * verbatim at swap time, so a digest built two turns ago is still correct
+   * without being rebuilt.
+   */
+  throughMessageId: Schema.String,
+  builtAt: Schema.String
+})
+export type ContextDigest = Schema.Schema.Type<typeof ContextDigest>
+
 /** Per-session context accounting, as shown by the meter and Settings. */
 export const ContextSnapshot = Schema.Struct({
   sessionId: Schema.String,
