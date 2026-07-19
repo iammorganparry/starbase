@@ -19,13 +19,20 @@ afterEach(cleanup)
 describe("Composer attachments in Gigaplan", () => {
   it("disables attaching, rather than accepting an image the round cannot carry", () => {
     render(<Composer mode="gigaplan" />)
-    const attach = screen.getByTitle(/images aren't sent to a planning round/i)
+    const attach = screen.getByTitle(/images aren't sent/i)
     expect((attach as HTMLButtonElement).disabled).toBe(true)
   })
 
   it("says why, so the operator is not left guessing at a dead control", () => {
     render(<Composer mode="gigaplan" />)
-    expect(screen.getByTitle(/Gigaplan plans from the written brief/i)).toBeTruthy()
+    expect(screen.getByTitle(/Planning rounds work from the written brief/i)).toBeTruthy()
+  })
+
+  it("keeps one stable accessible name, so it can't answer to another control's", () => {
+    // Regression: the explanation used to BE the name, which made this button
+    // match a by-name lookup for the Gigaplan mode chip.
+    render(<Composer mode="gigaplan" />)
+    expect(screen.getByLabelText("Attach an image")).toBeTruthy()
   })
 
   it("leaves every other mode alone", () => {

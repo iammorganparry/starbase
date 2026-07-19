@@ -472,9 +472,15 @@ export function Composer({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={paused || orchestrated}
+            /* The NAME stays constant while the tooltip explains. Letting the
+               explanation be the accessible name made this button answer to
+               "Gigaplan" — the mode chip's name — so a by-name lookup matched
+               two controls. What a control IS shouldn't change with why it's
+               unavailable. */
+            aria-label="Attach an image"
             title={
               orchestrated
-                ? "Gigaplan plans from the written brief — images aren't sent to a planning round"
+                ? "Planning rounds work from the written brief — images aren't sent"
                 : "Attach an image"
             }
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
