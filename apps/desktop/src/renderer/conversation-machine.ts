@@ -36,6 +36,7 @@ import {
   defaultModel,
   nextReviewPhase,
   isSubagentEvent,
+  retractSubagent,
   setGateStatus,
   setPlanStatus,
   setQuestionAnswers,
@@ -405,6 +406,14 @@ export const conversationMachine = setup({
     foldEvent: assign(({ context, event }) => {
       if (event.type !== "STREAM_EVENT") return {}
       const e = event.event
+      // The harness has revealed that a task we already opened a tab for is
+      // BACKGROUNDED. It lives in the session dock from here on, so retract the
+      // tab rather than showing the same work twice — see `retractSubagent`.
+      // `toolUseId` is the spawning tool_use id, i.e. exactly the tab's own id;
+      // tasks with no tool_use (ambient/workflow) never opened one.
+      if (e._tag === "BackgroundTaskStarted") {
+        return e.toolUseId === null ? {} : { subagents: retractSubagent(context.subagents, e.toolUseId) }
+      }
       // Sub-agent-scoped events drive the watch-only tabs, not the main turn.
       if (isSubagentEvent(e)) {
         return { subagents: applySubagentEvent(context.subagents, e) }

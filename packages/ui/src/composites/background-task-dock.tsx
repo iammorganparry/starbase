@@ -33,11 +33,13 @@ const isLive = (t: BackgroundTask): boolean => t.status === "running" || t.statu
 function TaskRow({
   task,
   onStop,
-  onView
+  onView,
+  onDismiss
 }: {
   task: BackgroundTask
   onStop?: (taskId: string) => void
   onView?: (taskId: string) => void
+  onDismiss?: (taskId: string) => void
 }) {
   const tone = TONE[task.status]
   const live = isLive(task)
@@ -108,6 +110,24 @@ function TaskRow({
           {task.status === "stopping" ? "Stopping…" : "Stop"}
         </Button>
       )}
+      {/*
+        Only failures get a dismiss control. Every other settled task ages out of
+        the registry on its own after a short grace period, so a button to remove
+        it would race that and mean nothing. A FAILED task is held indefinitely —
+        an error nobody saw is the one outcome worth insisting on — so this is the
+        only way to acknowledge it and clear the row.
+      */}
+      {task.status === "failed" && onDismiss && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="flex-none"
+          onClick={() => onDismiss(task.id)}
+          aria-label={`Dismiss ${task.description}`}
+        >
+          <X size={12} />
+        </Button>
+      )}
     </div>
   )
 }
@@ -131,6 +151,7 @@ export function BackgroundTaskDock({
   supported = true,
   onStop,
   onView,
+  onDismiss,
   className
 }: {
   tasks: ReadonlyArray<BackgroundTask>
@@ -138,9 +159,16 @@ export function BackgroundTaskDock({
   supported?: boolean
   onStop?: (taskId: string) => void
   onView?: (taskId: string) => void
+  /** Clear a failed task's row (other settled rows age out on their own). */
+  onDismiss?: (taskId: string) => void
   className?: string
 }) {
-  const [open, setOpen] = React.useState(true)
+  // Collapsed on every mount, deliberately — and deliberately NOT persisted, so
+  // it is collapsed on every mount rather than merely the first. An expanded dock
+  // eats the bottom of the transcript and crowds the composer, and the header
+  // badges below already report both the live count and the total, which is the
+  // whole of what a glance needs. Expanding is the operator's move, not ours.
+  const [open, setOpen] = React.useState(false)
   const live = tasks.filter(isLive)
   // Running first (that's what you act on), then most recently finished.
   const ordered = React.useMemo(
@@ -179,7 +207,7 @@ export function BackgroundTaskDock({
       {open && (
         <div className="flex max-h-[220px] flex-col gap-[2px] overflow-y-auto px-1.5 pb-1.5">
           {ordered.map((task) => (
-            <TaskRow key={task.id} task={task} onStop={onStop} onView={onView} />
+            <TaskRow key={task.id} task={task} onStop={onStop} onView={onView} onDismiss={onDismiss} />
           ))}
         </div>
       )}

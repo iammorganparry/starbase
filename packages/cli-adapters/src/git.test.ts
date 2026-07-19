@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, lstatSync, readFileSync } from "node:fs"
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -175,5 +175,94 @@ describe("GitService.createWorktree", () => {
     const list = execFileSync("git", ["worktree", "list"], { cwd: repoPath, encoding: "utf-8" })
     const occurrences = list.split("\n").filter((l) => l.includes(second.value.path)).length
     expect(occurrences).toBe(1)
+  })
+})
+
+/**
+ * `commitsSince` feeds review-finding attribution: the first commit touching a
+ * finding's file is credited with fixing it. So the two things worth asserting
+ * against real git are the ORDER (oldest first — the contract the credit rule
+ * depends on) and the per-commit file lists the match is made against.
+ */
+describe("GitService.commitsSince", () => {
+  let temp: ReturnType<typeof withTempRoot>
+  let repos: ReturnType<typeof mkTemp>
+  beforeEach(() => {
+    temp = withTempRoot()
+    repos = mkTemp("starbase-repos-")
+  })
+  afterEach(() => {
+    temp.cleanup()
+    repos.cleanup()
+  })
+
+  const git = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, encoding: "utf-8" })
+
+  const commit = (dir: string, file: string, message: string) => {
+    writeFileSync(join(dir, file), `${message}\n`)
+    git(dir, ["add", "-A"])
+    git(dir, ["commit", "-m", message, "--no-gpg-sign"])
+  }
+
+  const since = (cwd: string, sha: string) =>
+    runExit(GitService.commitsSince(cwd, sha).pipe(Effect.provide(GitService.Default)), temp.layer)
+
+  it("lists commits oldest-first with the files each touched", async () => {
+    const dir = initGitRepo(join(repos.dir, "widget"))
+    const base = git(dir, ["rev-parse", "HEAD"]).trim()
+    commit(dir, "a.ts", "first")
+    commit(dir, "b.ts", "second")
+
+    const exit = await since(dir, base)
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value.map((c) => c.subject)).toStrictEqual(["first", "second"])
+    expect(exit.value.map((c) => c.files)).toStrictEqual([["a.ts"], ["b.ts"]])
+    expect(exit.value[0]!.sha).toHaveLength(40)
+  })
+
+  it("lists every file a single commit touched", async () => {
+    const dir = initGitRepo(join(repos.dir, "widget"))
+    const base = git(dir, ["rev-parse", "HEAD"]).trim()
+    writeFileSync(join(dir, "a.ts"), "a\n")
+    writeFileSync(join(dir, "b.ts"), "b\n")
+    git(dir, ["add", "-A"])
+    git(dir, ["commit", "-m", "both", "--no-gpg-sign"])
+
+    const exit = await since(dir, base)
+    if (exit._tag !== "Success") throw new Error("expected success")
+    expect(exit.value).toHaveLength(1)
+    expect([...exit.value[0]!.files].sort()).toStrictEqual(["a.ts", "b.ts"])
+  })
+
+  it("is empty when nothing has landed since the head", async () => {
+    const dir = initGitRepo(join(repos.dir, "widget"))
+    const head = git(dir, ["rev-parse", "HEAD"]).trim()
+    const exit = await since(dir, head)
+    if (exit._tag !== "Success") throw new Error("expected success")
+    expect(exit.value).toStrictEqual([])
+  })
+
+  it("folds an unknown SHA to empty rather than failing", async () => {
+    // The real case: the reviewed head was force-pushed away, so the object is
+    // gone from this worktree. Declining to attribute is the safe direction — a
+    // crashed review pane is not.
+    const dir = initGitRepo(join(repos.dir, "widget"))
+    const exit = await since(dir, "0000000000000000000000000000000000000000")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value).toStrictEqual([])
+  })
+
+  it("keeps a subject containing punctuation intact", async () => {
+    // The parse splits on a unit separator, not on ':' or '-', so a conventional
+    // commit subject survives whole.
+    const dir = initGitRepo(join(repos.dir, "widget"))
+    const base = git(dir, ["rev-parse", "HEAD"]).trim()
+    commit(dir, "a.ts", "fix(auth): compare tokens with timingSafeEqual - not ===")
+
+    const exit = await since(dir, base)
+    if (exit._tag !== "Success") throw new Error("expected success")
+    expect(exit.value[0]!.subject).toBe("fix(auth): compare tokens with timingSafeEqual - not ===")
   })
 })

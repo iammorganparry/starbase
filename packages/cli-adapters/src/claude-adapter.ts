@@ -536,9 +536,14 @@ export const streamEventsFor = (
             outputFile: strOf(msg.output_file)
           })
         }
-        // Ambient/workflow tasks carry no tool_use_id: no tab to settle.
+        // Ambient/workflow tasks carry no tool_use_id: no tab to settle. Nor does
+        // a task we promoted to the DOCK — its tab was retracted when it was
+        // backgrounded, so settling it here would address an id that no longer
+        // exists. (Harmless today, since `applySubagentEvent` guards on
+        // membership, but it is the one place a background task is still spoken
+        // about as a sub-agent — so don't say it.)
         const id = strOf(msg.tool_use_id)
-        if (id) {
+        if (id && !(taskId && bg?.ever.has(taskId))) {
           out.push({ _tag: "SubagentEnded", id, status: msg.status === "completed" ? "done" : "error" })
         }
         return out

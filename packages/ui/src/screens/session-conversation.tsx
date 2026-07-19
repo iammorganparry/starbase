@@ -69,7 +69,10 @@ export interface SessionConversationProps {
    * Plan tabs from the same machine (so switching to Plan never aborts a parked
    * plan run). `view` selects the face; `ctx.onOpenPlanReview` switches the tab.
    */
-  renderConversationPane?: (view: "conversation" | "plan", ctx: ConversationPaneCtx) => ReactNode
+  renderConversationPane?: (
+    view: "conversation" | "plan" | "split",
+    ctx: ConversationPaneCtx
+  ) => ReactNode
   /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
   planSessions?: ReadonlySet<string>
   /**
@@ -173,12 +176,19 @@ export function SessionConversation(props: SessionConversationProps) {
   // (s_01, s_02…) that collide across sessions. Untagged, deep-linking in session
   // A would snap session B's Plan tab to an unrelated same-numbered step.
   const [target, setTarget] = useState<{ sessionId: string; stepId: string } | null>(null)
+  const [split, setSplit] = useState(false)
   const planStepTarget = target?.sessionId === props.activeSessionId ? target.stepId : null
   const active = props.sessions.find((s) => s.id === props.activeSessionId) ?? null
 
   const tabs = visibleTabs(active, props.planSessions)
   // Never leave a hidden tab selected (e.g. after switching to a PR-less session).
   const activeTab = tabs.includes(tab) ? tab : "conversation"
+  // Plan Review beside the transcript. Derived, never merely stored: a session
+  // with no plan has nothing to split, so the same reasoning that hides the Plan
+  // tab collapses the split — otherwise switching to a plan-less session would
+  // leave an empty column pinned open with no control on screen to close it.
+  const splitAvailable = activeTab === "conversation" && tabs.includes("plan")
+  const splitOpen = split && splitAvailable
   const connectGithub = props.onOpenSettings ?? (() => {})
   // What the active session's agent is doing — drives the tab bar's pill.
   const activeActivity = (active && props.liveActivity?.[active.id]) ?? null
@@ -252,6 +262,8 @@ export function SessionConversation(props: SessionConversationProps) {
               }
               onToggleBrowser={props.renderBrowserDock ? props.onToggleBrowser : undefined}
               browserActive={props.browserActive}
+              onToggleSplit={splitAvailable ? () => setSplit((v) => !v) : undefined}
+              splitActive={splitOpen}
             />
 
             {/*
@@ -273,18 +285,24 @@ export function SessionConversation(props: SessionConversationProps) {
                 */}
                 {activeTab === "conversation" || activeTab === "plan" ? (
                   props.renderConversationPane ? (
-                    props.renderConversationPane(activeTab === "plan" ? "plan" : "conversation", {
+                    props.renderConversationPane(
+                      activeTab === "plan" ? "plan" : splitOpen ? "split" : "conversation",
+                      {
                       onOpenPlanReview: (stepId) => {
                         setTarget(
                           stepId && props.activeSessionId
                             ? { sessionId: props.activeSessionId, stepId }
                             : null
                         )
-                        setTab("plan")
+                        // Already split? Plan Review is on screen — switching tabs
+                        // would close the transcript the operator just clicked from.
+                        // Just move its selection.
+                        if (!splitOpen) setTab("plan")
                       },
                       planStepId: planStepTarget,
                       onPlanStepSelected: () => setTarget(null)
-                    })
+                      }
+                    )
                   ) : (
                     <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
                       {props.conversationPane ?? (

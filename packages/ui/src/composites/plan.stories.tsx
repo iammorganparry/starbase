@@ -5,7 +5,6 @@ import { ConversationView } from "../app/conversation-view.js"
 import { SEED_CONVERSATION } from "../seed.js"
 import { PlanReview } from "../screens/plan-review.js"
 import { PlanCard } from "./plan-card.js"
-import { PlanProgressRail } from "./plan-progress-rail.js"
 import { PlanStepDetail } from "./plan-step-detail.js"
 
 /**
@@ -184,20 +183,11 @@ export const Empty: Story = {
   )
 }
 
-/** The rail on its own — checks, dots, branch arms, and the done/total meter. */
-export const ProgressRail: Story = {
-  render: () => (
-    <div className="flex h-[560px] w-[280px] border-r border-hairline bg-editor">
-      <PlanProgressRail plan={basePlan({ status: "approved" })} selectedId="s_03" />
-    </div>
-  )
-}
-
 /**
- * The rail in situ, beside the live transcript — this is the Conversation view
- * during execution. Clicking a step deep-links into Plan Review.
+ * The Conversation view during execution. The step rail that used to sit beside
+ * the transcript is gone — Plan Review now opens as a split beside it instead.
  */
-export const ConversationWithPlanRail: Story = {
+export const ConversationDuringExecution: Story = {
   render: () => (
     <div className="flex h-[620px] w-full bg-editor">
       <ConversationView

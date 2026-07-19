@@ -20,7 +20,8 @@ const finding = (id: string): ReviewFinding => ({
   severity: "major",
   title: `finding ${id}`,
   rationale: "because",
-  suggestion: null
+  suggestion: null,
+  resolvedBy: null
 })
 
 const review = (

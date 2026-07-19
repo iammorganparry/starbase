@@ -1,11 +1,34 @@
 import type { BackgroundTask, BackgroundTaskState, StreamEvent } from "@starbase/core"
 import { backgroundTaskMachine, newTaskContext, toBackgroundTask } from "@starbase/core"
-import { Effect, Ref } from "effect"
+import { Clock, Effect, Ref } from "effect"
 import type { Actor } from "xstate"
 import { createActor } from "xstate"
 import type { StopBackgroundTask } from "./adapter.js"
 
 type TaskActor = Actor<typeof backgroundTaskMachine>
+
+/**
+ * How long a settled task stays on screen before the store evicts it.
+ *
+ * Not zero: a task that vanished the instant it finished would never show its
+ * result, and the operator would watch rows disappear mid-glance. Not forever
+ * either — that is the bug this fixes. Ten seconds is long enough to register a
+ * completion, short enough that a busy session's dock stays readable.
+ */
+const SETTLED_GRACE_MS = 10_000
+
+/**
+ * Whether a task has aged out of the dock.
+ *
+ * `failed` is deliberately exempt: an error the operator never saw is the one
+ * outcome worth interrupting for, so a failure holds its row until explicitly
+ * dismissed. Everything else (completed, stopped — including the operator's own
+ * kill, which they already know about) ages out.
+ */
+const expired = (task: BackgroundTask, nowMs: number): boolean =>
+  task.endedAt !== null &&
+  task.status !== "failed" &&
+  nowMs - Date.parse(task.endedAt) > SETTLED_GRACE_MS
 
 /**
  * Session-scoped registry of background tasks — work the harness is running that
@@ -39,7 +62,10 @@ export class BackgroundTaskStore extends Effect.Service<BackgroundTaskStore>()(
       // over the live harness query, so the newest run's is the only valid one.
       const stops = yield* Ref.make(new Map<string, StopBackgroundTask>())
 
-      const now = Effect.sync(() => new Date().toISOString())
+      // Read from Effect's Clock rather than `new Date()` so the timestamps a task
+      // is stamped with and the `now` that `expired` compares them against are the
+      // SAME clock. Otherwise the grace period could only be tested by sleeping.
+      const now = Clock.currentTimeMillis.pipe(Effect.map((ms) => new Date(ms).toISOString()))
 
       const forSession = (sessionId: string): Effect.Effect<Map<string, TaskActor>> =>
         Ref.get(actors).pipe(Effect.map((m) => m.get(sessionId) ?? new Map()))
@@ -49,8 +75,56 @@ export class BackgroundTaskStore extends Effect.Service<BackgroundTaskStore>()(
         return toBackgroundTask(s.value as BackgroundTaskState, s.context)
       }
 
+      /** Stop and forget `taskIds` for a session. */
+      const evict = (sessionId: string, taskIds: ReadonlyArray<string>): Effect.Effect<void> =>
+        Ref.update(actors, (m) => {
+          const session = m.get(sessionId)
+          if (session === undefined) return m
+          const next = new Map(session)
+          for (const id of taskIds) next.delete(id)
+          const out = new Map(m)
+          return next.size === 0 ? (out.delete(sessionId), out) : out.set(sessionId, next)
+        })
+
+      /**
+       * The session's tasks, minus any that have aged out.
+       *
+       * Eviction happens HERE, on read, rather than on a timer fired when a task
+       * settles. The renderer already polls this every couple of seconds, so a
+       * lazy sweep is observed just as promptly — and it buys determinism: no
+       * per-task fiber to leak, cancel on session teardown, or reason about when
+       * the app is backgrounded. It also makes the rule testable with a TestClock
+       * instead of real elapsed time.
+       */
       const list = (sessionId: string): Effect.Effect<ReadonlyArray<BackgroundTask>> =>
-        forSession(sessionId).pipe(Effect.map((m) => [...m.values()].map(snapshot)))
+        Effect.gen(function* () {
+          const nowMs = yield* Clock.currentTimeMillis
+          const keep: BackgroundTask[] = []
+          const drop: string[] = []
+          for (const [id, actor] of yield* forSession(sessionId)) {
+            const task = snapshot(actor)
+            if (expired(task, nowMs)) {
+              drop.push(id)
+              yield* Effect.sync(() => actor.stop())
+            } else keep.push(task)
+          }
+          if (drop.length > 0) yield* evict(sessionId, drop)
+          return keep
+        })
+
+      /**
+       * Clear one row on the operator's say-so — the escape hatch for a `failed`
+       * task, which `expired` keeps indefinitely. Idempotent: dismissing an id
+       * that already aged out (or never existed) is a no-op, so a double click or
+       * a click racing the poll can't fail.
+       */
+      const dismiss = (sessionId: string, taskId: string): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          const actor = (yield* forSession(sessionId)).get(taskId)
+          if (!actor) return
+          yield* Effect.sync(() => actor.stop())
+          yield* evict(sessionId, [taskId])
+        })
 
       /** Start (or return) the actor for `taskId`. */
       const ensure = (
@@ -200,7 +274,7 @@ export class BackgroundTaskStore extends Effect.Service<BackgroundTaskStore>()(
           })
         })
 
-      return { list, ingest, registerStop, stop, clear }
+      return { list, ingest, registerStop, stop, dismiss, clear }
     })
   }
 ) {}

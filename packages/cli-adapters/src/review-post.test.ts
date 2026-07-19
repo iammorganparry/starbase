@@ -30,6 +30,7 @@ const finding = (over: Partial<ReviewFinding> = {}): ReviewFinding => ({
   title: "Prefer const",
   rationale: "It never reassigns.",
   suggestion: null,
+  resolvedBy: null,
   ...over
 })
 

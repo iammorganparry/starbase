@@ -7,12 +7,12 @@ import {
   ConfigService,
   DiscoveryService,
   GhService,
+  GitService,
   McpService,
   ModelsService,
   ReviewService,
   ReviewStore,
   AdversarialPlanService,
-  GitService,
   PlanRoundStore,
   SessionStore,
   TranscriptStore,
@@ -41,6 +41,7 @@ import {
   modelsList,
   reviewGet,
   reviewMarkRouted,
+  reviewReconcile,
   reviewRun,
   sessionDiff,
   skillsList,
@@ -567,6 +568,116 @@ describe("RPC handlers", () => {
       expect(review.findings).toHaveLength(1)
       // Fable is the default reviewer when nothing is configured.
       expect(review.model).toBe("claude-fable-5")
+    })
+
+    /**
+     * Reconciliation credits the commits that fixed findings. What matters here
+     * is the NULL contract: the renderer calls this after every settled turn, so
+     * "nothing changed" must be distinguishable from "here is a review", or the
+     * review pane re-renders on every turn for nothing.
+     */
+    describe("Review.reconcile", () => {
+      /** `gh` as above, plus a `git log` whose output is the commits since the head. */
+      const gitEnv = (headSha: string, log: string, adapter: Layer.Layer<CliAdapter>) =>
+        Layer.mergeAll(
+          Layer.succeed(AppPaths, appPathsFor(root)),
+          NodeContext.layer,
+          fakeCommandExecutor((cmd, args) => {
+            if (cmd === "which" || cmd === "where") {
+              return args[0] === "claude" ? { stdout: "/usr/local/bin/claude" } : { stdout: "" }
+            }
+            if (cmd === "git") return args[2] === "log" ? { stdout: log } : { stdout: "" }
+            if (cmd !== "gh") return { stdout: "2.1.0" }
+            if (args[1] === "view") return { stdout: JSON.stringify({ headRefOid: headSha }) }
+            if (args[1] === "diff") return { stdout: "diff --git a/a.ts b/a.ts\n+x\n" }
+            return { stdout: "" }
+          })
+        ).pipe(
+          (leaf) =>
+            Layer.mergeAll(
+              ConfigService.Default,
+              SessionStore.Default,
+              GhService.Default,
+              GitService.Default,
+              ReviewStore.Default,
+              ReviewService.Default,
+              DiscoveryService.Default,
+              adapter
+            ).pipe(Layer.provideMerge(leaf))
+        )
+
+      /** `git log --reverse --name-only --pretty=format:%H\x1f%s` output. */
+      const gitLog = (sha: string, subject: string, files: string[]) =>
+        `${sha}\x1f${subject}\n${files.join("\n")}\n`
+
+      it("returns null when there is no stored review", async () => {
+        withSession()
+        const { layer } = countingAdapter()
+        const out = await Effect.runPromise(
+          reviewReconcile("s1").pipe(Effect.provide(gitEnv("sha-one", "", layer)))
+        )
+        expect(out).toBeNull()
+      })
+
+      it("credits the commit that touched the finding's file, and persists it", async () => {
+        withSession()
+        const { layer } = countingAdapter()
+        // The stub reports one finding with no path, so anchor it by hand — the
+        // attribution rule is path-based and a pathless finding never resolves.
+        const seed = gitEnv("sha-one", "", layer)
+        const stored = await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(seed)))
+        await Effect.runPromise(
+          ReviewStore.set("s1", {
+            ...stored,
+            findings: [{ ...stored.findings[0]!, path: "src/auth.ts" }]
+          }).pipe(Effect.provide(seed))
+        )
+
+        const env = gitEnv(
+          "sha-one",
+          gitLog("9f2c1ab4e7d8905361bb2f0c4a7e13d5c8a6b204", "fix(auth): timingSafeEqual", [
+            "src/auth.ts"
+          ]),
+          layer
+        )
+        const out = await Effect.runPromise(reviewReconcile("s1").pipe(Effect.provide(env)))
+        expect(out?.findings[0]?.resolvedBy).toMatchObject({
+          sha: "9f2c1ab4e7d8905361bb2f0c4a7e13d5c8a6b204",
+          subject: "fix(auth): timingSafeEqual"
+        })
+        // Persisted, not just returned — the next read must agree.
+        const reread = await Effect.runPromise(reviewGet("s1").pipe(Effect.provide(env)))
+        expect(reread?.findings[0]?.resolvedBy?.sha).toBe("9f2c1ab4e7d8905361bb2f0c4a7e13d5c8a6b204")
+      })
+
+      it("returns null when no commit touched a finding's file", async () => {
+        withSession()
+        const { layer } = countingAdapter()
+        const seed = gitEnv("sha-one", "", layer)
+        const stored = await Effect.runPromise(reviewRun("s1", false).pipe(Effect.provide(seed)))
+        await Effect.runPromise(
+          ReviewStore.set("s1", {
+            ...stored,
+            findings: [{ ...stored.findings[0]!, path: "src/auth.ts" }]
+          }).pipe(Effect.provide(seed))
+        )
+
+        const out = await Effect.runPromise(
+          reviewReconcile("s1").pipe(
+            Effect.provide(gitEnv("sha-one", gitLog("aaa", "unrelated", ["src/other.ts"]), layer))
+          )
+        )
+        expect(out).toBeNull()
+      })
+
+      it("returns null for a session with no worktree", async () => {
+        withSession({ worktreePath: undefined })
+        const { layer } = countingAdapter()
+        const out = await Effect.runPromise(
+          reviewReconcile("s1").pipe(Effect.provide(gitEnv("sha-one", "", layer)))
+        )
+        expect(out).toBeNull()
+      })
     })
 
     it("re-running on an unchanged head returns the stored review WITHOUT spawning a reviewer", async () => {

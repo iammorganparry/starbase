@@ -19,6 +19,7 @@ const finding = (over: Partial<ReviewFinding>): ReviewFinding => ({
   title: "t",
   rationale: "because",
   suggestion: null,
+  resolvedBy: null,
   ...over
 })
 

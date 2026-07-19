@@ -1,5 +1,6 @@
 import type {
   PrLabel,
+  PrMergeMethod,
   PrReviewThread,
   PrState,
   PrTimelineItem,
@@ -9,8 +10,11 @@ import type {
 import { GitPullRequest } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { relativeTime } from "../lib/relative-time.js"
+import { Avatar, githubAvatarUrl } from "../components/avatar.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
+import { Card } from "../components/card.js"
+import { Markdown } from "../components/markdown.js"
 import { AsyncButton } from "../components/async-button.js"
 import { Callout } from "../components/callout.js"
 import { Spinner } from "../components/loading.js"
@@ -128,7 +132,7 @@ export interface PullRequestViewProps {
   /** Reply into an inline review thread (`commentId` = the REST databaseId). */
   onReplyToThread?: (commentId: number, body: string) => Promise<void> | void
   onOpenOnGithub?: () => void
-  onMerge?: () => void
+  onMerge?: (method: PrMergeMethod) => void
   /** A merge is in flight — disables the button and shows a spinner. */
   merging?: boolean
   /** A failed `gh pr merge`, shown beneath the merge button. */
@@ -139,6 +143,10 @@ export interface PullRequestViewProps {
   markingReady?: boolean
   /** A failed `gh pr ready`, shown beneath the button. */
   markReadyError?: string | null
+  /** Merge the base into the head — offered only while the branch is behind. */
+  onUpdateBranch?: () => void
+  updatingBranch?: boolean
+  updateBranchError?: string | null
   /** The adversarial review panel's state + actions (right rail). */
   review?: PrSidePanelProps["review"]
 }
@@ -168,6 +176,9 @@ export function PullRequestView({
   onMarkReady,
   markingReady = false,
   markReadyError,
+  onUpdateBranch,
+  updatingBranch = false,
+  updateBranchError,
   review
 }: PullRequestViewProps) {
   // Loading — avoid flashing the "Create PR" empty state before the PR resolves.
@@ -227,7 +238,16 @@ export function PullRequestView({
     <div className="flex min-h-0 flex-1">
       {/* Centre column: header + timeline + sticky composer */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-1 flex-col gap-[18px] overflow-auto px-7 py-6">
+        {/*
+          Same reading column as the Conversation view — 760px, centred, on a
+          30px gutter, with the scrollbar gutter reserved on BOTH edges so the
+          column sits on the window's true centre axis rather than shifting when
+          a scrollbar appears. Switching tabs shouldn't move the text you were
+          reading, and an unbounded column made PR bodies and review comments run
+          to line lengths nothing else in the app does.
+        */}
+        <div className="flex flex-1 flex-col overflow-auto px-[30px] py-[26px] [scrollbar-gutter:stable_both-edges]">
+          <div className="mx-auto flex w-full max-w-[760px] flex-1 flex-col gap-[18px]">
           {/* PR header */}
           <div className="flex flex-col gap-[11px]">
             <div className="flex items-center gap-[9px]">
@@ -270,6 +290,40 @@ export function PullRequestView({
             )}
           </div>
 
+          {/*
+            The PR description — the opening comment, rendered as one.
+            `pr.body` was fetched, mapped and carried in the schema all along and
+            simply never drawn, so this view opened straight onto the review
+            timeline: the case FOR the change was the one thing missing from the
+            page reviewing it. Presented as a timeline card (not a bare
+            paragraph) because on GitHub it IS the first comment, and the author
+            + timestamp are what let you tell a stale description from a current
+            one.
+          */}
+          {pr.body !== null && pr.body.trim().length > 0 && (
+            <Card>
+              <div className="flex items-center gap-[9px] border-b border-hairline px-[14px] py-[11px]">
+                <Avatar
+                  initial={pr.author.login.charAt(0).toUpperCase()}
+                  src={githubAvatarUrl(pr.author.login)}
+                  tone="orange"
+                  size={22}
+                />
+                <span className="text-[13px] font-semibold text-text-bright">
+                  {pr.author.login}
+                </span>
+                <span className="text-[11.5px] text-muted-foreground">opened this</span>
+                <div className="flex-1" />
+                <span className="font-mono text-[11px] text-dim">
+                  {relativeTime(pr.createdAt)}
+                </span>
+              </div>
+              <div className="px-[14px] py-[11px]">
+                <Markdown className="text-[13.5px]">{pr.body}</Markdown>
+              </div>
+            </Card>
+          )}
+
           <div className="h-px bg-line" />
 
           {/* Timeline — top-level reviews/comments and inline thread groups, interleaved */}
@@ -306,6 +360,7 @@ export function PullRequestView({
               onSubmit={(input) => onSubmitReview?.(input)}
             />
           </div>
+          </div>
         </div>
       </div>
 
@@ -319,6 +374,9 @@ export function PullRequestView({
         onMarkReady={onMarkReady}
         markingReady={markingReady}
         markReadyError={markReadyError}
+        onUpdateBranch={onUpdateBranch}
+        updatingBranch={updatingBranch}
+        updateBranchError={updateBranchError}
         review={review}
       />
     </div>

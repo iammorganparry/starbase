@@ -1,6 +1,7 @@
 export * from "./domain.js"
 export * from "./review-policy.js"
 export * from "./review-location.js"
+export * from "./review-resolution.js"
 export * from "./auth.js"
 export * from "./conversation.js"
 export * from "./task-kind.js"
