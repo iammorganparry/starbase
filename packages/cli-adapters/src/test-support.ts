@@ -47,6 +47,7 @@ export const appPathsFor = (root: string): AppPathsShape => ({
   transcriptsDir: join(root, "transcripts"),
   reviewsDir: join(root, "reviews"),
   planRoundsDir: join(root, "plan-rounds"),
+  outcomesDir: join(root, "outcomes"),
   plansDir: join(root, ".starbase"),
   authFile: join(root, "auth.enc")
 })

@@ -4,7 +4,16 @@
  * needed. Downstream product tables (billing, subscriptions) will reference
  * `user.id` — this is the anchor the paid-user work hangs off.
  */
-import { boolean, pgTable, text, timestamp } from "drizzle-orm/pg-core"
+import {
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique
+} from "drizzle-orm/pg-core"
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -102,6 +111,69 @@ export const invitation = pgTable("invitation", {
     .notNull()
     .references(() => user.id, { onDelete: "cascade" })
 })
+
+/**
+ * A scored outcome contributed by one member, scoped to an organisation and a
+ * repository.
+ *
+ * Scoped by organisation because learnings pool across a TEAM working on the
+ * same repositories — evidence from teammates on one repo is directly
+ * comparable, unlike evidence pooled across strangers' unrelated codebases.
+ *
+ * `repoKey` is a hash of the repository's root commit, never its name: it is
+ * identical across every clone and computable only by someone who already has
+ * the repo, so a team pools evidence without this server ever learning what
+ * their repositories are called.
+ *
+ * `userId` exists for abuse control and rate limiting ONLY. It is never exposed
+ * in an aggregate: how a MODEL performed is the question, and attributing a bad
+ * outcome to a named teammate would poison the feature inside a team.
+ *
+ * There is deliberately no free-text column. The desktop's `Outcome` schema is
+ * closed by construction and this mirrors it, so a leak would take a migration
+ * rather than an oversight.
+ */
+export const repoModelOutcome = pgTable(
+  "repo_model_outcome",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Hashed repository identity — see `repo-key.ts` in @starbase/core. */
+    repoKey: text("repo_key").notNull(),
+    taskKind: text("task_kind").notNull(),
+    cli: text("cli").notNull(),
+    vendor: text("vendor").notNull(),
+    /** The RESOLVED model id, never an alias. */
+    model: text("model").notNull(),
+    findingsCritical: integer("findings_critical").notNull(),
+    findingsMajor: integer("findings_major").notNull(),
+    findingsMinor: integer("findings_minor").notNull(),
+    findingsNit: integer("findings_nit").notNull(),
+    ciPassed: boolean("ci_passed"),
+    merged: boolean("merged"),
+    filesReverted: integer("files_reverted").notNull(),
+    planRevisions: integer("plan_revisions").notNull(),
+    sizeBucket: text("size_bucket").notNull(),
+    score: doublePrecision("score").notNull(),
+    /** Day precision only — a timestamp plus commit cadence fingerprints a person. */
+    occurredOn: text("occurred_on").notNull(),
+    createdAt: timestamp("created_at")
+      .$defaultFn(() => new Date())
+      .notNull()
+  },
+  (table) => [
+    // The read path is always (org, repo, kind); the unique key also makes
+    // contribution idempotent, so a client retrying a failed sync cannot
+    // double-count its own outcome.
+    index("repo_model_outcome_lookup").on(table.organizationId, table.repoKey, table.taskKind),
+    unique("repo_model_outcome_identity").on(table.organizationId, table.userId, table.id)
+  ]
+)
 
 export const schema = {
   user,

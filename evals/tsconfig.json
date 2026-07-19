@@ -1,0 +1,4 @@
+{
+  "extends": "@starbase/tsconfig/node.json",
+  "include": ["planning/**/*.ts"]
+}

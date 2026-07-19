@@ -8,6 +8,8 @@
  */
 import {
   AdversarialPlanService,
+  learningDaemonLayer,
+  OutcomeStore,
   AgentRunner,
   AuthService,
   ConfigService,
@@ -55,6 +57,7 @@ const StoreLayers = Layer.mergeAll(
   ReviewStore.Default,
   PlanExecutor.Default,
   PlanRoundStore.Default,
+  OutcomeStore.Default
 )
 
 /**
@@ -71,6 +74,22 @@ const HarnessLayers = Layer.mergeAll(
 
 // Later `Layer.provide`s satisfy the requirements of earlier ones, so the leaf
 // dependencies (paths, dialog, Node platform) come last.
+/**
+ * The learning daemon, forked for the app's lifetime.
+ *
+ * A layer rather than a handle in `index.ts`, mirroring how `RpcServerLive`
+ * keeps its own daemon alive: the runtime owns the fiber, so quitting tears it
+ * down without anyone remembering to. It is inert until the operator opts in.
+ *
+ * `isBusy` reads the runner's own fiber map through a mutable cell rather than
+ * taking a dependency on it, because AgentRunner sits in a sibling layer — and a
+ * daemon that could not see a live run would tick straight into the rate limits
+ * the operator is waiting on.
+ */
+let runnerBusy: () => boolean = () => false
+
+const LearningDaemonLive = learningDaemonLayer(() => runnerBusy())
+
 const AppLayer = RpcServerLive.pipe(
   // provideMerge: the RPC handlers consume DiscoveryService AND the main process
   // reaches the same instance to warm the model cache at startup (index.ts).
@@ -80,6 +99,7 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(WorkspaceService.Default),
   // Before SessionStore so the stores below satisfy the daemon's requirements —
   // a stage is provided-to by everything that follows it.
+  Layer.provide(LearningDaemonLive),
   Layer.provide(SessionStore.Default),
   Layer.provide(StoreLayers),
   Layer.provide(HarnessLayers),

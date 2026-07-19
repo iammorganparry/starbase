@@ -18,7 +18,9 @@ import {
   findApprovedPlan,
   isBackgroundTaskEvent,
   isSubagentEvent,
+  normalizePath,
   resumePlanPrompt,
+  samePath,
   setQuestionAnswers,
   STOPPED_NOTE,
   userMessage,
@@ -105,19 +107,6 @@ interface ActiveRun {
   readonly readPlan: (planId: string) => Effect.Effect<Plan | null>
   readonly applyPlan: (planId: string, f: (plan: Plan) => Plan) => Effect.Effect<void>
 }
-
-/** Windows separators → POSIX, so path comparison has one shape to reason about. */
-const normalizePath = (p: string): string => p.replace(/\\/g, "/")
-
-/**
- * Do two paths name the same file? One side is typically an absolute worktree
- * path (the tool's edit target), the other a repo-relative path (a plan step's
- * declared `files:`), so a suffix match is right — but ONLY anchored at a
- * separator. An unanchored `endsWith` makes "a.ts" match "src/schema.ts" and
- * ticks a step that had nothing to do with the edit.
- */
-const samePath = (a: string, b: string): boolean =>
-  a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`)
 
 const findPlan = (msg: Message, planId: string): Plan | null => {
   for (const p of msg.parts) if (p._tag === "Plan" && p.plan.id === planId) return p.plan

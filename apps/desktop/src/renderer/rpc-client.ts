@@ -434,6 +434,8 @@ export const rpc = {
 
   /** The stored planning round for a session, or null. */
   /** Turn learning from finished work on or off. */
+  configSetLearning: (config: { enabled: boolean; intervalMinutes?: number }): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setLearning({ config })),
 
   planRound: (sessionId: string): Promise<PlanRound | null> =>
     run((c) => c.Plan.round({ sessionId })),

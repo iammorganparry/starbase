@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Starbase auth backend — BetterAuth over Postgres/Drizzle, hosted on Hono (local + Vercel).",
+  "description": "Starbase auth backend \u2014 BetterAuth over Postgres/Drizzle, hosted on Hono (local + Vercel).",
   "exports": {
     ".": "./src/app.ts"
   },
@@ -32,7 +32,8 @@
     "postgres": "^3.4.9",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "resend": "^6.17.2"
+    "resend": "^6.17.2",
+    "@starbase/core": "workspace:*"
   },
   "devDependencies": {
     "@starbase/tsconfig": "workspace:*",

@@ -2,6 +2,8 @@ import fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import { CLI_KINDS } from "./domain.js"
 import type { ProviderModels } from "./models.js"
+import { normaliseRemote, repoKeyFromRoots } from "./repo-key.js"
+import type { Hasher } from "./repo-key.js"
 import { planningReadiness, reachableVendors, vendorOf } from "./vendor.js"
 
 /**
@@ -181,3 +183,44 @@ describe("harness preference cannot change gating", () => {
   })
 })
 
+describe("repo key — invariants", () => {
+  const hash: Hasher = (input) => {
+    let h = 0
+    for (const ch of input) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0
+    return (h >>> 0).toString(16).padStart(64, "0")
+  }
+
+  it("is independent of the order git reported the roots in", () => {
+    // `git rev-list` does not guarantee an order across versions, and an
+    // unstable pick would give two teammates different keys for one repo.
+    fc.assert(
+      fc.property(fc.array(fc.string({ minLength: 8, unit: fc.constantFrom(..."0123456789abcdef") }), { minLength: 1, maxLength: 4 }), (roots) => {
+        expect(repoKeyFromRoots(roots, hash)).toStrictEqual(
+          repoKeyFromRoots([...roots].reverse(), hash)
+        )
+      }),
+      RUNS
+    )
+  })
+
+  it("normalising a remote is idempotent", () => {
+    fc.assert(
+      // Hand-rolled rather than `fc.webUrl()`: that generator is expensive
+      // enough to be the single slowest thing in the suite, and these are the
+      // shapes a git remote actually takes.
+      fc.property(
+        fc.tuple(
+          fc.constantFrom("https://", "http://", "ssh://", "git@", ""),
+          fc.constantFrom("github.com", "gitlab.com", "git.internal:2222"),
+          fc.constantFrom(":", "/"),
+          fc.string({ minLength: 1, maxLength: 12 }),
+          fc.constantFrom(".git", "", "/")
+        ).map(([scheme, host, sep, path, suffix]) => `${scheme}${host}${sep}${path}${suffix}`),
+        (url) => {
+          expect(normaliseRemote(normaliseRemote(url))).toBe(normaliseRemote(url))
+        }
+      ),
+      RUNS
+    )
+  })
+})

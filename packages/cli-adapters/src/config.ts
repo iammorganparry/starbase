@@ -1,5 +1,5 @@
 import type {
-  CliKind, GitConfig, GithubConfig, ProviderConfig } from "@starbase/core"
+  LearningConfig, CliKind, GitConfig, GithubConfig, ProviderConfig } from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
@@ -57,6 +57,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.providers ? { providers: existing.providers } : {}),
             // MANDATORY: omit a section here and every unrelated save silently
             // drops it, because `patch` is a whole-object read-modify-write.
+            ...(existing?.learning ? { learning: existing.learning } : {}),
             ...patch
           }
           return yield* persist(config)
@@ -77,6 +78,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
       const setLastRepoPath = (lastRepoPath: string) => patch({ lastRepoPath })
 
       /** Upsert one CLI's provider defaults, preserving the other providers. */
+      /** Persist the learning switch. Absent ⇒ off, so this is the only way it turns on. */
+      const setLearning = (learning: LearningConfig) => patch({ learning })
+
       /** Persist the orchestrator's harness+model. Absent ⇒ the curated default. */
       const setOrchestrator = (cli: CliKind, model: string) =>
         patch({ orchestrator: { cli, model } })
@@ -115,6 +119,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setCollapsedRepos,
         setLastRepoPath,
         setProvider,
+        setLearning,
         setOrchestrator
       }
     }

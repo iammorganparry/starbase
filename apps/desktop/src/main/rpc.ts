@@ -30,6 +30,7 @@ import {
   METERED_ENV_KEYS,
   PlanExecutor,
   PlanRoundStore,
+  OutcomeStore,
   GitService,
   planReviewPost,
   retitleSession,
@@ -45,7 +46,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { GhError, GitError, PlanError, planningReadiness, reachableVendors, resolveOrchestrator, ReviewError, reviewModelFor, TASK_KINDS } from "@starbase/core"
+import { affinity, GhError, GitError, PlanError, planningReadiness, reachableVendors, resolveOrchestrator, ReviewError, reviewModelFor, TASK_KINDS } from "@starbase/core"
 import type {
   AdversarialReview,
   CliKind,
@@ -593,12 +594,48 @@ export const planExecute = (
     })
   )
 
-/** The persisted round for a session — proposal, critique and revision. */
+/**
+ * What this repository's history says about each reachable agent.
+ *
+ * Empty unless learning is enabled AND the repo has a stable key AND there are
+ * outcomes — three separate ways to have nothing to say, all of which must leave
+ * the round exactly as it behaves without a knowledge base.
+ */
+const planAffinity = (worktreePath: string, vendors: ReadonlyArray<VendorReach>) =>
+  Effect.gen(function* () {
+    const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+    if (config?.learning?.enabled !== true) return []
+    const repoKey = yield* GitService.repoKey(worktreePath).pipe(Effect.orElseSucceed(() => null))
+    if (repoKey === null) return []
+    const outcomes = yield* OutcomeStore.list(repoKey.key)
+    if (outcomes.length === 0) return []
+    const candidates = vendors.flatMap((v) =>
+      v.models.map((m) => ({ cli: v.cli, model: m.id, vendor: v.vendor }))
+    )
+    // One ranking per task kind would be more precise, but the menu is shown once
+    // per round — so the round-level view uses the kind-agnostic pooling that the
+    // per-step `task:` field then refines when the model chooses.
+    return TASK_KINDS.flatMap((taskKind) =>
+      affinity({ repoKey: repoKey.key, taskKind, candidates, outcomes }, { now: new Date() }).map(
+        (r) => ({
+          cli: r.cli,
+          model: r.model,
+          level: r.level,
+          observations: r.observations,
+          estimate: r.estimate
+        })
+      )
+    )
+  })
+
+/** `Plan.round` handler — the stored audit trail for a session, or null. */
 export const planRound = (sessionId: string) => PlanRoundStore.get(sessionId)
 
+/** Everything a planning round reaches for: discovery, models, the harness, the store. */
 type PlanAdversarialEnv =
   | ConfigService
   | GitService
+  | OutcomeStore
   | SessionStore
   | DiscoveryService
   | ModelsService
@@ -630,6 +667,12 @@ export const planAdversarial = (
         )
       }
       const { clis, vendors } = yield* planningVendors
+      // Only consult the knowledge base when the operator opted in. With learning
+      // off — or a repo with no history — this stays empty and the round routes
+      // on the model's own judgement, which is exactly phase-A behaviour.
+      const affinityForRepo = yield* planAffinity(session.worktreePath, vendors).pipe(
+        Effect.orElseSucceed(() => [] as ReadonlyArray<never>)
+      )
       const service = yield* AdversarialPlanService
       // Capture the store's context here so the persistence hook the service
       // calls later — on its own fiber, with only the adapter in scope — is a
@@ -648,6 +691,7 @@ export const planAdversarial = (
         vendors,
         binPathFor,
         assignAgents: true,
+        affinity: affinityForRepo,
         // Persistence is wired in here rather than inside the service so the
         // round logic stays free of the filesystem and testable without one.
         onRound: (round: PlanRound) => PlanRoundStore.set(round).pipe(Effect.provide(storeCtx))
@@ -1034,6 +1078,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setStarredRepos": ({ paths }) => ConfigService.setStarredRepos(paths),
   "Config.setCollapsedRepos": ({ paths }) => ConfigService.setCollapsedRepos(paths),
   "Config.setLastRepoPath": ({ path }) => ConfigService.setLastRepoPath(path),
+  "Config.setLearning": ({ config }) => ConfigService.setLearning(config),
   "Config.setOrchestrator": ({ cli, model }) => ConfigService.setOrchestrator(cli, model),
   "Config.setProvider": ({ cli, provider }) => ConfigService.setProvider(cli, provider),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
