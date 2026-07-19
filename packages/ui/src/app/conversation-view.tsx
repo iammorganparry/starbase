@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from "react"
+import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import type {
   Attachment,
   CliKind,
@@ -29,6 +29,16 @@ import { RunStats } from "../composites/run-stats.js"
  * Claude-only (the other harnesses are autonomous), so it's appended to the
  * cycle only for Claude sessions — see `cycleFor`.
  */
+/**
+ * How many queued messages show before the list collapses behind a "+N more".
+ *
+ * The queue sits between the transcript and the composer, so its height comes
+ * straight out of both. Routing an adversarial review's findings queues one turn
+ * PER FINDING — twenty of them pushed the composer off the bottom of the window
+ * entirely. Five is enough to see what's next without the list becoming the page.
+ */
+const QUEUE_PREVIEW = 5
+
 const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
 const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
   cli === "claude" ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
@@ -156,6 +166,8 @@ export function ConversationView({
   // Sticky-bottom: follow the newest content while the operator is parked at the
   // bottom, but never yank them down once they've scrolled up to read.
   const stick = useRef(true)
+  const [queueExpanded, setQueueExpanded] = useState(false)
+  const queueLimit = queueExpanded ? queued.length : QUEUE_PREVIEW
 
   // Shift+Tab cycles the HITL mode (works while typing in the composer). Plan
   // mode joins the cycle on Claude sessions only (matches the composer's gate).
@@ -304,8 +316,24 @@ export function ConversationView({
           ) : (
             <>
               {queued.length > 0 && (
-                <div className="mb-2 flex flex-col gap-1.5">
-                  {queued.map((item, i) => (
+                <div
+                  className={cn(
+                    "mb-2 flex flex-col gap-1.5",
+                    // Expanding must not reintroduce the bug it fixes: a 20-item
+                    // queue scrolls within its own box rather than growing the
+                    // composer off the screen again.
+                    queueExpanded && "max-h-[240px] overflow-y-auto"
+                  )}
+                >
+                  {/*
+                    Capped, because this list sits between the transcript and the
+                    composer and grows without limit — routing a review's findings
+                    queues one turn per finding, and twenty of them pushed the
+                    composer clean off the screen. `slice(0, n)` keeps each item's
+                    index intact, which matters: `onSendNow`/`onUnqueue` address
+                    the queue positionally.
+                  */}
+                  {queued.slice(0, queueLimit).map((item, i) => (
                     <div
                       key={`${i}-${item.text.slice(0, 24)}`}
                       className="flex items-center gap-2 rounded-lg border border-line bg-sunken/60 px-3 py-1.5 text-[12.5px] text-muted-foreground"
@@ -345,6 +373,17 @@ export function ConversationView({
                       )}
                     </div>
                   ))}
+                  {queued.length > QUEUE_PREVIEW && (
+                    <button
+                      type="button"
+                      onClick={() => setQueueExpanded((v) => !v)}
+                      className="self-start rounded px-1.5 py-0.5 text-[11.5px] text-dim outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {queueExpanded
+                        ? "Show fewer"
+                        : `+${queued.length - QUEUE_PREVIEW} more queued`}
+                    </button>
+                  )}
                 </div>
               )}
               <Composer
