@@ -136,6 +136,18 @@ export interface LaunchOptions {
       additions?: number
       deletions?: number
       updatedAt?: string
+      /** The PR description, as `gh pr view --json body` reports it. */
+      body?: string
+      labels?: ReadonlyArray<{ name: string; color?: string }>
+      /** `CLEAN` | `BEHIND` | `BLOCKED` | `DIRTY` — drives the merge box. */
+      mergeStateStatus?: string
+      /** `statusCheckRollup` entries, for the Checks rail. */
+      checks?: ReadonlyArray<{
+        name: string
+        conclusion?: string
+        status?: string
+        detailsUrl?: string
+      }>
     }>
     /** The unified diff served by `gh pr diff` (what an adversarial review reads). */
     readonly diff?: string
@@ -379,6 +391,12 @@ export interface LaunchedApp {
    * normally do this after the browser flow). Emits the main-process `open-url`.
    */
   readonly completeDeepLinkSignIn: () => Promise<void>
+  /**
+   * The `gh pr merge|update-branch|ready` invocations the fake gh recorded, in
+   * order — one raw argv line each. Lets a test assert WHICH command ran (the
+   * merge strategy, say) rather than only that the button stopped spinning.
+   */
+  readonly ghCalls: () => ReadonlyArray<string>
 }
 
 const git = (cwd: string, args: ReadonlyArray<string>) =>
@@ -447,6 +465,44 @@ const installFakeGh = (
       })
     )
   }
+  // Per-PR `gh pr view --json <PR_VIEW_FIELDS>` payloads — what the Pull Request
+  // tab reads. Kept separate from the cheap `--json state` poll below, which the
+  // shim answers inline.
+  for (const p of gh.prs ?? []) {
+    writeFileSync(
+      join(binDir, `pr-${p.number}.json`),
+      JSON.stringify({
+        number: p.number,
+        state: p.state ?? "OPEN",
+        title: p.title,
+        body: p.body ?? "",
+        url: `https://github.com/acme/widget/pull/${p.number}`,
+        headRefName: p.headRefName,
+        baseRefName: p.baseRefName,
+        isDraft: p.isDraft ?? false,
+        author: p.author,
+        createdAt: p.updatedAt ?? "2026-07-11T00:00:00Z",
+        commits: [{ oid: "c1" }],
+        files: [{ path: "a.ts", additions: p.additions ?? 0, deletions: p.deletions ?? 0 }],
+        additions: p.additions ?? 0,
+        deletions: p.deletions ?? 0,
+        labels: (p.labels ?? []).map((l) => ({ name: l.name, color: l.color ?? "cccccc" })),
+        reviews: [],
+        comments: [],
+        reviewRequests: [],
+        statusCheckRollup: (p.checks ?? []).map((c) => ({
+          name: c.name,
+          status: c.status ?? "COMPLETED",
+          conclusion: c.conclusion ?? "SUCCESS",
+          detailsUrl: c.detailsUrl ?? null,
+          startedAt: "2026-07-11T00:00:00Z",
+          completedAt: "2026-07-11T00:00:48Z"
+        })),
+        mergeable: "MERGEABLE",
+        mergeStateStatus: p.mergeStateStatus ?? "CLEAN"
+      })
+    )
+  }
   // Pre-create the head branches off main so `gh pr checkout` can land on them.
   for (const p of prs) {
     if (repoPath) git(repoPath, ["branch", p.headRefName, "main"])
@@ -470,6 +526,9 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   # single-field query — answer that separately from the state read above.
   case "$*" in
     *headRefOid*) printf '{"headRefOid":"e2ehead%s"}' "$3"; exit 0;;
+    # statusCheckRollup appears only in the Pull Request tab's full field list,
+    # never in the cheap state poll — so it's the marker for "serve the whole PR".
+    *statusCheckRollup*) cat "$STARBASE_E2E_GH_DIR/pr-$3.json" 2>/dev/null || echo '{}'; exit 0;;
   esac
   st=$(printf '%s' "$STARBASE_E2E_GH_STATES" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
   [ -z "$st" ] && st="OPEN"
@@ -477,6 +536,11 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
 fi
 if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
   printf '%s' "$STARBASE_E2E_GH_DIFF"; exit 0
+fi
+# Record write commands so a test can assert WHICH one ran (e.g. the merge
+# strategy). Appended, one invocation per line, to $STARBASE_E2E_GH_LOG.
+if [ "$1" = "pr" ] && { [ "$2" = "merge" ] || [ "$2" = "update-branch" ] || [ "$2" = "ready" ]; }; then
+  printf '%s\\n' "$*" >> "$STARBASE_E2E_GH_LOG"; exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "checkout" ]; then
   ref=$(printf '%s' "$STARBASE_E2E_GH_HEADS" | tr ',' '\\n' | awk -F: -v n="$3" '$1==n{print $2}')
@@ -506,7 +570,8 @@ exit 0
     STARBASE_E2E_GH_ISSUES: JSON.stringify(issues),
     STARBASE_E2E_GH_DIR: binDir,
     STARBASE_E2E_GH_HEADS: heads,
-    STARBASE_E2E_GH_STATES: states
+    STARBASE_E2E_GH_STATES: states,
+    STARBASE_E2E_GH_LOG: join(binDir, "gh-calls.log")
   }
 }
 
@@ -712,6 +777,12 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
           .map((l) => JSON.parse(l) as { id: string; body: { type: string; key: string } })
       }
 
+      const ghCalls = () => {
+        const log = join(home, "bin", "gh-calls.log")
+        if (!existsSync(log)) return []
+        return readFileSync(log, "utf8").split("\n").filter((l) => l.length > 0)
+      }
+
       return {
         app,
         window,
@@ -720,7 +791,8 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         repoPath,
         authServer,
         completeDeepLinkSignIn,
-        opencodeAuthWrites
+        opencodeAuthWrites,
+        ghCalls
       }
     }
 

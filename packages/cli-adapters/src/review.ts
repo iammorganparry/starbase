@@ -110,7 +110,10 @@ export const parseFindings = (text: string): ReadonlyArray<ReviewFinding> | null
         severity: asSeverity(f.severity),
         title,
         rationale: nonEmpty(f.rationale) ?? title,
-        suggestion: nonEmpty(f.suggestion)
+        suggestion: nonEmpty(f.suggestion),
+        // Always outstanding at birth: a finding is resolved by a commit that
+        // lands AFTER the head it was found on, so a fresh one cannot be.
+        resolvedBy: null
       }
     ]
   })

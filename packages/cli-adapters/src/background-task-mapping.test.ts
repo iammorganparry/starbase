@@ -180,15 +180,29 @@ describe("background-task mapping", () => {
     expect(tags(events)).toStrictEqual(["SubagentEnded"])
   })
 
-  it("still settles the sub-agent tab alongside the dock row", () => {
-    // A backgrounded sub-agent is BOTH: a tab in this turn and a dock row that
-    // outlives it. Dropping either leaves half the UI stale.
+  it("settles a backgrounded sub-agent in the dock and NOT as a tab", () => {
+    // A backgrounded sub-agent belongs to ONE surface. Its tab was opened at
+    // tool_use time and retracted the moment the level signal revealed it was
+    // backgrounded, so an accompanying `SubagentEnded` would address an id that
+    // no longer exists — and would be the one place the pipeline still talks
+    // about background work as if it were a tab.
     const events = run([
       taskStarted({ tool_use_id: "toolu_1", subagent_type: "Explore" }),
       level([{ task_id: "task_1", task_type: "subagent", description: "a" }]),
       notification({ tool_use_id: "toolu_1" })
     ])
-    expect(tags(events).slice(-2)).toStrictEqual(["BackgroundTaskSettled", "SubagentEnded"])
+    expect(tags(events).at(-1)).toBe("BackgroundTaskSettled")
+    expect(tags(events)).not.toContain("SubagentEnded")
+  })
+
+  it("carries the spawning tool_use id, so the tab can be retracted", () => {
+    // `toolUseId` is the join key between the dock row and the tab that must go.
+    // Without it the renderer has no way to tell WHICH tab this task supersedes.
+    const events = run([
+      taskStarted({ tool_use_id: "toolu_1", subagent_type: "Explore" }),
+      level([{ task_id: "task_1", task_type: "subagent", description: "a" }])
+    ])
+    expect(events[0]).toMatchObject({ _tag: "BackgroundTaskStarted", toolUseId: "toolu_1" })
   })
 
   it("emits nothing background-related when no state is threaded through", () => {

@@ -35,6 +35,9 @@ export function PullRequestPane({
     markReady,
     markingReady,
     markReadyError,
+    updateBranch,
+    updatingBranch,
+    updateBranchError,
     submitReview,
     sendEntryToAgent,
     sentEntryIds,
@@ -69,6 +72,9 @@ export function PullRequestPane({
       onMarkReady={markReady}
       markingReady={markingReady}
       markReadyError={markReadyError}
+      onUpdateBranch={updateBranch}
+      updatingBranch={updatingBranch}
+      updateBranchError={updateBranchError}
       onConnectGithub={onConnectGithub}
       onSubmitReview={submitReview}
       onSendEntryToAgent={sendEntryToAgent}

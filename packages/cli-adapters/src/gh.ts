@@ -1047,6 +1047,24 @@ export class GhService extends Effect.Service<GhService>()(
         runGh(cwd, ["pr", "merge", String(number), `--${method}`]).pipe(Effect.asVoid),
 
       /**
+       * Merge the base branch into PR `number`'s head — GitHub's "Update branch".
+       *
+       * This is the fix for `mergeStateStatus: "BEHIND"`, which is the one merge
+       * blocker the operator can clear from here without touching the code. It
+       * updates the REMOTE head, not this worktree: the session's local branch is
+       * left alone deliberately, since the agent may be mid-turn with uncommitted
+       * work and pulling underneath it would be hostile.
+       *
+       * `--update-branch` needs a reasonably current `gh`; an older one fails
+       * with a usage error, which surfaces as `GhError` like any other rejection.
+       */
+      prUpdateBranch: (
+        cwd: string,
+        number: number
+      ): Effect.Effect<void, GhError, CommandExecutor.CommandExecutor> =>
+        runGh(cwd, ["pr", "update-branch", String(number)]).pipe(Effect.asVoid),
+
+      /**
        * Flip draft PR `number` to "ready for review" (`gh pr ready`). Surfaces
        * `GhError` when GitHub rejects it (e.g. the PR is not a draft).
        */

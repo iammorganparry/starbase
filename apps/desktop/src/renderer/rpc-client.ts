@@ -266,6 +266,13 @@ export const rpc = {
    */
   reviewMarkRouted: (sessionId: string): Promise<string | null> =>
     run((c) => c.Review.markRouted({ sessionId })),
+  /**
+   * Credit the commits that fixed outstanding findings. Resolves with the updated
+   * review, or null when nothing changed — see the contract: null means "leave the
+   * query cache alone", which is the common answer.
+   */
+  reviewReconcile: (sessionId: string): Promise<AdversarialReview | null> =>
+    run((c) => c.Review.reconcile({ sessionId })),
   githubCreatePr: (input: {
     sessionId: string
     title: string
@@ -294,6 +301,9 @@ export const rpc = {
     run((c) => c.Github.merge({ sessionId, method })),
   githubMarkReady: (sessionId: string): Promise<void> =>
     run((c) => c.Github.markReady({ sessionId })),
+  /** Merge the base into the PR's head on GitHub (clears a `BEHIND` merge state). */
+  githubUpdateBranch: (sessionId: string): Promise<void> =>
+    run((c) => c.Github.updateBranch({ sessionId })),
 
   /**
    * Subscribe to a prompt's normalized event stream. Forks the RPC stream on the
@@ -370,6 +380,9 @@ export const rpc = {
   /** Ask the harness to stop one task; resolves with its new (usually `stopping`) state. */
   backgroundTasksStop: (sessionId: string, taskId: string): Promise<BackgroundTask | null> =>
     run((c) => c.BackgroundTasks.stop({ sessionId, taskId })),
+  /** Drop a settled task's row (the escape hatch for a failed one). Idempotent. */
+  backgroundTasksDismiss: (sessionId: string, taskId: string): Promise<void> =>
+    run((c) => c.BackgroundTasks.dismiss({ sessionId, taskId })),
   /** A settled task's transcript ("" while it is still running). */
   backgroundTasksOutput: (sessionId: string, taskId: string): Promise<string> =>
     run((c) => c.BackgroundTasks.output({ sessionId, taskId })),

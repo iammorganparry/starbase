@@ -258,6 +258,34 @@ export const scriptedRun =
       // drive it end-to-end without a real harness. The registered stop handle
       // settles it the way a real one does: by reporting the outcome back through
       // the same signals, rather than mutating state behind the registry's back.
+      // A `[[background-agent]]` marker drives the ONE case that used to show the
+      // same work twice: a sub-agent that opens a tab at tool_use time and is only
+      // then revealed to be backgrounded. The tab must be retracted and the dock
+      // row must be the only trace of it.
+      if (spec.prompt.includes("[[background-agent]]")) {
+        const taskId = `bgagent_${sessionId}`
+        const toolUseId = `toolu_${sessionId}`
+        yield* emit({
+          _tag: "SubagentStarted",
+          id: toolUseId,
+          name: "Explore",
+          description: "Survey the codebase",
+          parentId: null
+        })
+        yield* emit({
+          _tag: "BackgroundTaskStarted",
+          id: taskId,
+          description: "Surveying the codebase",
+          taskType: "subagent",
+          subagentType: "Explore",
+          toolUseId
+        })
+        yield* emit({ _tag: "BackgroundTasksChanged", ids: [taskId] })
+        yield* emit({ _tag: "Assistant", text: "Delegated the survey to a background agent." })
+        yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+        return
+      }
+
       if (spec.prompt.includes("[[background]]")) {
         const taskId = `bgtask_${sessionId}`
         yield* registerBackgroundStop(async (id) => {

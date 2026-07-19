@@ -1,5 +1,7 @@
-import type { PrReviewer, PrReviewKind, PullRequest } from "@starbase/core"
+import { useState } from "react"
+import type { PrMergeMethod, PrReviewer, PrReviewKind, PullRequest } from "@starbase/core"
 import type { BadgeProps } from "../components/badge.js"
+import { cn } from "../lib/cn.js"
 import { Avatar, githubAvatarUrl } from "../components/avatar.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
@@ -16,6 +18,40 @@ const reviewerBadge: Record<PrReviewKind, { tone: BadgeProps["tone"]; label: str
   commented: { tone: "blue", label: "commented" },
   pending: { tone: "count", label: "pending" }
 }
+
+/**
+ * The three merge strategies, with the button label each one arms.
+ *
+ * The label changes with the choice rather than staying "Merge pull request":
+ * these are not interchangeable — squash rewrites the branch into one commit and
+ * rebase discards the merge commit — so the button has to say which is about to
+ * happen. GitHub does the same, for the same reason.
+ */
+const MERGE_METHODS: ReadonlyArray<{
+  method: PrMergeMethod
+  label: string
+  action: string
+  hint: string
+}> = [
+  {
+    method: "merge",
+    label: "Merge",
+    action: "Merge pull request",
+    hint: "Keep all commits and add a merge commit"
+  },
+  {
+    method: "squash",
+    label: "Squash",
+    action: "Squash and merge",
+    hint: "Combine every commit into one on the base branch"
+  },
+  {
+    method: "rebase",
+    label: "Rebase",
+    action: "Rebase and merge",
+    hint: "Replay each commit onto the base, with no merge commit"
+  }
+]
 
 function ReviewerRow({ reviewer }: { reviewer: PrReviewer }) {
   const meta = reviewerBadge[reviewer.state]
@@ -42,12 +78,17 @@ function ReviewerRow({ reviewer }: { reviewer: PrReviewer }) {
 export interface PrSidePanelProps {
   pr: PullRequest
   connected: boolean
-  onMerge?: () => void
+  /** Merge with the chosen strategy — the picker below decides which. */
+  onMerge?: (method: PrMergeMethod) => void
   merging?: boolean
   mergeError?: string | null
   onMarkReady?: () => void
   markingReady?: boolean
   markReadyError?: string | null
+  /** Merge the base into the head — offered only while the branch is behind. */
+  onUpdateBranch?: () => void
+  updatingBranch?: boolean
+  updateBranchError?: string | null
   /**
    * The adversarial review panel's state + actions. Omitted in contexts that
    * don't offer a review (e.g. a story showing the bare PR rail). `canRun` is
@@ -66,10 +107,18 @@ export function PrSidePanel({
   onMarkReady,
   markingReady = false,
   markReadyError,
+  onUpdateBranch,
+  updatingBranch = false,
+  updateBranchError,
   review
 }: PrSidePanelProps) {
+  // Merge-commit default, matching `gh pr merge` and the previous hardcoded
+  // behaviour — a picker that silently changed what the button did would be a
+  // worse regression than not having one.
+  const [method, setMethod] = useState<PrMergeMethod>("merge")
   const failing = pr.checks.filter((c) => c.status === "fail").length
   const blocked = pr.mergeBlockers.length > 0
+  const behind = pr.mergeStateStatus === "BEHIND"
   const merged = pr.state === "merged"
   const closed = pr.state === "closed"
   const draft = pr.state === "draft"
@@ -158,7 +207,32 @@ export function PrSidePanel({
                 </span>
               ))}
             </div>
-            <div className="px-[13px] pb-[13px]">
+            <div className="flex flex-col gap-2 px-[13px] pb-[13px]">
+              {/*
+                "Out of date" is the ONE blocker the operator can clear from here
+                — conflicts need the code, branch protection needs a reviewer,
+                failing checks need a fix. `mergeStateStatus` was fetched all
+                along and only ever collapsed into a blocker STRING, so the box
+                stated the problem and offered nothing. This updates the remote
+                head only; the worktree is left alone, since the agent may be
+                mid-turn with uncommitted work.
+              */}
+              {behind && onUpdateBranch && (
+                <Button
+                  variant="secondary"
+                  className="w-full justify-center gap-2"
+                  disabled={!connected || updatingBranch}
+                  onClick={onUpdateBranch}
+                >
+                  {updatingBranch && <Spinner size={13} />}
+                  {updatingBranch ? "Updating…" : "Update branch"}
+                </Button>
+              )}
+              {updateBranchError && (
+                <Callout tone="red" className="items-start">
+                  {updateBranchError}
+                </Callout>
+              )}
               <Button variant="secondary" className="w-full justify-center" disabled>
                 Merge pull request
               </Button>
@@ -167,13 +241,46 @@ export function PrSidePanel({
         ) : (
           <div className="flex flex-col gap-3">
             <Callout tone="green">This branch has no conflicts and can be merged.</Callout>
+            {/*
+              The strategy picker. `PrMergeMethod` and `gh pr merge --<method>`
+              supported all three from the start; only the UI didn't, so every
+              merge from here was a merge commit. Squash is most teams' default,
+              which made this the likeliest reason to give up and open the
+              browser. Segmented rather than a dropdown: three options, and which
+              one is armed must be readable without opening anything.
+            */}
+            <div
+              role="radiogroup"
+              aria-label="Merge method"
+              className="flex overflow-hidden rounded-md border border-line"
+            >
+              {MERGE_METHODS.map((m) => (
+                <button
+                  key={m.method}
+                  type="button"
+                  role="radio"
+                  aria-checked={method === m.method}
+                  title={m.hint}
+                  disabled={merging}
+                  onClick={() => setMethod(m.method)}
+                  className={cn(
+                    "flex-1 px-2 py-[5px] text-[11.5px] transition-colors disabled:pointer-events-none",
+                    method === m.method
+                      ? "bg-surface text-text-bright"
+                      : "text-dim hover:bg-surface/50 hover:text-text"
+                  )}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
             <Button
               className="w-full justify-center gap-2"
               disabled={!connected || merging || !onMerge}
-              onClick={onMerge}
+              onClick={() => onMerge?.(method)}
             >
               {merging && <Spinner size={13} />}
-              {merging ? "Merging…" : "Merge pull request"}
+              {merging ? "Merging…" : MERGE_METHODS.find((m) => m.method === method)!.action}
             </Button>
             {mergeError && (
               <Callout tone="red" className="items-start">

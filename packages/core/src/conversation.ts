@@ -1020,6 +1020,33 @@ const descendantIds = (
 }
 
 /**
+ * Drop `id` and everything beneath it from the live sub-agent list.
+ *
+ * A `Task` opens its tab at tool_use time, because that is the only moment we
+ * learn about it — and a SYNCHRONOUS sub-agent would otherwise render nothing
+ * for the whole of its run. Whether the harness BACKGROUNDED that task is only
+ * revealed later, by `background_tasks_changed`. So the tab is opened
+ * optimistically and retracted here once the level signal says the work is
+ * session-scoped: a backgrounded task belongs to the dock, which outlives the
+ * turn, and must not also occupy a per-run tab that the next prompt would wipe.
+ *
+ * Descendants go too — a retracted agent's children are unreachable once their
+ * parent's tab is gone, and their content events are dropped by
+ * `applySubagentEvent`'s unknown-id guard rather than accruing invisibly.
+ *
+ * An unknown id is a no-op that returns the SAME array reference, so callers can
+ * route unconditionally without forcing a re-render.
+ */
+export const retractSubagent = (
+  subagents: ReadonlyArray<Subagent>,
+  id: string
+): ReadonlyArray<Subagent> => {
+  if (!subagents.some((s) => s.id === id)) return subagents
+  const gone = descendantIds(subagents, id)
+  return subagents.filter((s) => s.id !== id && !gone.has(s.id))
+}
+
+/**
  * Fold one sub-agent-scoped `StreamEvent` into the live sub-agent list, returning
  * a new list. `SubagentStarted` opens a fresh watch-only tab (at any depth — it
  * carries the `parentId` linking it to its spawner); `SubagentEnded` settles it

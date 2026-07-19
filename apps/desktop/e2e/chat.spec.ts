@@ -360,6 +360,42 @@ test("Plan mode: propose a plan, review a step, and approve to start execution",
   await expect(window.getByText("Changes in this step")).toBeVisible()
 })
 
+test("the plan can be split beside the conversation instead of replacing it", async ({
+  launchApp
+}) => {
+  // This replaced a narrow step-progress rail, which could only ever be a lossy
+  // restatement of Plan Review in a column too small to act on. The split shows
+  // the REAL thing — and, crucially, without unmounting the conversation, since
+  // that would abort a live run.
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+
+  const composer = window.getByPlaceholder("Message Claude…")
+  await composer.fill("[[plan]] refactor auth to a TokenStore")
+  await composer.press("Enter")
+  await expect(window.getByRole("button", { name: /Approve plan & start/ }).first()).toBeVisible({
+    timeout: 15_000
+  })
+
+  // The composer's placeholder tracks the run state (it reads "Queue a message…"
+  // while the agent is parked awaiting approval), so match either wording — the
+  // point here is that the composer EXISTS, not what it currently says.
+  const anyComposer = window.getByPlaceholder(/message claude|queue a message/i)
+
+  // Split on: the transcript's composer is STILL mounted (no tab swap) and the
+  // plan's step list is on screen at the same time.
+  const split = window.getByRole("button", { name: /split plan beside conversation/i })
+  await split.click()
+  await expect(anyComposer).toBeVisible()
+  await expect(window.getByRole("button", { name: /04 Handle token refresh/ })).toBeVisible()
+  await expect(window.getByRole("separator", { name: /resize plan/i })).toBeVisible()
+
+  // Split off: the plan column goes, the conversation stays put.
+  await split.click()
+  await expect(anyComposer).toBeVisible()
+  await expect(window.getByRole("separator", { name: /resize plan/i })).toHaveCount(0)
+})
+
 test("a worktree session without a PR shows a Changes tab with the Code Review view", async ({
   launchApp
 }) => {
@@ -403,6 +439,148 @@ test("a linked PR shows the sidebar badge and the Pull Request / Code Review tab
   // The Code Review tab is reachable (its view mounts in place of the stub).
   await reviewTab.click()
   await expect(window.getByText("Next milestone")).toHaveCount(0)
+})
+
+test("the Pull Request tab leads with the description, in the conversation's column", async ({
+  launchApp
+}) => {
+  // `pr.body` was fetched and carried in the schema from the start but never
+  // drawn, so this tab opened straight onto the review timeline — the case FOR
+  // the change missing from the page reviewing it.
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    gh: {
+      login: "e2e-user",
+      prs: [
+        {
+          number: 482,
+          title: "Refactor auth flow",
+          headRefName: "starbase/refactor",
+          baseRefName: "main",
+          author: { login: "e2e-user" },
+          additions: 313,
+          deletions: 23,
+          body: "## Why\n\nSession tokens were compared with `===`, which short-circuits.",
+          labels: [{ name: "security" }]
+        }
+      ]
+    }
+  })
+  await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
+  await window.getByText("Pull Request").first().click()
+
+  // The description renders as the opening comment — markdown and all.
+  await expect(window.getByRole("heading", { name: "Why" })).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByText(/short-circuits/)).toBeVisible()
+  await expect(window.getByText("opened this")).toBeVisible()
+  await expect(window.getByText("security")).toBeVisible()
+
+  // Continuity with the Conversation view: the same 760px reading column. Asserted
+  // as a real measured width so a stray class change can't silently widen it.
+  const column = window.locator(".max-w-\\[760px\\]").first()
+  await expect(column).toBeVisible()
+  const box = await column.boundingBox()
+  expect(box?.width).toBeLessThanOrEqual(760)
+})
+
+test("the merge box offers a strategy, and merges with the one chosen", async ({ launchApp }) => {
+  // `PrMergeMethod` and `gh pr merge --<method>` supported all three from the
+  // start; only the UI didn't, so every merge from here was a merge commit —
+  // squash being most teams' default made this the likeliest reason to give up
+  // and open the browser.
+  const { window, ghCalls } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    gh: {
+      login: "e2e-user",
+      prs: [
+        {
+          number: 482,
+          title: "Refactor auth flow",
+          headRefName: "starbase/refactor",
+          baseRefName: "main",
+          author: { login: "e2e-user" }
+        }
+      ]
+    }
+  })
+  await window.getByText("Pull Request").first().click()
+
+  // Default is a merge commit — the picker must not silently change what the
+  // button already did.
+  const mergeButton = window.getByRole("button", { name: "Merge pull request" })
+  await expect(mergeButton).toBeVisible({ timeout: 20_000 })
+
+  // Choosing squash re-labels the action, so the button says what will happen.
+  await window.getByRole("radio", { name: "Squash" }).click()
+  await expect(window.getByRole("button", { name: "Squash and merge" })).toBeVisible()
+
+  await window.getByRole("button", { name: "Squash and merge" }).click()
+  await expect.poll(() => ghCalls().join("\n"), { timeout: 15_000 }).toContain("--squash")
+})
+
+test("an out-of-date branch offers Update branch, not just a blocker", async ({ launchApp }) => {
+  // `mergeStateStatus` was fetched all along and only ever collapsed into a
+  // blocker STRING, so the box stated the problem and offered nothing. Being
+  // behind is the one blocker the operator can clear from here.
+  const { window, ghCalls } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    gh: {
+      login: "e2e-user",
+      prs: [
+        {
+          number: 482,
+          title: "Refactor auth flow",
+          headRefName: "starbase/refactor",
+          baseRefName: "main",
+          author: { login: "e2e-user" },
+          mergeStateStatus: "BEHIND"
+        }
+      ]
+    }
+  })
+  await window.getByText("Pull Request").first().click()
+
+  await expect(window.getByText("Branch is out of date with the base")).toBeVisible({
+    timeout: 20_000
+  })
+  await window.getByRole("button", { name: "Update branch" }).click()
+  await expect.poll(() => ghCalls().join("\n"), { timeout: 15_000 }).toContain("update-branch")
+})
+
+test("a passing check still links to its run", async ({ launchApp }) => {
+  // The details link used to be failures-only, so a green check was a dead end —
+  // no way to see why it took nine minutes or what it actually covered.
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededPrSessions,
+    gh: {
+      login: "e2e-user",
+      prs: [
+        {
+          number: 482,
+          title: "Refactor auth flow",
+          headRefName: "starbase/refactor",
+          baseRefName: "main",
+          author: { login: "e2e-user" },
+          checks: [{ name: "build", detailsUrl: "https://ci.example/build/1" }]
+        }
+      ]
+    }
+  })
+  await window.getByText("Pull Request").first().click()
+
+  const details = window.getByRole("link", { name: "Details for build" })
+  await expect(details).toBeVisible({ timeout: 20_000 })
+  await expect(details).toHaveAttribute("href", "https://ci.example/build/1")
+  // The duration is still reported beside it — they were alternatives before.
+  await expect(window.getByText("48s")).toBeVisible()
 })
 
 test("Code Review shows the Uncommitted source and reverts a whole file", async ({ launchApp }) => {

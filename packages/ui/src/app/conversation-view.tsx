@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef } from "react"
+import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import type {
   Attachment,
   CliKind,
@@ -18,8 +18,6 @@ import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
-import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
-import { PlanProgressRail } from "../composites/plan-progress-rail.js"
 import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
@@ -28,17 +26,20 @@ import { ContextMeter } from "../composites/context-meter.js"
 import { RunStats } from "../composites/run-stats.js"
 
 /**
- * Plan statuses the progress rail is FOR — an approved plan being executed, or a
- * stale one whose run died mid-flight (its progress so far is still the truth).
- * A proposed/revising plan belongs to the inline card; a rejected one is over.
- */
-const EXECUTING: ReadonlySet<PlanStatus> = new Set<PlanStatus>(["approved", "stale"])
-
-/**
  * Shift+Tab cycles through the HITL modes, Claude-Code style. Plan mode is
  * Claude-only (the other harnesses are autonomous), so it's appended to the
  * cycle only for Claude sessions — see `cycleFor`.
  */
+/**
+ * How many queued messages show before the list collapses behind a "+N more".
+ *
+ * The queue sits between the transcript and the composer, so its height comes
+ * straight out of both. Routing an adversarial review's findings queues one turn
+ * PER FINDING — twenty of them pushed the composer off the bottom of the window
+ * entirely. Five is enough to see what's next without the list becoming the page.
+ */
+const QUEUE_PREVIEW = 5
+
 const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
 const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
   cli === "claude" ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
@@ -182,6 +183,8 @@ export function ConversationView({
   // Sticky-bottom: follow the newest content while the operator is parked at the
   // bottom, but never yank them down once they've scrolled up to read.
   const stick = useRef(true)
+  const [queueExpanded, setQueueExpanded] = useState(false)
+  const queueLimit = queueExpanded ? queued.length : QUEUE_PREVIEW
 
   // Shift+Tab cycles the HITL mode (works while typing in the composer). Plan
   // mode joins the cycle on Claude sessions only (matches the composer's gate).
@@ -239,9 +242,6 @@ export function ConversationView({
     if (!el) return
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }, [])
-
-  // Declared unconditionally (hook order) even when there's no plan to show.
-  const rail = useResizableWidth({ storageKey: "sb.plan.rail", initial: 260, min: 200, max: 400 })
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -340,8 +340,24 @@ export function ConversationView({
           ) : (
             <>
               {queued.length > 0 && (
-                <div className="mb-2 flex flex-col gap-1.5">
-                  {queued.map((item, i) => (
+                <div
+                  className={cn(
+                    "mb-2 flex flex-col gap-1.5",
+                    // Expanding must not reintroduce the bug it fixes: a 20-item
+                    // queue scrolls within its own box rather than growing the
+                    // composer off the screen again.
+                    queueExpanded && "max-h-[240px] overflow-y-auto"
+                  )}
+                >
+                  {/*
+                    Capped, because this list sits between the transcript and the
+                    composer and grows without limit — routing a review's findings
+                    queues one turn per finding, and twenty of them pushed the
+                    composer clean off the screen. `slice(0, n)` keeps each item's
+                    index intact, which matters: `onSendNow`/`onUnqueue` address
+                    the queue positionally.
+                  */}
+                  {queued.slice(0, queueLimit).map((item, i) => (
                     <div
                       key={`${i}-${item.text.slice(0, 24)}`}
                       className="flex items-center gap-2 rounded-lg border border-line bg-sunken/60 px-3 py-1.5 text-[12.5px] text-muted-foreground"
@@ -381,6 +397,17 @@ export function ConversationView({
                       )}
                     </div>
                   ))}
+                  {queued.length > QUEUE_PREVIEW && (
+                    <button
+                      type="button"
+                      onClick={() => setQueueExpanded((v) => !v)}
+                      className="self-start rounded px-1.5 py-0.5 text-[11.5px] text-dim outline-none transition-colors hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {queueExpanded
+                        ? "Show fewer"
+                        : `+${queued.length - QUEUE_PREVIEW} more queued`}
+                    </button>
+                  )}
                 </div>
               )}
               <Composer
@@ -412,24 +439,11 @@ export function ConversationView({
       </div>
 
       {/*
-        The plan's step progress, beside the transcript. Only mounts for a plan
-        that's actually BEING EXECUTED — a plain conversation is untouched, a
-        rejected plan doesn't leave a dead 0/N meter, and while a plan is still
-        proposed the inline card already carries this (the rail would just repeat
-        it). Kept outside the scrolling column so the virtualizer measures against
-        a stable width.
+        The step-progress rail used to live here. It was a lossy summary of Plan
+        Review shown in a column too narrow to act on, so it has been replaced by
+        the split view (see `session-conversation`), which puts the REAL plan
+        beside the transcript instead of a second, worse copy of it.
       */}
-      {plan && EXECUTING.has(plan.status) && plan.steps.length > 0 && (
-        <>
-          <ResizeHandle aria-label="Resize plan steps" onResize={(dx) => rail.adjust(-dx)} />
-          <div
-            style={{ width: rail.width }}
-            className="flex min-h-0 flex-none flex-col overflow-hidden border-l border-hairline"
-          >
-            <PlanProgressRail plan={plan} onSelect={(stepId) => onOpenPlanReview?.(stepId)} />
-          </div>
-        </>
-      )}
     </div>
   )
 }

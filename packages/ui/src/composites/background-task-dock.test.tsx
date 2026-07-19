@@ -32,6 +32,14 @@ const task = (over: Partial<BackgroundTask> & { id: string }): BackgroundTask =>
   ...over
 })
 
+/**
+ * The dock mounts COLLAPSED (it would otherwise sit over the composer), so any
+ * assertion about rows has to open it first. Tests that assert on the header —
+ * counts, the empty/unsupported cases — deliberately don't call this.
+ */
+const expand = () =>
+  fireEvent.click(screen.getByRole("button", { name: /expand background tasks/i }))
+
 const rowOrder = () =>
   Array.from(document.querySelectorAll("[data-testid^='bg-task-']")).map((el) =>
     el.getAttribute("data-testid")!.replace("bg-task-", "")
@@ -44,6 +52,7 @@ describe("BackgroundTaskDock", () => {
         tasks={[task({ id: "t1", description: "run the suite", durationMs: 92_000, toolUses: 7, tokens: 4200, lastTool: "Bash" })]}
       />
     )
+    expand()
     expect(screen.getByText("run the suite")).toBeDefined()
     expect(screen.getByText("Running")).toBeDefined()
     expect(screen.getByText("1m 32s")).toBeDefined()
@@ -75,6 +84,7 @@ describe("BackgroundTaskDock", () => {
         ]}
       />
     )
+    expand()
     expect(rowOrder()).toStrictEqual(["live", "done"])
   })
 
@@ -87,12 +97,14 @@ describe("BackgroundTaskDock", () => {
         ]}
       />
     )
+    expand()
     expect(rowOrder()).toStrictEqual(["newer", "older"])
   })
 
   it("stops a running task by its id", () => {
     const onStop = vi.fn()
     render(<BackgroundTaskDock tasks={[task({ id: "t1", description: "long build" })]} onStop={onStop} />)
+    expand()
     fireEvent.click(screen.getByRole("button", { name: /stop long build/i }))
     expect(onStop).toHaveBeenCalledWith("t1")
   })
@@ -102,6 +114,7 @@ describe("BackgroundTaskDock", () => {
     // asynchronously, so without this the row looks untouched after the click and
     // invites a second one.
     render(<BackgroundTaskDock tasks={[task({ id: "t1", status: "stopping" })]} onStop={vi.fn()} />)
+    expand()
     const button = screen.getByRole("button", { name: /stop task t1/i })
     expect(button.textContent).toContain("Stopping")
     expect((button as HTMLButtonElement).disabled).toBe(true)
@@ -109,6 +122,7 @@ describe("BackgroundTaskDock", () => {
 
   it("offers no Stop for a task that has already finished", () => {
     render(<BackgroundTaskDock tasks={[task({ id: "t1", status: "completed" })]} onStop={vi.fn()} />)
+    expand()
     expect(screen.queryByRole("button", { name: /stop/i })).toBeNull()
   })
 
@@ -124,6 +138,7 @@ describe("BackgroundTaskDock", () => {
         onView={onView}
       />
     )
+    expand()
     // A running task has no output_file yet — the harness only reports one on settle.
     expect(screen.getAllByRole("button", { name: /view output/i })).toHaveLength(1)
     fireEvent.click(screen.getByRole("button", { name: /view output/i }))
@@ -136,6 +151,7 @@ describe("BackgroundTaskDock", () => {
         tasks={[task({ id: "t1", status: "completed", summary: "found 3 flaky tests", toolUses: 9 })]}
       />
     )
+    expand()
     expect(screen.getByText("found 3 flaky tests")).toBeDefined()
     expect(screen.queryByText("9 tools")).toBeNull()
   })
@@ -154,11 +170,36 @@ describe("BackgroundTaskDock", () => {
     expect(screen.getByText("3")).toBeDefined()
   })
 
-  it("collapses and expands without losing the rows", () => {
+  it("mounts collapsed, even with live work", () => {
+    // The dock sits directly above the composer, so an expanded default crowds
+    // the thing the operator is actually typing into. The header badges carry the
+    // signal instead; opening it is their move.
     render(<BackgroundTaskDock tasks={[task({ id: "t1" })]} />)
+    expect(rowOrder()).toStrictEqual([])
+    expect(screen.getByText("1 running")).toBeDefined()
+  })
+
+  it("expands and collapses without losing the rows", () => {
+    render(<BackgroundTaskDock tasks={[task({ id: "t1" })]} />)
+    expand()
+    expect(rowOrder()).toStrictEqual(["t1"])
     fireEvent.click(screen.getByRole("button", { name: /collapse background tasks/i }))
     expect(rowOrder()).toStrictEqual([])
-    fireEvent.click(screen.getByRole("button", { name: /expand background tasks/i }))
-    expect(rowOrder()).toStrictEqual(["t1"])
+  })
+
+  it("offers dismiss for a failed task only", () => {
+    // Everything else ages out of the registry on its own; a failure is held so
+    // it can't go unseen, which makes this the only way to clear one.
+    const onDismiss = vi.fn()
+    render(
+      <BackgroundTaskDock
+        tasks={[task({ id: "bad", status: "failed" }), task({ id: "ok", status: "completed" })]}
+        onDismiss={onDismiss}
+      />
+    )
+    expand()
+    expect(screen.getAllByRole("button", { name: /dismiss/i })).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }))
+    expect(onDismiss).toHaveBeenCalledWith("bad")
   })
 })

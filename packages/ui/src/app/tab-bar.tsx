@@ -6,6 +6,7 @@ import {
   Globe,
   type LucideIcon,
   MessagesSquare,
+  PanelRight,
   Waypoints,
   Workflow
 } from "lucide-react"
@@ -50,7 +51,9 @@ export function TabBar({
   changes = null,
   status,
   onToggleBrowser,
-  browserActive = false
+  browserActive = false,
+  onToggleSplit,
+  splitActive = false
 }: {
   tabs: ReadonlyArray<TabKey>
   active: TabKey
@@ -64,6 +67,15 @@ export function TabBar({
   onToggleBrowser?: () => void
   /** Whether the browser preview pane is currently open (highlights the toggle). */
   browserActive?: boolean
+  /**
+   * Open Plan Review beside the transcript. Omitted — and so hidden — unless the
+   * split is actually available: the session has a plan AND the conversation tab
+   * is the one on screen. A control that does nothing where it sits is worse than
+   * no control at all.
+   */
+  onToggleSplit?: () => void
+  /** Whether the plan is currently split beside the conversation. */
+  splitActive?: boolean
 }) {
   return (
     <div
@@ -116,6 +128,21 @@ export function TabBar({
           <Pill tone={status.tone} pulse>
             {status.label}
           </Pill>
+        )}
+        {onToggleSplit && (
+          <button
+            type="button"
+            onClick={onToggleSplit}
+            aria-label="Split plan beside conversation"
+            aria-pressed={splitActive}
+            title="Split plan beside conversation"
+            className={cn(
+              "flex size-6 items-center justify-center rounded transition-colors hover:bg-hairline",
+              splitActive ? "text-blue" : "text-dim hover:text-text-bright"
+            )}
+          >
+            <PanelRight className="size-4" />
+          </button>
         )}
         {onToggleBrowser && (
           <button

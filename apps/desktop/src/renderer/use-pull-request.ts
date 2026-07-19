@@ -8,7 +8,7 @@
  */
 import { useCallback, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { PullRequest, ReviewSubmitKind, Session } from "@starbase/core"
+import type { PrMergeMethod, PullRequest, ReviewSubmitKind, Session } from "@starbase/core"
 import { rpc } from "./rpc-client.js"
 import { getConversationActor } from "./conversation-registry.js"
 import { markRouted, useRoutedEntries } from "./routed-store.js"
@@ -38,8 +38,8 @@ export interface PullRequestState {
   /** The message from a failed `gh pr create`, or null. */
   readonly createError: string | null
   readonly createPr: () => Promise<void>
-  /** Merge the linked PR (merge commit). */
-  readonly mergePr: () => Promise<void>
+  /** Merge the PR. Defaults to a merge commit; the side panel offers the choice. */
+  readonly mergePr: (method?: PrMergeMethod) => Promise<void>
   /** A merge is in flight. */
   readonly merging: boolean
   /** The message from a failed `gh pr merge`, or null. */
@@ -50,6 +50,12 @@ export interface PullRequestState {
   readonly markingReady: boolean
   /** The message from a failed `gh pr ready`, or null. */
   readonly markReadyError: string | null
+  /** Merge the base into the PR's head (clears a `BEHIND` merge state). */
+  readonly updateBranch: () => Promise<void>
+  /** A branch update is in flight. */
+  readonly updatingBranch: boolean
+  /** The message from a failed `gh pr update-branch`, or null. */
+  readonly updateBranchError: string | null
   readonly submitReview: (input: { body: string; kind: ReviewSubmitKind; routeToAgent: boolean }) => Promise<void>
   readonly sendEntryToAgent: (entryId: string) => Promise<void>
   /** Timeline entry ids already routed to the agent (their action stays "Sent"). */
@@ -112,7 +118,7 @@ export function usePullRequest(
   // PR read is invalidated so the header flips to "Merged" (and the archive
   // sweep, which polls the PR state, retires the session).
   const mergeMutation = useMutation({
-    mutationFn: () => rpc.githubMerge(session.id),
+    mutationFn: (method: PrMergeMethod) => rpc.githubMerge(session.id, method),
     onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
   })
   // "Ready for review" flips a draft PR via `gh pr ready`. On success the PR
@@ -125,8 +131,18 @@ export function usePullRequest(
     () => markReadyMutation.mutateAsync().then(() => undefined),
     [markReadyMutation]
   )
+  // "Update branch" merges the base into the PR head on GitHub, clearing a
+  // `BEHIND` merge state. The re-read is what drops the blocker from the box.
+  const updateBranchMutation = useMutation({
+    mutationFn: () => rpc.githubUpdateBranch(session.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: prKey(session.id) })
+  })
+  const updateBranch = useCallback(
+    () => updateBranchMutation.mutateAsync().then(() => undefined),
+    [updateBranchMutation]
+  )
   const mergePr = useCallback(
-    () => mergeMutation.mutateAsync().then(() => undefined),
+    (method: PrMergeMethod = "merge") => mergeMutation.mutateAsync(method).then(() => undefined),
     [mergeMutation]
   )
 
@@ -211,6 +227,11 @@ export function usePullRequest(
     markingReady: markReadyMutation.isPending,
     markReadyError: markReadyMutation.error
       ? ((markReadyMutation.error as { message?: string }).message ?? "Failed to mark pull request ready")
+      : null,
+    updateBranch,
+    updatingBranch: updateBranchMutation.isPending,
+    updateBranchError: updateBranchMutation.error
+      ? ((updateBranchMutation.error as { message?: string }).message ?? "Failed to update the branch")
       : null,
     submitReview,
     sendEntryToAgent,

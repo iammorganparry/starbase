@@ -551,6 +551,22 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Attribute any outstanding findings to the commits that fixed them, and
+   * return the updated review — or **null when nothing changed**.
+   *
+   * Null-on-no-change is the contract, not an accident: the renderer calls this
+   * every time a turn settles, and the overwhelmingly common answer is "no new
+   * commits touched a finding's file". Returning the unchanged review would have
+   * the renderer publish an identical object into the query cache on every turn,
+   * re-rendering the review pane for nothing. Null also covers "no stored review"
+   * and "no worktree", which need the same treatment: leave the cache alone.
+   */
+  Rpc.make("Review.reconcile", {
+    success: Schema.NullOr(AdversarialReview),
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
    * The pull request linked to a session (its `prNumber`), assembled from `gh pr
    * view`. Null when the session has no worktree or no linked PR. Embeds CI
    * checks, reviewers, and the review timeline for the Pull Request tab.
@@ -711,6 +727,17 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String }
   }),
 
+  /**
+   * Merge the base branch into the PR's head — GitHub's "Update branch", the fix
+   * for a `BEHIND` merge state. Updates the REMOTE head only; the session's
+   * worktree is deliberately left alone, since the agent may be mid-turn.
+   * Surfaces `GhError` when there is no linked PR or GitHub rejects it.
+   */
+  Rpc.make("Github.updateBranch", {
+    error: GhError,
+    payload: { sessionId: Schema.String }
+  }),
+
   // ── Terminal ───────────────────────────────────────────────────────────────
   // A native PTY-backed terminal, scoped to a session (cwd = its worktree). The
   // PTY lives in the main process; only coalesced byte frames cross IPC. Lifecycle
@@ -787,6 +814,17 @@ export class StarbaseRpcs extends RpcGroup.make(
    */
   Rpc.make("BackgroundTasks.stop", {
     success: Schema.NullOr(BackgroundTask),
+    payload: { sessionId: Schema.String, taskId: Schema.String }
+  }),
+
+  /**
+   * Drop a settled task's row. Settled tasks normally age out on their own after
+   * a short grace period; a FAILED one is held indefinitely so an error can't
+   * scroll past unseen, and this is how the operator clears it. Idempotent — an
+   * unknown id (already aged out, already dismissed) succeeds silently.
+   */
+  Rpc.make("BackgroundTasks.dismiss", {
+    success: Schema.Void,
     payload: { sessionId: Schema.String, taskId: Schema.String }
   }),
 

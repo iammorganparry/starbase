@@ -754,6 +754,24 @@ export type ReviewComment = Schema.Schema.Type<typeof ReviewComment>
 export const ReviewSeverity = Schema.Literal("critical", "major", "minor", "nit")
 export type ReviewSeverity = Schema.Schema.Type<typeof ReviewSeverity>
 
+/**
+ * The commit credited with resolving a finding.
+ *
+ * The subject is stored alongside the SHA rather than looked up on read: the
+ * commit may be gone by the time anyone reads this (a rebase, a squashed merge,
+ * a discarded worktree), and a resolution that renders as a bare hash nobody can
+ * resolve is worse than no attribution at all.
+ */
+export const ReviewResolution = Schema.Struct({
+  /** Full 40-char commit SHA — abbreviated at the point of display, not here. */
+  sha: Schema.String,
+  /** The commit's subject line, so the card can name what fixed it. */
+  subject: Schema.String,
+  /** ISO-8601 stamp of when the resolution was ATTRIBUTED, not of the commit. */
+  at: Schema.String
+})
+export type ReviewResolution = Schema.Schema.Type<typeof ReviewResolution>
+
 /** One defect the adversarial reviewer argues for, anchored to file+line where it can be. */
 export const ReviewFinding = Schema.Struct({
   /** Stable id within a review — the key for "already routed to the agent". */
@@ -770,7 +788,23 @@ export const ReviewFinding = Schema.Struct({
   /** Why it's wrong — the concrete failure, not a style opinion. */
   rationale: Schema.String,
   /** A concrete fix, or null when the reviewer only raises the problem. */
-  suggestion: Schema.NullOr(Schema.String)
+  suggestion: Schema.NullOr(Schema.String),
+  /**
+   * The commit that addressed this finding, or null while it is outstanding.
+   *
+   * Attributed rather than declared: nothing asks the agent to report which
+   * finding a commit fixed, so this is inferred — the first commit landed AFTER
+   * the reviewed head that touches the finding's own file claims it (see
+   * `resolveFindings`). That is a heuristic, and deliberately a conservative one:
+   * it can only ever fire for a file the reviewer actually anchored a finding to,
+   * and it attributes to the FIRST such commit so the record doesn't drift to the
+   * most recent unrelated edit of the same file.
+   *
+   * `optionalWith` (default null) so reviews persisted before this field decode
+   * cleanly rather than folding to null in `ReviewStore.readFile` — which would
+   * throw away a real review and silently re-run the priciest model.
+   */
+  resolvedBy: Schema.optionalWith(Schema.NullOr(ReviewResolution), { default: () => null })
 })
 export type ReviewFinding = Schema.Schema.Type<typeof ReviewFinding>
 

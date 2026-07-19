@@ -42,7 +42,8 @@ const review = (over: Partial<AdversarialReview> = {}): AdversarialReview => ({
       severity: "critical",
       title: "Token compared with ==",
       rationale: "Timing-unsafe comparison leaks the token byte by byte.",
-      suggestion: "Use timingSafeEqual."
+      suggestion: "Use timingSafeEqual.",
+        resolvedBy: null
     }
   ],
   note: null,

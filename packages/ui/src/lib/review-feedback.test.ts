@@ -24,7 +24,8 @@ const finding = (path: string | null): ReviewFinding => ({
   severity: "nit",
   title: "t",
   rationale: "r",
-  suggestion: null
+  suggestion: null,
+  resolvedBy: null
 })
 
 const thread = (path: string, isResolved = false): PrReviewThread => ({
@@ -83,6 +84,22 @@ describe("feedbackCounts", () => {
     const { byPath, any } = feedbackCounts({
       ...empty,
       threads: [thread("src/a.ts", true)]
+    })
+    expect(byPath.size).toBe(0)
+    expect(any).toBe(false)
+  })
+
+  it("ignores a finding already credited to a commit", () => {
+    // Settled, exactly like a resolved thread. Leaving it counted keeps the file
+    // flagged for work that is done, and the filter would never empty out.
+    const { byPath, any } = feedbackCounts({
+      ...empty,
+      findings: [
+        {
+          ...finding("src/a.ts"),
+          resolvedBy: { sha: "aaa", subject: "fix it", at: "2026-07-19T00:00:00.000Z" }
+        }
+      ]
     })
     expect(byPath.size).toBe(0)
     expect(any).toBe(false)
