@@ -1,12 +1,11 @@
 import { Either, Schema } from "effect"
 import { describe, expect, it } from "vitest"
+import { ContextConfig, DEFAULT_CONTEXT_CONFIG } from "./domain.js"
 import { FALLBACK_MODELS, defaultModel } from "./models.js"
 import {
   BUDGET_RANGE,
-  ContextConfig,
   ContextSnapshot,
   DEFAULT_BUDGET_TOKENS,
-  DEFAULT_CONTEXT_CONFIG,
   DEFAULT_DIGEST_MODEL,
   clampBudget,
   contextPhase,
@@ -178,6 +177,7 @@ describe("wire types", () => {
       budget: 300_000,
       triggerAt: 300_000,
       phase: "prepare",
+      digestReady: false,
       lastCompactedAt: null,
       compactions: 0
     }

@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ContextConfig } from "./context.js"
+import { BUDGET_RANGE, DEFAULT_BUDGET_TOKENS } from "./context.js"
 
 /**
  * Domain schemas for Starbase. These are Effect `Schema`s so they can be reused
@@ -340,6 +340,27 @@ export const ProvidersConfig = Schema.partial(
   Schema.Record({ key: CliKind, value: ProviderConfig })
 )
 export type ProvidersConfig = Schema.Schema.Type<typeof ProvidersConfig>
+
+/**
+ * The global auto-compaction levers, persisted at `WorkspaceConfig.context`.
+ *
+ * Lives here rather than beside the policy in `context.ts` because it is
+ * CONFIG — and because `context.ts` may not import this module at runtime
+ * without collapsing the schema graph (see the note on its `CliKind` import).
+ */
+export const ContextConfig = Schema.Struct({
+  /** Master switch. Off returns the app to exactly its pre-feature behaviour. */
+  auto: Schema.Boolean,
+  /** Working-set budget in tokens, constrained to the usable quality band. */
+  budgetTokens: Schema.Number.pipe(Schema.between(BUDGET_RANGE.min, BUDGET_RANGE.max))
+})
+export type ContextConfig = Schema.Schema.Type<typeof ContextConfig>
+
+/** The shipped defaults — auto ON, mid-band budget. */
+export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
+  auto: true,
+  budgetTokens: DEFAULT_BUDGET_TOKENS
+}
 
 /**
  * Persisted app configuration, stored at `~/starbase/config.json`. `reposDir` is

@@ -185,6 +185,24 @@ const observeAndPhase = (tokens: number) =>
     return snap.phase
   })
 
+/**
+ * Wait until a digest is actually BUILT and waiting.
+ *
+ * The precise signal, rather than "the adapter was entered plus a hopeful
+ * sleep": under full-suite load the daemon fiber can be descheduled between
+ * replying and parsing, which made this suite's one timing-based assertion fail
+ * roughly one run in ten. Polling the state it is actually waiting on has no
+ * such window.
+ */
+const awaitDigest = () =>
+  Effect.gen(function* () {
+    for (let i = 0; i < 600; i++) {
+      const snap = yield* ContextManager.snapshot(SESSION)
+      if (snap.digestReady) return
+      yield* Effect.sleep("20 millis")
+    }
+  })
+
 /** Drive `observe`, then wait for the digest fiber to reach the adapter. */
 const observeAndSettle = (tokens: number, rec?: Recorder, runs = 1) =>
   Effect.gen(function* () {
@@ -215,7 +233,8 @@ describe("ContextManager.observe", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* observeAndSettle(180_000, rec)
+        yield* ContextManager.observe(SESSION, 180_000)
+        yield* awaitDigest()
         return yield* ContextManager.applyIfReady(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
@@ -451,7 +470,8 @@ describe("ContextManager.applyIfReady", () => {
     const [first, second] = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* observeAndSettle(180_000, rec)
+        yield* ContextManager.observe(SESSION, 180_000)
+        yield* awaitDigest()
         const a = yield* ContextManager.applyIfReady(SESSION)
         const b = yield* ContextManager.applyIfReady(SESSION)
         return [a, b] as const
@@ -485,8 +505,7 @@ describe("ContextManager.compactNow", () => {
       Effect.gen(function* () {
         yield* seed()
         yield* ContextManager.compactNow(SESSION)
-        yield* awaitRuns(rec, 1)
-        yield* Effect.sleep("30 millis")
+        yield* awaitDigest()
         return yield* ContextManager.applyIfReady(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
@@ -608,7 +627,8 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* observeAndSettle(180_000, rec)
+        yield* ContextManager.observe(SESSION, 180_000)
+        yield* awaitDigest()
         yield* ContextManager.applyIfReady(SESSION)
         return yield* ContextManager.snapshot(SESSION)
       }),

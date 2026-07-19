@@ -10,6 +10,7 @@ import {
   AgentRunner,
   AuthService,
   ConfigService,
+  ContextManager,
   DiscoveryService,
   GhService,
   GitService,
@@ -53,12 +54,18 @@ const StoreLayers = Layer.mergeAll(
 )
 
 /**
- * The two things that drive a CLI harness. `AgentRunner` owns the session's
+ * The three things that drive a CLI harness. `AgentRunner` owns the session's
  * conversation; `ReviewService` drives the adapter itself so an adversarial
  * review can run on its own model, read-only, without touching that
- * conversation. Peers — neither depends on the other.
+ * conversation; `ContextManager` does the same to summarise a session's own
+ * transcript when its working set outgrows the quality band. Peers — none
+ * depends on the others, and all three reach the harness through `CliAdapter`.
  */
-const HarnessLayers = Layer.mergeAll(AgentRunner.Default, ReviewService.Default)
+const HarnessLayers = Layer.mergeAll(
+  AgentRunner.Default,
+  ReviewService.Default,
+  ContextManager.Default
+)
 
 // Later `Layer.provide`s satisfy the requirements of earlier ones, so the leaf
 // dependencies (paths, dialog, Node platform) come last.

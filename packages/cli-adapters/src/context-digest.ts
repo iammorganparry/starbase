@@ -98,6 +98,12 @@ const renderPart = (part: ContentPart): string | null => {
         })
         .join("\n")
     }
+    case "Context":
+      // A previous compaction, being summarised again. Carrying the earlier goal
+      // forward is what stops a twice-compacted session from drifting: the second
+      // digest sees an explicit statement of intent rather than a transcript that
+      // appears to begin mid-conversation.
+      return `- EARLIER CONTEXT COMPACTED — goal at that point: ${part.digest.goal}`
     case "Plan": {
       const steps = part.plan.steps
         .filter((s) => s.kind !== "branch-arm")

@@ -29,6 +29,7 @@ import {
   ReviewService,
   ReviewStore,
   SessionStore,
+  ContextManager,
   setOpencodeAuth,
   SkillsService,
   TerminalService,
@@ -946,8 +947,13 @@ const ServerProtocolLive = Layer.effect(
 /**
  * The running RPC server: the group's handlers served over the IPC protocol.
  * Building this layer forks the server daemon and registers the `ipcMain`
- * listener; it still requires `CommandExecutor | DiscoveryService | SessionStore`,
- * which `AppLayer` provides.
+ * listener; it still requires `CommandExecutor | DiscoveryService | SessionStore
+ * | ContextManager`, which `AppLayer` provides.
+ *
+ * `ContextManager` must be imported as a VALUE here even though this file never
+ * calls it: it appears in the inferred requirement set via the handlers, and
+ * TypeScript cannot NAME an inferred type that reaches into a workspace
+ * package's internals without a reference to it in scope.
  */
 export const RpcServerLive = RpcServer.layer(StarbaseRpcs).pipe(
   Layer.provide(HandlersLayer),

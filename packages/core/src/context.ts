@@ -1,7 +1,13 @@
 import { Schema } from "effect"
-// TYPE-only on purpose: `domain.ts` imports `ContextConfig` back from here, and a
-// value import would close that loop at module-init time — where `Schema.Struct`
-// calls run — leaving whichever module loaded second holding an undefined schema.
+// TYPE-only, and load-bearing. `domain.ts` imports the budget constants below as
+// VALUES, so a value import back would close the loop. That cycle is not merely a
+// module-init hazard: it made `StreamEvent` infer as `never`, which collapsed the
+// entire `applyStreamEvent` match into unreachable code with errors pointing at
+// tags that had nothing to do with the change.
+//
+// The rule this encodes: schemas live in the module that OWNS the concept —
+// `ContextConfig` with the rest of the config in `domain.ts`, `ContextDigest`
+// with the transcript in `conversation.ts` — and this module stays pure policy.
 import type { CliKind } from "./domain.js"
 
 /**
@@ -183,36 +189,7 @@ export const digestModelFor = (cli: CliKind, configured?: string): string =>
  * ── Wire types ─────────────────────────────────────────────────────────────
  */
 
-/**
- * The carried-forward summary of a conversation, produced by a background run
- * over our own transcript and used to seed a fresh harness conversation.
- *
- * Deliberately STRUCTURED rather than a prose blob. Structure is what lets the
- * compaction divider show the user exactly what survived, and what lets a
- * malformed model reply be rejected wholesale — a half-parsed digest that
- * silently dropped "decisions" would reseed a session with its own reasoning
- * amputated, and nothing downstream could tell.
- */
-export const ContextDigest = Schema.Struct({
-  /** What the user is ultimately trying to achieve in this session. */
-  goal: Schema.String,
-  /** Choices made and why — the part a summary most often destroys. */
-  decisions: Schema.Array(Schema.String),
-  /** Files created or modified, so the fresh conversation knows where it is. */
-  filesTouched: Schema.Array(Schema.String),
-  /** Work explicitly left unfinished. */
-  openThreads: Schema.Array(Schema.String),
-  /** Standing instructions the user gave that must keep applying. */
-  preferences: Schema.Array(Schema.String),
-  /**
-   * The last message this digest covers. Everything AFTER it is replayed
-   * verbatim at swap time, so a digest built two turns ago is still correct
-   * without being rebuilt.
-   */
-  throughMessageId: Schema.String,
-  builtAt: Schema.String
-})
-export type ContextDigest = Schema.Schema.Type<typeof ContextDigest>
+
 
 /** Per-session context accounting, as shown by the meter and Settings. */
 export const ContextSnapshot = Schema.Struct({
@@ -226,26 +203,17 @@ export const ContextSnapshot = Schema.Struct({
   /** The computed `min(budget, window × safety)` — what the meter fills toward. */
   triggerAt: Schema.NullOr(Schema.Number),
   phase: Schema.Literal("unknown", "idle", "prepare", "swap"),
+  /**
+   * A digest is built and waiting to be applied on the next turn.
+   *
+   * Distinct from `phase`: a manual "Compact now" can leave a session holding a
+   * ready digest while still comfortably inside the budget, so `phase` reads
+   * `idle` and only this says the next turn will reseed.
+   */
+  digestReady: Schema.Boolean,
   /** ISO timestamp of the last successful compaction, or null. */
   lastCompactedAt: Schema.NullOr(Schema.String),
   /** How many times this session has been compacted. */
   compactions: Schema.Number
 })
 export type ContextSnapshot = Schema.Schema.Type<typeof ContextSnapshot>
-
-/** The global auto-compaction levers, persisted in `WorkspaceConfig.context`. */
-export const ContextConfig = Schema.Struct({
-  /** Master switch. Off returns the app to exactly its pre-feature behaviour. */
-  auto: Schema.Boolean,
-  /** Working-set budget in tokens, constrained to the usable band. */
-  budgetTokens: Schema.Number.pipe(
-    Schema.between(BUDGET_RANGE.min, BUDGET_RANGE.max)
-  )
-})
-export type ContextConfig = Schema.Schema.Type<typeof ContextConfig>
-
-/** The shipped defaults — auto ON, mid-band budget. */
-export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
-  auto: true,
-  budgetTokens: DEFAULT_BUDGET_TOKENS
-}
