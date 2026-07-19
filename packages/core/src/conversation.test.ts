@@ -18,6 +18,7 @@ import {
   nextReviewPhase,
   markChangedSteps,
   applySubagentEvent,
+  retractSubagent,
   agentChildren,
   agentPath,
   assistantMessage,
@@ -771,6 +772,42 @@ describe("sub-agents", () => {
     expect(unchanged).toBe(subs)
     expect(subs.find((s) => s.id === "t1")?.message.parts).toHaveLength(0)
     expect(subs.find((s) => s.id === "t2")?.message.parts).toHaveLength(1)
+  })
+
+  it("retracts a backgrounded task's tab, and its descendants with it", () => {
+    // A tab is opened optimistically at tool_use time — that is the only moment
+    // we hear about a Task, and a synchronous one would otherwise render nothing
+    // for its whole run. When the harness later reveals it was BACKGROUNDED, the
+    // work belongs to the session dock (which outlives the turn), so the per-run
+    // tab has to go or the same work shows up twice.
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "bg", parentId: null })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1a", name: "Explore", description: "child", parentId: "t1" })
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t2", name: "Explore", description: "sync", parentId: null })
+
+    const after = retractSubagent(subs, "t1")
+    // The nested agent goes too: it is unreachable once its parent's tab is gone.
+    expect(after.map((s) => s.id)).toStrictEqual(["t2"])
+    // A synchronous sibling is untouched — only the backgrounded one moves.
+    expect(after[0]?.status).toBe("working")
+  })
+
+  it("retracting an unknown id is a no-op that does not re-render", () => {
+    // Most tasks carry no tool_use id at all (ambient/workflow), so this path is
+    // hit constantly. Returning the SAME reference keeps it free.
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "one", parentId: null })
+    expect(retractSubagent(subs, "nope")).toBe(subs)
+  })
+
+  it("drops content arriving for a retracted tab instead of resurrecting it", () => {
+    // A backgrounded agent's output keeps coming after the tab is gone. It must
+    // land nowhere rather than re-opening a tab the dock now owns.
+    let subs: ReadonlyArray<Subagent> = []
+    subs = applySubagentEvent(subs, { _tag: "SubagentStarted", id: "t1", name: "Explore", description: "bg", parentId: null })
+    const retracted = retractSubagent(subs, "t1")
+    const after = applySubagentEvent(retracted, { _tag: "Assistant", text: "late", agentId: "t1" })
+    expect(after).toStrictEqual([])
   })
 
   it("SubagentEnded keeps the tab (marks its status) so output stays readable", () => {

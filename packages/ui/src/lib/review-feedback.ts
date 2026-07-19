@@ -47,6 +47,10 @@ export const feedbackCounts = (input: {
   const byPath = new Map<string, number>()
 
   for (const finding of input.findings) {
+    // A finding credited to a commit is settled, exactly like a resolved thread
+    // below — leaving it counted keeps a file flagged for work already done, and
+    // the filter would never empty out.
+    if (finding.resolvedBy !== null) continue
     if (finding.path !== null && known.has(finding.path)) bump(byPath, finding.path)
   }
   for (const draft of input.drafts) {

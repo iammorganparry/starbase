@@ -6,7 +6,7 @@
  * gates surface in the Conversation tab instead of a hidden run that stalls
  * forever with its gates rendered nowhere.
  */
-import { useCallback, useMemo } from "react"
+import { useCallback, useEffect, useMemo } from "react"
 import { useSelector } from "@xstate/react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { AdversarialReview, ReviewFinding, ReviewPhase, Session } from "@starbase/core"
@@ -121,6 +121,35 @@ export function useAdversarialReview(
   // off. The spinner is gone by a different route: an unstamped finding now
   // reads "Send to agent" (see `outcomeOf`), which is the truth — it was not
   // sent, and here is how — and hands the choice back to the operator.
+
+  // Attribute fixed findings to the commit that fixed them.
+  //
+  // Triggered on the agent going IDLE rather than on a timer, because that is
+  // precisely when the thing being detected can have happened: commits land
+  // during a turn, so a turn settling is the only moment new ones exist. The
+  // effect also runs on mount, which covers a session reopened after the fixes
+  // were already made — the query's `staleTime: Infinity` means nothing else
+  // would ever re-read the store.
+  //
+  // Only publishes on a non-null answer. `Review.reconcile` returns null when it
+  // attributed nothing, so the steady state is one cheap `git log` per turn and
+  // no re-render at all.
+  const agentBusy = useSelector(actor, (s) => s.context.runStartedAt !== null)
+  useEffect(() => {
+    if (!hasPr || !connected || agentBusy) return
+    let cancelled = false
+    void rpc
+      .reviewReconcile(session.id)
+      .then((next) => {
+        if (!cancelled && next !== null) qc.setQueryData(reviewQueryKey(session.id), next)
+      })
+      // Best-effort: attribution is a nicety layered over a review that is already
+      // readable, so a failure must leave the pane exactly as it was.
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [agentBusy, hasPr, connected, session.id, qc])
 
   const routedKeys = useRoutedEntries(session.id)
 

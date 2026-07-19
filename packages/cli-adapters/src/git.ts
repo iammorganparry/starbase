@@ -1,4 +1,4 @@
-import type { Worktree } from "@starbase/core"
+import type { ResolvingCommit, Worktree } from "@starbase/core"
 import { GitError } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
@@ -240,12 +240,67 @@ export class GitService extends Effect.Service<GitService>()(
           }
         })
 
+      /**
+       * The commits landed at `cwd` since `sinceSha`, OLDEST FIRST, each with the
+       * files it touched. Feeds `resolveFindings`, which credits the first commit
+       * touching a finding's file with fixing it — so the order is contractual,
+       * hence the explicit `--reverse`.
+       *
+       * Folds to `[]` rather than failing on ANY git error, and the common error
+       * here is not exotic: `sinceSha` is the PR head the review ran against, and
+       * a force-push or a fresh clone can leave that object absent from this
+       * worktree. There is nothing to do about that but decline to attribute —
+       * an unresolved finding is the safe direction, a crashed review pane is not.
+       *
+       * Parsing: `%H<US>%s` marks a commit header (US = 0x1f, which cannot appear
+       * in a subject), and `--name-only` lists that commit's paths beneath it. A
+       * merge commit lists no paths under this format and simply contributes
+       * nothing, which is correct — a merge fixes nothing on its own.
+       */
+      const commitsSince = (
+        cwd: string,
+        sinceSha: string
+      ): Effect.Effect<ReadonlyArray<ResolvingCommit>, never, CommandExecutor.CommandExecutor> =>
+        runString(
+          "git",
+          "-C",
+          cwd,
+          "log",
+          `${sinceSha}..HEAD`,
+          "--reverse",
+          "--name-only",
+          "--pretty=format:%H\x1f%s"
+        ).pipe(
+          Effect.map((out) => {
+            if (out === null) return []
+            const commits: Array<{ sha: string; subject: string; files: Array<string> }> = []
+            for (const line of out.split("\n")) {
+              const sep = line.indexOf("\x1f")
+              if (sep !== -1) {
+                commits.push({
+                  sha: line.slice(0, sep),
+                  subject: line.slice(sep + 1).trim(),
+                  files: []
+                })
+                continue
+              }
+              const path = line.trim()
+              // A path before any header cannot be attributed to a commit; drop it
+              // rather than guessing (this shouldn't happen, but the parse must not
+              // reach into `commits[-1]`).
+              if (path.length > 0 && commits.length > 0) commits[commits.length - 1]!.files.push(path)
+            }
+            return commits
+          })
+        )
+
       return {
         worktreePathFor,
         createWorktree,
         createDetachedWorktree,
         branchAt,
         checkoutBranch,
+        commitsSince,
         removeWorktreeAt
       }
     }

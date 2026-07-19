@@ -41,7 +41,8 @@ const finding = (id: string, severity: ReviewSeverity): ReviewFinding => ({
   severity,
   title: `${severity} finding`,
   rationale: "because",
-  suggestion: null
+  suggestion: null,
+  resolvedBy: null
 })
 
 const review = (over: Partial<AdversarialReview> = {}): AdversarialReview => ({

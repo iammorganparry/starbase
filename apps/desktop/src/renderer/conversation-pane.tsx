@@ -17,7 +17,9 @@ import {
   MAIN_AGENT,
   McpStatusDialog,
   PlanReview,
-  SubagentView
+  ResizeHandle,
+  SubagentView,
+  useResizableWidth
 } from "@starbase/ui"
 import { rpc } from "./rpc-client.js"
 import { clearDraft, getDraft, seedDraftOnce, setDraft, useDraft } from "./draft-store.js"
@@ -36,8 +38,13 @@ export function ConversationPane({
   onInitialPromptConsumed
 }: {
   session: Session
-  /** Which face of the session to show — the transcript, or the Plan Review. */
-  view?: "conversation" | "plan"
+  /**
+   * Which face of the session to show: the transcript, the Plan Review, or both
+   * side by side. `split` renders the SAME Plan Review beside the transcript
+   * rather than a condensed rail — one conversation machine, two columns, so
+   * toggling it can never remount (and so never abort) a live run.
+   */
+  view?: "conversation" | "plan" | "split"
   /**
    * Switch the pane to the Plan Review view — bare from the inline plan card, or
    * with a step id from the Conversation progress rail (a deep link).
@@ -59,6 +66,10 @@ export function ConversationPane({
   // MCP config is a property of the harness.
   const mcp = useMcp(session.id, convo.cli)
   const [mcpOpen, setMcpOpen] = useState(false)
+
+  // Declared unconditionally (hook order) — the plan column only reads it in the
+  // `split` view, but the `plan` view returns early above.
+  const planSplit = useResizableWidth({ storageKey: "sb.split.plan", initial: 520, min: 360, max: 900 })
 
   // Background tasks. Gated on the HARNESS's capability, read from discovery —
   // only Claude reports a live task set and accepts a per-task stop, so the dock
@@ -146,20 +157,20 @@ export function ConversationPane({
 
   const planId = convo.plan?.id ?? null
 
-  if (view === "plan") {
-    return (
-      <PlanReview
-        plan={convo.plan}
-        patch={convo.patch}
-        selectedStepId={planStepId}
-        onSelectStep={onPlanStepSelected}
-        onApprove={() => planId && convo.approvePlan(planId)}
-        onResume={() => planId && convo.resumePlan(planId)}
-        onRevise={() => planId && convo.revisePlan(planId)}
-        onComment={(stepId, body) => planId && convo.commentPlanStep(planId, stepId, body)}
-      />
-    )
-  }
+  const planReview = (
+    <PlanReview
+      plan={convo.plan}
+      patch={convo.patch}
+      selectedStepId={planStepId}
+      onSelectStep={onPlanStepSelected}
+      onApprove={() => planId && convo.approvePlan(planId)}
+      onResume={() => planId && convo.resumePlan(planId)}
+      onRevise={() => planId && convo.revisePlan(planId)}
+      onComment={(stepId, body) => planId && convo.commentPlanStep(planId, stepId, body)}
+    />
+  )
+
+  if (view === "plan") return planReview
 
   // Directly beneath the main tab bar, a secondary bar surfaces the turn's live
   // sub-agents (only while some exist). Selecting one swaps the pane to its
@@ -167,7 +178,8 @@ export function ConversationPane({
   // either way — the actor lives in the registry, not this pane, so swapping the
   // view never aborts the run.
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {barAgents.length > 0 && (
         <AgentTabBar
           agents={barAgents.map((s) => ({
@@ -260,6 +272,7 @@ export function ConversationPane({
         tasks={bgTasks.tasks}
         supported={backgroundTasksSupported}
         onStop={bgTasks.stop}
+        onDismiss={bgTasks.dismiss}
         onView={(taskId) => {
           setViewingTaskId(taskId)
           void bgTasks.output(taskId).then(setTaskOutput)
@@ -277,6 +290,25 @@ export function ConversationPane({
         onRefresh={() => mcp.check(true)}
         onClose={() => setMcpOpen(false)}
       />
+      </div>
+
+      {/*
+        Split view: the real Plan Review beside the transcript. This replaced a
+        narrow step-progress rail, which could only ever be a lossy restatement of
+        this screen in a column too small to act on. Kept OUTSIDE the transcript's
+        scrolling column so the virtualizer measures against a stable width.
+      */}
+      {view === "split" && (
+        <>
+          <ResizeHandle aria-label="Resize plan" onResize={(dx) => planSplit.adjust(-dx)} />
+          <div
+            style={{ width: planSplit.width }}
+            className="flex min-h-0 flex-none flex-col overflow-hidden border-l border-hairline"
+          >
+            {planReview}
+          </div>
+        </>
+      )}
     </div>
   )
 }

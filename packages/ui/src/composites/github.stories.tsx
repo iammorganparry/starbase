@@ -168,7 +168,13 @@ const adversarialReview: AdversarialReview = {
       title: "Session token compared with ===",
       rationale:
         "String comparison short-circuits on the first differing byte, so an attacker can recover the token one character at a time by measuring response latency.",
-      suggestion: "Compare with crypto.timingSafeEqual over equal-length buffers."
+      suggestion: "Compare with crypto.timingSafeEqual over equal-length buffers.",
+      // Fixed already — the card recedes, strikes its title, and names the commit.
+      resolvedBy: {
+        sha: "9f2c1ab4e7d8905361bb2f0c4a7e13d5c8a6b204",
+        subject: "fix(auth): compare session tokens with timingSafeEqual",
+        at: "2026-07-16T11:20:00.000Z"
+      }
     },
     {
       id: "f2",
@@ -179,7 +185,8 @@ const adversarialReview: AdversarialReview = {
       title: "Refresh retries forever on a permanently invalid token",
       rationale:
         "The retry loop has no terminal case for a 401. A revoked refresh token spins until the request times out, holding the connection open.",
-      suggestion: "Break on 4xx and surface the failure to the caller."
+      suggestion: "Break on 4xx and surface the failure to the caller.",
+      resolvedBy: null
     },
     {
       id: "f3",
@@ -190,7 +197,8 @@ const adversarialReview: AdversarialReview = {
       title: "No test covers the expired-token path",
       rationale:
         "Every new test exercises the happy path. The refresh branch this PR adds is the risky one and is untested.",
-      suggestion: null
+      suggestion: null,
+      resolvedBy: null
     }
   ]
 }
@@ -223,7 +231,10 @@ export const PullRequestAdversarialReview: Story = {
  */
 export const ReviewFindingCards: Story = {
   render: () => {
-    const base = adversarialReview.findings[0]!
+    // findings[0] ships resolved (see the fixture); this story is about the
+    // DELIVERY outcomes, and resolution outranks all of them — so clear it here
+    // and demo it as its own column below.
+    const base = { ...adversarialReview.findings[0]!, resolvedBy: null }
     const card = (severity: ReviewSeverity, title: string, over: Partial<ReviewFinding> = {}) => ({
       ...base,
       id: `${severity}-${title}`,
@@ -257,6 +268,25 @@ export const ReviewFindingCards: Story = {
             every card offers "Send to agent" rather than spinning — the operator
             decides, nothing fires on its own. */}
         {column("Unstamped → manual", { ...adversarialReview, routedAt: null, postedAt: null }, all)}
+        {/* Resolved: attributed to the commit that fixed it. The card recedes and
+            strikes its title but keeps its place, and the outcome line names the
+            commit — attribution is inferred, so it points at the evidence. */}
+        {column(
+          "Resolved by a commit",
+          adversarialReview,
+          all.map((f, i) => ({
+            ...f,
+            // Two of four, so the contrast with the outstanding ones is visible.
+            resolvedBy:
+              i % 2 === 0
+                ? {
+                    sha: "9f2c1ab4e7d8905361bb2f0c4a7e13d5c8a6b204",
+                    subject: "fix(auth): compare session tokens with timingSafeEqual",
+                    at: "2026-07-16T11:20:00.000Z"
+                  }
+                : null
+          }))
+        )}
       </div>
     )
   }
@@ -403,7 +433,8 @@ export const CodeReviewWithFindings: Story = {
                 title: "Finding on a file outside this diff",
                 rationale:
                   "The reviewer read this file for context. It isn't in the PR, so the finding collects under General rather than being dropped.",
-                suggestion: null
+                suggestion: null,
+                resolvedBy: null
               }
             ]
           }}
