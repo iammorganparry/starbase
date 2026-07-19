@@ -47,6 +47,8 @@ import type {
   StreamEvent,
   TerminalChunk,
   TerminalInfo,
+  ContextConfig,
+  ContextSnapshot,
   Usage,
   WorkspaceConfig
 } from "@starbase/core"
@@ -180,6 +182,20 @@ export const rpc = {
   opencodeSetAuth: (providerId: string, key: string): Promise<boolean> =>
     run((c) => c.Opencode.setAuth({ providerId, key })),
   usageGet: (): Promise<Usage> => run((c) => c.Usage.get()),
+  /** A session's context accounting — drives the meter and the Settings list. */
+  contextState: (sessionId: string): Promise<ContextSnapshot> =>
+    run((c) => c.Context.state({ sessionId })),
+  /**
+   * Compact now. Resolves as soon as the request is accepted, NOT when the
+   * summary is ready — the digest builds in the background and applies on the
+   * next turn, so the UI must not park on it.
+   */
+  contextCompactNow: (sessionId: string): Promise<void> =>
+    run((c) => c.Context.compactNow({ sessionId })),
+  configSetContext: (context: ContextConfig): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setContext(context)),
+  sessionsSetAutoCompact: (id: string, autoCompact: boolean | null): Promise<Session> =>
+    run((c) => c.Sessions.setAutoCompact({ id, autoCompact })),
   agentDecideGate: (sessionId: string, gateId: string, decision: GateDecision): Promise<void> =>
     run((c) => c.Agent.decideGate({ sessionId, gateId, decision })),
   agentAnswerQuestion: (

@@ -834,6 +834,21 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Opencode.listProviders": () => opencodeListProviders(),
   "Opencode.setAuth": ({ providerId, key }) => opencodeSetAuth(providerId, key),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
+  "Context.state": ({ sessionId }) => ContextManager.snapshot(sessionId),
+  // Fire-and-forget by design: the digest builds on a background fiber and lands
+  // on the next turn, so the button returns instantly rather than parking the UI
+  // on a summary the user is not waiting for.
+  "Context.compactNow": ({ sessionId }) => ContextManager.compactNow(sessionId),
+  "Config.setContext": (context) => ConfigService.setContext(context),
+  // Returns the updated session so the renderer can patch its cache without a
+  // refetch, matching every other session mutation.
+  "Sessions.setAutoCompact": ({ id, autoCompact }) =>
+    SessionStore.setAutoCompact(id, autoCompact).pipe(
+      Effect.zipRight(SessionStore.get(id)),
+      Effect.catchTag("SessionNotFoundError", (cause) =>
+        Effect.fail(new GitError({ message: "Session not found", cause }))
+      )
+    ),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),
   "Config.setGit": (git) => ConfigService.setGit(git),

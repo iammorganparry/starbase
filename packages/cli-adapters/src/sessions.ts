@@ -375,6 +375,18 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       const setTokens = (id: string, tokens: number) =>
         update(id, (s) => (Number.isFinite(tokens) && tokens >= 0 ? { ...s, tokens } : s))
 
+      /**
+       * Pin auto-compaction on or off for this session; `null` clears the
+       * override so it follows the global setting again.
+       *
+       * `undefined` on clear, not null — `autoCompact` is `optional`, so writing
+       * null would persist a key the schema rejects on the next read, and
+       * `TranscriptStore`-style best-effort decoding would then drop the whole
+       * session record.
+       */
+      const setAutoCompact = (id: string, autoCompact: boolean | null) =>
+        update(id, (s) => ({ ...s, autoCompact: autoCompact ?? undefined }))
+
       /** Persist an auto-generated title (leaves `autoTitle` untouched). */
       const setTitle = (id: string, title: string) => update(id, (s) => ({ ...s, title }))
 
@@ -490,6 +502,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         setResumeId,
         clearResumeId,
         setTokens,
+        setAutoCompact,
         setTitle,
         renameTitle,
         setStatus,
