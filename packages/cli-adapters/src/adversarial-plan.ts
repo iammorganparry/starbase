@@ -386,7 +386,7 @@ const runRole = (
       // worktree it was told not to touch.
       readOnly: true,
       // Unattended: nobody is watching the transcript to notice a stray read.
-      confineFileToolsToCwd: true
+      unattended: true
     }
 
     const ctx: AgentContext = {

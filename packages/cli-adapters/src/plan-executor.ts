@@ -147,7 +147,7 @@ const runStep = (
       // string rather than a path, so the shell is not confined. An approved
       // plan is trusted code execution — the confinement here narrows careless
       // reads and writes, it is not a sandbox.
-      confineFileToolsToCwd: true
+      unattended: true
     }
 
     const ctx: AgentContext = {

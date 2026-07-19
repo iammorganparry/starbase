@@ -54,4 +54,19 @@ describe("billingPath", () => {
   it("does not call an empty key a key", () => {
     expect(billingPath("codex", { OPENAI_API_KEY: "" }, false)).toBe("unknown")
   })
+
+  it("separates a probe that could not look from one that found nothing", () => {
+    // The two read the same to the code and completely differently to a person.
+    // "not signed in" tells an operator to go and sign in; if the truth is that
+    // we failed to READ their credentials, they may already be signed in and we
+    // have sent them to fix something that is not broken.
+    expect(billingPath("codex", { PATH: "/usr/bin" }, false, false)).toBe("unknown")
+    expect(billingPath("codex", { PATH: "/usr/bin" }, false, true)).toBe("undetermined")
+  })
+
+  it("still answers definitively when a key is present, probe or no probe", () => {
+    // The plan probe failing does not make the billing ambiguous: that key IS
+    // what the run gets charged to.
+    expect(billingPath("codex", ENV, false, true)).toBe("api-key")
+  })
 })

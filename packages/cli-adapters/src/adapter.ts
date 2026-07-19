@@ -59,35 +59,30 @@ export interface SessionSpec {
    */
   readonly readOnly?: boolean
   /**
-   * Refuse any FILE TOOL call naming an absolute path outside `cwd`.
+   * This agent runs with nobody watching, so apply the protections that implies.
    *
-   * For UNATTENDED agents — planning roles, the judge, plan steps — where there
-   * is nobody watching the transcript to notice a stray read. Read tools are
-   * never gated (`toPermissionRequest` returns null for them), so without this
-   * an agent can read anything on the disk; a planning proposer was observed
-   * doing exactly that, pulling 403 lines of an unrelated private repository
-   * into its context.
+   * Two mechanisms, deliberately kept separate because they fail differently:
    *
-   * NAMED FOR WHAT IT ACTUALLY COVERS. It inspects the path arguments of file
-   * tools (`Read`/`Edit`/`Glob`/`Grep`/…) and nothing else. It does NOT confine
-   * a shell: `Bash` takes a command string, not a path, so an agent that can run
-   * commands can still reach the whole filesystem. That matters for exactly one
-   * caller — the plan executor, which needs Bash to build and test — so a step
-   * is confined for file tools and unconfined for shell. Calling this
-   * `confineToCwd` implied a guarantee it never gave.
+   *  1. **File-tool confinement to `cwd`** (`confinement.ts`). Read tools are
+   *     never gated — `toPermissionRequest` returns null for them — so without
+   *     this an agent reads anything on disk. A planning proposer was observed
+   *     doing exactly that, pulling 403 lines of an unrelated private repository
+   *     into its context. Pure, and works on every platform.
+   *  2. **A credential denylist sandbox** (`sandbox.ts`). The check above cannot
+   *     see a shell, and a plan step needs Bash to build and test, so `cat
+   *     ~/.ssh/id_rsa` walked straight through it. The sandbox blocks that at the
+   *     OS level — but it needs platform support and degrades silently when
+   *     absent, which is why (1) is kept rather than replaced.
    *
-   * Confining the shell properly needs the harness's own sandbox rather than
-   * string inspection of commands (quoting, `$HOME`, `cd &&` and subshells make
-   * that a losing game). The Claude SDK has `sandbox`, but with two catches
-   * worth knowing before reaching for it: filesystem limits there come from
-   * permission RULES rather than the sandbox settings, and `failIfUnavailable`
-   * defaults to true, so enabling it would hard-fail execution on a host
-   * missing the dependencies rather than degrade.
+   * NEITHER IS CONFINEMENT TO THE WORKTREE, and the gap is measured rather than
+   * assumed: `denyRead` is absolute with no carve-out, so denying `~` also denies
+   * a worktree under `~`. A step that cannot read its own repository is useless.
+   * Anything outside the denylist and outside the file tools remains reachable.
    *
-   * Deliberately NOT set for the operator's own session: they are watching, and
-   * a coding agent that cannot read a sibling repo on request is less useful.
+   * Deliberately NOT set for the operator's own session: they are watching, and a
+   * coding agent that cannot read a sibling repo on request is less useful.
    */
-  readonly confineFileToolsToCwd?: boolean
+  readonly unattended?: boolean
 }
 
 /** What the agent is asking permission to do, surfaced before it acts. */

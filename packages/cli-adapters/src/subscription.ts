@@ -40,6 +40,12 @@ export type BillingPath =
   | "api-key"
   /** Neither detected; the harness will decide, and may well fail. */
   | "unknown"
+  /**
+   * The probe could not read the credential store at all. Distinct from
+   * `unknown`: that says "no plan found", this says "we could not look", and
+   * telling an operator to sign in when they already are is the worse error.
+   */
+  | "undetermined"
 
 /**
  * The environment a harness child should run with.
@@ -71,11 +77,15 @@ export const harnessEnv = (
 export const billingPath = (
   cli: CliKind,
   env: Record<string, string | undefined>,
-  hasSubscription: boolean
+  hasSubscription: boolean,
+  probeFailed = false
 ): BillingPath => {
   if (hasSubscription) return "subscription"
   const keys = METERED_ENV_KEYS[cli] ?? []
-  return keys.some((k) => (env[k] ?? "").length > 0) ? "api-key" : "unknown"
+  // A key present is a definite answer even when the plan probe failed: that
+  // key IS what the run will be billed to.
+  if (keys.some((k) => (env[k] ?? "").length > 0)) return "api-key"
+  return probeFailed ? "undetermined" : "unknown"
 }
 
 /**
@@ -106,6 +116,21 @@ const cache = new Map<CliKind, boolean>()
  */
 const harnessHome = (): string => process.env.STARBASE_HARNESS_HOME ?? homedir()
 
+/**
+ * Whether the probe itself could not run, as opposed to finding no plan.
+ *
+ * Recorded because the two are different claims and only one is actionable. A
+ * harness with genuinely no subscription should be told to sign in; a harness
+ * whose credential store we failed to READ (permissions, an unreadable
+ * Keychain, a platform with neither) is a Starbase problem the operator can do
+ * nothing about, and reporting it as "not signed in" sends them to fix
+ * something that is not broken.
+ *
+ * The conservative default is unchanged either way: an unreadable probe still
+ * answers "no subscription", so no key is ever stripped on a guess.
+ */
+const indeterminate = new Set<CliKind>()
+
 const detect = (cli: CliKind): boolean => {
   try {
     if (cli === "codex") {
@@ -126,7 +151,12 @@ const detect = (cli: CliKind): boolean => {
       // A seeded harness home means a TEST: the Keychain belongs to the real
       // machine and would leak the developer's own sign-in into the result.
       if (process.env.STARBASE_HARNESS_HOME !== undefined) return false
-      if (process.platform !== "darwin") return false
+      // Not macOS and no credentials file: Claude Code may still be signed in
+      // somewhere we cannot see, so this is "could not tell" rather than "no".
+      if (process.platform !== "darwin") {
+        indeterminate.add("claude")
+        return false
+      }
       execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], {
         stdio: "ignore"
       })
@@ -134,6 +164,7 @@ const detect = (cli: CliKind): boolean => {
     }
     return false
   } catch {
+    indeterminate.add(cli)
     return false
   }
 }
@@ -141,10 +172,21 @@ const detect = (cli: CliKind): boolean => {
 export const hasSubscriptionAuth = (cli: CliKind): boolean => {
   const hit = cache.get(cli)
   if (hit !== undefined) return hit
+  indeterminate.delete(cli)
   const found = detect(cli)
   cache.set(cli, found)
   return found
 }
 
+/**
+ * Whether the last probe for this harness failed rather than answered.
+ *
+ * Only meaningful after `hasSubscriptionAuth` has run for the same harness.
+ */
+export const subscriptionProbeFailed = (cli: CliKind): boolean => indeterminate.has(cli)
+
 /** Forget the probe — for tests, and for a re-check after a sign-in. */
-export const resetSubscriptionCache = (): void => cache.clear()
+export const resetSubscriptionCache = (): void => {
+  cache.clear()
+  indeterminate.clear()
+}

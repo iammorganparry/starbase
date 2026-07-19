@@ -26,6 +26,7 @@ import {
   ModelsService,
   planDraftPost,
   billingPath,
+  subscriptionProbeFailed,
   hasSubscriptionAuth,
   resetSubscriptionCache,
   METERED_ENV_KEYS,
@@ -509,7 +510,7 @@ export const billingPaths = Effect.gen(function* () {
       const keys = METERED_ENV_KEYS[c.kind] ?? []
       return {
         cli: c.kind,
-        path: billingPath(c.kind, process.env, subscription),
+        path: billingPath(c.kind, process.env, subscription, subscriptionProbeFailed(c.kind)),
         // A key WAS present and we withheld it — the case worth naming, because
         // it is the one that silently cost money before.
         keyWithheld: subscription && keys.some((k) => (process.env[k] ?? "").length > 0)

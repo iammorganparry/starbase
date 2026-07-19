@@ -5,6 +5,7 @@ import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { startTeeStream, type TeeStream } from "./bash-tee.js"
 import { escapingPath } from "./confinement.js"
+import { unattendedSandbox } from "./sandbox.js"
 import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { requireWorktree } from "./cwd.js"
 import { capOutput } from "./output-cap.js"
@@ -750,7 +751,7 @@ export const runClaude = (
           // Confinement first, and ahead of `toPermissionRequest`: read tools
           // are never gated, so a check that ran after it would miss exactly the
           // case this exists for.
-          if (spec.confineFileToolsToCwd === true) {
+          if (spec.unattended === true) {
             const escaped = escapingPath(spec.cwd, input)
             if (escaped !== null) {
               return {
@@ -815,6 +816,11 @@ export const runClaude = (
             // REPLACES the child environment with this rather than merging, so
             // `harnessEnv` returns a complete copy. See `subscription.ts`.
             env: harnessEnv("claude", process.env, hasSubscriptionAuth("claude")),
+            // An unattended agent gets the OS-level credential denylist as well
+            // as the file-tool check below — the latter cannot see a shell, and
+            // a plan step needs one. See `sandbox.ts` for what this does and,
+            // more importantly, what it does not.
+            ...(spec.unattended === true ? { sandbox: unattendedSandbox() } : {}),
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
             ...(spec.mode === "plan" ? { planModeInstructions } : {}),

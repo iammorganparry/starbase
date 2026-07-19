@@ -134,10 +134,21 @@ export function GigaplanSettings({
                     ? "your plan"
                     : b.path === "api-key"
                       ? "API key — metered"
-                      : "not signed in"}
+                      : /* "couldn't check" is not "not signed in". Telling an
+                           operator who IS signed in to sign in sends them to fix
+                           something that isn't broken. */
+                        b.path === "undetermined"
+                        ? "couldn't check"
+                        : "not signed in"}
                 </span>
                 {/* Named explicitly: this is the case that used to cost money
                     without anyone noticing. */}
+                {b.path === "undetermined" ? (
+                  <span className="text-[11px] text-muted-foreground">
+                    Starbase couldn&rsquo;t read this harness&rsquo;s credentials, so it left your
+                    environment alone
+                  </span>
+                ) : null}
                 {b.keyWithheld ? (
                   <span className="text-[11px] text-muted-foreground">
                     an API key in your environment was ignored in favour of the plan

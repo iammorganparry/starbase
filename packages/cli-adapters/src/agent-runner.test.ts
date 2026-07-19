@@ -1252,3 +1252,70 @@ describe("AgentRunner on the Starbase harness", () => {
     expect(await captureSpec("claude")).toStrictEqual({ cli: "claude", model: "sonnet" })
   })
 })
+
+describe("AgentRunner usage accrual", () => {
+  /**
+   * `Session.costUsd` and `tokens` were written as 0 at creation and never
+   * updated, so the sidebar reported nothing however much work a session did.
+   */
+  it("adds each finished turn's usage to the session's running total", async () => {
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      ConfigService.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      BackgroundTaskStore.Default,
+      PlanStore.Default,
+      makeScriptedCliAdapter(0),
+      noHarnesses,
+      temp.layer
+    )
+    const totals = await Effect.gen(function* () {
+      mkdirSync(temp.root, { recursive: true })
+      writeFileSync(
+        join(temp.root, "sessions.json"),
+        JSON.stringify([
+          {
+            id: SESSION,
+            repo: "widget",
+            branch: "b",
+            title: "t",
+            status: "idle",
+            cli: "claude",
+            diff: { added: 0, removed: 0 },
+            prNumber: null,
+            costUsd: 0,
+            tokens: 0,
+            updatedAt: "2026-07-19T00:00:00.000Z",
+            worktreePath: temp.root
+          }
+        ])
+      )
+      const runner = yield* AgentRunner
+      // Two turns: the totals must ACCUMULATE. A session is many turns, and the
+      // last turn's usage is not the session's usage.
+      // The scripted harness gates its edit and its command; nothing else here
+      // answers them, so the run would park forever.
+      const turn = (text: string) =>
+        runner.prompt(SESSION, text).pipe(
+          Stream.tap((ev) =>
+            ev._tag === "GateRequested"
+              ? runner.decideGate(SESSION, ev.gate.id, "allow")
+              : Effect.void
+          ),
+          Stream.runDrain
+        )
+      yield* turn("one")
+      const afterOne = yield* SessionStore.get(SESSION)
+      yield* turn("two")
+      const afterTwo = yield* SessionStore.get(SESSION)
+      return { afterOne, afterTwo }
+    }).pipe(Effect.provide(base), Effect.runPromise)
+
+    // The scripted harness reports a fixed 0.38 / 42_100 per turn.
+    expect(totals.afterOne.costUsd).toBeCloseTo(0.38, 5)
+    expect(totals.afterOne.tokens).toBe(42_100)
+    expect(totals.afterTwo.costUsd).toBeCloseTo(0.76, 5)
+    expect(totals.afterTwo.tokens).toBe(84_200)
+  })
+})

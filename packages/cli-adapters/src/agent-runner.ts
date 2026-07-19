@@ -694,6 +694,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                 yield* out.offer(event)
                 return
               }
+              // A finished turn reports what it used. Accrued here rather than
+              // in the adapters so every harness lands in one place — and so a
+              // harness that reports nothing simply adds zero instead of needing
+              // its own bookkeeping.
+              if (event._tag === "Done") {
+                yield* SessionStore.addUsage(sessionId, {
+                  costUsd: event.costUsd,
+                  tokens: event.tokens
+                }).pipe(Effect.provide(env), Effect.ignore)
+              }
               const next = applyStreamEvent(yield* Ref.get(acc), event)
               yield* Ref.set(acc, next)
               yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)

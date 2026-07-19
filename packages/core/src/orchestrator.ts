@@ -53,9 +53,11 @@ export const HarnessBilling = Schema.Struct({
   /**
    * `subscription` — the operator's plan. `api-key` — a metered key from the
    * environment. `unknown` — neither detected; the harness will decide, and may
-   * well fail to authenticate at all.
+   * well fail to authenticate at all. `undetermined` — we could not READ the
+   * credential store, which is a different claim from finding nothing there and
+   * must not be reported as "sign in": the operator may already be signed in.
    */
-  path: Schema.Literal("subscription", "api-key", "unknown"),
+  path: Schema.Literal("subscription", "api-key", "unknown", "undetermined"),
   /** True when a key was present but withheld because a plan was found. */
   keyWithheld: Schema.Boolean
 })

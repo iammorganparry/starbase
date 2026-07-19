@@ -322,6 +322,25 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       const setModel = (id: string, model: string) => update(id, (s) => ({ ...s, model }))
 
       /**
+       * Accrue what a finished turn reported, ADDING to the session's running
+       * total rather than replacing it — a session is many turns, and the last
+       * one's usage is not the session's usage.
+       *
+       * `costUsd` is the harness's own figure. On subscription auth it is a
+       * NOTIONAL api-equivalent price rather than money billed, which is worth
+       * knowing before treating it as spend: the billing pane is what says which
+       * of the two an operator is actually on. Recorded regardless, because "how
+       * expensive was this work" is a useful question either way; it is the
+       * interpretation that differs, not the number.
+       */
+      const addUsage = (id: string, usage: { costUsd: number; tokens: number }) =>
+        update(id, (s) => ({
+          ...s,
+          costUsd: s.costUsd + (Number.isFinite(usage.costUsd) ? usage.costUsd : 0),
+          tokens: s.tokens + (Number.isFinite(usage.tokens) ? usage.tokens : 0)
+        }))
+
+      /**
        * Switch the session's harness and model together.
        *
        * When `cli` actually changes, `resumeId` MUST be dropped: it holds the
@@ -461,6 +480,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         createFromIssue,
         setMode,
         setModel,
+        addUsage,
         setHarness,
         setResumeId,
         setTitle,
