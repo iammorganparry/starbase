@@ -8,6 +8,7 @@ import { escapingPath } from "./confinement.js"
 import { unattendedSandbox } from "./sandbox.js"
 import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { requireWorktree } from "./cwd.js"
+import { worktreeEnv } from "./worktree-env.js"
 import { capOutput } from "./output-cap.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
@@ -886,7 +887,14 @@ export const runClaude = (
             // Run on the operator's Claude plan where they have one. The SDK
             // REPLACES the child environment with this rather than merging, so
             // `harnessEnv` returns a complete copy. See `subscription.ts`.
-            env: harnessEnv("claude", process.env, hasSubscriptionAuth("claude")),
+            // Layered over `worktreeEnv` so the agent also stops inheriting the
+            // toolchain config of whatever repo Starbase was launched from —
+            // the env-var counterpart of the `cwd` hazard noted above.
+            env: harnessEnv(
+              "claude",
+              worktreeEnv(process.env, spec.cwd ?? undefined),
+              hasSubscriptionAuth("claude")
+            ),
             // An unattended agent gets the OS-level credential denylist as well
             // as the file-tool check below — the latter cannot see a shell, and
             // a plan step needs one. See `sandbox.ts` for what this does and,

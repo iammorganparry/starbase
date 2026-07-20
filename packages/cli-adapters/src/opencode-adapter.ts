@@ -6,6 +6,7 @@ import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
 import { stopChild, trackChild } from "./child-registry.js"
 import { requireWorktree } from "./cwd.js"
+import { worktreeEnv } from "./worktree-env.js"
 
 /**
  * Real opencode harness, driven by `@opencode-ai/sdk`'s CLIENT against a server
@@ -612,7 +613,11 @@ const driveOpencode = async (
       // against an unrelated repository.
       cwd: requireWorktree(spec.cwd, `session ${sessionId}`),
       env: {
-        ...process.env,
+        // opencode is bring-your-own-key, so its environment is passed through
+        // rather than curated (see `subscription.ts`) — but the LAUNCHER's
+        // toolchain config is not the operator's intent either way, and must
+        // still be stripped. See `worktree-env.ts`.
+        ...worktreeEnv(process.env, spec.cwd ?? undefined),
         // Layers OVER the user's own opencode config rather than replacing it, so
         // their providers/keys/levers survive and we only pin what this run needs.
         OPENCODE_CONFIG_CONTENT: JSON.stringify({
