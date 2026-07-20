@@ -255,20 +255,30 @@ describe("ContextManager.observe", () => {
    */
   it("summarises through the session's own authenticated harness, on the cheap tier", async () => {
     const rec = recorder()
-    await run(
+    const discovered = await run(
       Effect.gen(function* () {
         yield* seed()
         yield* observeAndSettle(180_000, rec)
+        const clis = yield* DiscoveryService.list()
+        return clis.find((c) => c.kind === "claude")?.binPath ?? null
       }),
       recordingAdapter(GOOD_REPLY, rec)
     )
     const spec = rec.specs[0]!
     expect(spec.cli).toBe("claude")
-    // The DISCOVERED binary — whichever route found it on this host — not a
-    // path we invented. That it is the user's own installed CLI is the point;
-    // asserting a literal path would only assert where this machine keeps it.
-    expect(spec.binPath).not.toBeNull()
-    expect(spec.binPath!.endsWith("claude")).toBe(true)
+    /**
+     * The digest must go to whatever binary DISCOVERY resolved for this
+     * session's harness — that it is the user's own authenticated CLI is the
+     * whole no-extra-cost claim.
+     *
+     * Compared against discovery's own answer rather than asserted non-null: on
+     * a machine with Claude installed the absolute-candidate probe finds a real
+     * path, and on a clean CI runner it finds nothing. Asserting non-null passed
+     * locally and failed in CI while the code was correct in both cases — null
+     * simply means "fall through to the scripted adapter", exactly as any other
+     * run would.
+     */
+    expect(spec.binPath).toBe(discovered)
     // haiku, not the session's sonnet — `DEFAULT_DIGEST_MODEL`.
     expect(spec.model).toBe("haiku")
     expect(spec.model).not.toBe("sonnet")
