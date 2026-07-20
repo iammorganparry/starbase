@@ -48,6 +48,75 @@ export const mapCodexPolicy = (
       ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
       : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
+/**
+ * Tokens occupying Codex's context window after a completed turn.
+ *
+ * A Codex turn resends the whole thread, so the turn's `input_tokens` IS the
+ * conversation as the model saw it; adding the reply gives the size the next
+ * turn inherits. That makes this the direct analogue of Claude's
+ * `contextTokens`, despite arriving through a completely different event.
+ *
+ * The two subset fields are deliberately NOT added:
+ *  - `cached_input_tokens` is part of `input_tokens` (codex itself derives
+ *    non-cached input by subtracting it), and
+ *  - `reasoning_output_tokens` is part of `output_tokens`.
+ * Summing all four double-counts both, inflating the reading by roughly the
+ * cache-hit rate — which on a long, heavily-cached session is most of it. That
+ * error is in the "compact far too early" direction, so it would have looked
+ * like a working feature while quietly halving everyone's usable context.
+ *
+ * This replaces a hard-coded `0`. The old comment was right that a turn TOTAL
+ * mislabelled as context is worse than no number — but `input + output` is not
+ * a turn total, it is the context, and without it Codex sessions could never
+ * participate in auto-compaction at all.
+ */
+export const codexContextTokens = (usage: {
+  readonly input_tokens?: number
+  readonly output_tokens?: number
+  /** Subset of `input_tokens` — accepted so the real payload type-checks, never summed. */
+  readonly cached_input_tokens?: number
+  /** Subset of `output_tokens` — accepted so the real payload type-checks, never summed. */
+  readonly reasoning_output_tokens?: number
+}): number => {
+  const num = (v: number | undefined): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0)
+  return num(usage?.input_tokens) + num(usage?.output_tokens)
+}
+
+/**
+ * Which Codex thread a run should continue, or `undefined` to start a new one.
+ *
+ * Extracted as a pure function because the branch that matters cannot be reached
+ * without a real Codex login otherwise — and it was wrong: `fresh` was ignored
+ * here while Claude and opencode honoured it, so every one-shot caller silently
+ * resumed the thread it was trying to escape.
+ */
+export const threadIdFor = (input: {
+  readonly resume: ReadonlyMap<string, string>
+  readonly sessionId: string
+  readonly resumeId?: string | null
+  readonly fresh?: boolean
+}): string | undefined => {
+  if (input.fresh === true) return undefined
+  return input.resume.get(input.sessionId) ?? input.resumeId ?? undefined
+}
+
+/**
+ * Record the thread id a run just started, unless the run was `fresh`.
+ *
+ * A one-shot run must leave no trace, or the NEXT turn under the same session id
+ * resumes it — which would make a compaction's throwaway thread the session's
+ * real one.
+ */
+export const rememberThread = (input: {
+  readonly resume: Map<string, string>
+  readonly sessionId: string
+  readonly threadId: string
+  readonly fresh?: boolean
+}): void => {
+  if (input.fresh === true) return
+  input.resume.set(input.sessionId, input.threadId)
+}
+
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
 export const codexEventToStreamEvents = (
   event: ThreadEvent,
@@ -147,17 +216,13 @@ export const codexEventToStreamEvents = (
       }
     }
 
-    case "turn.completed":
+    case "turn.completed": {
+      const tokens = codexContextTokens(event.usage)
       return [
-        {
-          _tag: "Done",
-          costUsd: 0,
-          // The exec SDK exposes aggregate turn consumption, not the current
-          // thread context size. Zero means "unavailable" to the renderer; a
-          // turn total labelled as context would be worse than no number.
-          tokens: 0
-        }
+        { _tag: "Usage", tokens },
+        { _tag: "Done", costUsd: 0, tokens }
       ]
+    }
 
     case "turn.failed":
       return [{ _tag: "Failed", message: event.error.message }]
@@ -217,7 +282,16 @@ export const runCodex = (
         // Prefer the live in-memory thread id (this launch), else the id persisted
         // on the session (survives an app restart), so "continue" resumes the
         // Codex thread instead of starting a fresh one.
-        const prior = resume.get(sessionId) ?? spec.resumeId ?? undefined
+        //
+        // `fresh` opts out of BOTH, and must: the map wins over `spec.resumeId`,
+        // so clearing the persisted id alone leaves a caller that asked for a
+        // brand-new thread silently resuming the old one. Two callers depend on
+        // this — the adversarial reviewer (which must be a pure function of the
+        // diff) and context compaction (whose entire purpose is to shed the
+        // thread it just summarised). Claude and opencode already honoured it;
+        // Codex was the odd one out, so on Codex both features quietly no-opped
+        // while still paying for the run.
+        const prior = threadIdFor({ resume, sessionId, resumeId: spec.resumeId, fresh: spec.fresh })
         const thread = prior
           ? codex.resumeThread(prior, threadOptions)
           : codex.startThread(threadOptions)
@@ -225,7 +299,7 @@ export const runCodex = (
         const { events } = await thread.runStreamed(spec.prompt, { signal: abort.signal })
         for await (const event of events) {
           if (event.type === "thread.started" && event.thread_id) {
-            resume.set(sessionId, event.thread_id)
+            rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
           }
           for (const se of codexEventToStreamEvents(event, sessionId)) {
             await runP(ctx.emit(se))

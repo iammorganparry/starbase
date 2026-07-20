@@ -23,6 +23,8 @@ import {
   Issue,
   IssueAutomations,
   IssueSummary,
+  ContextConfig,
+  ContextSnapshot,
   Message,
   ModelOption,
   OpencodeProviderInfo,
@@ -429,6 +431,42 @@ export class StarbaseRpcs extends RpcGroup.make(
   /** Provider usage / rate-limit windows for the Usage & limits modal. */
   Rpc.make("Usage.get", {
     success: Usage
+  }),
+
+  /**
+   * A session's context accounting — what the meter renders and what Settings
+   * lists. Cheap enough to poll: it reads in-memory state plus the persisted
+   * session, and never touches a harness.
+   */
+  Rpc.make("Context.state", {
+    success: ContextSnapshot,
+    payload: { sessionId: Schema.String }
+  }),
+
+  /**
+   * Compact this session now, regardless of the budget.
+   *
+   * Returns immediately — the digest is built on a background fiber, exactly as
+   * an automatic compaction would be, and lands on the NEXT turn. A button that
+   * blocked until the summary was ready would reintroduce the wait the whole
+   * feature exists to remove.
+   */
+  Rpc.make("Context.compactNow", {
+    payload: { sessionId: Schema.String }
+  }),
+
+  /** Persist the auto-compaction levers (master switch + working-set budget). */
+  Rpc.make("Config.setContext", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: ContextConfig
+  }),
+
+  /** Per-session auto-compaction override (absent = follow the global setting). */
+  Rpc.make("Sessions.setAutoCompact", {
+    success: Session,
+    error: GitError,
+    payload: { id: Schema.String, autoCompact: Schema.NullOr(Schema.Boolean) }
   }),
 
   /** Detect the GitHub CLI (`gh`) and its authentication status. */

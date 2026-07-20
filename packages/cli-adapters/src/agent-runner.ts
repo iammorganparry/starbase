@@ -33,6 +33,8 @@ import { AppPaths } from "./app-paths.js"
 import { ConfigService } from "./config.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
 import type { PermissionDecision, PermissionRequest, SessionSpec, StopBackgroundTask } from "./adapter.js"
+import { ContextManager } from "./context-manager.js"
+import { renderPrimer, tailAfter } from "./context-digest.js"
 import { readDefaultMode } from "./default-mode.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -195,6 +197,8 @@ type PromptEnv =
   | BackgroundTaskStore
   | PlanStore
   | DiscoveryService
+  | ContextManager
+  | ConfigService
   | CommandExecutor.CommandExecutor
   | FileSystem.FileSystem
   | Path.Path
@@ -465,6 +469,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         // one, and acting on it would kill the operator's NEXT turn instead.
         const running = (yield* Ref.get(fibers)).get(sessionId)
         if (running !== undefined) yield* Fiber.interrupt(running.fiber)
+        // Kill any digest being prepared for this session too. It runs on a
+        // DAEMON fiber, so interrupting the run leaves it alive — an operator who
+        // stopped a session would otherwise keep paying for a summary of it, with
+        // nothing on screen to say why.
+        yield* ContextManager.cancel(sessionId).pipe(Effect.ignore)
       })
 
     const prompt = (
@@ -523,12 +532,36 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             worktreePath.length > 0
               ? yield* PlanStore.list(worktreePath).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
               : []
+          /**
+           * Consume a ready digest, if the context manager has one waiting.
+           *
+           * This is the entire swap. Compaction prepared in the background while
+           * the user was reading the last answer, so applying it costs nothing
+           * here — it only changes how the spec below is built. Sub-agents never
+           * reach this code: they run inside the harness process, and this is the
+           * top-level turn path.
+           */
+          const digest = yield* ContextManager.applyIfReady(sessionId)
+          const compactedFrom = digest === null ? 0 : session?.tokens ?? 0
+          // Everything that landed after the digest was built is replayed
+          // verbatim, so preparing in the background never races the user.
+          const tail =
+            digest === null
+              ? []
+              : tailAfter(
+                  yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => [])),
+                  digest.throughMessageId
+                )
+
+          const planNote = savedPlans.length > 0 ? `${planPointerNote(worktreePath, savedPlans)}\n\n` : ""
+          const primer = digest === null ? "" : `${renderPrimer(digest, tail)}\n\n`
+
           const spec: SessionSpec = {
             cli,
             repo: session?.repo ?? "",
             branch: session?.branch ?? "",
             cwd: worktreePath,
-            prompt: savedPlans.length > 0 ? `${planPointerNote(worktreePath, savedPlans)}\n\n${text}` : text,
+            prompt: `${primer}${planNote}${text}`,
             images,
             binPath,
             mode,
@@ -538,8 +571,19 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                 : (session?.model ?? defaultModel(cli)),
             // The persisted harness session id, so the adapter resumes the full
             // conversation even after a restart cleared its in-memory resume map.
-            resumeId: session?.resumeId ?? null
+            //
+            // On a compaction this is dropped: the whole point is to begin a NEW
+            // harness conversation seeded with the summary. `fresh` is required
+            // alongside it because the adapter prefers its in-memory resume map
+            // over the spec, so a null id alone would silently resume anyway.
+            resumeId: digest === null ? session?.resumeId ?? null : null,
+            ...(digest === null ? {} : { fresh: true })
           }
+
+          // Clear the PERSISTED id too, so a crash between here and the harness
+          // reporting its new id can't leave the session pointing at a thread
+          // whose context we have already decided to abandon.
+          if (digest !== null) yield* SessionStore.clearResumeId(sessionId).pipe(Effect.ignore)
 
           // Capture the persistence services so `emit`/`run` handed to the
           // adapter have no residual requirements (R = never).
@@ -548,6 +592,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             | SessionStore
             | PlanStore
             | BackgroundTaskStore
+            // `emit` hands every context reading to the manager, which may fork a
+            // digest run — so the manager's own dependencies (the adapter it
+            // summarises through, the config holding the budget, the discovery
+            // that finds the binary) have to be captured here too, or `emit`
+            // stops being `R = never` and the whole fold fails to type.
+            | ContextManager
+            | ConfigService
+            | CliAdapter
+            | DiscoveryService
+            | CommandExecutor.CommandExecutor
             | FileSystem.FileSystem
             | Path.Path
             | AppPaths
@@ -731,6 +785,23 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               if (event._tag === "ToolEnd" && event.status === "success") {
                 yield* markPlanProgress(event.id)
               }
+              // Hand every context reading to the manager, but only let a SETTLED
+              // turn start a digest.
+              //
+              // Claude and opencode report usage per assistant message, so a turn
+              // that uses tools reports several times before it ends. Summarising
+              // from one of those mid-turn readings would capture a transcript
+              // whose last message is still streaming, and the digest's
+              // `throughMessageId` would then cause the rest of that same turn to
+              // be skipped at swap time — neither summarised nor replayed.
+              //
+              // `Done` is the only point at which the transcript is coherent.
+              if (event._tag === "Usage") {
+                yield* ContextManager.observe(sessionId, event.tokens).pipe(Effect.ignore)
+              }
+              if (event._tag === "Done" && event.tokens > 0) {
+                yield* ContextManager.settle(sessionId, event.tokens).pipe(Effect.ignore)
+              }
             }).pipe(Effect.provide(env), Effect.asVoid)
 
           const canUseTool = (req: PermissionRequest): Effect.Effect<PermissionDecision> =>
@@ -812,6 +883,17 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // per-process, so those ids no longer resolve to anything stoppable.
           const registerBackgroundStop = (stop: StopBackgroundTask) =>
             BackgroundTaskStore.registerStop(sessionId, stop).pipe(Effect.provide(env), Effect.ignore)
+
+          // Record the compaction on THIS turn, before the harness says anything.
+          //
+          // The transcript is never truncated — the user can still scroll back
+          // through the whole conversation. This marker exists so that what the
+          // model kept is legible: without it the context meter would simply drop
+          // with no explanation, which is how `/compact` behaves today and exactly
+          // why it feels like the app lost your history.
+          if (digest !== null) {
+            yield* emit({ _tag: "ContextCompacted", digest, tokensBefore: compactedFrom })
+          }
 
           const run = adapter.run(sessionId, spec, {
             emit,

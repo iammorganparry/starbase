@@ -8,6 +8,7 @@ import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape } from "./adapter.js"
 import { ConfigService } from "./config.js"
 import { AgentRunner } from "./agent-runner.js"
+import { ContextManager } from "./context-manager.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
 import { TranscriptStore } from "./transcripts.js"
@@ -42,6 +43,8 @@ const runPrompt = (mode: PermissionMode, decision: GateDecision) => {
     PlanStore.Default,
     makeScriptedCliAdapter(0),
     DiscoveryService.Default,
+    ContextManager.Default,
+    ConfigService.Default,
     temp.layer
   )
   const program = Effect.gen(function* () {
@@ -146,6 +149,8 @@ describe("AgentRunner sub-agents", () => {
       PlanStore.Default,
       subagentAdapter,
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     const program = Effect.gen(function* () {
@@ -190,6 +195,8 @@ describe("AgentRunner image attachments", () => {
       PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     const image = { id: "img1", name: "login.png", mediaType: "image/png", data: "aGVsbG8=" }
@@ -222,6 +229,8 @@ describe("AgentRunner AskUserQuestion", () => {
       PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     const program = Effect.gen(function* () {
@@ -273,6 +282,8 @@ describe("AgentRunner ids", () => {
       PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     // Each provide of AgentRunner.Default builds a fresh runner (fresh counter),
@@ -310,6 +321,8 @@ describe("AgentRunner allowlist", () => {
       PlanStore.Default,
       makeScriptedCliAdapter(0),
     DiscoveryService.Default,
+    ContextManager.Default,
+    ConfigService.Default,
       temp.layer
     )
     const program = Effect.gen(function* () {
@@ -349,6 +362,8 @@ describe("AgentRunner plan mode", () => {
       PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
 
@@ -654,6 +669,8 @@ describe("AgentRunner model", () => {
       PlanStore.Default,
       modelReportingAdapter,
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     const model = await Effect.runPromise(
@@ -718,6 +735,8 @@ describe("AgentRunner plan library", () => {
       PlanStore.Default,
       makeScriptedCliAdapter(0),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     await Effect.runPromise(
@@ -752,6 +771,8 @@ describe("AgentRunner plan library", () => {
       PlanStore.Default,
       recordingAdapter(captured),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     // A saved plan already exists for this worktree.
@@ -789,6 +810,8 @@ describe("AgentRunner plan library", () => {
       PlanStore.Default,
       recordingAdapter(captured),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     await Effect.runPromise(
@@ -854,6 +877,8 @@ describe("AgentRunner resume across restarts", () => {
       PlanStore.Default,
       resumeAdapter(captured, "sdk-123"),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
 
@@ -957,6 +982,8 @@ describe("AgentRunner plan progress across turns", () => {
       PlanStore.Default,
       twoTurnAdapter(edit, plan),
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     return Effect.runPromise(
@@ -1076,6 +1103,7 @@ describe("AgentRunner failures", () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
       ConfigService.Default,
+      ContextManager.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,
@@ -1152,9 +1180,10 @@ describe("AgentRunner stop", () => {
         ConfigService.Default,
         SessionStore.Default,
         TranscriptStore.Default,
-      BackgroundTaskStore.Default,
-    BackgroundTaskStore.Default,
+        BackgroundTaskStore.Default,
         PlanStore.Default,
+        ContextManager.Default,
+        ConfigService.Default,
         hangingAdapter(started, interrupted, opts.gate),
         noHarnesses,
         temp.layer
@@ -1230,6 +1259,8 @@ describe("AgentRunner live tool output", () => {
       PlanStore.Default,
       deltaAdapter,
       DiscoveryService.Default,
+      ContextManager.Default,
+      ConfigService.Default,
       temp.layer
     )
     const { events, transcript } = await Effect.runPromise(
@@ -1283,6 +1314,7 @@ describe("AgentRunner on the Starbase harness", () => {
       const base = Layer.mergeAll(
         AgentRunner.Default,
         ConfigService.Default,
+        ContextManager.Default,
         SessionStore.Default,
         TranscriptStore.Default,
         BackgroundTaskStore.Default,
@@ -1344,6 +1376,7 @@ describe("AgentRunner usage accrual", () => {
     const base = Layer.mergeAll(
       AgentRunner.Default,
       ConfigService.Default,
+      ContextManager.Default,
       SessionStore.Default,
       TranscriptStore.Default,
       BackgroundTaskStore.Default,

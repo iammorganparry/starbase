@@ -8,6 +8,7 @@ import { DiffPeek } from "../components/diff-peek.js"
 import { Markdown } from "../components/markdown.js"
 import { PROVIDER_COLOR, PROVIDER_LABEL, ProviderIcon } from "../components/provider-icon.js"
 import { ApprovalGate } from "./approval-gate.js"
+import { ContextDivider } from "./context-divider.js"
 import { PlanCard } from "./plan-card.js"
 import { QuestionSummary } from "./question-summary.js"
 import { ThoughtBlock } from "./thought-block.js"
@@ -213,6 +214,10 @@ function PartView({
           onOpenReview={onOpenPlanReview}
         />
       )
+    case "Context":
+      // Deliberately full-width and unindented: this marks a boundary in the
+      // conversation rather than being something the agent said.
+      return <ContextDivider digest={part.digest} tokensBefore={part.tokensBefore} />
   }
 }
 

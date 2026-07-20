@@ -23,6 +23,7 @@ import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
 import { MessageTurn } from "../composites/message-turn.js"
 import { ArchivedBanner } from "../composites/archived-banner.js"
+import { ContextMeter } from "../composites/context-meter.js"
 import { RunStats } from "../composites/run-stats.js"
 
 /**
@@ -75,6 +76,18 @@ export interface ConversationViewProps {
   busy?: boolean
   /** Tokens currently occupying the main agent's context window. */
   tokens?: number
+  /**
+   * Where compaction fires for this session, in tokens. Null when the harness
+   * reports no usage — the meter then renders nothing rather than an empty bar
+   * that would read as "plenty of room left".
+   */
+  contextTriggerAt?: number | null
+  /** A digest is prepared; the next turn will reseed the conversation. */
+  /** A summary is being built right now. */
+  contextPreparing?: boolean
+  contextDigestReady?: boolean
+  /** Compact this session now, ahead of the budget. */
+  onCompactNow?: () => void
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   runStartedAt?: number | null
   /** Messages the operator queued while the agent was busy (sent FIFO once it's free). */
@@ -155,6 +168,10 @@ export function ConversationView({
   onStop,
   busy = false,
   tokens = 0,
+  contextTriggerAt = null,
+  contextPreparing = false,
+  contextDigestReady = false,
+  onCompactNow,
   runStartedAt = null,
   queued = [],
   onUnqueue,
@@ -297,7 +314,14 @@ export function ConversationView({
           {/* Live session analytics — elapsed time + current context size, right
               above the composer so it stays visible while the user works. */}
           {!archived && (busy || runStartedAt !== null || tokens > 0) && (
-            <div className="mb-1.5 flex items-center justify-end">
+            <div className="mb-1.5 flex items-center justify-end gap-2.5">
+              <ContextMeter
+                tokens={tokens}
+                triggerAt={contextTriggerAt}
+                preparing={contextPreparing}
+                digestReady={contextDigestReady}
+                onCompactNow={onCompactNow}
+              />
               <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
             </div>
           )}

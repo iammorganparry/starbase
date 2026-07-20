@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { BUDGET_RANGE, DEFAULT_BUDGET_TOKENS } from "./context.js"
 
 /**
  * Domain schemas for Starbase. These are Effect `Schema`s so they can be reused
@@ -52,6 +53,19 @@ export const CliInfo = Schema.Struct({
    * would reject them.
    */
   backgroundTasks: Schema.optional(Schema.Boolean),
+  /**
+   * Whether this harness reports how much of the context window it is using, via
+   * a `Usage` stream event. Claude, Codex and opencode do; Cursor has no headless
+   * adapter and runs on the scripted fallback, so it reports nothing real.
+   *
+   * Gates BOTH the context meter and auto-compaction: a harness we cannot measure
+   * is one we leave alone, with its own internal limit still the backstop. Showing
+   * a meter fed by a fabricated number would be worse than showing none.
+   *
+   * OPTIONAL for the same reason `backgroundTasks` is: it decodes payloads
+   * persisted before the field existed.
+   */
+  contextReporting: Schema.optional(Schema.Boolean),
   /**
    * Why an *installed* CLI is nonetheless unavailable — e.g. "opencode 1.0.220
    * found; Starbase needs ≥1.18". Absent when the CLI is usable, or simply not
@@ -164,6 +178,19 @@ export const Session = Schema.Struct({
   initialPrompt: Schema.optional(Schema.String),
   costUsd: Schema.Number,
   tokens: Schema.Number,
+  /**
+   * Tokens currently OCCUPYING the model's context window.
+   *
+   * Deliberately not `tokens`, which is the session's lifetime total and only
+   * ever grows. This one goes both ways: a compaction is supposed to make it
+   * fall, and that drop is the signal the feature worked. Folding the two into
+   * one field would make a compaction look like negative usage on the sidebar,
+   * and make the meter read a lifetime sum as though it were the working set.
+   *
+   * Absent on sessions written before compaction existed, which read as "not
+   * measured yet" rather than "empty".
+   */
+  contextTokens: Schema.optional(Schema.Number),
   /** ISO-8601 last-activity timestamp. */
   updatedAt: Schema.String,
   /** Absolute path to this session's isolated git worktree, when one exists. */
@@ -195,6 +222,15 @@ export const Session = Schema.Struct({
   allowlist: Schema.optional(Schema.Array(Schema.String)),
   /** The harness model id for this session; defaults to the harness default. */
   model: Schema.optional(Schema.String),
+  /**
+   * Per-session auto-compaction override. Absent = follow the global setting.
+   *
+   * Overrides in BOTH directions on purpose. A user mid-way through something
+   * delicate may want one session pinned open with its full history intact, and
+   * a user who left the global switch off may still want it on for the one
+   * session that has been running all day.
+   */
+  autoCompact: Schema.optional(Schema.Boolean),
   /**
    * True only for sessions the agent auto-names (refreshed each turn). A manual
    * rename — or a title typed at creation — pins the name (false). Absent is
@@ -331,8 +367,24 @@ export const ProviderConfig = Schema.Struct({
   defaultMode: PermissionMode,
   /** Default harness model id for new sessions; absent = the harness default. */
   defaultModel: Schema.optional(Schema.String),
-  /** Small/fast model for summaries & side tasks; absent = the harness default. */
+  /**
+   * Small/fast model for summaries & side tasks; absent = the harness default.
+   *
+   * Consumed by the context digest (`digestModelFor`), which runs through the
+   * session's own harness binary — so the summary bills to the user's existing
+   * subscription rather than any separate API credential.
+   */
   backgroundModel: Schema.optional(Schema.String),
+  /**
+   * The model's context-window size in tokens, when Starbase can't infer it.
+   *
+   * Only route to auto-compaction for opencode, whose catalogue is resolved from
+   * the user's own credentials across ~167 providers — there is no honest window
+   * default to invent, so `contextWindowFor` reports unknown and compaction stays
+   * off until the user says how big the window is. Also the escape hatch when a
+   * harness ships a model whose window we don't know yet.
+   */
+  contextWindow: Schema.optional(Schema.Number),
   /** Extended-thinking budget; absent = the harness default. */
   reasoningEffort: Schema.optional(ReasoningEffort),
   /** Reply tone/verbosity preset; absent = the harness default. */
@@ -398,6 +450,27 @@ export const ProvidersConfig = Schema.partial(
 export type ProvidersConfig = Schema.Schema.Type<typeof ProvidersConfig>
 
 /**
+ * The global auto-compaction levers, persisted at `WorkspaceConfig.context`.
+ *
+ * Lives here rather than beside the policy in `context.ts` because it is
+ * CONFIG — and because `context.ts` may not import this module at runtime
+ * without collapsing the schema graph (see the note on its `CliKind` import).
+ */
+export const ContextConfig = Schema.Struct({
+  /** Master switch. Off returns the app to exactly its pre-feature behaviour. */
+  auto: Schema.Boolean,
+  /** Working-set budget in tokens, constrained to the usable quality band. */
+  budgetTokens: Schema.Number.pipe(Schema.between(BUDGET_RANGE.min, BUDGET_RANGE.max))
+})
+export type ContextConfig = Schema.Schema.Type<typeof ContextConfig>
+
+/** The shipped defaults — auto ON, mid-band budget. */
+export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
+  auto: true,
+  budgetTokens: DEFAULT_BUDGET_TOKENS
+}
+
+/**
  * Persisted app configuration, stored at `~/starbase/config.json`. `reposDir` is
  * null until the user completes first-run setup by choosing a repos directory.
  */
@@ -406,6 +479,12 @@ export const WorkspaceConfig = Schema.Struct({
   reposDir: Schema.NullOr(Schema.String),
   /** ISO-8601 timestamp of when the config was first created. */
   createdAt: Schema.String,
+  /**
+   * Auto-compaction levers. Absent on configs written before the feature, which
+   * `DEFAULT_CONTEXT_CONFIG` fills in — so existing users get it switched on
+   * without having to find a setting.
+   */
+  context: Schema.optional(ContextConfig),
   /** GitHub integration prefs; absent until configured (older configs lack it). */
   github: Schema.optional(GithubConfig),
   /** Git behaviour prefs; absent until configured (older configs lack it). */

@@ -29,17 +29,30 @@ interface CliSpec {
    * than offering a Stop button with nothing to aim at.
    */
   readonly backgroundTasks?: boolean
+  /**
+   * Whether this harness reports context-window occupancy through a `Usage`
+   * event. Claude reads it off the SDK's final sampling iteration, Codex off
+   * `turn.completed`, opencode off its per-step totals.
+   *
+   * Cursor has no headless adapter at all — it falls through to the scripted
+   * fallback, whose token numbers are fixtures. Reporting `true` there would put
+   * a meter on screen filled with invented data and arm auto-compaction against
+   * it, so it stays false.
+   */
+  readonly contextReporting?: boolean
 }
 
 const CLI_SPECS: Record<CliKind, CliSpec> = {
   claude: {
     label: "Claude Code",
     backgroundTasks: true,
+    contextReporting: true,
     bins: ["claude"],
     candidates: ["~/.claude/local/claude", "~/.local/bin/claude", "/opt/homebrew/bin/claude"]
   },
   codex: {
     label: "Codex CLI",
+    contextReporting: true,
     bins: ["codex"],
     candidates: ["~/.local/bin/codex", "/opt/homebrew/bin/codex"]
   },
@@ -50,6 +63,7 @@ const CLI_SPECS: Record<CliKind, CliSpec> = {
   },
   opencode: {
     label: "opencode",
+    contextReporting: true,
     bins: ["opencode"],
     candidates: ["~/.opencode/bin/opencode", "~/.local/bin/opencode", "/opt/homebrew/bin/opencode"],
     // The 1.0.x line can't be driven the way the adapter expects: no `--auto`,
@@ -124,6 +138,7 @@ const unavailable = (kind: CliKind, spec: CliSpec, note?: string): CliInfo => ({
   kind,
   label: spec.label,
   backgroundTasks: spec.backgroundTasks ?? false,
+  contextReporting: spec.contextReporting ?? false,
   binPath: null,
   version: null,
   available: false,
@@ -177,7 +192,8 @@ const probe = (
             binPath,
             version,
             available: true,
-            backgroundTasks: spec.backgroundTasks ?? false
+            backgroundTasks: spec.backgroundTasks ?? false,
+            contextReporting: spec.contextReporting ?? false
           }
 
     // 0. Pinned dir (e2e only): this dir IS the host, so neither the PATH lookup

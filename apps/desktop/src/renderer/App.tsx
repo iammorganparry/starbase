@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
+  ContextConfig,
   CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
@@ -117,6 +118,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const gitConfig = configQuery.data?.git ?? null
   const notificationsConfig = configQuery.data?.notifications ?? null
   const providersConfig = configQuery.data?.providers ?? null
+  const contextConfig = configQuery.data?.context ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
   const collapsedRepos = configQuery.data?.collapsedRepos ?? []
   const lastRepoPath = configQuery.data?.lastRepoPath ?? null
@@ -141,6 +143,13 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const saveProvider = (cli: CliKind, config: ProviderConfig) =>
     rpc.configSetProvider(cli, config).then((saved) => {
       qc.setQueryData(["config"], saved)
+    })
+  const saveContextConfig = (config: ContextConfig) =>
+    rpc.configSetContext(config).then((saved) => {
+      qc.setQueryData(["config"], saved)
+      // Every session's trigger point moves with the budget, so drop the cached
+      // snapshots rather than leaving meters reading against the old one.
+      void qc.invalidateQueries({ queryKey: ["context"] })
     })
   const saveOrchestrator = (cli: CliKind, model: string) => {
     void rpc.configSetOrchestrator(cli, model).then((saved) => {
@@ -503,6 +512,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveNotificationsConfig={saveNotificationsConfig}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
+      contextConfig={contextConfig}
+      onSaveContextConfig={saveContextConfig}
       modelCatalog={catalogQuery.data ?? []}
       orchestrator={configQuery.data?.orchestrator ?? null}
       onSaveOrchestrator={saveOrchestrator}

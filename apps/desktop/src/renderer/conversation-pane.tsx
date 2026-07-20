@@ -78,6 +78,64 @@ export function ConversationPane({
   const backgroundTasksSupported =
     clisQuery.data?.find((c) => c.kind === convo.cli)?.backgroundTasks ?? false
   const bgTasks = useBackgroundTasks(session.id, backgroundTasksSupported)
+
+  /**
+   * Context accounting for the meter.
+   *
+   * Re-read when the live token count changes rather than polled: `convo.tokens`
+   * moves on every `Usage` event, so keying the query on it gives a meter that
+   * tracks the run without a timer running against every open session. Gated on
+   * the harness reporting context at all — the meter renders nothing when
+   * `triggerAt` is null, and asking for a snapshot we would not draw is waste.
+   */
+  const contextReporting =
+    clisQuery.data?.find((c) => c.kind === convo.cli)?.contextReporting ?? false
+  /**
+   * The session's context accounting.
+   *
+   * NOT keyed on the live token count. Keying it there seemed natural — refetch
+   * whenever usage moves — but every `Usage` event then produced a new cache
+   * entry whose `data` starts `undefined`, so `triggerAt` went null and the
+   * meter UNMOUNTED. Mid-run, where usage updates constantly, it could never
+   * appear at all. It also fired one RPC per token update. The live number comes
+   * from `convo.tokens` instead.
+   *
+   * It IS keyed on the harness and model, because the trigger point is derived
+   * from them: a session switched from Claude to Codex has a different window
+   * and therefore a different budget. Keyed on the session alone, the meter and
+   * the Compact now action would keep pointing at the old harness's numbers —
+   * and because a disabled query still serves its last data, switching to a
+   * harness that reports nothing (Cursor) would leave the previous harness's
+   * meter on screen rather than hiding it.
+   */
+  const [requested, setRequested] = useState(false)
+  const contextQuery = useQuery({
+    queryKey: ["context", session.id, convo.cli, convo.model],
+    queryFn: () => rpc.contextState(session.id),
+    enabled: contextReporting,
+    /**
+     * Poll while a compaction could be happening.
+     *
+     * The digest runs on a background fiber with no push channel to the
+     * renderer, so polling is the only way to see it start or finish. Scoped to
+     * when something might actually be in flight — a session sitting well inside
+     * its budget needs no timer.
+     */
+    refetchInterval: (query) =>
+      requested || query.state.data?.preparing || convo.busy ? 1500 : false
+  })
+  const preparing = contextQuery.data?.preparing ?? false
+  const digestReady = contextQuery.data?.digestReady ?? false
+  // The manual request is only needed until the manager reports the fiber it
+  // started; after that `preparing` is the authoritative signal.
+  useEffect(() => {
+    if (preparing || digestReady) setRequested(false)
+  }, [preparing, digestReady])
+  // A turn crossing the budget starts a digest, so re-read once it settles.
+  useEffect(() => {
+    if (!convo.busy && contextReporting) void contextQuery.refetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convo.busy, contextReporting])
   const [viewingTaskId, setViewingTaskId] = useState<string | null>(null)
   const [taskOutput, setTaskOutput] = useState("")
   const viewingTask = bgTasks.tasks.find((t) => t.id === viewingTaskId) ?? null
@@ -209,6 +267,13 @@ export function ConversationPane({
           paused={convo.paused}
           busy={convo.busy}
           tokens={convo.tokens}
+          contextTriggerAt={contextQuery.data?.triggerAt ?? null}
+          contextPreparing={preparing || requested}
+          contextDigestReady={digestReady}
+          onCompactNow={() => {
+            setRequested(true)
+            void rpc.contextCompactNow(session.id).catch(() => setRequested(false))
+          }}
           runStartedAt={convo.runStartedAt}
           queued={convo.queued}
           onUnqueue={convo.unqueue}
