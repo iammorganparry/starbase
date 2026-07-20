@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -52,16 +52,70 @@ describe("GitService.createWorktree", () => {
     expect(worktrees).toContain(worktree.path)
   })
 
-  it("symlinks node_modules to the origin repo when the origin has one", async () => {
+  it("shares the origin's third-party packages rather than copying them", async () => {
     const repoPath = initGitRepo(join(repos.dir, "app"), { nodeModules: true })
     const exit = await create(repoPath, "app")
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
 
-    const link = join(exit.value.path, "node_modules")
-    expect(lstatSync(link).isSymbolicLink()).toBe(true)
-    // The marker in the origin's node_modules is readable *through* the link.
-    expect(readFileSync(join(link, ".marker"), "utf-8")).toContain("origin-node-modules")
+    // The marker in the origin's node_modules is readable from the worktree —
+    // the anti-bloat win: nothing was copied or reinstalled.
+    const nm = join(exit.value.path, "node_modules")
+    expect(readFileSync(join(nm, ".marker"), "utf-8")).toContain("origin-node-modules")
+    expect(lstatSync(join(nm, ".marker")).isSymbolicLink()).toBe(true)
+  })
+
+  it("resolves a WORKSPACE package to the worktree's own source, not the origin's", async () => {
+    // The regression this whole mirror exists for. A package manager writes
+    // workspace links RELATIVE (`@acme/lib -> ../../packages/lib`), so
+    // symlinking node_modules wholesale made every workspace import in the
+    // worktree resolve back into the ORIGIN checkout. Agents then edited the
+    // branch and type-checked main.
+    const repoPath = initGitRepo(join(repos.dir, "mono"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "mono")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const worktree = exit.value.path
+
+    // Change the branch's copy. The origin's copy still says "origin-source".
+    writeFileSync(join(worktree, "packages", "lib", "index.js"), "module.exports = 'branch-source'\n")
+
+    const throughLink = readFileSync(join(worktree, "node_modules", "@acme", "lib", "index.js"), "utf-8")
+    expect(throughLink).toContain("branch-source")
+    expect(throughLink).not.toContain("origin-source")
+    // And the origin is untouched — the worktree must not write through to it.
+    expect(readFileSync(join(repoPath, "packages", "lib", "index.js"), "utf-8")).toContain("origin-source")
+  })
+
+  it("tells workspace and third-party apart INSIDE the same scope dir", async () => {
+    // `@acme` holds both a workspace link and a vendored package, so the scope
+    // dir can't be classified as a whole — only entry by entry.
+    const repoPath = initGitRepo(join(repos.dir, "mixed"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "mixed")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const nm = join(exit.value.path, "node_modules")
+
+    // The scope dir itself is REAL (rebuilt), or its entries couldn't differ.
+    expect(lstatSync(join(nm, "@acme")).isDirectory()).toBe(true)
+    expect(lstatSync(join(nm, "@acme")).isSymbolicLink()).toBe(false)
+    // Vendored code is still shared with the origin.
+    expect(readFileSync(join(nm, "@acme", "vendor-kit", "index.js"), "utf-8")).toContain("vendor")
+    expect(readFileSync(join(nm, "left-pad", "index.js"), "utf-8")).toContain("vendor")
+  })
+
+  it("survives a broken link in the origin's node_modules", async () => {
+    // A dep removed since the last install leaves a dangling entry. It must be
+    // skipped, not propagated — and must not fail the session create, which is
+    // the expensive thing to lose.
+    const repoPath = initGitRepo(join(repos.dir, "stale"), { nodeModules: true })
+    symlinkSync(join(repoPath, "node_modules", "gone"), join(repoPath, "node_modules", "dangling"))
+    const exit = await create(repoPath, "stale")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(existsSync(join(exit.value.path, "node_modules", "dangling"))).toBe(false)
+    // The healthy entries still landed.
+    expect(existsSync(join(exit.value.path, "node_modules", ".marker"))).toBe(true)
   })
 
   it("creates no node_modules link when the origin has none (and does not fail)", async () => {

@@ -6,6 +6,17 @@ import { Effect } from "effect"
 import { AppPaths } from "./app-paths.js"
 import { gitLine, runGit, runString } from "./command.js"
 
+/**
+ * Is `candidate` the directory `root`, or somewhere beneath it?
+ *
+ * Compares path SEGMENTS, not string prefixes: `/repo-backup` starts with
+ * `/repo` as text but is a different tree, and treating it as contained would
+ * misclassify its packages as workspace members. Both arguments are expected to
+ * be already-resolved absolute paths.
+ */
+const isWithin = (root: string, candidate: string): boolean =>
+  candidate === root || candidate.startsWith(root.endsWith("/") ? root : `${root}/`)
+
 /** Parameters for forking an isolated worktree from a repo. */
 export interface CreateWorktreeInput {
   /** Absolute path to the origin repo. */
@@ -27,9 +38,13 @@ type GitEnv =
 /**
  * Creates isolated git worktrees for sessions. A worktree is added under
  * `~/starbase/worktrees/<repo>/<slug>` on a fresh `starbase/<slug>` branch forked
- * from `baseBranch`. To avoid duplicating dependencies, the worktree's
- * `node_modules` is symlinked to the origin repo's `node_modules` (best-effort;
- * a session that later changes deps simply installs locally over the link).
+ * from `baseBranch`.
+ *
+ * To avoid duplicating dependencies, the worktree's `node_modules` MIRRORS the
+ * origin repo's: third-party packages are symlinked (nothing copied), while
+ * workspace packages are re-pointed at the worktree's own source — see
+ * `mirrorEntry`. Best-effort; a session that later changes deps simply installs
+ * locally over the links.
  */
 export class GitService extends Effect.Service<GitService>()(
   "@starbase/GitService",
@@ -88,8 +103,102 @@ export class GitService extends Effect.Service<GitService>()(
         })
 
       /**
-       * Anti-bloat: point the worktree's node_modules at the origin repo's, so
-       * no deps are copied or reinstalled. Best-effort — never fatal.
+       * Directories inside `node_modules` that hold OTHER entries rather than
+       * being a package themselves, so they must be rebuilt entry-by-entry
+       * instead of linked whole. `@scope` dirs mix third-party packages with
+       * workspace links; `.bin` mixes third-party shims with workspace ones.
+       */
+      const isContainerDir = (name: string): boolean => name.startsWith("@") || name === ".bin"
+
+      /**
+       * Mirror one `node_modules` entry into the worktree.
+       *
+       * THE BUG THIS EXISTS FOR: symlinking `node_modules` wholesale was correct
+       * for a single-package repo and silently wrong for a workspace monorepo.
+       * A workspace link inside it (`node_modules/@acme/web -> ../../apps/web`)
+       * is RELATIVE, so following it from the worktree resolved back into the
+       * ORIGIN checkout — every workspace import in a session read main's
+       * source instead of the branch's. Agents then edited one tree and
+       * type-checked another, producing errors that pointed at code the branch
+       * had already changed.
+       *
+       * So each entry is classified by where it REALLY lands (`realPath`, which
+       * follows the whole chain):
+       *   - inside the repo but outside `node_modules` → a workspace package;
+       *     re-point it at the worktree's own copy, which is the fix;
+       *   - a container dir (`@scope`, `.bin`) → recurse, since it holds a mix;
+       *   - anything else → a third-party package; link to the origin's copy and
+       *     keep the anti-bloat win that motivated this in the first place.
+       */
+      const mirrorEntry = (
+        repoPath: string,
+        worktreePath: string,
+        originDir: string,
+        targetDir: string,
+        name: string
+      ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path
+          const fs = yield* FileSystem.FileSystem
+          const originEntry = path.join(originDir, name)
+          const targetEntry = path.join(targetDir, name)
+
+          // A broken link (a dep removed since the last install) resolves to
+          // nothing. Skip it rather than propagating a dangling entry.
+          const real = yield* fs.realPath(originEntry).pipe(Effect.option)
+          if (real._tag === "None") return
+          const resolved = real.value
+
+          const nodeModulesRoot = path.join(repoPath, "node_modules")
+          const insideRepo = isWithin(repoPath, resolved)
+          const insideNodeModules = isWithin(nodeModulesRoot, resolved)
+
+          if (insideRepo && !insideNodeModules) {
+            // A workspace package. Point at the SAME relative location under the
+            // worktree, so the branch's own source is what gets imported.
+            const rel = path.relative(repoPath, resolved)
+            yield* fs.symlink(path.join(worktreePath, rel), targetEntry).pipe(Effect.ignore)
+            return
+          }
+
+          if (isContainerDir(name)) {
+            yield* mirrorDir(repoPath, worktreePath, originEntry, targetEntry)
+            return
+          }
+
+          yield* fs.symlink(originEntry, targetEntry).pipe(Effect.ignore)
+        })
+
+      /** Rebuild one directory in the worktree, mirroring each of its entries. */
+      const mirrorDir = (
+        repoPath: string,
+        worktreePath: string,
+        originDir: string,
+        targetDir: string
+      ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const entries = yield* fs.readDirectory(originDir).pipe(Effect.orElseSucceed(() => []))
+          yield* fs.makeDirectory(targetDir, { recursive: true }).pipe(Effect.ignore)
+          yield* Effect.forEach(
+            entries,
+            (name) => mirrorEntry(repoPath, worktreePath, originDir, targetDir, name),
+            // Bounded rather than unbounded: a large monorepo has thousands of
+            // entries and each costs a `realPath` + a `symlink`. Sequential is
+            // needlessly slow; unbounded exhausts the file-descriptor limit.
+            { concurrency: 16, discard: true }
+          )
+        })
+
+      /**
+       * Anti-bloat: give the worktree a `node_modules` whose third-party packages
+       * are SHARED with the origin repo (nothing copied or reinstalled) but whose
+       * workspace packages resolve to the WORKTREE's own source. See
+       * `mirrorEntry` for why the obvious one-symlink version was wrong.
+       *
+       * Best-effort throughout — a session with a partially-linked
+       * `node_modules` is recoverable by running an install, but a session that
+       * failed to create is not.
        */
       const linkNodeModules = (
         repoPath: string,
@@ -102,11 +211,23 @@ export class GitService extends Effect.Service<GitService>()(
           const hasNodeModules = yield* fs
             .exists(originNodeModules)
             .pipe(Effect.orElseSucceed(() => false))
-          if (hasNodeModules) {
-            yield* fs
-              .symlink(originNodeModules, path.join(worktreePath, "node_modules"))
-              .pipe(Effect.ignore)
-          }
+          if (!hasNodeModules) return
+          // Canonicalise BOTH roots before any containment check. `realPath`
+          // resolves symlinked parents, and on macOS the temp/volume paths that
+          // repos live under routinely are ones (`/var` → `/private/var`). Left
+          // uncanonicalised, a resolved workspace package never appears to be
+          // "inside the repo", every entry falls through to the third-party
+          // branch, and the bug this function fixes comes straight back — quietly.
+          const repoRoot = yield* fs.realPath(repoPath).pipe(Effect.orElseSucceed(() => repoPath))
+          const treeRoot = yield* fs
+            .realPath(worktreePath)
+            .pipe(Effect.orElseSucceed(() => worktreePath))
+          yield* mirrorDir(
+            repoRoot,
+            treeRoot,
+            originNodeModules,
+            path.join(worktreePath, "node_modules")
+          )
         })
 
       /**
