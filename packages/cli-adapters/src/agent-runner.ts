@@ -755,16 +755,22 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               if (event._tag === "ToolEnd" && event.status === "success") {
                 yield* markPlanProgress(event.id)
               }
-              // Hand every context reading to the manager, which decides whether
-              // to start preparing a digest. It forks and returns immediately, so
-              // this cannot slow the turn down. `Usage` is the live per-message
-              // reading; `Done` is the fallback for harnesses that only report at
-              // the end.
+              // Hand every context reading to the manager, but only let a SETTLED
+              // turn start a digest.
+              //
+              // Claude and opencode report usage per assistant message, so a turn
+              // that uses tools reports several times before it ends. Summarising
+              // from one of those mid-turn readings would capture a transcript
+              // whose last message is still streaming, and the digest's
+              // `throughMessageId` would then cause the rest of that same turn to
+              // be skipped at swap time — neither summarised nor replayed.
+              //
+              // `Done` is the only point at which the transcript is coherent.
               if (event._tag === "Usage") {
                 yield* ContextManager.observe(sessionId, event.tokens).pipe(Effect.ignore)
               }
               if (event._tag === "Done" && event.tokens > 0) {
-                yield* ContextManager.observe(sessionId, event.tokens).pipe(Effect.ignore)
+                yield* ContextManager.settle(sessionId, event.tokens).pipe(Effect.ignore)
               }
             }).pipe(Effect.provide(env), Effect.asVoid)
 

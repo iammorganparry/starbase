@@ -1,4 +1,4 @@
-import type { ContextDigest, ContextSnapshot, Message, StreamEvent } from "@starbase/core"
+import type { CliInfo, ContextDigest, ContextSnapshot, Message, StreamEvent } from "@starbase/core"
 import {
   DEFAULT_CONTEXT_CONFIG,
   contextPhase,
@@ -89,6 +89,42 @@ export class ContextManager extends Effect.Service<ContextManager>()(
       /** Live digest fibers, so a stopped or deleted session can cancel its own. */
       const fibers = yield* Ref.make(new Map<string, Fiber.RuntimeFiber<void, never>>())
 
+      /**
+       * Harness discovery, memoised for 30s.
+       *
+       * `DiscoveryService.list()` shells out `which` + `--version` for every
+       * harness — roughly eight processes per call — and does not cache. This
+       * service needs it on EVERY `snapshot`, which the meter polls once a second
+       * and a half while a turn runs, so calling straight through meant spawning
+       * eight processes a second per open session just to draw a progress bar.
+       *
+       * Hand-rolled rather than `Effect.cachedWithTTL` because that resolves the
+       * effect at CONSTRUCTION time, which would turn discovery into a layer
+       * dependency of this service and force every consumer to rewire. Keeping it
+       * per-call leaves the service's shape unchanged.
+       *
+       * A TTL rather than a permanent cache so installing or upgrading a harness
+       * takes effect within half a minute, without a restart.
+       */
+      const cliCache = yield* Ref.make<{ at: number; value: ReadonlyArray<CliInfo> } | null>(null)
+      const CLI_TTL_MS = 30_000
+
+      const listClis = (): Effect.Effect<
+        ReadonlyArray<CliInfo>,
+        never,
+        DiscoveryService | CommandExecutor.CommandExecutor
+      > =>
+        Effect.gen(function* () {
+          const now = yield* Effect.sync(() => Date.now())
+          const cached = yield* Ref.get(cliCache)
+          if (cached !== null && now - cached.at < CLI_TTL_MS) return cached.value
+          const fresh = yield* DiscoveryService.list().pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<CliInfo>)
+          )
+          yield* Ref.set(cliCache, { at: now, value: fresh })
+          return fresh
+        })
+
       const stateOf = (sessionId: string): Effect.Effect<SessionContext> =>
         Effect.map(Ref.get(states), (m) => m.get(sessionId) ?? EMPTY)
 
@@ -115,8 +151,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           const ctx = config?.context ?? DEFAULT_CONTEXT_CONFIG
           const provider = config?.providers?.[session.cli]
 
-          const clis = yield* DiscoveryService.list().pipe(Effect.orElseSucceed(() => []))
-          const cli = clis.find((c) => c.kind === session.cli)
+          const cli = (yield* listClis()).find((c) => c.kind === session.cli)
 
           // A harness that reports no usage gives us nothing to measure, so it is
           // left alone rather than compacted against a fabricated number.
@@ -260,13 +295,39 @@ export class ContextManager extends Effect.Service<ContextManager>()(
       const observe = (
         sessionId: string,
         tokens: number
-      ): Effect.Effect<void, never, DigestEnv> =>
+      ): Effect.Effect<void, never, SessionStore | FileSystem.FileSystem | AppPaths> =>
         Effect.gen(function* () {
           if (!Number.isFinite(tokens) || tokens <= 0) return
           yield* setState(sessionId, (s) => ({ ...s, tokens }))
           // Persist so the reading survives a restart — otherwise a session
           // reopened at 290k reads as 0 and runs to the ceiling.
           yield* SessionStore.setTokens(sessionId, tokens).pipe(Effect.ignore)
+        })
+
+      /**
+       * Record a reading AND decide whether to start preparing a digest.
+       *
+       * Called only when a turn has SETTLED, and that distinction is
+       * load-bearing. Claude and opencode report usage per assistant message, so
+       * a turn that uses tools reports several times before it finishes. Forking
+       * on one of those mid-turn readings builds the digest from a transcript
+       * whose last message is still streaming — and since the digest stamps
+       * `throughMessageId` with that message's id, `tailAfter` then slices AFTER
+       * it at swap time. Every tool result and closing paragraph that landed on
+       * that same message afterwards is neither summarised nor replayed: the
+       * compacted context silently loses the tail of the very turn that
+       * triggered it.
+       *
+       * Readings still arrive continuously through `observe`; only the decision
+       * to summarise waits for a coherent transcript.
+       */
+      const settle = (
+        sessionId: string,
+        tokens: number
+      ): Effect.Effect<void, never, DigestEnv> =>
+        Effect.gen(function* () {
+          yield* observe(sessionId, tokens)
+          if (!Number.isFinite(tokens) || tokens <= 0) return
 
           const settings = yield* settingsFor(sessionId)
           if (settings === null) return
@@ -376,7 +437,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           }
         })
 
-      return { observe, applyIfReady, compactNow, cancel, snapshot }
+      return { observe, settle, applyIfReady, compactNow, cancel, snapshot }
     })
   }
 ) {}

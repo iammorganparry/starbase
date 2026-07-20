@@ -1,6 +1,12 @@
 import type { ThreadEvent } from "@openai/codex-sdk"
 import { describe, expect, it } from "vitest"
-import { codexContextTokens, codexEventToStreamEvents, mapCodexPolicy } from "./codex-adapter.js"
+import {
+  codexContextTokens,
+  codexEventToStreamEvents,
+  mapCodexPolicy,
+  rememberThread,
+  threadIdFor
+} from "./codex-adapter.js"
 
 /**
  * Codex's live path needs a real `codex` login, so we test the PURE seam — the
@@ -133,6 +139,43 @@ describe("codexEventToStreamEvents", () => {
     expect(
       codexEventToStreamEvents(ev({ type: "turn.failed", error: { message: "boom" } }), "s1")
     ).toStrictEqual([{ _tag: "Failed", message: "boom" }])
+  })
+
+  /**
+   * `fresh` was silently ignored here while Claude and opencode honoured it, so
+   * BOTH one-shot callers quietly no-opped on Codex: the adversarial reviewer
+   * resumed the previous review's thread, and a compaction resumed the very
+   * conversation it had just summarised — paying for the digest and shedding
+   * nothing. Only an app restart cleared it.
+   */
+  describe("fresh threads", () => {
+    it("resumes the live thread on a normal turn", () => {
+      const resume = new Map<string, string>([["s1", "thread_live"]])
+      expect(threadIdFor({ resume, sessionId: "s1", resumeId: "thread_persisted" })).toBe("thread_live")
+    })
+
+    it("falls back to the persisted id after a restart cleared the map", () => {
+      expect(
+        threadIdFor({ resume: new Map(), sessionId: "s1", resumeId: "thread_persisted" })
+      ).toBe("thread_persisted")
+    })
+
+    // The map WINS over the spec, so clearing the persisted id is not enough on
+    // its own — this is the case that was broken.
+    it("starts a brand-new thread when fresh, even with a live thread in the map", () => {
+      const resume = new Map<string, string>([["s1", "thread_live"]])
+      expect(
+        threadIdFor({ resume, sessionId: "s1", resumeId: "thread_persisted", fresh: true })
+      ).toBeUndefined()
+    })
+
+    it("leaves no trace, so the next turn cannot resume the one-shot thread", () => {
+      const resume = new Map<string, string>()
+      rememberThread({ resume, sessionId: "s1", threadId: "thread_oneshot", fresh: true })
+      expect(resume.has("s1")).toBe(false)
+      rememberThread({ resume, sessionId: "s1", threadId: "thread_real" })
+      expect(resume.get("s1")).toBe("thread_real")
+    })
   })
 
   describe("codexContextTokens", () => {

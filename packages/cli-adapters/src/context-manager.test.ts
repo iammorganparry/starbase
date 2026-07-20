@@ -179,7 +179,7 @@ const settle = () => Effect.sleep("300 millis")
 /** Observe, wait, and report both the run count's input and the decided phase. */
 const observeAndPhase = (tokens: number) =>
   Effect.gen(function* () {
-    yield* ContextManager.observe(SESSION, tokens)
+    yield* ContextManager.settle(SESSION, tokens)
     const snap = yield* ContextManager.snapshot(SESSION)
     yield* settle()
     return snap.phase
@@ -206,7 +206,7 @@ const awaitDigest = () =>
 /** Drive `observe`, then wait for the digest fiber to reach the adapter. */
 const observeAndSettle = (tokens: number, rec?: Recorder, runs = 1) =>
   Effect.gen(function* () {
-    yield* ContextManager.observe(SESSION, tokens)
+    yield* ContextManager.settle(SESSION, tokens)
     if (rec === undefined) return yield* settle()
     yield* awaitRuns(rec, runs)
     // The adapter has been entered; give the fiber a moment to finish parsing.
@@ -233,7 +233,7 @@ describe("ContextManager.observe", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.observe(SESSION, 180_000)
+        yield* ContextManager.settle(SESSION, 180_000)
         yield* awaitDigest()
         return yield* ContextManager.applyIfReady(SESSION)
       }),
@@ -301,9 +301,9 @@ describe("ContextManager.observe", () => {
     await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.observe(SESSION, 180_000)
-        yield* ContextManager.observe(SESSION, 185_000)
-        yield* ContextManager.observe(SESSION, 190_000)
+        yield* ContextManager.settle(SESSION, 180_000)
+        yield* ContextManager.settle(SESSION, 185_000)
+        yield* ContextManager.settle(SESSION, 190_000)
         yield* awaitRuns(rec, 1)
         yield* settle()
       }),
@@ -450,6 +450,52 @@ describe("ContextManager.observe", () => {
   })
 })
 
+/**
+ * The `observe` / `settle` split, which exists because of a real bug.
+ *
+ * Claude and opencode report usage per assistant message, so a turn that uses
+ * tools reports several times before it ends. Forking on one of those readings
+ * summarised a transcript whose last message was still streaming — and because
+ * the digest stamps `throughMessageId` with that message's id, `tailAfter` then
+ * skipped the REST of that same turn at swap time. Every tool result and closing
+ * paragraph that landed afterwards was neither summarised nor replayed.
+ */
+describe("mid-turn readings", () => {
+  it("records a mid-turn reading without starting a digest", async () => {
+    const rec = recorder()
+    const session = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        // Well over the 170k trigger, but the turn has not finished.
+        yield* ContextManager.observe(SESSION, 180_000)
+        yield* Effect.sleep("300 millis")
+        return yield* SessionStore.get(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    // The reading still lands — the meter and a reload both depend on it.
+    expect(session.tokens).toBe(180_000)
+    // …but nothing was summarised from a half-written transcript.
+    expect(rec.runs.count).toBe(0)
+  })
+
+  it("starts the digest once the turn settles", async () => {
+    const rec = recorder()
+    await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* ContextManager.observe(SESSION, 175_000)
+        yield* ContextManager.observe(SESSION, 178_000)
+        expect(rec.runs.count).toBe(0)
+        yield* ContextManager.settle(SESSION, 180_000)
+        yield* awaitRuns(rec, 1)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(rec.runs.count).toBe(1)
+  })
+})
+
 describe("ContextManager.applyIfReady", () => {
   it("returns nothing when no digest is waiting", async () => {
     const rec = recorder()
@@ -470,7 +516,7 @@ describe("ContextManager.applyIfReady", () => {
     const [first, second] = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.observe(SESSION, 180_000)
+        yield* ContextManager.settle(SESSION, 180_000)
         yield* awaitDigest()
         const a = yield* ContextManager.applyIfReady(SESSION)
         const b = yield* ContextManager.applyIfReady(SESSION)
@@ -550,7 +596,7 @@ describe("ContextManager.cancel", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.observe(SESSION, 180_000)
+        yield* ContextManager.settle(SESSION, 180_000)
         yield* ContextManager.cancel(SESSION)
         yield* settle()
         return yield* ContextManager.applyIfReady(SESSION)
@@ -567,7 +613,7 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.observe(SESSION, 100_000)
+        yield* ContextManager.settle(SESSION, 100_000)
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
@@ -585,7 +631,7 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed({ model: "claude-fable-5" })
-        yield* ContextManager.observe(SESSION, 100_000)
+        yield* ContextManager.settle(SESSION, 100_000)
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
@@ -627,7 +673,7 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.observe(SESSION, 180_000)
+        yield* ContextManager.settle(SESSION, 180_000)
         yield* awaitDigest()
         yield* ContextManager.applyIfReady(SESSION)
         return yield* ContextManager.snapshot(SESSION)

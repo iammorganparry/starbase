@@ -93,18 +93,24 @@ export function ConversationPane({
   /**
    * The session's context accounting.
    *
-   * Keyed on the session ALONE, deliberately. Keying it on the live token count
-   * seemed natural — refetch whenever usage moves — but every `Usage` event then
-   * produced a new cache entry whose `data` starts `undefined`, so `triggerAt`
-   * went null and the meter UNMOUNTED. Mid-run, where usage updates constantly,
-   * it could never appear at all. It also fired one RPC per token update.
+   * NOT keyed on the live token count. Keying it there seemed natural — refetch
+   * whenever usage moves — but every `Usage` event then produced a new cache
+   * entry whose `data` starts `undefined`, so `triggerAt` went null and the
+   * meter UNMOUNTED. Mid-run, where usage updates constantly, it could never
+   * appear at all. It also fired one RPC per token update. The live number comes
+   * from `convo.tokens` instead.
    *
-   * The live number comes from `convo.tokens` instead; this query supplies only
-   * the slow-moving parts (the trigger point, and whether a digest is in flight).
+   * It IS keyed on the harness and model, because the trigger point is derived
+   * from them: a session switched from Claude to Codex has a different window
+   * and therefore a different budget. Keyed on the session alone, the meter and
+   * the Compact now action would keep pointing at the old harness's numbers —
+   * and because a disabled query still serves its last data, switching to a
+   * harness that reports nothing (Cursor) would leave the previous harness's
+   * meter on screen rather than hiding it.
    */
   const [requested, setRequested] = useState(false)
   const contextQuery = useQuery({
-    queryKey: ["context", session.id],
+    queryKey: ["context", session.id, convo.cli, convo.model],
     queryFn: () => rpc.contextState(session.id),
     enabled: contextReporting,
     /**
