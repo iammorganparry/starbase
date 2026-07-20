@@ -53,16 +53,19 @@ describe("GitService.createWorktree", () => {
   })
 
   it("shares the origin's third-party packages rather than copying them", async () => {
-    const repoPath = initGitRepo(join(repos.dir, "app"), { nodeModules: true })
+    const repoPath = initGitRepo(join(repos.dir, "app"), { nodeModules: true, workspace: true })
     const exit = await create(repoPath, "app")
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
-
-    // The marker in the origin's node_modules is readable from the worktree —
-    // the anti-bloat win: nothing was copied or reinstalled.
     const nm = join(exit.value.path, "node_modules")
+
+    // The anti-bloat win, and the reason the whole design exists: a dependency
+    // DIRECTORY is linked, not duplicated. Bulk is shared; only the small
+    // metadata files are copied (see the install-state test).
+    expect(lstatSync(join(nm, "left-pad")).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(nm, "left-pad", "index.js"), "utf-8")).toContain("vendor")
+    // Contents remain readable from the worktree either way.
     expect(readFileSync(join(nm, ".marker"), "utf-8")).toContain("origin-node-modules")
-    expect(lstatSync(join(nm, ".marker")).isSymbolicLink()).toBe(true)
   })
 
   it("resolves a WORKSPACE package to the worktree's own source, not the origin's", async () => {
@@ -102,6 +105,54 @@ describe("GitService.createWorktree", () => {
     // Vendored code is still shared with the origin.
     expect(readFileSync(join(nm, "@acme", "vendor-kit", "index.js"), "utf-8")).toContain("vendor")
     expect(readFileSync(join(nm, "left-pad", "index.js"), "utf-8")).toContain("vendor")
+  })
+
+  it("COPIES install state, so an install in the worktree can't rewrite the origin's", async () => {
+    // The recovery flow this design assumes — "a session that changes deps just
+    // installs over the links" — opens exactly these files for write. Linked,
+    // that write follows the symlink and rewrites the ORIGIN's install state to
+    // describe the worktree's tree, corrupting the source repo from a session
+    // that did nothing wrong.
+    const repoPath = initGitRepo(join(repos.dir, "state"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "state")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    const stateFile = join(exit.value.path, "node_modules", ".install-state.yml")
+    expect(lstatSync(stateFile).isSymbolicLink()).toBe(false)
+    writeFileSync(stateFile, "worktree-state\n")
+    expect(readFileSync(join(repoPath, "node_modules", ".install-state.yml"), "utf-8")).toContain(
+      "origin-state"
+    )
+  })
+
+  it("leaves build caches out entirely rather than sharing one between branches", async () => {
+    // A cache is written during ordinary work, not install — sharing it hands
+    // every parallel session the same dir to write concurrently.
+    const repoPath = initGitRepo(join(repos.dir, "cache"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "cache")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(existsSync(join(exit.value.path, "node_modules", ".cache"))).toBe(false)
+  })
+
+  it("mirrors PER-PACKAGE node_modules, so a pnpm layout resolves too", async () => {
+    // pnpm gives each workspace package its own node_modules. They're gitignored,
+    // so a fresh worktree checkout has none — mirroring only the root would leave
+    // every import from inside `packages/*` unresolved on the layout this product
+    // itself uses.
+    const repoPath = initGitRepo(join(repos.dir, "pnpm"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "pnpm")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const libNm = join(exit.value.path, "packages", "lib", "node_modules")
+
+    // Its third-party dep is shared with the origin …
+    expect(readFileSync(join(libNm, "dep-of-lib", "index.js"), "utf-8")).toContain("vendor")
+    // … and its link to a SIBLING workspace package follows the branch, which is
+    // the same rule the root mirror applies, applied one level down.
+    writeFileSync(join(exit.value.path, "packages", "app", "index.js"), "module.exports = 'branch-app'\n")
+    expect(readFileSync(join(libNm, "@acme", "app", "index.js"), "utf-8")).toContain("branch-app")
   })
 
   it("survives a broken link in the origin's node_modules", async () => {

@@ -17,6 +17,25 @@ import { gitLine, runGit, runString } from "./command.js"
 const isWithin = (root: string, candidate: string): boolean =>
   candidate === root || candidate.startsWith(root.endsWith("/") ? root : `${root}/`)
 
+/**
+ * Is `resolved` a WORKSPACE package of the repo at `repoRoot` — the repo's own
+ * source, rather than an installed dependency?
+ *
+ * Tested as "inside the repo, with no `node_modules` segment on the way". The
+ * segment check has to allow for nesting at ANY depth, not just the root
+ * `node_modules`: pnpm gives each workspace package its own
+ * `packages/<pkg>/node_modules`, so a root-only test would classify everything
+ * installed there as repo source and re-point it at a path that holds no
+ * package at all.
+ *
+ * Both arguments must already be canonical (see `linkNodeModules`).
+ */
+const isWorkspacePath = (repoRoot: string, resolved: string): boolean => {
+  if (!isWithin(repoRoot, resolved)) return false
+  const rel = resolved.slice(repoRoot.length).replace(/^\/+/, "")
+  return rel.length > 0 && !rel.split("/").includes("node_modules")
+}
+
 /** Parameters for forking an isolated worktree from a repo. */
 export interface CreateWorktreeInput {
   /** Absolute path to the origin repo. */
@@ -111,6 +130,17 @@ export class GitService extends Effect.Service<GitService>()(
       const isContainerDir = (name: string): boolean => name.startsWith("@") || name === ".bin"
 
       /**
+       * Build caches that live inside `node_modules`. Deliberately NOT shared.
+       *
+       * These are written during ordinary work, not during install, so linking
+       * one would hand every parallel session the same directory to write
+       * concurrently — cross-contaminating one branch's build output with
+       * another's. They are also cheap to regenerate, which is the whole reason
+       * a tool put its cache somewhere disposable.
+       */
+      const CACHE_DIRS: ReadonlySet<string> = new Set([".cache", ".vite", ".turbo", ".parcel-cache"])
+
+      /**
        * Mirror one `node_modules` entry into the worktree.
        *
        * THE BUG THIS EXISTS FOR: symlinking `node_modules` wholesale was correct
@@ -149,11 +179,10 @@ export class GitService extends Effect.Service<GitService>()(
           if (real._tag === "None") return
           const resolved = real.value
 
-          const nodeModulesRoot = path.join(repoPath, "node_modules")
-          const insideRepo = isWithin(repoPath, resolved)
-          const insideNodeModules = isWithin(nodeModulesRoot, resolved)
+          // A cache, not a dependency. Left absent so the worktree makes its own.
+          if (CACHE_DIRS.has(name)) return
 
-          if (insideRepo && !insideNodeModules) {
+          if (isWorkspacePath(repoPath, resolved)) {
             // A workspace package. Point at the SAME relative location under the
             // worktree, so the branch's own source is what gets imported.
             const rel = path.relative(repoPath, resolved)
@@ -163,6 +192,20 @@ export class GitService extends Effect.Service<GitService>()(
 
           if (isContainerDir(name)) {
             yield* mirrorDir(repoPath, worktreePath, originEntry, targetEntry)
+            return
+          }
+
+          // A regular FILE — install metadata like `.yarn-state.yml`,
+          // `.package-lock.json`, `.modules.yaml`. Copied, never linked: these
+          // are the files a package manager REWRITES, and the recovery flow this
+          // whole design assumes ("a session that changes deps just installs
+          // over the links") opens exactly them for write. Linked, that write
+          // follows the symlink and rewrites the ORIGIN's install state to
+          // describe the worktree's tree — corrupting the source repo from a
+          // session that did nothing wrong. They are a few KB; copying is free.
+          const info = yield* fs.stat(resolved).pipe(Effect.option)
+          if (info._tag === "Some" && info.value.type === "File") {
+            yield* fs.copyFile(originEntry, targetEntry).pipe(Effect.ignore)
             return
           }
 
@@ -188,6 +231,41 @@ export class GitService extends Effect.Service<GitService>()(
             // needlessly slow; unbounded exhausts the file-descriptor limit.
             { concurrency: 16, discard: true }
           )
+        })
+
+      /**
+       * Repo-relative directories that hold their own `node_modules` — the
+       * per-package installs pnpm and nested-npm layouts create.
+       *
+       * Found by scanning rather than by parsing workspace globs, because the
+       * globs live in a different file per package manager (`pnpm-workspace.yaml`,
+       * `package.json#workspaces`, `lerna.json`) and a scan is correct for all of
+       * them. Bounded to two levels (`packages/core`, `apps/desktop`) — deeper
+       * nesting is rare, and the alternative is walking a whole monorepo.
+       */
+      const nestedNodeModules = (
+        repoPath: string
+      ): Effect.Effect<ReadonlyArray<string>, never, Path.Path | FileSystem.FileSystem> =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path
+          const fs = yield* FileSystem.FileSystem
+          const groups = yield* fs.readDirectory(repoPath).pipe(Effect.orElseSucceed(() => []))
+          const found: Array<string> = []
+          for (const group of groups) {
+            // Never descend into the root install: its `.pnpm` store alone holds
+            // thousands of nested `node_modules`, none of them workspace packages.
+            if (group === "node_modules" || group.startsWith(".")) continue
+            const groupPath = path.join(repoPath, group)
+            const members = yield* fs.readDirectory(groupPath).pipe(Effect.orElseSucceed(() => []))
+            for (const member of members) {
+              const rel = path.join(group, member)
+              const has = yield* fs
+                .exists(path.join(repoPath, rel, "node_modules"))
+                .pipe(Effect.orElseSucceed(() => false))
+              if (has) found.push(rel)
+            }
+          }
+          return found
         })
 
       /**
@@ -228,6 +306,20 @@ export class GitService extends Effect.Service<GitService>()(
             originNodeModules,
             path.join(worktreePath, "node_modules")
           )
+          // pnpm (and npm with nested installs) give each workspace package its
+          // OWN node_modules — `packages/<pkg>/node_modules` — holding that
+          // package's deps and its links to sibling workspaces. They are
+          // gitignored, so a fresh worktree checkout has none of them, and
+          // mirroring only the root would leave every import from inside
+          // `packages/*` unresolved on the layout this product itself uses.
+          for (const dir of yield* nestedNodeModules(repoPath)) {
+            yield* mirrorDir(
+              repoRoot,
+              treeRoot,
+              path.join(repoPath, dir, "node_modules"),
+              path.join(worktreePath, dir, "node_modules")
+            )
+          }
         })
 
       /**

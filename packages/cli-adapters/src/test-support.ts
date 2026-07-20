@@ -117,6 +117,10 @@ export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): stri
     // what makes "did the link follow the branch or the origin?" observable.
     mkdirSync(join(dir, "packages", "lib"), { recursive: true })
     writeFileSync(join(dir, "packages", "lib", "index.js"), "module.exports = 'origin-source'\n")
+    // A second workspace package, so a per-package node_modules has a sibling
+    // to link to — the pnpm case.
+    mkdirSync(join(dir, "packages", "app"), { recursive: true })
+    writeFileSync(join(dir, "packages", "app", "index.js"), "module.exports = 'origin-app'\n")
   }
   git(dir, ["add", "-A"])
   git(dir, ["commit", "-m", "init", "--no-gpg-sign"])
@@ -137,6 +141,18 @@ export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): stri
       // link, so the fixture proves the two are told apart per-entry.
       mkdirSync(join(nm, "@acme", "vendor-kit"), { recursive: true })
       writeFileSync(join(nm, "@acme", "vendor-kit", "index.js"), "module.exports = 'vendor'\n")
+      // Install STATE — the file a package manager rewrites on every install.
+      writeFileSync(join(nm, ".install-state.yml"), "origin-state\n")
+      // A build cache: written during ordinary work, not install.
+      mkdirSync(join(nm, ".cache"), { recursive: true })
+      writeFileSync(join(nm, ".cache", "build.json"), "origin-cache\n")
+      // pnpm's per-package install: `packages/lib` gets its OWN node_modules,
+      // holding a dep and a link to a sibling workspace package.
+      const libNm = join(dir, "packages", "lib", "node_modules")
+      mkdirSync(join(libNm, "dep-of-lib"), { recursive: true })
+      writeFileSync(join(libNm, "dep-of-lib", "index.js"), "module.exports = 'vendor'\n")
+      mkdirSync(join(libNm, "@acme"), { recursive: true })
+      symlinkSync("../../../../packages/app", join(libNm, "@acme", "app"))
     }
   }
   return dir
