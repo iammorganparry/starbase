@@ -671,10 +671,20 @@ export const streamEventsFor = (
 
     case "result": {
       if (msg.subtype !== "success") {
-        const reason = msg.errors.find((error) => error.trim().length > 0)
-        return [{ _tag: "Failed", message: reason?.trim() ?? "Claude run failed." }]
+        // Guarded like every other SDK field here (`strOf`, `numOf`,
+        // `Array.isArray(msg.tasks)`): the CLI on the user's machine is not
+        // version-locked to the SDK types, and a bare `.find` on an absent
+        // `errors` throws inside the mapper — killing event mapping for the
+        // whole run, which is worse than the generic message it replaces.
+        const errors = Array.isArray(msg.errors) ? msg.errors : []
+        const reason = errors.find((error) => strOf(error)?.trim())
+        return [{ _tag: "Failed", message: strOf(reason)?.trim() ?? "Claude run failed." }]
       }
-      if (msg.is_error === true) return [{ _tag: "Failed", message: "Claude run failed." }]
+      // `msg.result` carries the actual error text on an is_error success —
+      // the generic string throws away the one detail worth reporting.
+      if (msg.is_error === true) {
+        return [{ _tag: "Failed", message: strOf(msg.result)?.trim() ?? "Claude run failed." }]
+      }
       return [
         {
           _tag: "Done",

@@ -112,12 +112,12 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
  * while it is active: Gigaplan chooses per step, so a model chip would be a
  * control that is silently overridden.
  */
+export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan", "gigaplan")
+export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
+
 /** Concrete harness permission modes that can execute an approved plan. */
 export const ExecutionMode = Schema.Literal("ask", "accept-edits", "auto")
 export type ExecutionMode = Schema.Schema.Type<typeof ExecutionMode>
-
-export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan", "gigaplan")
-export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 
 /**
  * Automations for a session linked to a GitHub issue (design I2 toggles).

@@ -410,13 +410,24 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   // every minute and a merged PR stays merged, so without this it would announce
   // the same merge forever.
   const notifiedPrsRef = useRef<Set<string>>(new Set())
+  // Whether the first poll of this launch has been absorbed. Everything it
+  // reports is PRE-EXISTING — merged is permanent, but this ref is memory-only,
+  // so without a baseline every launch would re-announce every already-merged
+  // session in the sidebar. The first poll is recorded silently; only later
+  // transitions are news. Same rule the transcript notifier applies to a
+  // restored session.
+  const prBaselineRef = useRef(false)
   useEffect(() => {
+    // An empty first result is the "still loading" state, not a real baseline —
+    // taking it would let the genuine first result through as an edge.
+    const seeding = !prBaselineRef.current && Object.keys(prStates).length > 0
     for (const { session, state: prState } of prsToNotify(
       prStates,
       sweepTargets,
       notifiedPrsRef.current
     )) {
       notifiedPrsRef.current.add(session.id)
+      if (seeding) continue
       const plan = prNotification(session.title, prState)
       void rpc
         .notifyShow({
@@ -431,6 +442,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
         })
         .catch(() => {})
     }
+    if (seeding) prBaselineRef.current = true
   }, [prStates, sweepTargets])
 
   if (state.matches("loading") || state.matches("starting")) {

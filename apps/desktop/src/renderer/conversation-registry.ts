@@ -70,9 +70,19 @@ export const getConversationActor = (session: Session): ConversationActor => {
     const activity = activityFor(snap)
     const planPresent = latestPlan(snap.context.messages) !== null
     const diff = diffCounts(snap.context.patch)
+    // Nothing is announced until the transcript has LOADED, and the first loaded
+    // snapshot becomes the baseline rather than an edge.
+    //
+    // `notificationFor`'s own first-observation rule is not enough on its own:
+    // the actor's initial `start()` snapshot has empty messages and so reports
+    // no activity, and the restored transcript arrives on a LATER transition. A
+    // session that was already blocked when the app last closed therefore looked
+    // like a null → needs-input edge on observation #2, and announced "Waiting
+    // for your input" for state that predates the operator opening the app —
+    // precisely the stale-replay noise the rule exists to prevent.
     const observed: NotifiableState = { activity, outcome: snap.context.lastOutcome }
-    const announce = notificationFor(session.title, lastSeen, observed)
-    lastSeen = observed
+    const announce = snap.context.loaded ? notificationFor(session.title, lastSeen, observed) : null
+    if (snap.context.loaded) lastSeen = observed
     queueMicrotask(() => {
       setSessionActivity(session.id, activity)
       setPlanPresent(session.id, planPresent)

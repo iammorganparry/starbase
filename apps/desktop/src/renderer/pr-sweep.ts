@@ -33,11 +33,17 @@ import type { PrState, Session } from "@starbase/core"
  * `alreadyNotified` plays the same role as `alreadyClosed` above: a merged PR
  * stays merged, so without it the poll re-announces it every tick.
  */
+/** A session whose linked PR has resolved, and how. */
+export interface ResolvedPr {
+  readonly session: Session
+  readonly state: "merged" | "closed"
+}
+
 export const prsToNotify = (
   prStates: Readonly<Record<string, PrState>>,
   sessions: ReadonlyArray<Session>,
   alreadyNotified: ReadonlySet<string>
-): ReadonlyArray<{ readonly session: Session; readonly state: "merged" | "closed" }> =>
+): ReadonlyArray<ResolvedPr> =>
   sessions.flatMap((session) => {
     const state = prStates[session.id]
     if (state !== "merged" && state !== "closed") return []

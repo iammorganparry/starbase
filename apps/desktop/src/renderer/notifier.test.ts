@@ -90,3 +90,26 @@ describe("prNotification", () => {
     expect(prNotification("add auth", "closed").body).toContain("closed")
   })
 })
+
+describe("baseline discipline", () => {
+  /**
+   * These pin the rule both notification paths share: an operator is told what
+   * CHANGED while they were watching, never what was already true when they
+   * started watching. The registry enforces it by withholding observations until
+   * the transcript has loaded; this is the shape that relies on.
+   */
+  it("treats the first LOADED observation as the baseline, not an edge", () => {
+    // The restored transcript of a session that was blocked when the app closed.
+    // If that snapshot were fed in as `next` against a null `prev`, it would read
+    // as a fresh null → needs-input edge and announce stale state.
+    const restored = state({ activity: blocked("needs-input") })
+    expect(notificationFor("add auth", null, restored)).toBeNull()
+    // Once it IS the baseline, staying blocked is still silent …
+    expect(notificationFor("add auth", restored, restored)).toBeNull()
+    // … and only a genuine change speaks.
+    expect(notificationFor("add auth", restored, state({ activity: thinking }))).toBeNull()
+    expect(
+      notificationFor("add auth", state({ activity: thinking }), restored)
+    ).toMatchObject({ kind: "needs-input" })
+  })
+})
