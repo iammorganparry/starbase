@@ -124,9 +124,14 @@ export function PrSidePanel({
   const draft = pr.state === "draft"
 
   return (
-    <div className="flex w-[352px] flex-none flex-col overflow-auto border-l border-hairline bg-panel">
+    // The panel itself no longer scrolls. Only the sections ABOVE the merge box
+    // do, so the merge action stays pinned to the bottom and reachable at any
+    // scroll position — a long adversarial review used to push it off-screen,
+    // which is exactly when you most want to merge.
+    <div className="flex w-[352px] flex-none flex-col overflow-hidden border-l border-hairline bg-panel">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       {/* Reviewers */}
-      <div className="flex flex-col gap-[11px] border-b border-hairline p-4">
+      <div className="flex flex-none flex-col gap-[11px] border-b border-hairline p-4">
         <Eyebrow>Reviewers</Eyebrow>
         {pr.reviewers.length === 0 ? (
           <span className="text-[12px] text-dim">No reviewers yet</span>
@@ -136,7 +141,7 @@ export function PrSidePanel({
       </div>
 
       {/* Checks */}
-      <div className="flex flex-col gap-3 border-b border-hairline p-4">
+      <div className="flex flex-none flex-col gap-3 border-b border-hairline p-4">
         <div className="flex items-center gap-2">
           <Eyebrow className="flex-1">Checks</Eyebrow>
           {failing > 0 && (
@@ -152,7 +157,7 @@ export function PrSidePanel({
 
       {/* Adversarial review */}
       {review && (
-        <div className="flex flex-col gap-3 border-b border-hairline p-4">
+        <div className="flex flex-none flex-col gap-3 border-b border-hairline p-4">
           <div className="flex items-center gap-2">
             <Eyebrow className="flex-1">Adversarial review</Eyebrow>
             {review.review && review.review.findings.length > 0 && (
@@ -168,8 +173,10 @@ export function PrSidePanel({
         </div>
       )}
 
-      {/* Merge box */}
-      <div className="p-4">
+      </div>
+
+      {/* Merge box — outside the scroll container, so it's always in reach. */}
+      <div className="flex-none border-t border-hairline bg-panel p-4">
         {merged ? (
           <Callout tone="purple">This pull request has been merged.</Callout>
         ) : closed ? (

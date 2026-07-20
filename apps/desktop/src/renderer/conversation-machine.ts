@@ -12,6 +12,7 @@ import type {
   PlanningReadiness,
   Attachment,
   CliKind,
+  ExecutionMode,
   GateDecision,
   Message,
   PermissionMode,
@@ -50,10 +51,15 @@ import { assign, fromCallback, fromPromise, setup } from "xstate"
 import { rpc } from "./rpc-client.js"
 import { publishSessionUpdate } from "./session-updates.js"
 
+const isExecutionMode = (mode: PermissionMode): mode is ExecutionMode =>
+  mode !== "plan" && mode !== "gigaplan"
+
 export interface ConversationContext {
   readonly session: Session
   readonly messages: ReadonlyArray<Message>
   readonly mode: PermissionMode
+  /** Last concrete harness permission mode, retained while Plan/Gigaplan is selected. */
+  readonly executionMode: ExecutionMode
   readonly skills: ReadonlyArray<Skill>
   readonly files: ReadonlyArray<string>
   /**
@@ -101,6 +107,8 @@ export interface ConversationContext {
    * instead of a parallel one per run kind.
    */
   readonly executePlanId: string | null
+  /** Permission mode selected when the approved Gigaplan starts executing. */
+  readonly executePlanMode: ExecutionMode | null
   /**
    * Whether adversarial planning is offerable, and the reason when it isn't.
    * Null until the first load — the entry stays disabled until we actually know,
@@ -111,6 +119,16 @@ export interface ConversationContext {
   readonly tokens: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
   readonly runStartedAt: number | null
+  /**
+   * How the most recent run ENDED, or null while one is in flight.
+   *
+   * A `Failed` folds into the transcript as ordinary text (see the fold), so by
+   * the time an observer sees the settled messages it can no longer tell a
+   * failure from a normal reply. The notifier needs that distinction — "your
+   * agent finished" and "your agent died" are not interchangeable — so the fold
+   * records it here rather than making every observer re-derive it.
+   */
+  readonly lastOutcome: "done" | "failed" | null
   /**
    * The last lifecycle status known to be in the store, so a settling turn only
    * hits the disk when the status actually CHANGED (sessions.json is rewritten
@@ -160,7 +178,7 @@ type ConversationEvent =
   | { type: "REVIEW_EVENT"; event: StreamEvent }
   | { type: "COMMENT_PLAN_STEP"; planId: string; stepId: string; body: string }
   | { type: "REVISE_PLAN"; planId: string }
-  | { type: "APPROVE_PLAN"; planId: string }
+  | { type: "APPROVE_PLAN"; planId: string; executionMode?: ExecutionMode }
   | { type: "RESUME_PLAN"; planId: string }
   | { type: "REFRESH_DIFF" }
   | { type: "STOP" }
@@ -213,6 +231,7 @@ const agentStream = fromCallback<
     resumePlanId: string | null
     adversarialBrief: string | null
     executePlanId: string | null
+    executePlanMode: ExecutionMode | null
   }
 >(({ sendBack, input }) => {
   const onEvent = (event: StreamEvent) => sendBack({ type: "STREAM_EVENT", event })
@@ -225,7 +244,7 @@ const agentStream = fromCallback<
   const cancel = input.adversarialBrief
     ? rpc.planAdversarial(input.sessionId, input.adversarialBrief, onEvent)
     : input.executePlanId
-      ? rpc.planExecute(input.sessionId, input.executePlanId, onEvent)
+      ? rpc.planExecute(input.sessionId, input.executePlanId, input.executePlanMode, onEvent)
       : input.resumePlanId
         ? rpc.agentResumePlan(input.sessionId, input.resumePlanId, onEvent)
         : rpc.agentRun(input.sessionId, input.text, onEvent, input.images)
@@ -348,9 +367,11 @@ export const conversationMachine = setup({
         resumePlanId: null,
         adversarialBrief: null,
         executePlanId: null,
+        executePlanMode: null,
         // Reset the live analytics for the new run.
         tokens: 0,
         runStartedAt: Date.now(),
+        lastOutcome: null,
         messages: [
           ...context.messages,
           userMessage(`u_local_${id}`, text, now, images),
@@ -378,6 +399,7 @@ export const conversationMachine = setup({
         // Every other run-starting action clears them; this one didn't.
         adversarialBrief: null,
         executePlanId: null,
+        executePlanMode: null,
         pendingText: "",
         pendingImages: [],
         // A fresh run (the plan re-drive) starts with no sub-agents carried over.
@@ -385,6 +407,7 @@ export const conversationMachine = setup({
         reviewer: keepReviewer(context.reviewer),
         tokens: 0,
         runStartedAt: Date.now(),
+        lastOutcome: null,
         messages: [
           ...context.messages.map((m) => setPlanStatus(m, event.planId, "approved")),
           userMessage(`u_local_${id}`, "Approved — implement the plan.", now),
@@ -433,8 +456,10 @@ export const conversationMachine = setup({
         resumePlanId: null,
         adversarialBrief: null,
         executePlanId: null,
+        executePlanMode: null,
         tokens: 0,
         runStartedAt: Date.now(),
+        lastOutcome: null,
         messages: [
           ...context.messages,
           userMessage(`u_local_${id}`, next.text, now, next.images),
@@ -495,10 +520,13 @@ export const conversationMachine = setup({
           messages,
           subagents: settled,
           tokens: context.tokens > 0 ? context.tokens : e.tokens,
-          runStartedAt: null
+          runStartedAt: null,
+          lastOutcome: "done" as const
         }
       }
-      if (e._tag === "Failed") return { messages, subagents: settled, runStartedAt: null }
+      if (e._tag === "Failed") {
+        return { messages, subagents: settled, runStartedAt: null, lastOutcome: "failed" as const }
+      }
       // The harness reports its actual model on init — reflect it in the chip.
       return e._tag === "Started" && e.model ? { messages, model: e.model } : { messages }
     }),
@@ -535,7 +563,9 @@ export const conversationMachine = setup({
     persistMode: assign(({ context, event }) => {
       if (event.type !== "SET_MODE") return {}
       void rpc.agentSetMode(context.session.id, event.mode)
-      return { mode: event.mode }
+      return isExecutionMode(event.mode)
+        ? { mode: event.mode, executionMode: event.mode }
+        : { mode: event.mode }
     }),
     // Plan mode (optimistic + fire-and-forget, like the gate/question actions).
     // The runner echoes a `PlanUpdated` so the authoritative state reconciles.
@@ -569,16 +599,24 @@ export const conversationMachine = setup({
       if (event.type !== "APPROVE_PLAN" && event.type !== "RESUME_PLAN") return {}
       const now = new Date().toISOString()
       const id = stamp()
+      const executionMode =
+        event.type === "APPROVE_PLAN"
+          ? (event.executionMode ?? context.executionMode)
+          : context.executionMode
       return {
         executePlanId: event.planId,
+        executePlanMode: executionMode,
         resumePlanId: null,
         adversarialBrief: null,
+        mode: executionMode,
+        executionMode,
         pendingText: "",
         pendingImages: [],
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         tokens: 0,
         runStartedAt: Date.now(),
+        lastOutcome: null,
         // The same two turns every other run kind appends, and for the same
         // reason: `applyStreamEvent` folds into the LAST message, so without an
         // assistant turn to land in, every step's output would be dropped.
@@ -591,8 +629,13 @@ export const conversationMachine = setup({
     }),
     optimisticPlanApprove: assign(({ context, event }) => {
       if (event.type !== "APPROVE_PLAN") return {}
-      void rpc.agentApprovePlan(context.session.id, event.planId)
-      return { messages: context.messages.map((m) => setPlanStatus(m, event.planId, "approved")) }
+      const executionMode = event.executionMode ?? context.executionMode
+      void rpc.agentApprovePlan(context.session.id, event.planId, event.executionMode)
+      return {
+        mode: executionMode,
+        executionMode,
+        messages: context.messages.map((m) => setPlanStatus(m, event.planId, "approved"))
+      }
     }),
     /**
      * Apply a harness/model pick. Picking a model under another provider's
@@ -614,12 +657,14 @@ export const conversationMachine = setup({
         .then((skills) => self.send({ type: "SKILLS_LOADED", skills }))
         .catch(() => {})
 
+      const mode = context.mode === "plan" && event.cli !== "claude" ? "ask" : context.mode
       return {
         cli: event.cli,
         model: event.model,
         // Mirror main's write so the UI doesn't lie until the next load.
         session: { ...context.session, cli: event.cli, resumeId: undefined },
-        mode: context.mode === "plan" && event.cli !== "claude" ? "ask" : context.mode,
+        mode,
+        executionMode: isExecutionMode(mode) ? mode : context.executionMode,
         // Empty until the refetch lands — better a bare `/` menu than one
         // offering the old harness's skills.
         skills: []
@@ -678,6 +723,7 @@ export const conversationMachine = setup({
         resumePlanId: null,
         tokens: 0,
         runStartedAt: Date.now(),
+        lastOutcome: null,
         // The same two turns a normal send appends, and for the same reason:
         // `applyStreamEvent` folds into the LAST message, so without an
         // assistant turn to land in, the round's plan — and every event before
@@ -784,7 +830,10 @@ export const conversationMachine = setup({
       messages: patchLast(context.messages, (last) =>
         applyStreamEvent(last, { _tag: "Failed", message: STOPPED_NOTE })
       ),
-      runStartedAt: null
+      runStartedAt: null,
+      // The OPERATOR stopped this run. Recording it as `failed` would notify
+      // them that their own deliberate action went wrong.
+      lastOutcome: null
     }))
   }
 }).createMachine({
@@ -810,6 +859,10 @@ export const conversationMachine = setup({
     session: input.session,
     messages: [],
     mode: input.session.mode ?? "accept-edits",
+    executionMode:
+      input.session.mode && isExecutionMode(input.session.mode)
+        ? input.session.mode
+        : "accept-edits",
     skills: [],
     files: [],
     cli: input.session.cli,
@@ -823,9 +876,11 @@ export const conversationMachine = setup({
     resumePlanId: null,
     adversarialBrief: null,
     executePlanId: null,
+    executePlanMode: null,
     planReadiness: null,
     tokens: 0,
     runStartedAt: null,
+    lastOutcome: null,
     persistedStatus: input.session.status,
     loaded: false,
     reviewer: null,
@@ -943,7 +998,8 @@ export const conversationMachine = setup({
           images: context.pendingImages,
           resumePlanId: context.resumePlanId,
           adversarialBrief: context.adversarialBrief,
-          executePlanId: context.executePlanId
+          executePlanId: context.executePlanId,
+          executePlanMode: context.executePlanMode
         })
       },
       on: {

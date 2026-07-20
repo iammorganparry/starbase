@@ -24,6 +24,7 @@ import {
   assistantMessage,
   findApprovedPlan,
   isSubagentEvent,
+  scopeToAgent,
   latestPlan,
   resumePlanPrompt,
   pendingPlan,
@@ -747,6 +748,46 @@ describe("sub-agents", () => {
     // A ToolDelta routes to a sub-agent's tab only when it carries an agentId.
     expect(isSubagentEvent({ _tag: "ToolDelta", id: "t1", output: "x", agentId: "a1" })).toBe(true)
     expect(isSubagentEvent({ _tag: "ToolDelta", id: "t1", output: "x" })).toBe(false)
+  })
+
+  it("scopeToAgent attributes an UNTAGGED content event — the whole point", () => {
+    // The regression this exists for: `agentId` is `Schema.optional`, so an
+    // event emitted without one has no such KEY. A guard of `"agentId" in event`
+    // therefore reported false for exactly the events that needed attributing,
+    // and an orchestrated step's output silently landed on the main turn while
+    // its own tab rendered empty.
+    const unattributed: ReadonlyArray<StreamEvent> = [
+      { _tag: "Assistant", text: "step output" },
+      { _tag: "Thinking", text: "hmm", seconds: null, done: false },
+      { _tag: "ToolStart", id: "t1", name: "Read", target: "a.ts" },
+      { _tag: "ToolDelta", id: "t1", output: "x" },
+      { _tag: "ToolEnd", id: "t1", status: "success", meta: null, diff: null, preview: null }
+    ]
+    for (const event of unattributed) {
+      const scoped = scopeToAgent(event, "step_01")
+      expect(scoped).toMatchObject({ agentId: "step_01" })
+      expect(isSubagentEvent(scoped)).toBe(true)
+    }
+  })
+
+  it("scopeToAgent leaves a NESTED agent's own claim alone", () => {
+    // The inner agent's attribution is the more specific one and must win.
+    expect(scopeToAgent({ _tag: "Assistant", text: "x", agentId: "inner" }, "outer")).toMatchObject({
+      agentId: "inner"
+    })
+  })
+
+  it("scopeToAgent never adds a field an event doesn't declare", () => {
+    // Adding `agentId` to a TaggedStruct without it would fail to encode across
+    // the RPC boundary — so main-turn lifecycle events pass through untouched.
+    const unscopeable: ReadonlyArray<StreamEvent> = [
+      { _tag: "Done", costUsd: 0, tokens: 0 },
+      { _tag: "Failed", message: "boom" },
+      { _tag: "SubagentEnded", id: "t1", status: "done" }
+    ]
+    for (const event of unscopeable) {
+      expect(scopeToAgent(event, "step_01")).toStrictEqual(event)
+    }
   })
 
   it("SubagentStarted opens a working tab; agentId events accrue onto its own message", () => {

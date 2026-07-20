@@ -125,6 +125,12 @@ export function PlanStepDetail({
           {step.diff && <DiffStat added={step.diff.added} removed={step.diff.removed} />}
         </div>
 
+        {(step.origin || step.assignee || step.taskKind) && (
+          <Section title="Routing">
+            <PlanProvenance step={step} />
+          </Section>
+        )}
+
         {step.intent && (
           <Section title="Intent">
             <p className="m-0 text-[13px] leading-[1.6] text-text-body">{step.intent}</p>
@@ -204,12 +210,6 @@ export function PlanStepDetail({
                 <Markdown>{`\`\`\`${step.code.lang ?? ""}\n${step.code.body}\n\`\`\``}</Markdown>
               </div>
             </div>
-          </Section>
-        )}
-
-        {(step.origin || step.assignee || step.taskKind) && (
-          <Section title="Provenance & routing">
-            <PlanProvenance step={step} />
           </Section>
         )}
 

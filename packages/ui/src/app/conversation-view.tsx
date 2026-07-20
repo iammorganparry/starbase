@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react"
 import type {
   Attachment,
   CliKind,
+  ExecutionMode,
   GateDecision,
   Message,
   ProviderModels,
@@ -94,7 +95,7 @@ export interface ConversationViewProps {
   question?: QuestionRequest | null
   onAnswerQuestion?: (requestId: string, answers: ReadonlyArray<QuestionAnswer>) => void
   /** Approve a proposed plan inline (from a transcript plan card). */
-  onApprovePlan?: (planId: string) => void
+  onApprovePlan?: (planId: string, executionMode?: ExecutionMode) => void
   /** Approve a stale plan inline (re-drives execution after a restart). */
   onResumePlan?: (planId: string) => void
   /**

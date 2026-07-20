@@ -430,6 +430,20 @@ export const backgroundTaskState = (): BackgroundTaskState => ({
   ever: new Set()
 })
 
+/**
+ * Is this live background task a delegated sub-agent rather than operator work?
+ *
+ * Checked against the memo `task_started` left us FIRST — that edge carries the
+ * authoritative `subagent_type` — and falls back to the level's own fields for a
+ * task whose start we never saw. Either signal is sufficient: the SDK sets
+ * `task_type: "subagent"` and `subagent_type` together.
+ */
+const isSubagentTask = (task: { task_type?: unknown; subagent_type?: unknown }, bg: BackgroundTaskState): boolean => {
+  const meta = bg.meta.get(String((task as { task_id?: unknown }).task_id))
+  if (meta) return meta.taskType === "subagent" || meta.subagentType !== null
+  return task.task_type === "subagent" || strOf(task.subagent_type) !== null
+}
+
 export const streamEventsFor = (
   msg: SDKMessage,
   tools: Map<string, ToolMemo>,
@@ -457,7 +471,14 @@ export const streamEventsFor = (
       // remember every task's metadata, but only promote a task to the dock once
       // the harness lists it as live in the background.
       if (msg.subtype === "background_tasks_changed" && bg) {
-        const tasks = Array.isArray(msg.tasks) ? msg.tasks : []
+        const all = Array.isArray(msg.tasks) ? msg.tasks : []
+        // The dock is for work the OPERATOR has to mind: dev servers, watchers,
+        // long-running shell. Delegated sub-agents are not that — the SDK
+        // backgrounds every `Task` by default, so admitting them fills the dock
+        // with ordinary exploration that already has its own watch-only tab.
+        // Drop them here (the single choke point) so the dock, its counter, and
+        // the background-task actors all agree on what counts.
+        const tasks = all.filter((t) => !isSubagentTask(t, bg))
         const ids = tasks.map((t) => String(t.task_id))
         const out: StreamEvent[] = []
         for (const task of tasks) {
@@ -570,6 +591,14 @@ export const streamEventsFor = (
     // The completed assistant message carries thinking (as a finished block) and
     // tool_use calls. Text is skipped here — it already streamed via deltas.
     case "assistant": {
+      if (msg.error === "authentication_failed") {
+        return [
+          {
+            _tag: "Failed",
+            message: "Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+          }
+        ]
+      }
       const out: StreamEvent[] = []
       for (const block of contentBlocks(msg.message)) {
         const type = block.type
@@ -640,7 +669,22 @@ export const streamEventsFor = (
       return out
     }
 
-    case "result":
+    case "result": {
+      if (msg.subtype !== "success") {
+        // Guarded like every other SDK field here (`strOf`, `numOf`,
+        // `Array.isArray(msg.tasks)`): the CLI on the user's machine is not
+        // version-locked to the SDK types, and a bare `.find` on an absent
+        // `errors` throws inside the mapper — killing event mapping for the
+        // whole run, which is worse than the generic message it replaces.
+        const errors = Array.isArray(msg.errors) ? msg.errors : []
+        const reason = errors.find((error) => strOf(error)?.trim())
+        return [{ _tag: "Failed", message: strOf(reason)?.trim() ?? "Claude run failed." }]
+      }
+      // `msg.result` carries the actual error text on an is_error success —
+      // the generic string throws away the one detail worth reporting.
+      if (msg.is_error === true) {
+        return [{ _tag: "Failed", message: strOf(msg.result)?.trim() ?? "Claude run failed." }]
+      }
       return [
         {
           _tag: "Done",
@@ -650,6 +694,7 @@ export const streamEventsFor = (
           tokens: contextTokens(msg.usage)
         }
       ]
+    }
 
     default:
       return []

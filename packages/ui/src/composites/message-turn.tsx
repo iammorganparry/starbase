@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react"
-import type { CliKind, ContentPart, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
+import type { CliKind, ContentPart, ExecutionMode, GateDecision, Message, ToolCall as ToolCallModel } from "@starbase/core"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { AttachmentThumb } from "../components/attachment-thumb.js"
@@ -160,7 +160,7 @@ function PartView({
   part: ContentPart
   markdown: boolean
   onDecideGate?: (gateId: string, decision: GateDecision) => void
-  onApprovePlan?: (planId: string) => void
+  onApprovePlan?: (planId: string, executionMode?: ExecutionMode) => void
   onResumePlan?: (planId: string) => void
   onOpenPlanReview?: () => void
 }) {
@@ -208,7 +208,7 @@ function PartView({
       return (
         <PlanCard
           plan={part.plan}
-          onApprove={() => onApprovePlan?.(part.plan.id)}
+          onApprove={(executionMode) => onApprovePlan?.(part.plan.id, executionMode)}
           onResume={() => onResumePlan?.(part.plan.id)}
           onOpenReview={onOpenPlanReview}
         />
@@ -226,7 +226,7 @@ function renderParts(
   markdown: boolean,
   handlers: {
     onDecideGate?: (gateId: string, decision: GateDecision) => void
-    onApprovePlan?: (planId: string) => void
+    onApprovePlan?: (planId: string, executionMode?: ExecutionMode) => void
     onResumePlan?: (planId: string) => void
     onOpenPlanReview?: () => void
   }
@@ -293,7 +293,7 @@ export function MessageTurn({
   cli?: CliKind
   onDecideGate?: (gateId: string, decision: GateDecision) => void
   /** Approve a proposed plan inline (from the transcript's plan card). */
-  onApprovePlan?: (planId: string) => void
+  onApprovePlan?: (planId: string, executionMode?: ExecutionMode) => void
   /** Approve a stale plan inline (re-drives execution after a restart). */
   onResumePlan?: (planId: string) => void
   /** Open the full Plan Review view from the inline plan card. */

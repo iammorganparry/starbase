@@ -523,7 +523,12 @@ export function Composer({
               needs a second provider
             </span>
           )}
-          <ChipMenu value={mode} options={modeOptions} onSelect={onSetMode} className={accent.chip} />
+          <ChipMenu
+            value={mode}
+            options={modeOptions}
+            onSelect={onSetMode}
+            className={cn("w-[112px] justify-between", accent.chip)}
+          />
           {mcp !== undefined && mcp.total > 0 && (
             <button
               type="button"

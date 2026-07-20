@@ -3,6 +3,7 @@ import { Check, GitBranch, MessageSquareText } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { ChallengeBadge } from "./plan-challenges.js"
 import { StatusDot } from "../components/status-dot.js"
+import { PlanAssignee } from "./plan-assignee.js"
 
 /**
  * A step's dot colour. Exported because the Conversation progress rail shows the
@@ -73,7 +74,7 @@ function Row({
       type="button"
       onClick={() => onSelect?.(step.id)}
       className={cn(
-        "group flex min-h-[34px] items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors",
+        "group flex min-h-10 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors",
         "active:scale-[0.99] [transition-property:background-color,border-color,scale]",
         arm && "ml-5",
         selected
@@ -108,6 +109,7 @@ function Row({
       >
         {step.title}
       </span>
+      {step.assignee && <PlanAssignee assignee={step.assignee} compact />}
       {step.condition && (
         <span className="flex-none font-mono text-[9.5px] text-muted-foreground">{step.condition}</span>
       )}
