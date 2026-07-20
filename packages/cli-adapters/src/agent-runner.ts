@@ -627,6 +627,30 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
 
           const out = yield* Mailbox.make<StreamEvent>()
 
+          /**
+           * ── Instrumentation: turns that end without settling ────────────────
+           *
+           * A turn's `streaming` flag is cleared by exactly two events, `Done`
+           * and `Failed` (see `applyEvent` in core/conversation.ts). A run that
+           * ends without emitting either leaves the turn spinning in the live UI
+           * forever — the "turn died and never responded" report. It reads as
+           * self-healing because `settleStreaming()` wipes stale flags whenever
+           * the transcript is re-read, so a reload hides the evidence.
+           *
+           * Measured at 142 of 729 persisted assistant messages (~19.5%), so this
+           * is common, not exotic — but which path skips both events is still
+           * unknown, and interrupts are NOT uniformly to blame (one interrupted
+           * turn settled with the stop note while another, same session, did not).
+           *
+           * So: record the shape of every unsettled exit, and let the next
+           * occurrence say what it was. Purely observational — it changes no
+           * behaviour and cannot fail a run (`Effect.ignore` at the call site).
+           */
+          const sawTerminal = yield* Ref.make(false)
+          const eventCount = yield* Ref.make(0)
+          const lastEvent = yield* Ref.make<string>("<none>")
+          const wasInterrupted = yield* Ref.make(false)
+
           // toolUseId → the file an edit tool is writing, remembered at ToolStart so
           // its ToolEnd can mark the matching plan step done (see markPlanProgress).
           const editTargets = yield* Ref.make(new Map<string, string>())
@@ -723,6 +747,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Runs on the single producer fiber, so transcript order is preserved.
           const emit = (event: StreamEvent): Effect.Effect<void> =>
             Effect.gen(function* () {
+              // Tracked before the early returns below, so background-task and
+              // sub-agent events still count toward "what did this run actually
+              // emit" — a run that produced only sub-agent chatter and then
+              // vanished is a different failure from one that emitted nothing.
+              yield* Ref.update(eventCount, (n) => n + 1)
+              yield* Ref.set(lastEvent, event._tag)
+              if (event._tag === "Done" || event._tag === "Failed") {
+                yield* Ref.set(sawTerminal, true)
+              }
               // Background tasks are SESSION-level: they outlive this turn, so
               // they fold into the session's task registry (one statechart per
               // task) rather than into the transcript. Surfaced downstream too so
@@ -906,7 +939,14 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // terminal event so the message settles (and the transcript says why)
             // rather than being left mid-stream forever. Finalizers run
             // uninterruptibly, so this emit completes before the mailbox closes.
-            Effect.onInterrupt(() => emit({ _tag: "Failed", message: STOPPED_NOTE })),
+            Effect.onInterrupt(() =>
+              // Flagged BEFORE the emit, so the instrumentation still learns the
+              // exit was an interrupt even in the case we most want to catch:
+              // the one where this emit does not land.
+              Ref.set(wasInterrupted, true).pipe(
+                Effect.andThen(emit({ _tag: "Failed", message: STOPPED_NOTE }))
+              )
+            ),
             // A stop is not a crash — don't report the operator's own interrupt as
             // "the agent run failed" on top of the note we just wrote.
             Effect.catchAllCause((cause) => {
@@ -947,6 +987,39 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                 nextMap.delete(sessionId)
                 return nextMap
               })
+            ),
+            /**
+             * Record an exit that never settled the turn.
+             *
+             * Ordered INSIDE `out.end` (it is piped before it, so it runs first)
+             * purely so the reading is taken while the run's state is still the
+             * one that produced it; nothing here touches the mailbox.
+             *
+             * `exitInterrupted` is the field that should break the tie: if
+             * unsettled exits are all interrupts, the stop path is racing its own
+             * `Failed` emit; if they are not, something upstream is ending the
+             * stream without a terminal event at all.
+             */
+            Effect.ensuring(
+              Effect.gen(function* () {
+                if (yield* Ref.get(sawTerminal)) return
+                const fs = yield* FileSystem.FileSystem
+                const paths = yield* AppPaths
+                const record = {
+                  at: new Date().toISOString(),
+                  sessionId,
+                  cli: session?.cli ?? null,
+                  images: images.length,
+                  events: yield* Ref.get(eventCount),
+                  lastEvent: yield* Ref.get(lastEvent),
+                  exitInterrupted: yield* Ref.get(wasInterrupted)
+                }
+                yield* fs.writeFileString(
+                  `${paths.root}/unsettled-turns.jsonl`,
+                  `${JSON.stringify(record)}\n`,
+                  { flag: "a" }
+                )
+              }).pipe(Effect.provide(env), Effect.ignore)
             ),
             Effect.ensuring(out.end)
           )

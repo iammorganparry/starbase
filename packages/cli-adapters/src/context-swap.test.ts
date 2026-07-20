@@ -131,12 +131,24 @@ const seedTranscript = () =>
     })
   })
 
+/**
+ * Block until the digest is built, and DIE if it never is.
+ *
+ * The give-up used to be silent: the loop simply ran out and the test carried on
+ * to prompt without a digest, so a slow machine failed on `expect(spec.fresh)`
+ * — pointing at the swap logic when the real story was that the summary hadn't
+ * finished yet. A loud failure names the actual condition, and the longer budget
+ * keeps it from firing merely because the suite is running under load.
+ */
 const awaitDigest = () =>
   Effect.gen(function* () {
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 1500; i++) {
       if ((yield* ContextManager.snapshot(SESSION)).digestReady) return
       yield* Effect.sleep("20 millis")
     }
+    return yield* Effect.die(
+      new Error("digest never became ready — the compaction never prepared one")
+    )
   })
 
 /** Seed, prepare a digest, then run one real turn. Returns what the user is left with. */

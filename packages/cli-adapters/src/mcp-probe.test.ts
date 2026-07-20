@@ -51,8 +51,16 @@ const remote = (name: string, url: string): ParsedMcpServer => ({
 
 const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect)
 
-/** Short timeout for the hang cases, so they don't cost the real 15s. */
-const SHORT = Duration.millis(750)
+/**
+ * Short timeout for the hang cases, so they don't cost the real 15s.
+ *
+ * Not as short as it looks like it could be. The same deadline governs the
+ * HEALTHY server in the mixed batch, and a healthy probe still has to spawn a
+ * node process and complete a handshake — which at 750ms the suite could miss
+ * under parallel load, reporting a good server as failed. Sized to clear a slow
+ * spawn while still costing a fraction of the real timeout.
+ */
+const SHORT = Duration.seconds(5)
 
 /** Count live children of this process, to prove the probe doesn't orphan any. */
 const childCount = (): number => {

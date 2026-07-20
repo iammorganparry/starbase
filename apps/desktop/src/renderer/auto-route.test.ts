@@ -184,4 +184,27 @@ describe("routeReviewToAgent", () => {
     await routeReviewToAgent(session, review({ headSha: "h-nine" }), qc)
     expect(markRoutedCalls).toStrictEqual(["review:h-nine:f1"])
   })
+
+  /**
+   * The session and the review arrive as independent arguments, and a caller DID
+   * pair them wrongly: App.tsx zipped sessions to review results by array index,
+   * so archiving a session shifted the mapping and handed one session another
+   * session's findings. That reached the agent as a real turn against the wrong
+   * worktree, arguing about a file absent from its branch.
+   */
+  it("refuses a review belonging to another session", async () => {
+    await routeReviewToAgent(session, review({ sessionId: "s2", headSha: "h-eleven" }), qc)
+    expect(sent).toHaveLength(0)
+    expect(markRoutedCalls).toHaveLength(0)
+  })
+
+  /**
+   * The mismatch check must not burn the guard key, or the legitimate pairing
+   * arriving afterwards would be swallowed as an already-claimed duplicate.
+   */
+  it("still routes the rightful session after refusing a mispaired call", async () => {
+    await routeReviewToAgent(session, review({ sessionId: "s2", headSha: "h-twelve" }), qc)
+    await routeReviewToAgent(session, review({ headSha: "h-twelve" }), qc)
+    expect(sent).toHaveLength(1)
+  })
 })

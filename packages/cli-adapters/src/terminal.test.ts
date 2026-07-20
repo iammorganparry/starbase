@@ -121,6 +121,7 @@ describe("TerminalService", () => {
         const info = yield* t.create({ sessionId: "s1", cols: 200, rows: 50 })
         const sink = collect(t, info.id)
         yield* Effect.sleep("150 millis")
+        const startedAt = yield* Effect.sync(() => Date.now())
         // ~5000 lines of output as fast as the shell can print — a genuine flood.
         yield* t.write(info.id, "for i in $(seq 1 5000); do echo flood-line-$i-xxxxxxxxxxxxxxxxxxxx; done\r")
         // Wait until the flood has actually landed (robust under load), then let
@@ -128,16 +129,28 @@ describe("TerminalService", () => {
         yield* waitFor(() => sink.text().length > 50_000)
         yield* Effect.sleep("300 millis")
         yield* Fiber.interrupt(sink.fiber)
+        const elapsedMs = (yield* Effect.sync(() => Date.now())) - startedAt
 
         const bytes = sink.text().length
         const frameCount = sink.dataFrames().length
         // The flood really happened...
         expect(bytes).toBeGreaterThan(50_000)
-        // ...yet coalescing kept frames far below one-per-raw-chunk. Bounded by
-        // (bytes / 32KB size-flush) + (~elapsed / 16ms tick-flush) + replay, so a
-        // few hundred is a comfortable, non-flaky ceiling well under the 1000s of
-        // raw onData chunks a 5000-line flood produces.
-        expect(frameCount).toBeLessThan(400)
+        /**
+         * ...yet coalescing kept frames far below one-per-raw-chunk.
+         *
+         * Derived from the two flush triggers rather than hard-coded, because the
+         * tick-flush term is a RATE: the longer the flood takes in wall-clock, the
+         * more 16ms ticks legitimately fire. A fixed ceiling (this was `< 400`)
+         * therefore fails on a loaded machine for a run that coalesced perfectly —
+         * it was measuring the CPU, not the batching. Comparing against the bound
+         * the implementation actually promises holds at any speed.
+         */
+        const sizeFlushes = bytes / 32_768
+        const tickFlushes = elapsedMs / 16
+        expect(frameCount).toBeLessThan(sizeFlushes + tickFlushes + 50)
+        // And it really was batched, not passed through chunk-for-chunk: a
+        // 5000-line flood arrives as thousands of raw `onData` chunks.
+        expect(frameCount).toBeLessThan(1000)
       })
     ))
 

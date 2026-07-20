@@ -1072,7 +1072,10 @@ function ContextSection({
                     <ContextMeter
                       tokens={s.snapshot.tokens}
                       triggerAt={s.snapshot.triggerAt}
+                      phase={s.snapshot.phase}
+                      preparing={s.snapshot.preparing}
                       digestReady={s.snapshot.digestReady}
+                      stalled={s.snapshot.stalled}
                     />
                   )}
                 </div>

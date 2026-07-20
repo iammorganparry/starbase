@@ -5,10 +5,26 @@ import { RunStats } from "./run-stats.js"
 afterEach(cleanup)
 
 describe("RunStats", () => {
-  it("labels the token count as context size", () => {
-    const { container } = render(<RunStats startedAt={null} tokens={42_600} busy={false} />)
+  it("renders nothing when there is no run", () => {
+    const { container } = render(<RunStats startedAt={null} busy={false} />)
 
-    expect(screen.getByText("context tokens")).toBeDefined()
-    expect(container.textContent).toBe("42.6k context tokens")
+    expect(container.textContent).toBe("")
+  })
+
+  it("shows the elapsed time of a run", () => {
+    const { container } = render(<RunStats startedAt={Date.now() - 45_000} busy />)
+
+    expect(container.textContent).toContain("45s")
+  })
+
+  /**
+   * The context reading belongs to `ContextMeter` alone. Both components render
+   * side by side above the composer, so a token count here reappears as the
+   * duplicate this was split to remove.
+   */
+  it("does not report context size", () => {
+    render(<RunStats startedAt={Date.now() - 45_000} busy />)
+
+    expect(screen.queryByText("context tokens")).toBeNull()
   })
 })

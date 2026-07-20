@@ -16,7 +16,7 @@ import type {
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
 import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
-import type { ArchiveReason } from "@starbase/core"
+import type { ArchiveReason, ContextPhase } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
 import { Composer } from "../composites/composer.js"
@@ -82,10 +82,14 @@ export interface ConversationViewProps {
    * that would read as "plenty of room left".
    */
   contextTriggerAt?: number | null
-  /** A digest is prepared; the next turn will reseed the conversation. */
+  /** What the manager will actually do — the meter must not infer this itself. */
+  contextPhase?: ContextPhase
   /** A summary is being built right now. */
   contextPreparing?: boolean
+  /** A digest is prepared; the next turn will reseed the conversation. */
   contextDigestReady?: boolean
+  /** Automatic compaction has given up on this session after repeated failures. */
+  contextStalled?: boolean
   /** Compact this session now, ahead of the budget. */
   onCompactNow?: () => void
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
@@ -169,8 +173,10 @@ export function ConversationView({
   busy = false,
   tokens = 0,
   contextTriggerAt = null,
+  contextPhase = "unknown",
   contextPreparing = false,
   contextDigestReady = false,
+  contextStalled = false,
   onCompactNow,
   runStartedAt = null,
   queued = [],
@@ -318,11 +324,13 @@ export function ConversationView({
               <ContextMeter
                 tokens={tokens}
                 triggerAt={contextTriggerAt}
+                phase={contextPhase}
                 preparing={contextPreparing}
                 digestReady={contextDigestReady}
+                stalled={contextStalled}
                 onCompactNow={onCompactNow}
               />
-              <RunStats startedAt={runStartedAt} tokens={tokens} busy={busy} />
+              <RunStats startedAt={runStartedAt} busy={busy} />
             </div>
           )}
           {archived ? (

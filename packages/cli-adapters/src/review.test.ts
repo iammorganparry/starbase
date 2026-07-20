@@ -705,14 +705,22 @@ describe("ReviewService — transcript persistence", () => {
   /**
    * Everything a watcher sees when it attaches, in a given service instance.
    *
-   * Collected via a quiet-period timeout rather than a yield: restoring from disk
-   * is real file IO, so a watcher on a cold buffer has not produced anything yet
-   * by the next tick — and the hub stays open for the next review, so there is no
-   * end-of-stream to wait for either.
+   * The hub stays open for the next review, so there is no end-of-stream to wait
+   * for — but a restored run always ENDS in a terminal event, so stop on that
+   * rather than on a stopwatch. The timeout is only a backstop for the one case
+   * with no terminal event to find (a review that never started, which must
+   * restore nothing).
+   *
+   * This was a 250ms quiet period alone. Restoring is real file IO, so under
+   * parallel load the replay could still be arriving when the clock ran out and
+   * the collected tail lost its `Done` — a flake that reported as "the transcript
+   * doesn't end in a terminal event" when the test had merely stopped listening
+   * too early.
    */
   const attach = (sessionId: string) =>
     watchStream(sessionId).pipe(
-      Stream.timeout("250 millis"),
+      Stream.takeUntil((e) => e._tag === "Done" || e._tag === "Failed"),
+      Stream.timeout("4 seconds"),
       Stream.runCollect,
       Effect.map((chunk) => Array.from(chunk) as ReadonlyArray<StreamEvent>)
     )

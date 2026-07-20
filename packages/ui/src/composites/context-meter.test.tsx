@@ -44,8 +44,58 @@ describe("ContextMeter", () => {
   })
 
   it("says a compaction is coming once over the trigger", () => {
-    render(<ContextMeter tokens={310_000} triggerAt={300_000} />)
+    render(<ContextMeter tokens={310_000} triggerAt={300_000} phase="prepare" />)
     expect(screen.getByText("compacting soon")).toBeDefined()
+  })
+
+  /**
+   * The promise the meter used to break.
+   *
+   * `triggerAt` is computed the moment the model's window is known, but
+   * compaction also requires auto-compaction to be ON and the harness to report
+   * usage — so a session can sit far past its trigger with `phase: "unknown"`
+   * and never compact. Labelling off `tokens / triggerAt` made the meter say
+   * "compacting soon" forever on exactly those sessions.
+   */
+  it("does not promise a compaction that will never come", () => {
+    render(<ContextMeter tokens={472_200} triggerAt={300_000} phase="unknown" />)
+    expect(screen.queryByText("compacting soon")).toBeNull()
+    expect(screen.getByText("context")).toBeDefined()
+  })
+
+  it("says so when auto-compaction is off for the session", () => {
+    const { container } = render(
+      <ContextMeter tokens={472_200} triggerAt={300_000} phase="unknown" />
+    )
+    expect((container.firstChild as HTMLElement).getAttribute("title")).toContain(
+      "automatic compaction is off"
+    )
+  })
+
+  /**
+   * After the retry ceiling the manager stops forking digest fibers entirely.
+   * Both this and a healthy pre-compaction session leave `preparing: false`, so
+   * without `stalled` the meter cannot tell "a digest is coming" from "no digest
+   * is ever coming" — and it defaulted to promising one.
+   */
+  it("reports a session that has given up rather than promising a compaction", () => {
+    render(<ContextMeter tokens={472_200} triggerAt={300_000} phase="prepare" stalled />)
+    expect(screen.queryByText("compacting soon")).toBeNull()
+    expect(screen.getByText("compaction failed")).toBeDefined()
+  })
+
+  it("offers a retry on a stalled session", () => {
+    const { container } = render(
+      <ContextMeter tokens={472_200} triggerAt={300_000} phase="prepare" stalled />
+    )
+    expect((container.firstChild as HTMLElement).getAttribute("title")).toContain("try again")
+  })
+
+  // An in-flight summary is still the truth even on a session that had
+  // previously given up — a manual "Compact now" clears the failure count.
+  it("prefers the in-flight state over a stale stall", () => {
+    render(<ContextMeter tokens={472_200} triggerAt={300_000} phase="prepare" stalled preparing />)
+    expect(screen.getByText("compacting…")).toBeDefined()
   })
 
   it("says the next turn will reseed once a digest is ready", () => {

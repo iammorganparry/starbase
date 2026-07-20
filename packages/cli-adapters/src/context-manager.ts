@@ -433,7 +433,10 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             preparing: state.status === "preparing",
             digestReady: state.digest !== null,
             lastCompactedAt: state.lastCompactedAt,
-            compactions: state.compactions
+            compactions: state.compactions,
+            // Mirrors the guard in `settle` exactly — this is the same ceiling
+            // that stops the fork, reported so the meter can say so.
+            stalled: state.failures >= MAX_FAILURES
           }
         })
 

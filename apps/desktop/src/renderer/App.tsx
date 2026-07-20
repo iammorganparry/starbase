@@ -372,10 +372,25 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       // in a loop or surface anywhere — the manual button remains the recourse.
       retry: false
     })),
+    /**
+     * Keyed off the review's OWN `sessionId`, never the query's position.
+     *
+     * This used to zip `reviewTargets[i]` with `results[i]`. That pairing is only
+     * sound while both arrays stay the same length in the same order, and
+     * `reviewTargets` derives from `sweepTargets`, which filters `!s.archived` —
+     * so archiving ANY session shifts every later index by one and welds one
+     * session's id onto another session's review. The observed damage: a session
+     * was handed the findings from a different session's PR, which it published
+     * into its cache AND routed to its agent, spending a real turn arguing about
+     * a file that does not exist on its branch.
+     *
+     * The review carries the id it belongs to. Use it, and let a result with no
+     * data drop out rather than shift everything behind it.
+     */
     combine: (results) =>
-      reviewTargets.flatMap((s, i) => {
-        const review = results[i]?.data
-        return review ? [{ id: s.id, review }] : []
+      results.flatMap((r) => {
+        const review = r?.data
+        return review ? [{ id: review.sessionId, review }] : []
       })
   })
   // Publish auto-review results into the cache the PR tab reads, so findings

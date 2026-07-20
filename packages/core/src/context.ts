@@ -234,6 +234,18 @@ export const ContextSnapshot = Schema.Struct({
   /** ISO timestamp of the last successful compaction, or null. */
   lastCompactedAt: Schema.NullOr(Schema.String),
   /** How many times this session has been compacted. */
-  compactions: Schema.Number
+  compactions: Schema.Number,
+  /**
+   * This session has given up on compacting itself.
+   *
+   * Set once consecutive digest failures hit the retry ceiling, after which the
+   * manager stops forking fibers for this session entirely. Without it the meter
+   * cannot tell "a digest is coming" from "no digest is ever coming": both leave
+   * `phase: "prepare"` with `preparing: false`, so the UI promised "compacting
+   * soon" indefinitely for a session that had permanently stopped trying.
+   *
+   * Cleared by a manual "Compact now", which resets the failure count.
+   */
+  stalled: Schema.Boolean
 })
 export type ContextSnapshot = Schema.Schema.Type<typeof ContextSnapshot>
