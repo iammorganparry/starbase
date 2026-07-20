@@ -1,7 +1,6 @@
 import { type ReactNode, useState } from "react"
 import type { ActivityKind, DiffStat, Session, SessionActivity } from "@starbase/core"
 import { activityLabel } from "@starbase/core"
-import type { DockSide } from "../app/terminal-panel.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
 import { SEED_CONVERSATION } from "../seed.js"
@@ -77,38 +76,13 @@ export interface SessionPaneProps {
   /** Render the Issue tab — the rich linked-issue view (shown when one is linked). */
   renderIssue?: (session: Session, ctx: { onConnectGithub: () => void }) => ReactNode
   /**
-   * Render the per-session terminal dock (the desktop app's live TerminalDock).
-   * Docked to the main content column beside/below the tab body. Absent in stories.
+   * Toggle the browser-preview pane. App-level, not pane-level: the dock itself is
+   * mounted once outside the grid, so every pane's copy of this control drives the
+   * same one.
    */
-  renderTerminalDock?: (session: Session) => ReactNode
-  /** Which edge the terminal dock attaches to — drives the content column's flow. */
-  terminalDockSide?: DockSide
-  /**
-   * Render the embedded browser-preview dock (desktop app's BrowserPreviewView).
-   * Docked beside/below the tab body like the terminal dock; absent in stories.
-   */
-  renderBrowserDock?: (session: Session | null) => ReactNode
-  /** Which edge the browser dock attaches to. */
-  browserDockSide?: DockSide
-  /** Toggle the browser-preview pane (shows a control in the tab bar). */
   onToggleBrowser?: () => void
   /** Whether the browser-preview pane is currently open. */
   browserActive?: boolean
-  /**
-   * Whether this pane owns the app-wide singletons — the terminal dock and the
-   * native browser preview.
-   *
-   * Both are one-per-app, not one-per-pane: the preview is a single
-   * `WebContentsView` living in the main process, floating OUTSIDE the DOM and
-   * positioned from a placeholder's bounding box. Two panes rendering it would
-   * have two rAF loops writing conflicting bounds to the same native view. So the
-   * focused pane gets them, and the rest degrade visibly rather than silently.
-   *
-   * Defaults to true so a lone pane (and every story) behaves as it always did.
-   */
-  ownsDocks?: boolean
-  /** Which pane currently holds the docks — names the owner in the disabled tooltip. */
-  dockOwnerLabel?: string
   /** Empty this pane's slot. Absent in 1-up, where there is nothing to close back to. */
   onClosePane?: () => void
 }
@@ -134,7 +108,10 @@ export const visibleTabs = (
 }
 
 /**
- * One session's full workspace: its tab bar, its tab body, and its docks.
+ * One session's full workspace: its tab bar and its tab body.
+ *
+ * Not its docks — the terminal and browser preview are mounted once by
+ * `SessionGrid`, outside every pane. See the comment there for why.
  *
  * Extracted out of `SessionConversation` so the grid can mount SEVERAL of these
  * at once. The important consequence of the split is that `tab`, `target` and
@@ -175,27 +152,6 @@ export function SessionPane(props: SessionPaneProps) {
   const connectGithub = props.onOpenSettings ?? (() => {})
   // What this session's agent is doing — drives the tab bar's pill.
   const activeActivity = props.liveActivity?.[active.id] ?? null
-  // Both docks are app-wide singletons — only the owning pane may mount them.
-  const ownsDocks = props.ownsDocks ?? true
-  const dock = ownsDocks && props.renderTerminalDock ? props.renderTerminalDock(active) : null
-  // The embedded browser-preview dock — session-agnostic (localhost). Each dock
-  // hides itself (display:none) when its pane is closed, so rendering both is
-  // layout-free until opened.
-  const browserDock = ownsDocks && props.renderBrowserDock ? props.renderBrowserDock(active) : null
-  const termSide = props.terminalDockSide ?? "bottom"
-  const browserSide = props.browserDockSide ?? "right"
-  const rightDocks = (
-    <>
-      {termSide === "right" ? dock : null}
-      {browserSide === "right" ? browserDock : null}
-    </>
-  )
-  const bottomDocks = (
-    <>
-      {termSide === "bottom" ? dock : null}
-      {browserSide === "bottom" ? browserDock : null}
-    </>
-  )
 
   return (
     <>
@@ -210,89 +166,71 @@ export function SessionPane(props: SessionPaneProps) {
             ? { label: activityLabel(activeActivity), tone: ACTIVITY_TONE[activeActivity.kind] }
             : undefined
         }
-        onToggleBrowser={props.renderBrowserDock ? props.onToggleBrowser : undefined}
-        browserActive={ownsDocks && props.browserActive}
-        browserDisabled={!ownsDocks}
-        browserDisabledReason={
-          ownsDocks
-            ? undefined
-            : `Browser preview belongs to ${props.dockOwnerLabel ?? "the focused pane"}`
-        }
+        onToggleBrowser={props.onToggleBrowser}
+        browserActive={props.browserActive}
         onToggleSplit={splitAvailable ? () => setSplit((v) => !v) : undefined}
         splitActive={splitOpen}
         onClosePane={props.onClosePane}
       />
 
-      {/*
-        Dock area: any RIGHT-docked panes sit beside the content column (a
-        flex-row), and any BOTTOM-docked panes stack beneath that row. Each
-        dock CSS-hides itself when closed, so this holds for 0, 1, or 2 open
-        docks on independent sides (terminal + browser preview).
-      */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-row">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {/*
-              The Conversation + Plan tabs share ONE persistent pane (same
-              conversation machine), so switching to Plan Review never unmounts —
-              and thus never aborts — a parked plan run. The pane swaps its own
-              inner view; only the OTHER tabs (pr/review/stub) fully unmount on
-              switch (keyed by activeTab), since the virtualized transcript's
-              measurement cache corrupts if kept mounted-but-hidden.
-            */}
-            {activeTab === "conversation" || activeTab === "plan" ? (
-              props.renderConversation ? (
-                <div key={active.id} className="flex min-h-0 min-w-0 flex-1">
-                  {props.renderConversation(
-                    active,
-                    activeTab === "plan" ? "plan" : splitOpen ? "split" : "conversation",
-                    {
-                      onOpenPlanReview: (stepId) => {
-                        setTarget(stepId ? { sessionId: active.id, stepId } : null)
-                        // Already split? Plan Review is on screen — switching tabs
-                        // would close the transcript the operator just clicked from.
-                        // Just move its selection.
-                        if (!splitOpen) setTab("plan")
-                      },
-                      planStepId: planStepTarget,
-                      onPlanStepSelected: () => setTarget(null)
-                    }
-                  )}
-                </div>
-              ) : (
-                <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
-                  {props.conversationPane ?? (
-                    <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" />
-                  )}
-                </div>
-              )
-            ) : (
-              <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
-                {activeTab === "issue" ? (
-                  (props.renderIssue?.(active, { onConnectGithub: connectGithub }) ?? (
-                    <StubScreen tab="issue" />
-                  ))
-                ) : activeTab === "pr" ? (
-                  (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
-                    <StubScreen tab="pr" />
-                  ))
-                ) : activeTab === "review" ? (
-                  (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
-                    <StubScreen tab="review" />
-                  ))
-                ) : activeTab === "changes" ? (
-                  (props.renderCode?.(active, { onConnectGithub: connectGithub }) ?? (
-                    <StubScreen tab="changes" />
-                  ))
-                ) : (
-                  <StubScreen tab={activeTab} />
-                )}
-              </div>
+      {/*
+        The Conversation + Plan tabs share ONE persistent pane (same
+        conversation machine), so switching to Plan Review never unmounts —
+        and thus never aborts — a parked plan run. The pane swaps its own
+        inner view; only the OTHER tabs (pr/review/stub) fully unmount on
+        switch (keyed by activeTab), since the virtualized transcript's
+        measurement cache corrupts if kept mounted-but-hidden.
+      */}
+      {activeTab === "conversation" || activeTab === "plan" ? (
+        props.renderConversation ? (
+          <div key={active.id} className="flex min-h-0 min-w-0 flex-1">
+            {props.renderConversation(
+              active,
+              activeTab === "plan" ? "plan" : splitOpen ? "split" : "conversation",
+              {
+                onOpenPlanReview: (stepId) => {
+                  setTarget(stepId ? { sessionId: active.id, stepId } : null)
+                  // Already split? Plan Review is on screen — switching tabs
+                  // would close the transcript the operator just clicked from.
+                  // Just move its selection.
+                  if (!splitOpen) setTab("plan")
+                },
+                planStepId: planStepTarget,
+                onPlanStepSelected: () => setTarget(null)
+              }
             )}
           </div>
-          {rightDocks}
+        ) : (
+          <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
+            {props.conversationPane ?? (
+              <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" />
+            )}
+          </div>
+        )
+      ) : (
+        <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
+          {activeTab === "issue" ? (
+            (props.renderIssue?.(active, { onConnectGithub: connectGithub }) ?? (
+              <StubScreen tab="issue" />
+            ))
+          ) : activeTab === "pr" ? (
+            (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
+              <StubScreen tab="pr" />
+            ))
+          ) : activeTab === "review" ? (
+            (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
+              <StubScreen tab="review" />
+            ))
+          ) : activeTab === "changes" ? (
+            (props.renderCode?.(active, { onConnectGithub: connectGithub }) ?? (
+              <StubScreen tab="changes" />
+            ))
+          ) : (
+            <StubScreen tab={activeTab} />
+          )}
         </div>
-        {bottomDocks}
+      )}
       </div>
     </>
   )

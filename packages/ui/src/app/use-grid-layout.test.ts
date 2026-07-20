@@ -25,7 +25,7 @@ describe("useGridLayout", () => {
     expect(reloaded.current.layout.slots).toEqual(["a", null, "c", null])
   })
 
-  it("treats a sidebar click as 'show this in the pane I'm looking at'", () => {
+  it("treats a sidebar click on an OFF-grid session as 'show it in this pane'", () => {
     const { result } = renderHook(() => useGridLayout(sessions, "a"))
     act(() => result.current.changeMode("1|1"))
     act(() => result.current.assignToSlot(1, "b"))
@@ -37,6 +37,21 @@ describe("useGridLayout", () => {
     expect(result.current.activeSessionId).toBe("c")
   })
 
+  it("just focuses a session that is already on the grid, rearranging nothing", () => {
+    // Falling through to `assign` would apply its SWAP semantics and yank the
+    // session out of the pane the operator can see it in, pushing the focused
+    // pane's session into the hole — two panes move when they wanted to read one.
+    const { result } = renderHook(() => useGridLayout(sessions, "a"))
+    act(() => result.current.changeMode("1|1"))
+    act(() => result.current.assignToSlot(1, "b"))
+    expect(result.current.layout.focused).toBe(1)
+
+    act(() => result.current.selectSession("a"))
+    expect(result.current.layout.slots).toEqual(["a", "b"])
+    expect(result.current.layout.focused).toBe(0)
+    expect(result.current.activeSessionId).toBe("a")
+  })
+
   it("drops slots whose session no longer exists", () => {
     localStorage.setItem(
       LAYOUT_STORAGE_KEY,
@@ -46,15 +61,18 @@ describe("useGridLayout", () => {
     expect(result.current.layout.slots).toEqual(["a", null])
   })
 
-  it("does not blank the grid while the session list is still loading", () => {
-    // An empty `sessions` array is the loading state, not "everything was
-    // deleted" — pruning against it would wipe the restored layout on every boot.
+  it("clears every slot when the last session is deleted", () => {
+    // `StarbaseApp` only mounts once the app machine leaves loading, so an empty
+    // list means everything really was deleted. Treating it as "still loading"
+    // left the grid holding dead ids and showed drop placeholders with nothing
+    // left to drag, instead of the first-launch screen — and persisted that.
     localStorage.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({ mode: "1|1", slots: ["a", "b"], focused: 0 })
     )
     const { result } = renderHook(() => useGridLayout([], null))
-    expect(result.current.layout.slots).toEqual(["a", "b"])
+    expect(result.current.layout.slots).toEqual([null, null])
+    expect(result.current.visibleSessionIds.size).toBe(0)
   })
 
   it("exposes the slot each session sits in, for the sidebar badges", () => {
@@ -75,6 +93,28 @@ describe("useGridLayout", () => {
     // Session a is deleted upstream — the grid must not keep pointing at it.
     rerender({ list: [{ id: "b" }, { id: "c" }] })
     expect(result.current.layout.slots).toEqual([null, "b"])
+  })
+
+  it("reports EVERY on-screen session, not just the focused one", () => {
+    // Notification suppression reads this. The main process's rule is "don't tell
+    // them what they can already see" — so a session sitting visible in an
+    // unfocused pane must count as seen, or it raises an OS toast for something
+    // the operator is looking straight at.
+    const { result } = renderHook(() => useGridLayout(sessions, "a"))
+    act(() => result.current.changeMode("2|1"))
+    act(() => result.current.assignToSlot(1, "b"))
+    act(() => result.current.focusSlot(0))
+
+    expect(result.current.activeSessionId).toBe("a")
+    expect([...result.current.visibleSessionIds].sort()).toEqual(["a", "b"])
+  })
+
+  it("drops a session from the visible set once its slot is cleared", () => {
+    const { result } = renderHook(() => useGridLayout(sessions, "a"))
+    act(() => result.current.changeMode("1|1"))
+    act(() => result.current.assignToSlot(1, "b"))
+    act(() => result.current.clearSlot(1))
+    expect([...result.current.visibleSessionIds]).toEqual(["a"])
   })
 
   it("writes every change straight through to storage", () => {

@@ -52,10 +52,13 @@ export interface GridLayout {
   /** Session id per slot, `null` for an empty slot. Length always `SLOT_COUNT[mode]`. */
   readonly slots: ReadonlyArray<string | null>
   /**
-   * Which slot last had the operator's attention. Not merely cosmetic: it decides
-   * which pane owns the app-wide singletons (the native browser preview, the
-   * terminal dock) and which session counts as "on screen" for notification
-   * suppression. Always a valid index into `slots`.
+   * Which slot last had the operator's attention.
+   *
+   * Drives the focus ring, which slot a sidebar click replaces, and which session
+   * the per-session terminal dock follows. It does NOT decide what counts as "on
+   * screen" for notification suppression — every session in `slots` is on screen,
+   * and suppression uses all of them (see `use-grid-layout`'s
+   * `visibleSessionIds`). Always a valid index into `slots`.
    */
   readonly focused: number
 }
@@ -179,10 +182,6 @@ export const prune = (layout: GridLayout, knownIds: ReadonlySet<string>): GridLa
   return { ...layout, slots }
 }
 
-/** The first empty slot, or -1 when the grid is full. */
-export const firstEmptySlot = (layout: GridLayout): number =>
-  layout.slots.findIndex((id) => id === null)
-
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
@@ -199,6 +198,13 @@ const isLayoutMode = (value: unknown): value is LayoutMode =>
  *
  * `2v` (two full-width rows) has no column-based equivalent and becomes two
  * columns: same pane count, same sessions, different orientation.
+ *
+ * `3` (three equal columns) has no faithful mapping either — `2|1` has no middle
+ * column — so its indices are reused as-is and the geometry moves: the old middle
+ * pane lands bottom-left. The old RIGHTMOST pane keeps its full-height right-hand
+ * position, which is the one most likely to be the operator's main pane, so this
+ * is the least-surprising of the available shuffles rather than a faithful remap.
+ * Unlike `2x2` (below) no reordering can avoid it.
  */
 const LEGACY_MODES: Record<string, LayoutMode> = {
   "2h": "1|1",

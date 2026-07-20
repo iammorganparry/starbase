@@ -14,65 +14,76 @@ const renderGrid = (focused: number, slots: ReadonlyArray<string | null> = ["a",
       sessions={sessions}
       onFocusSlot={vi.fn()}
       renderConversation={(s) => <div>transcript {s.id}</div>}
-      renderTerminalDock={(s) => <div data-testid={`terminal-dock-${s.id}`} />}
-      renderBrowserDock={(s) => <div data-testid={`browser-dock-${s?.id}`} />}
+      renderTerminalDock={(s) => <div data-testid="terminal-dock">{s.id}</div>}
+      renderBrowserDock={(s) => <div data-testid="browser-dock">{s?.id ?? "none"}</div>}
       onToggleBrowser={vi.fn()}
       browserActive
     />
   )
 
-describe("singleton dock ownership", () => {
-  it("mounts the browser preview in exactly one pane, however many are visible", () => {
-    // The preview is ONE native WebContentsView positioned from a placeholder's
-    // bounding box. Two mounts would mean two rAF loops fighting over its bounds.
+describe("dock mounting", () => {
+  it("mounts each dock exactly once, however many panes are visible", () => {
+    // The browser preview drives ONE native WebContentsView. Two mounts would
+    // mean two rAF loops writing conflicting bounds to the same native view.
     renderGrid(0)
-    expect(screen.getAllByTestId(/^browser-dock-/)).toHaveLength(1)
-    expect(screen.getByTestId("browser-dock-a")).toBeTruthy()
+    expect(screen.getAllByTestId("browser-dock")).toHaveLength(1)
+    expect(screen.getAllByTestId("terminal-dock")).toHaveLength(1)
   })
 
-  it("mounts the terminal dock only in the focused pane", () => {
-    renderGrid(1)
-    expect(screen.queryByTestId("terminal-dock-a")).toBeNull()
-    expect(screen.getByTestId("terminal-dock-b")).toBeTruthy()
-  })
-
-  it("moves the docks when focus moves", () => {
-    const { unmount } = renderGrid(0)
-    expect(screen.getByTestId("browser-dock-a")).toBeTruthy()
-    unmount()
-
-    renderGrid(1)
-    expect(screen.getByTestId("browser-dock-b")).toBeTruthy()
-    expect(screen.queryByTestId("browser-dock-a")).toBeNull()
-  })
-
-  it("greys out the browser toggle in unfocused panes and says who owns it", () => {
-    // Hidden would read as a missing feature; inert-with-a-reason is honest.
+  it("mounts the docks OUTSIDE every pane, so a pane click cannot remount them", () => {
+    // The regression this guards: the docks used to live inside the focused
+    // pane, so clicking another pane unmounted the preview — and its unmount
+    // cleanup calls browserPreviewClose(), destroying the view and losing the
+    // page, its history and the URL. Clicking a pane must not touch them.
     renderGrid(0)
-    const paneB = screen.getByTestId("grid-slot-1")
-    const toggle = within(paneB).getByTestId("toggle-browser") as HTMLButtonElement
-    expect(toggle.disabled).toBe(true)
-    expect(toggle.getAttribute("title")).toContain("pane 1")
-
-    const paneA = screen.getByTestId("grid-slot-0")
-    expect((within(paneA).getByTestId("toggle-browser") as HTMLButtonElement).disabled).toBe(false)
+    for (const slot of [0, 1]) {
+      const pane = screen.getByTestId(`grid-slot-${slot}`)
+      expect(within(pane).queryByTestId("browser-dock")).toBeNull()
+      expect(within(pane).queryByTestId("terminal-dock")).toBeNull()
+    }
   })
 
-  it("leaves the toggle live in a single-pane layout", () => {
-    renderGrid(0, ["a"])
-    const toggle = screen.getByTestId("toggle-browser") as HTMLButtonElement
-    expect(toggle.disabled).toBe(false)
-  })
-})
+  it("keeps the same dock element across a focus change", () => {
+    const { rerender } = renderGrid(0)
+    const before = screen.getByTestId("browser-dock")
 
-describe("when the focused slot is empty", () => {
-  it("hands the docks to the first filled pane rather than unmounting them", () => {
-    // You just closed the focused pane. `clear` leaves focus on the now-empty
-    // slot, and an empty slot renders no SessionPane — so without a fallback
-    // NOTHING would mount the terminal or browser dock.
+    rerender(
+      <SessionGrid
+        layout={{ mode: "1|1", slots: ["a", "b"], focused: 1 }}
+        sessions={sessions}
+        onFocusSlot={vi.fn()}
+        renderConversation={(s) => <div>transcript {s.id}</div>}
+        renderTerminalDock={(s) => <div data-testid="terminal-dock">{s.id}</div>}
+        renderBrowserDock={(s) => <div data-testid="browser-dock">{s?.id ?? "none"}</div>}
+        onToggleBrowser={vi.fn()}
+        browserActive
+      />
+    )
+    // Same DOM node, not a replacement — React reconciled rather than remounted,
+    // which is what stops the native view being torn down and reopened.
+    expect(screen.getByTestId("browser-dock")).toBe(before)
+  })
+
+  it("points the per-session terminal dock at the focused session", () => {
+    renderGrid(1)
+    expect(screen.getByTestId("terminal-dock").textContent).toBe("b")
+  })
+
+  it("falls back to the first filled slot when the focused slot is empty", () => {
+    // You just closed the focused pane; `clear` leaves focus on the empty slot.
     renderGrid(1, ["a", null])
-    expect(screen.getByTestId("browser-dock-a")).toBeTruthy()
-    expect(screen.getByTestId("terminal-dock-a")).toBeTruthy()
+    expect(screen.getByTestId("terminal-dock").textContent).toBe("a")
+  })
+
+  it("leaves the browser toggle live in every pane", () => {
+    // The dock is app-level now, so every pane's toggle drives the same one —
+    // there is no longer an "owning" pane whose toggle alone works.
+    renderGrid(0)
+    for (const slot of [0, 1]) {
+      const pane = screen.getByTestId(`grid-slot-${slot}`)
+      const toggle = within(pane).getByTestId("toggle-browser") as HTMLButtonElement
+      expect(toggle.disabled).toBe(false)
+    }
   })
 })
 

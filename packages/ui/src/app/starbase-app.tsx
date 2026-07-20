@@ -156,8 +156,12 @@ export interface StarbaseAppProps {
    * when null.
    */
   selectSessionRequest?: { readonly sessionId: string; readonly nonce: number } | null
-  /** Notified whenever the shell's selected session changes (including to null). */
-  onActiveSessionChange?: (sessionId: string | null) => void
+  /**
+   * Notified whenever the set of ON-SCREEN sessions changes. A set rather than a
+   * single id because the grid shows several at once, and the desktop suppresses
+   * notifications for anything the operator can already see.
+   */
+  onVisibleSessionsChange?: (sessionIds: ReadonlySet<string>) => void
   patch?: string
   /**
    * Render the live conversation for the active session. Called with the active
@@ -263,7 +267,7 @@ export function StarbaseApp({
   browserActive,
   activeSessionId,
   selectSessionRequest,
-  onActiveSessionChange,
+  onVisibleSessionsChange,
   patch = SEED_PATCH,
   renderConversation,
   planSessions,
@@ -310,8 +314,8 @@ export function StarbaseApp({
   // Publish the selection so the notifier can tell whether a session is the one
   // already on screen (see `active-session.ts` in the desktop renderer).
   useEffect(() => {
-    onActiveSessionChange?.(selected)
-  }, [selected, onActiveSessionChange])
+    onVisibleSessionsChange?.(grid.visibleSessionIds)
+  }, [grid.visibleSessionIds, onVisibleSessionsChange])
 
   const openUsage = useCallback(() => {
     setUsageOpen(true)

@@ -18,16 +18,24 @@ export function TitleBar({
   return (
     <div
       style={drag}
-      className="flex h-[38px] flex-none items-center gap-3.5 border-b border-hairline bg-panel px-3.5"
+      className="relative flex h-[38px] flex-none items-center gap-3.5 border-b border-hairline bg-panel px-3.5"
     >
-      <div style={noDrag} className="flex gap-2">
+      {/*
+        The title is absolutely centred rather than flexed between the two side
+        blocks. Those blocks are different widths — traffic lights on the left,
+        a five-button layout picker on the right — so a `flex-1` title would sit
+        visibly off-centre in the only configuration the app actually renders.
+      */}
+      <div className="pointer-events-none absolute inset-x-0 text-center text-[12px] text-dim">
+        {title}
+      </div>
+      <div style={noDrag} className="relative flex gap-2">
         <span className="size-3 rounded-full bg-[#ff5f57]" />
         <span className="size-3 rounded-full bg-[#febc2e]" />
         <span className="size-3 rounded-full bg-[#28c840]" />
       </div>
-      <div className="flex-1 text-center text-[12px] text-dim">{title}</div>
-      {/* Keeps the title optically centred when there are no actions. */}
-      <div style={noDrag} className="flex min-w-[52px] justify-end">
+      <div className="flex-1" />
+      <div style={noDrag} className="relative flex justify-end">
         {actions}
       </div>
     </div>

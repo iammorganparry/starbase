@@ -24,7 +24,7 @@ import { conversationMachine } from "./conversation-machine.js"
 import { setSessionActivity } from "./session-activity.js"
 import { setPlanPresent } from "./plan-presence.js"
 import { clearSessionDiff, diffCounts, setSessionDiff } from "./diff-presence.js"
-import { activeSessionId } from "./active-session.js"
+import { isSessionVisible } from "./active-session.js"
 import type { NotifiableState } from "./notifier.js"
 import { notificationFor } from "./notifier.js"
 import { rpc } from "./rpc-client.js"
@@ -97,7 +97,7 @@ export const getConversationActor = (session: Session): ConversationActor => {
             kind: announce.kind,
             title: announce.title,
             body: announce.body,
-            isActiveSession: activeSessionId() === session.id
+            isActiveSession: isSessionVisible(session.id)
           })
           .catch(() => {})
       }

@@ -44,10 +44,13 @@ export function useGridLayout(
   // rather than rendering a pane pointed at nothing.
   const knownIds = useMemo(() => new Set(sessions.map((s) => s.id)), [sessions])
   useEffect(() => {
-    // Skip while the session list is still empty — that's the loading state, not
-    // "every session was deleted", and pruning against it would blank the grid on
-    // every cold start.
-    if (knownIds.size === 0) return
+    // Unconditional, including for an EMPTY list. `StarbaseApp` only mounts once
+    // the app machine has left `loading`/`starting` (App.tsx renders LoadingScreen
+    // until then), so no sessions here means every session really was deleted —
+    // not that they haven't arrived yet. Skipping the prune in that case left the
+    // grid holding ids of deleted sessions, persisted them to localStorage, and
+    // showed "Drag a session here" placeholders with nothing left to drag instead
+    // of the first-launch screen — across restarts.
     setLayout((current) => prune(current, knownIds))
   }, [knownIds])
 
@@ -57,7 +60,15 @@ export function useGridLayout(
    * behaviour; in a grid it means "the pane I'm looking at, show me this instead".
    */
   const selectSession = useCallback((sessionId: string) => {
-    setLayout((current) => assign(current, current.focused, sessionId))
+    setLayout((current) => {
+      // Already on screen? Just look at it. Falling through to `assign` would
+      // apply its SWAP semantics — yanking the session out of the pane it is
+      // visibly sitting in and pushing the focused pane's session into the hole,
+      // rearranging two panes when the operator only wanted to read one. Swap
+      // stays the meaning of an explicit DRAG, not of a click.
+      const at = current.slots.indexOf(sessionId)
+      return at === -1 ? assign(current, current.focused, sessionId) : focus(current, at)
+    })
   }, [])
 
   /** Put a session in a specific slot — what a DROP means. */
@@ -78,12 +89,19 @@ export function useGridLayout(
   }, [])
 
   const slotBySession = useMemo(() => slotIndexBySession(layout), [layout])
+  /**
+   * Every session currently ON SCREEN, not just the focused one. Notification
+   * suppression keys off this: the main process's rule is "don't tell them what
+   * they can already see", and in a grid that is every gridded session.
+   */
+  const visibleSessionIds = useMemo(() => new Set(slotBySession.keys()), [slotBySession])
 
   return {
     layout,
     /** The session in the focused slot — the app's "active session". */
     activeSessionId: focusedSessionId(layout),
     slotBySession,
+    visibleSessionIds,
     selectSession,
     assignToSlot,
     clearSlot,

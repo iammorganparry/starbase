@@ -61,8 +61,11 @@ export interface SessionConversationProps {
   /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
   planSessions?: ReadonlySet<string>
   /**
-   * Show the empty state instead of a transcript — the real app sets this when
-   * no session is active (first launch), so the seeded demo never renders.
+   * Show the empty state instead of the grid. The HOST owns this rule — it is
+   * not re-derived here. `StarbaseApp` sets it when the grid is entirely empty
+   * AND a live `renderConversation` is wired, so the Storybook/standalone path
+   * (no live renderer) still shows its seeded transcript rather than the
+   * first-launch screen.
    */
   showEmpty?: boolean
   /** Unified-diff patch for the Changes rail (fallback demo only). */
@@ -144,10 +147,6 @@ export function SessionConversation(props: SessionConversationProps) {
     slots: [props.activeSessionId],
     focused: 0
   }
-  // The empty state belongs to the whole screen, not to a slot: an EMPTY SLOT in a
-  // 2x2 is a drop target ("Drag a session here"), whereas an empty GRID means
-  // there is nothing to work on at all and should offer to create a session.
-  const gridEmpty = layout.slots.every((id) => id === null)
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -178,7 +177,7 @@ export function SessionConversation(props: SessionConversationProps) {
       <div className="flex min-w-0 flex-1 flex-col bg-editor">
         {props.settingsView ? (
           props.settingsView
-        ) : props.showEmpty || gridEmpty ? (
+        ) : props.showEmpty ? (
           <EmptyConversation
             clis={props.clis}
             version={props.version}

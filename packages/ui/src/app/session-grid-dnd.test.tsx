@@ -74,6 +74,27 @@ describe("dragging a session onto a slot", () => {
     expect(screen.getByTestId("grid-slot-1").className).not.toContain("ring-2")
   })
 
+  it("clears a stuck highlight when the drag is cancelled outside any slot", () => {
+    // dragleave never fires if the drag ends off-window or is cancelled with
+    // Escape, so without a global listener the ring stays painted until the next
+    // drag. `dragend` fires on the source for every one of those endings.
+    render(
+      <SessionGrid
+        layout={{ mode: "1|1", slots: ["a", null], focused: 0 }}
+        sessions={sessions}
+        onFocusSlot={vi.fn()}
+        onAssignSlot={vi.fn()}
+        renderConversation={(s) => <div>transcript {s.id}</div>}
+      />
+    )
+    const slot = screen.getByTestId("grid-slot-1")
+    fireEvent.dragOver(slot, { dataTransfer: sessionDrag("b") })
+    expect(slot.className).toContain("ring-blue")
+
+    fireEvent.dragEnd(window)
+    expect(screen.getByTestId("grid-slot-1").className).not.toContain("ring-2")
+  })
+
   it("does not accept drops when the grid is read-only", () => {
     render(
       <SessionGrid

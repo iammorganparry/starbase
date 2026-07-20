@@ -1,4 +1,4 @@
-import { type DragEvent, type ReactNode, useState } from "react"
+import { type DragEvent, type ReactNode, useEffect, useState } from "react"
 import type { DiffStat, Session, SessionActivity } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import type { DockSide } from "./terminal-panel.js"
@@ -164,12 +164,24 @@ export function SessionGrid(props: SessionGridProps) {
   // slot highlights: `dragleave` fires when crossing into a CHILD element too, so
   // a per-slot boolean would flicker as the cursor moves over the pane's contents.
   const [dropTarget, setDropTarget] = useState<number | null>(null)
-  // Who owns the app-wide docks. Normally the focused slot — but a focused slot
-  // can be EMPTY (you just closed its pane), and an empty slot renders no
-  // SessionPane, so nothing would mount the terminal or browser dock at all.
-  // Fall back to the first filled slot so the docks stay reachable.
-  const focusedFilled = layout.slots[layout.focused] != null
-  const dockOwner = focusedFilled ? layout.focused : layout.slots.findIndex((id) => id !== null)
+  // A drag can end without the slot ever seeing `dragleave` — dropped outside the
+  // window, cancelled with Escape, or aborted when the window loses focus — which
+  // would leave the highlight painted until the next drag. `dragend` fires on the
+  // source for all of those, so listen for it globally while a slot is lit.
+  useEffect(() => {
+    if (dropTarget === null) return
+    const clear = () => setDropTarget(null)
+    window.addEventListener("dragend", clear)
+    window.addEventListener("drop", clear)
+    return () => {
+      window.removeEventListener("dragend", clear)
+      window.removeEventListener("drop", clear)
+    }
+  }, [dropTarget])
+  // The session the per-session docks follow. The focused slot normally, falling
+  // back to the first filled one so closing the focused pane doesn't strand them.
+  const dockSessionId = layout.slots[layout.focused] ?? layout.slots.find((id) => id !== null) ?? null
+  const dockSession = dockSessionId === null ? null : (sessions.find((s) => s.id === dockSessionId) ?? null)
 
   const renderSlot = (index: number) => {
     const sessionId = layout.slots[index] ?? null
@@ -230,17 +242,10 @@ export function SessionGrid(props: SessionGridProps) {
                 renderReview={props.renderReview}
                 renderCode={props.renderCode}
                 renderIssue={props.renderIssue}
-                renderTerminalDock={props.renderTerminalDock}
-                terminalDockSide={props.terminalDockSide}
-                renderBrowserDock={props.renderBrowserDock}
-                browserDockSide={props.browserDockSide}
+                // The docks are mounted ONCE outside the grid (see below), so the
+                // toggle is app-level and every pane's copy drives the same dock.
                 onToggleBrowser={props.onToggleBrowser}
                 browserActive={props.browserActive}
-                // Exactly one pane may drive the native browser preview and the
-                // terminal dock. In 1-up that's trivially the only pane; in a grid
-                // it follows focus, so the docks travel with the operator's attention.
-                ownsDocks={index === dockOwner}
-                dockOwnerLabel={`pane ${dockOwner + 1}`}
                 // No close control in 1-up: with one slot there is nothing to
                 // close back to, so it would only be a way to blank the app.
                 onClosePane={
@@ -252,7 +257,28 @@ export function SessionGrid(props: SessionGridProps) {
     )
   }
 
-  return (
+  // Both docks are mounted HERE, once, outside the slot loop — never inside a
+  // pane.
+  //
+  // The browser preview drives a single native `WebContentsView` in the main
+  // process and its unmount cleanup calls `browserPreviewClose()`, with the
+  // current URL held in component state. Mounting it inside the focused pane
+  // meant that clicking a different pane — to type in its composer, say —
+  // unmounted it and remounted a fresh one, destroying the view and reopening at
+  // the default URL. You would lose the page, its history and your scroll
+  // position just by clicking the pane next to it.
+  //
+  // The terminal dock is per-SESSION rather than per-pane, so it stays mounted
+  // and simply takes whichever session currently owns it as a prop. Passing a
+  // prop re-runs its queries; unmounting it would throw away the xterm buffer.
+  const dock = dockSession && props.renderTerminalDock ? props.renderTerminalDock(dockSession) : null
+  // Session-agnostic (it points at localhost), which is exactly why hoisting it
+  // out of the panes costs nothing.
+  const browserDock = props.renderBrowserDock ? props.renderBrowserDock(dockSession) : null
+  const termSide = props.terminalDockSide ?? "bottom"
+  const browserSide = props.browserDockSide ?? "right"
+
+  const grid = (
     <div
       data-testid="session-grid"
       data-mode={layout.mode}
@@ -271,6 +297,21 @@ export function SessionGrid(props: SessionGridProps) {
           {slotIndices.map(renderSlot)}
         </div>
       ))}
+    </div>
+  )
+
+  // RIGHT-docked panes sit beside the whole grid; BOTTOM-docked ones stack under
+  // that row. Each dock CSS-hides itself when closed, so this holds for 0, 1 or 2
+  // open docks on independent sides.
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+        {grid}
+        {termSide === "right" ? dock : null}
+        {browserSide === "right" ? browserDock : null}
+      </div>
+      {termSide === "bottom" ? dock : null}
+      {browserSide === "bottom" ? browserDock : null}
     </div>
   )
 }

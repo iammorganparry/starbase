@@ -5,7 +5,6 @@ import {
   COLUMN_SPEC,
   columnsOf,
   EMPTY_LAYOUT,
-  firstEmptySlot,
   focus,
   focusedSessionId,
   type GridLayout,
@@ -176,16 +175,6 @@ describe("prune", () => {
   it("returns the same reference when every slot is still valid", () => {
     const before = layout("1|1", ["a", null])
     expect(prune(before, new Set(["a", "b"]))).toBe(before)
-  })
-})
-
-describe("firstEmptySlot", () => {
-  it("finds the first gap", () => {
-    expect(firstEmptySlot(layout("2|2", ["a", null, "c", null]))).toBe(1)
-  })
-
-  it("reports -1 when the grid is full", () => {
-    expect(firstEmptySlot(layout("1|1", ["a", "b"]))).toBe(-1)
   })
 })
 

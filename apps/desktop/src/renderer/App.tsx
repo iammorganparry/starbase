@@ -33,7 +33,7 @@ import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
 import { clearDraft } from "./draft-store.js"
 import { onSessionUpdate } from "./session-updates.js"
-import { setActiveSessionId } from "./active-session.js"
+import { setVisibleSessionIds } from "./active-session.js"
 import { prNotification } from "./notifier.js"
 import { completedSessionIds } from "./pr-refresh.js"
 import { issuesToCloseOnMerge, prsToNotify } from "./pr-sweep.js"
@@ -92,8 +92,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   )
   // Keep the module-level cell the conversation registry reads in sync. It can't
   // use a hook: it outlives every component. See `active-session.ts`.
-  const onActiveSessionChange = useCallback(
-    (id: string | null) => setActiveSessionId(id),
+  const onVisibleSessionsChange = useCallback(
+    (ids: ReadonlySet<string>) => setVisibleSessionIds(ids),
     []
   )
 
@@ -488,7 +488,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     <StarbaseApp
       clis={clis}
       selectSessionRequest={selectRequest}
-      onActiveSessionChange={onActiveSessionChange}
+      onVisibleSessionsChange={onVisibleSessionsChange}
       sessions={sessions}
       user={user}
       onSignOut={onSignOut}

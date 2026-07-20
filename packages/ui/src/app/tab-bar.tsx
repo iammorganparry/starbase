@@ -53,8 +53,6 @@ export function TabBar({
   status,
   onToggleBrowser,
   browserActive = false,
-  browserDisabled = false,
-  browserDisabledReason,
   onToggleSplit,
   splitActive = false,
   onClosePane
@@ -71,14 +69,6 @@ export function TabBar({
   onToggleBrowser?: () => void
   /** Whether the browser preview pane is currently open (highlights the toggle). */
   browserActive?: boolean
-  /**
-   * Greys out the browser toggle. The preview is a single native view owned by
-   * the whole app, so only the FOCUSED pane in a grid can drive it — the others
-   * show the control (its absence would read as a missing feature) but inert.
-   */
-  browserDisabled?: boolean
-  /** Tooltip explaining why the toggle is inert, e.g. "Browser preview is in pane 1". */
-  browserDisabledReason?: string
   /**
    * Open Plan Review beside the transcript. Omitted — and so hidden — unless the
    * split is actually available: the session has a plan AND the conversation tab
@@ -166,17 +156,13 @@ export function TabBar({
           <button
             type="button"
             onClick={onToggleBrowser}
-            disabled={browserDisabled}
             aria-label="Browser preview"
             aria-pressed={browserActive}
             data-testid="toggle-browser"
-            title={browserDisabledReason ?? "Toggle browser preview (⌃⇧B)"}
+            title="Toggle browser preview (⌃⇧B)"
             className={cn(
-              "flex size-6 items-center justify-center rounded transition-colors",
-              browserDisabled
-                ? "cursor-not-allowed text-dim/40"
-                : "hover:bg-hairline " +
-                  (browserActive ? "text-blue" : "text-dim hover:text-text-bright")
+              "flex size-6 items-center justify-center rounded transition-colors hover:bg-hairline",
+              browserActive ? "text-blue" : "text-dim hover:text-text-bright"
             )}
           >
             <Globe className="size-4" />
