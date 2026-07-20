@@ -19,9 +19,12 @@ import type {
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
   CreateSessionInput,
+  ExecutionMode,
   GateDecision,
   GhStatus,
   GitConfig,
+  NotificationKind,
+  NotificationsConfig,
   HarnessBilling,
   GithubConfig,
   Issue,
@@ -198,8 +201,12 @@ export const rpc = {
     run((c) => c.Agent.commentPlanStep({ sessionId, planId, stepId, body })),
   agentRevisePlan: (sessionId: string, planId: string): Promise<void> =>
     run((c) => c.Agent.revisePlan({ sessionId, planId })),
-  agentApprovePlan: (sessionId: string, planId: string): Promise<void> =>
-    run((c) => c.Agent.approvePlan({ sessionId, planId })),
+  agentApprovePlan: (
+    sessionId: string,
+    planId: string,
+    executionMode?: ExecutionMode
+  ): Promise<void> =>
+    run((c) => c.Agent.approvePlan({ sessionId, planId, executionMode })),
   agentSetHarness: (sessionId: string, cli: CliKind, model: string): Promise<void> =>
     run((c) => c.Agent.setHarness({ sessionId, cli, model })),
   agentStop: (sessionId: string): Promise<void> => run((c) => c.Agent.stop({ sessionId })),
@@ -208,6 +215,19 @@ export const rpc = {
     run((c) => c.Config.setGithub(github)),
   configSetGit: (git: GitConfig): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setGit(git)),
+  configSetNotifications: (notifications: NotificationsConfig): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setNotifications(notifications)),
+  /**
+   * Ask main to raise an OS notification. Main decides whether it actually
+   * surfaces — it owns window focus and the stored prefs.
+   */
+  notifyShow: (input: {
+    sessionId: string
+    kind: NotificationKind
+    title: string
+    body: string
+    isActiveSession: boolean
+  }): Promise<void> => run((c) => c.Notify.show(input)),
   configSetStarredRepos: (paths: ReadonlyArray<string>): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setStarredRepos({ paths })),
   configSetCollapsedRepos: (paths: ReadonlyArray<string>): Promise<WorkspaceConfig> =>
@@ -458,6 +478,7 @@ export const rpc = {
   planExecute: (
     sessionId: string,
     planId: string,
+    executionMode: ExecutionMode | null,
     onEvent: (event: StreamEvent) => void
   ): (() => void) => {
     let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
@@ -465,7 +486,11 @@ export const rpc = {
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        client.Plan.execute({ sessionId, planId }).pipe(
+        client.Plan.execute({
+          sessionId,
+          planId,
+          executionMode: executionMode ?? undefined
+        }).pipe(
           Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
         )
       )

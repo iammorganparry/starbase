@@ -24,6 +24,10 @@ import { conversationMachine } from "./conversation-machine.js"
 import { setSessionActivity } from "./session-activity.js"
 import { setPlanPresent } from "./plan-presence.js"
 import { clearSessionDiff, diffCounts, setSessionDiff } from "./diff-presence.js"
+import { activeSessionId } from "./active-session.js"
+import type { NotifiableState } from "./notifier.js"
+import { notificationFor } from "./notifier.js"
+import { rpc } from "./rpc-client.js"
 
 type ConversationActor = ActorRefFrom<typeof conversationMachine>
 type ConversationSnapshot = SnapshotFrom<typeof conversationMachine>
@@ -56,6 +60,9 @@ export const getConversationActor = (session: Session): ConversationActor => {
   if (existing) return existing
 
   const actor = createActor(conversationMachine, { input: { session } })
+  // Previous observation for the edge detector — see `notificationFor`. Held per
+  // actor so it dies with the session rather than leaking into the next one.
+  let lastSeen: NotifiableState | null = null
   actor.subscribe((snap) => {
     // Deferred so the very first (synchronous) notification from `start()` — which
     // can happen while a component is rendering, since the actor is created inside
@@ -63,10 +70,27 @@ export const getConversationActor = (session: Session): ConversationActor => {
     const activity = activityFor(snap)
     const planPresent = latestPlan(snap.context.messages) !== null
     const diff = diffCounts(snap.context.patch)
+    const observed: NotifiableState = { activity, outcome: snap.context.lastOutcome }
+    const announce = notificationFor(session.title, lastSeen, observed)
+    lastSeen = observed
     queueMicrotask(() => {
       setSessionActivity(session.id, activity)
       setPlanPresent(session.id, planPresent)
       setSessionDiff(session.id, diff)
+      // Fire-and-forget, and deliberately last: a notification that fails must
+      // never take the status stores down with it. Main decides whether this
+      // actually surfaces (window focus + the operator's prefs).
+      if (announce !== null) {
+        void rpc
+          .notifyShow({
+            sessionId: session.id,
+            kind: announce.kind,
+            title: announce.title,
+            body: announce.body,
+            isActiveSession: activeSessionId() === session.id
+          })
+          .catch(() => {})
+      }
     })
   })
   actor.start()

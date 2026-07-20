@@ -17,7 +17,7 @@ import { conversationMachine } from "./conversation-machine.js"
 const h = vi.hoisted(() => ({
   streamCb: null as null | ((event: unknown) => void),
   agentRunCalls: [] as Array<{ sessionId: string; text: string; images: unknown }>,
-  execCalls: [] as Array<{ sessionId: string; planId: string }>,
+  execCalls: [] as Array<{ sessionId: string; planId: string; executionMode: string | undefined }>,
   resumeCalls: [] as Array<{ sessionId: string; planId: string }>,
   diffValue: "diff-0",
   diffCalls: 0,
@@ -84,8 +84,13 @@ vi.mock("./rpc-client.js", () => ({
         h.streamCb = null
       }
     },
-    planExecute: (sessionId: string, planId: string, onEvent: (event: unknown) => void) => {
-      h.execCalls.push({ sessionId, planId })
+    planExecute: (
+      sessionId: string,
+      planId: string,
+      executionMode: string | undefined,
+      onEvent: (event: unknown) => void
+    ) => {
+      h.execCalls.push({ sessionId, planId, executionMode })
       h.streamCb = onEvent
       return () => {
         h.streamCb = null
@@ -987,7 +992,23 @@ describe("conversationMachine — approving a plan after the mode changed", () =
     actor.send({ type: "APPROVE_PLAN", planId: assignedPlan.id })
 
     await waitFor(actor, (s) => s.matches("running"))
-    expect(h.execCalls).toEqual([{ sessionId: "s1", planId: "p_assigned" }])
+    expect(h.execCalls).toEqual([
+      { sessionId: "s1", planId: "p_assigned", executionMode: "accept-edits" }
+    ])
+  })
+
+  it("runs an assigned plan in auto when approval explicitly asks for it", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    seed(actor, assignedPlan)
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "APPROVE_PLAN", planId: assignedPlan.id, executionMode: "auto" })
+
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.execCalls).toEqual([
+      { sessionId: "s1", planId: "p_assigned", executionMode: "auto" }
+    ])
   })
 
   it("never swallows the click — an unassigned plan re-drives instead", async () => {

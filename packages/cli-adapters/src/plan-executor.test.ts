@@ -26,14 +26,14 @@ const planOf = (steps: ReadonlyArray<PlanStep>): Plan =>
 
 /** Records which (cli, model) each step actually ran on, in order. */
 const recording = (
-  onRun?: (spec: { cli: string; model: string | null }) => Effect.Effect<void>
+  onRun?: (spec: { cli: string; model: string | null; mode: string }) => Effect.Effect<void>
 ) => {
-  const ran: Array<{ cli: string; model: string | null; prompt: string }> = []
+  const ran: Array<{ cli: string; model: string | null; mode: string; prompt: string }> = []
   const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
     run: (_id, spec, ctx) =>
       Effect.gen(function* () {
-        ran.push({ cli: spec.cli, model: spec.model, prompt: spec.prompt })
-        if (onRun) yield* onRun({ cli: spec.cli, model: spec.model })
+        ran.push({ cli: spec.cli, model: spec.model, mode: spec.mode, prompt: spec.prompt })
+        if (onRun) yield* onRun({ cli: spec.cli, model: spec.model, mode: spec.mode })
         yield* ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
       }),
     stop: () => Effect.void
@@ -47,7 +47,8 @@ const execute = (
   available = [
     { cli: "claude" as const, model: "opus" },
     { cli: "codex" as const, model: "gpt-5.6-sol" }
-  ]
+  ],
+  executionMode?: "auto"
 ) =>
   Effect.gen(function* () {
     const svc = yield* PlanExecutor
@@ -60,7 +61,8 @@ const execute = (
         plan,
         available,
         fallback: { cli: "claude", model: "opus" },
-        binPathFor: () => "/usr/bin/fake"
+        binPathFor: () => "/usr/bin/fake",
+        executionMode
       })
       .pipe(Stream.runCollect, Effect.map((c) => [...c]))
   }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
@@ -85,6 +87,37 @@ describe("PlanExecutor", () => {
       "codex:gpt-5.6-sol",
       "claude:opus"
     ])
+  })
+
+  it("broadcasts each step's status LIVE, not just onto the stored plan", async () => {
+    // `onStepDone` ticks the step on the persisted transcript, which is what
+    // survives a crash — but a disk write says nothing to a running renderer.
+    // Without `PlanUpdated` on the stream, every step of a live Gigaplan run
+    // stayed on "proposed" in the Plan tab until the operator reloaded.
+    const { layer } = recording()
+    const events = await execute(
+      planOf([step({ id: "a", number: "01" }), step({ id: "b", number: "02" })]),
+      layer
+    )
+    const statuses = events
+      .filter((e): e is Extract<StreamEvent, { _tag: "PlanUpdated" }> => e._tag === "PlanUpdated")
+      .map((e) => e.plan.steps.map((s) => `${s.number}:${s.status ?? "proposed"}`).join(" "))
+
+    // Each step goes current before it runs and done once it settles, and the
+    // earlier step's `done` persists into the later step's updates.
+    expect(statuses).toStrictEqual([
+      "01:current 02:proposed",
+      "01:done 02:proposed",
+      "01:done 02:current",
+      "01:done 02:done"
+    ])
+  })
+
+  it("runs every assigned step in auto when approval selected auto", async () => {
+    const { ran, layer } = recording()
+    await execute(planOf([step({ id: "a", number: "01" })]), layer, undefined, "auto")
+
+    expect(ran.map((r) => r.mode)).toStrictEqual(["auto"])
   })
 
   it("runs steps in dependency order, not the order they were written", async () => {
@@ -458,4 +491,3 @@ describe("what the run reports it spent", () => {
     }
   })
 })
-

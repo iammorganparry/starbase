@@ -112,6 +112,10 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
  * while it is active: Gigaplan chooses per step, so a model chip would be a
  * control that is silently overridden.
  */
+/** Concrete harness permission modes that can execute an approved plan. */
+export const ExecutionMode = Schema.Literal("ask", "accept-edits", "auto")
+export type ExecutionMode = Schema.Schema.Type<typeof ExecutionMode>
+
 export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan", "gigaplan")
 export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 
@@ -242,6 +246,55 @@ export const GitConfig = Schema.Struct({
 export type GitConfig = Schema.Schema.Type<typeof GitConfig>
 
 /**
+ * What a desktop notification can be about.
+ *
+ * These are the moments a parallel operator cannot afford to miss while looking
+ * at another session: the agent is BLOCKED on them, or it has stopped. Progress
+ * is deliberately not among them — a notification per tool call would train the
+ * operator to ignore the channel entirely.
+ */
+export const NotificationKind = Schema.Literal("needs-input", "done", "failed", "pr")
+export type NotificationKind = Schema.Schema.Type<typeof NotificationKind>
+
+/**
+ * Desktop-notification preferences. Persisted inside `WorkspaceConfig`.
+ *
+ * Per-kind toggles rather than one switch: the kinds differ sharply in how
+ * interruptive they earn the right to be, and an operator who mutes "done"
+ * because it is noisy must not thereby lose "needs-input", which is the one that
+ * actually costs them time when missed.
+ */
+export const NotificationsConfig = Schema.Struct({
+  /** Master switch — off silences every kind regardless of the flags below. */
+  enabled: Schema.Boolean,
+  needsInput: Schema.Boolean,
+  done: Schema.Boolean,
+  failed: Schema.Boolean,
+  /** A PR for one of your sessions was merged or closed. */
+  pr: Schema.Boolean,
+  /** Play the OS notification sound rather than showing it silently. */
+  sound: Schema.Boolean
+})
+export type NotificationsConfig = Schema.Schema.Type<typeof NotificationsConfig>
+
+/**
+ * What notifications do when the operator has never chosen.
+ *
+ * On by default, because a notification the operator never asked for is a far
+ * smaller harm than a blocked agent nobody noticed for an hour — which is the
+ * whole reason the feature exists. Sound is the exception: it interrupts a room,
+ * not just a screen, so it stays opt-in.
+ */
+export const NOTIFICATIONS_DEFAULT: NotificationsConfig = {
+  enabled: true,
+  needsInput: true,
+  done: true,
+  failed: true,
+  pr: true,
+  sound: false
+}
+
+/**
  * Extended-thinking / reasoning budget for a harness, mapped from the design's
  * "thinking budget" segments. Harness-specific in meaning; persisted per provider.
  */
@@ -345,6 +398,12 @@ export const WorkspaceConfig = Schema.Struct({
   github: Schema.optional(GithubConfig),
   /** Git behaviour prefs; absent until configured (older configs lack it). */
   git: Schema.optional(GitConfig),
+  /**
+   * Desktop-notification prefs. Absent on older configs, which means the
+   * DEFAULTS apply (see `NOTIFICATIONS_DEFAULT`) rather than "off" — an operator
+   * who never opened Settings should still be told when an agent needs them.
+   */
+  notifications: Schema.optional(NotificationsConfig),
   /**
    * Absolute paths of the repos the user has starred, so the New Session picker
    * can surface them first. Absent on older configs (treated as an empty list).

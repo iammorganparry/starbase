@@ -12,7 +12,7 @@ import type {
   StreamEvent,
   VendorReach
 } from "@starbase/core"
-import { DEFAULT_REVIEW_MODEL, PlanError } from "@starbase/core"
+import { DEFAULT_REVIEW_MODEL, PlanError, scopeToAgent } from "@starbase/core"
 import { Effect, Mailbox, Ref, Schema, Stream } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { CliAdapter, isChildLifecycle, PlanDecision } from "./adapter.js"
@@ -393,6 +393,7 @@ const runRole = (
   Effect.gen(function* () {
     const adapter = yield* CliAdapter
     const collected = yield* Ref.make<ReadonlyArray<string>>([])
+    const childFailure = yield* Ref.make<string | null>(null)
     const agentId = ROLE_IDS[role]
 
     const spec: SessionSpec = {
@@ -425,15 +426,18 @@ const runRole = (
 
     const ctx: AgentContext = {
       emit: (event) =>
-        Effect.zipRight(
-          // A role's own `Started`/`Done`/`Failed` never reaches the parent —
-          // see `isChildLifecycle`. Forwarding them ended the round the moment
-          // the proposer finished.
-          isChildLifecycle(event) ? Effect.void : emit(scopeToRole(event, agentId)),
-          event._tag === "Assistant" && event.agentId === undefined
-            ? Ref.update(collected, (acc) => [...acc, event.text])
-            : Effect.void
-        ),
+        event._tag === "Failed"
+          ? Ref.set(childFailure, event.message)
+          : Effect.zipRight(
+              // A role's own `Started`/`Done` never reaches the parent — see
+              // `isChildLifecycle`. Forwarding either ended the round the moment
+              // the proposer finished. Failed is captured above: swallowing its
+              // reason would turn a logged-out harness into an empty fake plan.
+              isChildLifecycle(event) ? Effect.void : emit(scopeToRole(event, agentId)),
+              event._tag === "Assistant" && event.agentId === undefined
+                ? Ref.update(collected, (acc) => [...acc, event.text])
+                : Effect.void
+            ),
       canUseTool: () => Effect.succeed("deny" as const),
       // NOT `[]` — see `UNATTENDED_ANSWER`. An empty answer reads as
       // "(no selection)" to the harness and provokes an endless re-ask.
@@ -450,7 +454,11 @@ const runRole = (
       id: agentId,
       name: ROLE_NAMES[role],
       description: `${who.cli} · ${who.model} (${who.vendor})`,
-      parentId: null
+      parentId: null,
+      // Brand the tab with the harness ACTUALLY running this role. The attacker
+      // is deliberately a rival lab, so inheriting the session's CLI would label
+      // a Codex run "Claude".
+      cli: who.cli
     })
     const outcome = yield* adapter
       .run(`${agentId}_${input.sessionId}`, spec, ctx)
@@ -465,10 +473,11 @@ const runRole = (
         }),
         Effect.either
       )
+    const reportedFailure = yield* Ref.get(childFailure)
     yield* emit({
       _tag: "SubagentEnded",
       id: agentId,
-      status: outcome._tag === "Right" ? "done" : "error"
+      status: outcome._tag === "Right" && reportedFailure === null ? "done" : "error"
     })
     if (outcome._tag === "Left") {
       // Name WHICH failure. "The Proposing step failed" sends you to the logs;
@@ -478,8 +487,13 @@ const runRole = (
         new PlanError({
           message: timedOut
             ? `The ${ROLE_NAMES[role]} step gave up after ${ROLE_TIMEOUT} without finishing.`
-            : `The ${ROLE_NAMES[role]} step failed.`
+            : `The ${ROLE_NAMES[role]} step failed: ${outcome.left.message}`
         })
+      )
+    }
+    if (reportedFailure !== null) {
+      return yield* Effect.fail(
+        new PlanError({ message: `The ${ROLE_NAMES[role]} step failed: ${reportedFailure}` })
       )
     }
     return (yield* Ref.get(collected)).join("\n")
@@ -492,8 +506,7 @@ const ROLE_NAMES = {
 } as const
 
 /** Attribute an event to the role that produced it, where the shape allows. */
-const scopeToRole = (event: StreamEvent, agentId: string): StreamEvent =>
-  "agentId" in event && event.agentId === undefined ? { ...event, agentId } : event
+const scopeToRole = scopeToAgent
 
 export class AdversarialPlanService extends Effect.Service<AdversarialPlanService>()(
   "@starbase/AdversarialPlanService",

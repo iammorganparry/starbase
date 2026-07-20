@@ -6,6 +6,7 @@ import type {
   GitConfig,
   GithubConfig,
   McpServer,
+  NotificationsConfig,
   McpServerStatus,
   ModelOption,
   OpencodeProviderInfo,
@@ -18,7 +19,7 @@ import type {
   HarnessBilling,
   ReasoningEffort
 } from "@starbase/core"
-import { DEFAULT_REVIEW_MODEL, reviewModelFor } from "@starbase/core"
+import { DEFAULT_REVIEW_MODEL, NOTIFICATIONS_DEFAULT, reviewModelFor } from "@starbase/core"
 import {
   ChevronRight,
   Cpu,
@@ -72,7 +73,7 @@ interface NavItem {
 }
 
 const NAV: ReadonlyArray<NavItem> = [
-  { key: "general", label: "General", icon: <SlidersHorizontal size={14} />, ready: false },
+  { key: "general", label: "General", icon: <SlidersHorizontal size={14} />, ready: true },
   { key: "providers", label: "Providers", icon: <Cpu size={14} />, ready: true },
   { key: "gigaplan", label: "Gigaplan", icon: <Sparkles size={14} />, ready: true },
   { key: "agents", label: "Agents & skills", icon: <Sparkles size={14} />, ready: false },
@@ -433,6 +434,9 @@ export interface SettingsViewProps {
   onRecheck?: () => void
   onSaveGithub?: (config: GithubConfig) => void
   onSaveGit?: (config: GitConfig) => void
+  /** Desktop-notification prefs; absent means the defaults, not "off". */
+  notifications?: NotificationsConfig | null
+  onSaveNotifications?: (config: NotificationsConfig) => void | Promise<void>
   /** Close the view and return to the active session. */
   onClose?: () => void
 }
@@ -464,6 +468,8 @@ export function SettingsView({
   onRecheck,
   onSaveGithub,
   onSaveGit,
+  notifications,
+  onSaveNotifications,
   onClose
 }: SettingsViewProps) {
   const [section, setSection] = React.useState<SectionKey>("providers")
@@ -516,7 +522,12 @@ export function SettingsView({
         </div>
       </nav>
 
-      {section === "providers" ? (
+      {section === "general" ? (
+        <GeneralSection
+          notifications={notifications}
+          onSaveNotifications={onSaveNotifications}
+        />
+      ) : section === "providers" ? (
         <ProvidersSection
           clis={clis}
           providers={providers ?? undefined}
@@ -919,6 +930,97 @@ function ToggleRow({
         <div className="mt-0.5 text-[11px] leading-[1.5] text-muted-foreground">{description}</div>
       </div>
       <Toggle checked={checked} disabled={disabled} onCheckedChange={onChange} className="mt-0.5" />
+    </div>
+  )
+}
+
+/**
+ * Settings → General. Today that means desktop notifications.
+ *
+ * Per-kind toggles rather than one switch, because the kinds are not equally
+ * interruptive: an operator who mutes "finished" (frequent, rarely urgent) must
+ * not thereby lose "needs input", which is the one whose absence actually costs
+ * them a stalled agent. Sound is separate again — it interrupts a room.
+ *
+ * Saves on every toggle. There is no Save button because there is nothing to
+ * review: each switch is independently meaningful and instantly reversible.
+ */
+function GeneralSection({
+  notifications,
+  onSaveNotifications
+}: {
+  notifications?: NotificationsConfig | null
+  onSaveNotifications?: (config: NotificationsConfig) => void | Promise<void>
+}) {
+  // Absent config means the DEFAULTS, not silence — an operator who never opened
+  // this pane should still be told when an agent needs them.
+  const [draft, setDraft] = React.useState<NotificationsConfig>(
+    notifications ?? NOTIFICATIONS_DEFAULT
+  )
+  React.useEffect(() => {
+    if (notifications) setDraft(notifications)
+  }, [notifications])
+
+  const set = (patch: Partial<NotificationsConfig>) => {
+    const next = { ...draft, ...patch }
+    setDraft(next)
+    void onSaveNotifications?.(next)
+  }
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor p-6">
+      <div className="mx-auto w-full max-w-[560px]">
+        <div className="mb-1 flex items-center gap-2 border-b border-hairline pb-2.5">
+          <span className="text-[13px] font-semibold text-text-bright">Notifications</span>
+        </div>
+        <div className="divide-y divide-hairline">
+          <ToggleRow
+            label="Desktop notifications"
+            description="Tell me when a session needs me or stops, while Starbase is in the background."
+            checked={draft.enabled}
+            onChange={(enabled) => set({ enabled })}
+          />
+          <ToggleRow
+            label="Needs input"
+            description="An agent is blocked waiting on your approval or an answer."
+            checked={draft.needsInput}
+            disabled={!draft.enabled}
+            onChange={(needsInput) => set({ needsInput })}
+          />
+          <ToggleRow
+            label="Run finished"
+            description="An agent completed its turn."
+            checked={draft.done}
+            disabled={!draft.enabled}
+            onChange={(done) => set({ done })}
+          />
+          <ToggleRow
+            label="Run failed"
+            description="An agent's run ended in an error."
+            checked={draft.failed}
+            disabled={!draft.enabled}
+            onChange={(failed) => set({ failed })}
+          />
+          <ToggleRow
+            label="Pull request resolved"
+            description="A session's pull request was merged or closed on GitHub."
+            checked={draft.pr}
+            disabled={!draft.enabled}
+            onChange={(pr) => set({ pr })}
+          />
+          <ToggleRow
+            label="Play a sound"
+            description="Use the system notification sound instead of showing them silently."
+            checked={draft.sound}
+            disabled={!draft.enabled}
+            onChange={(sound) => set({ sound })}
+          />
+        </div>
+        <p className="mt-4 text-[11px] leading-[1.6] text-muted-foreground">
+          Notifications are suppressed for the session you already have open and focused —
+          you can see that one for yourself.
+        </p>
+      </div>
     </div>
   )
 }

@@ -21,6 +21,13 @@ interface StarbaseBridge {
   readonly onAuthComplete: (
     cb: (payload: { readonly ok: boolean; readonly error: string | null }) => void
   ) => () => void
+  /**
+   * Subscribe to notification clicks. Main has already focused the window; the
+   * payload names the session to select. Returns an unsubscribe fn.
+   */
+  readonly onNotificationActivated: (
+    cb: (payload: { readonly sessionId: string }) => void
+  ) => () => void
 }
 
 interface Window {

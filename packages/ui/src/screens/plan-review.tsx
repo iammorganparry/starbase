@@ -1,5 +1,5 @@
 import { useState } from "react"
-import type { Plan, PlanStatus } from "@starbase/core"
+import type { ExecutionMode, Plan, PlanStatus } from "@starbase/core"
 import { ClipboardList, GitBranch, MousePointerClick, Play, Send } from "lucide-react"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
@@ -9,6 +9,8 @@ import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
 import { PlanStepChanges } from "../composites/plan-step-changes.js"
 import { PlanStepDetail } from "../composites/plan-step-detail.js"
 import { PlanStepList } from "../composites/plan-step-list.js"
+import { PlanApprovalActions } from "../composites/plan-approval-actions.js"
+import { cn } from "../lib/cn.js"
 
 const STATUS_PILL: Partial<Record<PlanStatus, { label: string; tone: "yellow" | "blue" | "green" }>> = {
   proposed: { label: "Awaiting approval", tone: "yellow" },
@@ -30,6 +32,7 @@ export function PlanReview({
   plan,
   patch = "",
   selectedStepId,
+  compact = false,
   onSelectStep,
   onApprove,
   onResume,
@@ -45,9 +48,11 @@ export function PlanReview({
    * `onSelectStep` or the user would be snapped back to it on every click.
    */
   selectedStepId?: string | null
+  /** Narrow split-pane layout: one step at a time, navigated by the detail footer. */
+  compact?: boolean
   /** A step was picked here — lets the host drop a spent deep link. */
   onSelectStep?: (stepId: string) => void
-  onApprove?: () => void
+  onApprove?: (executionMode?: ExecutionMode) => void
   /** Approve a STALE plan (its original run is gone, e.g. after a restart) — re-drives execution. */
   onResume?: () => void
   onRevise?: () => void
@@ -80,7 +85,12 @@ export function PlanReview({
   // step wrapping the raw markdown), where not auto-opening hid the plan entirely.
   const soleStepId = plan.steps.length === 1 ? (plan.steps[0]?.id ?? null) : null
   // Precedence: an explicit deep link, then the local pick, then the auto-open.
-  const effectiveId = selectedStepId ?? selectedId ?? firstFlowStepId ?? soleStepId
+  const effectiveId =
+    selectedStepId ??
+    selectedId ??
+    firstFlowStepId ??
+    soleStepId ??
+    (compact ? (plan.steps[0]?.id ?? null) : null)
   const selected = plan.steps.find((s) => s.id === effectiveId) ?? null
   const select = (id: string) => {
     setSelectedId(id)
@@ -94,8 +104,8 @@ export function PlanReview({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-editor">
       {/* Header — summary + status on the left, the terminal actions on the right. */}
-      <div className="flex flex-none items-center gap-3 border-b border-hairline bg-panel px-4 py-2.5">
-        <span className="truncate text-[13px] font-semibold text-text">{plan.summary}</span>
+      <div className="flex flex-none flex-wrap items-center gap-x-3 gap-y-2 border-b border-hairline bg-panel px-4 py-2.5">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-text">{plan.summary}</span>
         {statusPill && (
           <Pill tone={statusPill.tone} pulse={plan.status !== "approved"}>
             {statusPill.label}
@@ -106,7 +116,12 @@ export function PlanReview({
           {plan.steps.length} steps · {branches} {branches === 1 ? "branch" : "branches"}
         </span>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div
+          className={cn(
+            "ml-auto flex items-center gap-2",
+            compact && "w-full flex-wrap justify-end border-t border-hairline pt-2"
+          )}
+        >
           {plan.status === "stale" ? (
             // The original planning run is gone (e.g. reopened app) — approving
             // re-drives execution on a fresh run rather than resuming a dead one.
@@ -133,15 +148,24 @@ export function PlanReview({
                 <Send className="size-3.5" />
                 Route to agent · revise
               </Button>
-              <Button size="sm" onClick={onApprove}>
-                Approve plan &amp; start
-              </Button>
+              <PlanApprovalActions onApprove={onApprove} />
             </>
           )}
         </div>
       </div>
 
       {/* Body — step list + flow ↔ step spec (the spec owns the discussion). */}
+      {compact ? (
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {selected ? (
+            <PlanStepDetail plan={plan} step={selected} onSelect={select} onComment={onComment} />
+          ) : (
+            <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center px-5 text-center text-[12px] text-muted-foreground">
+              This plan has no steps to review.
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex min-h-0 min-w-0 flex-1">
         <div
           style={{ width: list.width }}
@@ -178,6 +202,7 @@ export function PlanReview({
           </>
         )}
       </div>
+      )}
 
       {readOnly && plan.status === "stale" && (
         <div className="flex-none border-t border-hairline p-3">

@@ -194,6 +194,24 @@ describe("streamEventsFor", () => {
     expect(tools.get("tu_1")?.name).toBe("Edit")
   })
 
+  it("turns an authentication failure into an actionable failed event", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "assistant",
+        error: "authentication_failed",
+        message: { content: [] }
+      }),
+      new Map()
+    )
+
+    expect(events).toStrictEqual([
+      {
+        _tag: "Failed",
+        message: "Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+      }
+    ])
+  })
+
   it("reports the latest full context, including cached input", () => {
     const events = streamEventsFor(
       msg({
@@ -362,6 +380,22 @@ describe("streamEventsFor", () => {
       new Map()
     )
     expect(events).toStrictEqual([{ _tag: "Done", costUsd: 0.42, tokens: 650 }])
+  })
+
+  it("maps an errored result to Failed instead of silently completing", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Claude Code is not logged in."],
+        total_cost_usd: 0,
+        usage: {}
+      }),
+      new Map()
+    )
+
+    expect(events).toStrictEqual([{ _tag: "Failed", message: "Claude Code is not logged in." }])
   })
 })
 

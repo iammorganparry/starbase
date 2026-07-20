@@ -313,7 +313,7 @@ test("a storm of consecutive tool calls collapses to the latest with a +N more t
   await expect(window.getByText("src/file-1.ts")).toHaveCount(0)
 })
 
-test("Plan mode: propose a plan, review a step, and approve to start execution", async ({
+test("Plan mode: propose a plan, review a step, and approve in auto", async ({
   launchApp
 }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
@@ -326,9 +326,10 @@ test("Plan mode: propose a plan, review a step, and approve to start execution",
   await composer.press("Enter")
 
   // The inline plan card lands in the transcript with the plan's steps + actions.
-  await expect(window.getByRole("button", { name: /Approve plan & start/ }).first()).toBeVisible({
+  await expect(window.getByRole("button", { name: "Approve", exact: true }).first()).toBeVisible({
     timeout: 15_000
   })
+  await expect(window.getByRole("button", { name: "Approve and auto", exact: true }).first()).toBeVisible()
   await expect(window.getByText("Audit session middleware").first()).toBeVisible()
 
   // The Plan Review tab surfaces (live plan-presence); open it.
@@ -349,9 +350,13 @@ test("Plan mode: propose a plan, review a step, and approve to start execution",
   await expect(window.getByText("Decide the refresh path on expiry.")).toHaveCount(0)
   await expect(window.getByText("Control flow")).toHaveCount(0)
 
-  // Approve the plan from the header → the plan flips read-only and execution starts.
-  await window.getByRole("button", { name: /Approve plan & start/ }).click()
+  // Approve in auto from the header → the plan flips read-only, the execution
+  // override becomes visible in the mode chip, and execution starts.
+  await window.getByRole("button", { name: "Approve and auto", exact: true }).click()
   await expect(window.getByText(/execution started/i)).toBeVisible({ timeout: 15_000 })
+  await window.getByText("Conversation", { exact: true }).first().click()
+  await expect(window.getByRole("button", { name: "auto", exact: true })).toBeVisible()
+  await window.getByText("Plan Review", { exact: true }).first().click()
 
   // Drilling into a step shows its proposed code sample AND a per-step Changes
   // rail (the actual worktree diff for that step's files) on the right.
@@ -373,7 +378,7 @@ test("the plan can be split beside the conversation instead of replacing it", as
   const composer = window.getByPlaceholder("Message Claude…")
   await composer.fill("[[plan]] refactor auth to a TokenStore")
   await composer.press("Enter")
-  await expect(window.getByRole("button", { name: /Approve plan & start/ }).first()).toBeVisible({
+  await expect(window.getByRole("button", { name: "Approve", exact: true }).first()).toBeVisible({
     timeout: 15_000
   })
 
@@ -383,12 +388,16 @@ test("the plan can be split beside the conversation instead of replacing it", as
   const anyComposer = window.getByPlaceholder(/message claude|queue a message/i)
 
   // Split on: the transcript's composer is STILL mounted (no tab swap) and the
-  // plan's step list is on screen at the same time.
+  // selected step is on screen at the same time. At this width the review must
+  // not retain its own fixed list and changes rails: those were what squeezed
+  // the centre pane into the malformed layout.
   const split = window.getByRole("button", { name: /split plan beside conversation/i })
   await split.click()
   await expect(anyComposer).toBeVisible()
-  await expect(window.getByRole("button", { name: /04 Handle token refresh/ })).toBeVisible()
+  await expect(window.getByText("Decide the refresh path on expiry.", { exact: true })).toBeVisible()
   await expect(window.getByRole("separator", { name: /resize plan/i })).toBeVisible()
+  await expect(window.getByRole("separator", { name: /resize step list/i })).toHaveCount(0)
+  await expect(window.getByRole("separator", { name: /resize changes/i })).toHaveCount(0)
 
   // Split off: the plan column goes, the conversation stays put.
   await split.click()

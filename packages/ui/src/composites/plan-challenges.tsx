@@ -2,6 +2,7 @@ import type { PlanChallenge, PlanStep } from "@starbase/core"
 import { unresolvedChallenges, wasChallenged } from "@starbase/core"
 import { ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { PlanAssignee } from "./plan-assignee.js"
 
 /**
  * What a rival lab said about a plan step, and what the proposer did about it.
@@ -139,32 +140,23 @@ export function PlanProvenance({ step, className }: { step: PlanStep; className?
   const { origin, assignee, taskKind } = step
   if (!origin && !assignee && !taskKind) return null
   return (
-    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]", className)}>
-      {origin && (
-        <span className="text-muted-foreground">
-          proposed by <span className="text-text-body">{origin.model}</span>{" "}
-          <span className="text-muted-foreground/70">({origin.vendor})</span>
-        </span>
-      )}
-      {taskKind && (
-        <span className="rounded-sm bg-surface px-1 font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground">
-          {taskKind}
-        </span>
-      )}
-      {assignee && (
-        <span className="text-muted-foreground">
-          build with{" "}
-          <span className="text-text-body">
-            {assignee.cli} {assignee.model}
-          </span>
-          {assignee.reason && <span className="text-muted-foreground"> — {assignee.reason}</span>}
-          {assignee.evidence && (
-            <span className="ml-1 font-mono text-[9.5px] text-muted-foreground/70">
-              [{assignee.evidence.level}, n={assignee.evidence.observations}]
+    <div className={cn("flex flex-col gap-2", className)}>
+      {(origin || taskKind) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          {origin && (
+            <span className="text-muted-foreground">
+              proposed by <span className="text-text-body">{origin.model}</span>{" "}
+              <span className="text-muted-foreground/70">({origin.vendor})</span>
             </span>
           )}
-        </span>
+          {taskKind && (
+            <span className="rounded-sm bg-surface px-1 font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground">
+              {taskKind}
+            </span>
+          )}
+        </div>
       )}
+      {assignee && <PlanAssignee assignee={assignee} />}
     </div>
   )
 }

@@ -1,5 +1,5 @@
-import type { CliKind, Plan, PlanStep, StreamEvent } from "@starbase/core"
-import { executionOrder, PlanError, resolveRunner } from "@starbase/core"
+import type { CliKind, ExecutionMode, Plan, PlanStep, PlanStepStatus, StreamEvent } from "@starbase/core"
+import { executionOrder, PlanError, resolveRunner, scopeToAgent } from "@starbase/core"
 import { Effect, Mailbox, Ref, Schema, Stream } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { CliAdapter, isChildLifecycle, PlanDecision } from "./adapter.js"
@@ -34,6 +34,8 @@ export interface StepRunInput {
   /** Used when a step names no assignee, or names one that isn't installed. */
   readonly fallback: { readonly cli: CliKind; readonly model: string } | null
   readonly binPathFor: (cli: CliKind) => string | null
+  /** Concrete permission mode selected when the operator approved the plan. */
+  readonly executionMode?: ExecutionMode
   /** Called as each step finishes, so progress survives a crash mid-run. */
   readonly onStepDone?: (step: PlanStep) => Effect.Effect<void>
 }
@@ -98,8 +100,8 @@ export const parseStepVerdict = (text: string): StepVerdict => {
   return { status: "blocked", reason: reason && reason.length > 0 ? reason : null }
 }
 
-const scopeTo = (event: StreamEvent, agentId: string): StreamEvent =>
-  "agentId" in event && event.agentId === undefined ? { ...event, agentId } : event
+/** Attribute a step's output to its own tab. See `scopeToAgent` for the trap. */
+const scopeTo = scopeToAgent
 
 /**
  * Execute one step.
@@ -136,7 +138,7 @@ const runStep = (
       prompt: stepPrompt({ plan: input.plan, step, previousBlocker }),
       images: [],
       binPath: input.binPathFor(runner.cli),
-      mode: "accept-edits",
+      mode: input.executionMode ?? "accept-edits",
       model: runner.model,
       resumeId: null,
       // Each step is its own context. Resuming would carry one step's reasoning
@@ -272,6 +274,19 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
 
             const done = yield* Ref.make(0)
             const spend = yield* Ref.make({ costUsd: 0, tokens: 0 })
+            // The plan as the operator is currently watching it. `onStepDone`
+            // ticks the step on the STORED transcript, which is what survives a
+            // crash — but a disk write is invisible to a running renderer, so
+            // the Plan tab sat on "proposed" for every step of a live run and
+            // only caught up on reload. `PlanUpdated` is the live channel; hold
+            // the evolving plan here and publish each transition through it.
+            const live = yield* Ref.make(input.plan)
+            const publish = (stepId: string, status: PlanStepStatus) =>
+              Ref.updateAndGet(live, (p) => ({
+                ...p,
+                steps: p.steps.map((s) => (s.id === stepId ? { ...s, status } : s))
+              })).pipe(Effect.flatMap((plan) => emit({ _tag: "PlanUpdated", plan })))
+
             for (const step of order) {
               const runner = resolveRunner(step, input.available, input.fallback)
               if (runner === null) {
@@ -288,6 +303,10 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
               // once it knows what stopped it.
               let blocker: string | null = null
               let settled = false
+              // Mark it running BEFORE the first attempt, so the operator can
+              // see which step a long run is actually on. Retries stay
+              // `current` — the tab and the blocker line carry that detail.
+              yield* publish(step.id, "current")
               for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
                 const verdict: StepVerdict = yield* runStep(
                   input,
@@ -327,6 +346,7 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
                   })
                 )
               }
+              yield* publish(step.id, "done")
               yield* Ref.update(done, (n) => n + 1)
             }
 
