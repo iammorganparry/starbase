@@ -10,6 +10,7 @@ import type {
 } from "@starbase/core"
 import { GhError, GitError, SessionNotFoundError, UNTITLED_SESSION } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
+import { basename } from "node:path"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect, Schema } from "effect"
@@ -20,14 +21,40 @@ import { GitService } from "./git.js"
 
 const SessionArray = Schema.Array(SessionSchema)
 
+/**
+ * The longest slug we will put on disk.
+ *
+ * A slug becomes a DIRECTORY NAME (`~/starbase/worktrees/<repo>/<slug>`) and a
+ * branch name, and most filesystems cap a single name at 255 bytes. Slugs are
+ * derived from PR and issue titles, which have no such limit — a long issue
+ * title produced a path `git worktree add` rejected with ENAMETOOLONG, failing
+ * session creation outright.
+ *
+ * 100 leaves generous headroom for the `-<number>` and `-<stamp>` suffixes
+ * appended after truncation, and for multi-byte characters surviving `kebab`.
+ */
+const MAX_SLUG = 100
+
 /** Lowercase, collapse non-alphanumeric runs to single dashes, trim; fallback "session". */
 const kebab = (input: string): string =>
   input
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "session"
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_SLUG)
+    // Truncation can land mid-word and leave a trailing dash; trim again so the
+    // slug never ends in one.
+    .replace(/-+$/g, "") || "session"
 
 type PersistEnv = FileSystem.FileSystem | AppPaths
+
+/**
+ * A process-wide monotonic counter, used wherever `Date.now()` is too coarse to
+ * distinguish two operations. Two things happening in the same millisecond are
+ * routine here — session creation is driven by the UI and by automation.
+ */
+let opSeq = 0
+const nextOpId = (): number => ++opSeq
 
 /**
  * The session store, persisted to `~/starbase/sessions.json`. Starts empty — real
@@ -40,6 +67,30 @@ export class SessionStore extends Effect.Service<SessionStore>()(
   {
     accessors: true,
     sync: () => {
+      /**
+       * Serialises every read-modify-write of `sessions.json`.
+       *
+       * The whole store is one JSON file rewritten wholesale, so any two
+       * concurrent mutations race: each reads the array, edits its own session,
+       * and writes the WHOLE thing back — and the later write silently discards
+       * the earlier one's change.
+       *
+       * Two sessions created at once are enough to hit it: each reads the list,
+       * then forks a worktree (seconds), then appends to the list it read — so
+       * the second create writes a list that never contained the first session.
+       *
+       * One permit, held only across read-then-write and never across anything
+       * slow (a worktree fork, a network call), so this serialises the file and
+       * not the work.
+       *
+       * In-process only. It orders the app's own writers, which is what exists
+       * today; it would not order a second Starbase process against this one.
+       */
+      const lock = Effect.unsafeMakeSemaphore(1)
+      const atomically = <A, E, R>(
+        effect: Effect.Effect<A, E, R>
+      ): Effect.Effect<A, E, R> => lock.withPermits(1)(effect)
+
       const readAll = (): Effect.Effect<ReadonlyArray<Session>, never, PersistEnv> =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
@@ -69,9 +120,35 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           const encoded = yield* Schema.encode(SessionArray)(sessions).pipe(
             Effect.mapError((cause) => new GitError({ message: "Failed to encode sessions", cause }))
           )
+          // Write-then-RENAME, never write in place.
+          //
+          // `sessions.json` is the only record of which worktrees exist, and
+          // `readAll` deliberately folds a parse error to `[]` so a corrupt file
+          // cannot stop the app booting. Together those turn ANY partial write
+          // into total, silent loss of every session — the file survives, reads
+          // as empty, and the next write makes it so.
+          //
+          // `rename` within a directory is atomic, so a reader sees either the
+          // whole previous file or the whole new one, never a prefix of either.
+          //
+          // The temp name must be UNIQUE per write, not a fixed
+          // `sessions.json.tmp`. Two writers sharing one temp path both write
+          // it, the first rename moves it away, and the second fails ENOENT —
+          // which is a corrupted write dressed up as a missing file. The store
+          // lock orders writers within a process; this keeps the scheme correct
+          // even when it does not (a second Starbase instance, a stray fibre).
+          const tempFile = `${paths.sessionsFile}.${process.pid}.${nextOpId()}.tmp`
           yield* fs
-            .writeFileString(paths.sessionsFile, JSON.stringify(encoded, null, 2))
+            .writeFileString(tempFile, JSON.stringify(encoded, null, 2))
             .pipe(Effect.mapError((cause) => new GitError({ message: "Failed to persist session", cause })))
+          yield* fs
+            .rename(tempFile, paths.sessionsFile)
+            .pipe(
+              Effect.mapError((cause) => new GitError({ message: "Failed to persist session", cause })),
+              // A failed rename leaves the temp file behind; drop it rather than
+              // accumulating one per failure next to the real store.
+              Effect.tapError(() => fs.remove(tempFile).pipe(Effect.ignore))
+            )
         })
 
       const list = (): Effect.Effect<ReadonlyArray<Session>, never, PersistEnv> => readAll()
@@ -114,10 +191,38 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             const usedSlugs = new Set(
               existing
                 .filter((s) => s.repo === input.repoName && s.worktreePath)
-                .map((s) => s.worktreePath!.split("/").pop()!)
+                // `basename`, not `split("/")`. Worktree paths are built with
+                // `path.join`, so on Windows they are backslash-separated and a
+                // "/" split returns the WHOLE path — the used-slug set then
+                // never matches a candidate, `freeCreativeName` always believes
+                // its first pick is free, and every untitled session in a repo
+                // collides on one name.
+                .map((s) => basename(s.worktreePath!))
             )
-            const seed = yield* Effect.sync(() => Date.now())
+            // `Date.now()` ALONE is not a distinct seed. Two untitled sessions
+            // created in the same millisecond get the same clock reading and the
+            // same (still empty) used-set, so `freeCreativeName` hands both the
+            // same name — and the second create's reclaim step would then
+            // `rm -rf` the first's worktree. Mixing in a per-process counter
+            // makes the seed differ even when the clock does not.
+            const seed = yield* Effect.sync(() => Date.now() + nextOpId() * 7919)
             slug = freeCreativeName(usedSlugs, seed, `${kebab(title)}-${stamp}`)
+          }
+          // Refuse if a live session already owns this path — the same guard
+          // `createFromPr` and `createFromIssue` carry, and for the same reason:
+          // `createWorktree` reclaims whatever is at the target path with an
+          // `rm -rf`, so without this a slug collision DELETES a working
+          // session's worktree and everything uncommitted in it.
+          //
+          // The stamp makes a collision unlikely, not impossible:
+          // `freeCreativeName` falls back to an unstamped name after enough
+          // collisions, and two creates in the same millisecond share a stamp.
+          // Unlikely is the wrong bar for an unrecoverable outcome.
+          const worktreePath = yield* GitService.worktreePathFor(input.repoName, slug)
+          if (existing.some((s) => s.worktreePath === worktreePath)) {
+            return yield* Effect.fail(
+              new GitError({ message: "A session already exists for this branch name." })
+            )
           }
           const worktree = yield* GitService.createWorktree({
             repoPath: input.repoPath,
@@ -139,6 +244,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
+            repoPath: worktree.repoPath,
             baseBranch: input.baseBranch,
             // Seed the session's permission mode / model from the provider's
             // configured defaults (omitted → the harness falls back on its own).
@@ -146,7 +252,18 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             ...(options.defaultModel ? { model: options.defaultModel } : {})
           }
           // `existing` was read above (for the friendly-name collision check).
-          yield* writeAll([session, ...existing])
+          // Re-read INSIDE the lock rather than reusing the list read before
+          // the worktree fork: that read is now seconds stale, and appending to
+          // it would drop any session created — or any deps status written — in
+          // the meantime.
+          yield* atomically(
+            Effect.gen(function* () {
+              const current = yield* readAll()
+              yield* writeAll([session, ...current])
+            })
+          )
+          // AFTER the write: the fibre patches this session by id, so the record
+          // it patches has to exist before it can run.
           return session
         })
 
@@ -225,10 +342,20 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
+            repoPath: worktree.repoPath,
             baseBranch: input.pr.baseRefName
           }
           const existing = yield* readAll()
-          yield* writeAll([session, ...existing])
+          // Re-read INSIDE the lock rather than reusing the list read before
+          // the worktree fork: that read is now seconds stale, and appending to
+          // it would drop any session created — or any deps status written — in
+          // the meantime.
+          yield* atomically(
+            Effect.gen(function* () {
+              const current = yield* readAll()
+              yield* writeAll([session, ...current])
+            })
+          )
           return session
         })
 
@@ -245,7 +372,11 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       ): Effect.Effect<
         Session,
         GitError,
-        GitService | FileSystem.FileSystem | Path.Path | CommandExecutor.CommandExecutor | AppPaths
+        | GitService
+        | FileSystem.FileSystem
+        | Path.Path
+        | CommandExecutor.CommandExecutor
+        | AppPaths
       > =>
         Effect.gen(function* () {
           const now = yield* Effect.sync(() => new Date().toISOString())
@@ -296,11 +427,21 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
+            repoPath: worktree.repoPath,
             baseBranch: input.baseBranch,
             ...(options.defaultMode ? { mode: options.defaultMode } : {}),
             ...(options.defaultModel ? { model: options.defaultModel } : {})
           }
-          yield* writeAll([session, ...prior])
+          // Re-read INSIDE the lock rather than reusing the list read before
+          // the worktree fork: that read is now seconds stale, and appending to
+          // it would drop any session created — or any deps status written — in
+          // the meantime.
+          yield* atomically(
+            Effect.gen(function* () {
+              const current = yield* readAll()
+              yield* writeAll([session, ...current])
+            })
+          )
           return session
         })
 
@@ -309,11 +450,13 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         id: string,
         patch: (session: Session) => Session
       ): Effect.Effect<void, GitError, PersistEnv> =>
-        Effect.gen(function* () {
-          const all = yield* readAll()
-          if (!all.some((s) => s.id === id)) return
-          yield* writeAll(all.map((s) => (s.id === id ? patch(s) : s)))
-        })
+        atomically(
+          Effect.gen(function* () {
+            const all = yield* readAll()
+            if (!all.some((s) => s.id === id)) return
+            yield* writeAll(all.map((s) => (s.id === id ? patch(s) : s)))
+          })
+        )
 
       /** Persist the session's HITL permission mode. */
       const setMode = (id: string, mode: PermissionMode) => update(id, (s) => ({ ...s, mode }))
@@ -503,13 +646,24 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         GitService | FileSystem.FileSystem | Path.Path | CommandExecutor.CommandExecutor | AppPaths
       > =>
         Effect.gen(function* () {
-          const all = yield* readAll()
-          const target = all.find((s) => s.id === id)
+          const target = (yield* readAll()).find((s) => s.id === id)
           if (!target) return
           if (target.worktreePath) {
-            yield* GitService.removeWorktreeAt(target.worktreePath).pipe(Effect.ignore)
+            yield* GitService.removeWorktreeAt(target.worktreePath, target.repoPath).pipe(
+              Effect.ignore
+            )
           }
-          yield* writeAll(all.filter((s) => s.id !== id))
+          // Re-read INSIDE the lock rather than filtering the list read above.
+          // `removeWorktreeAt` shells out to git (`worktree remove --force`, then
+          // a prune) and takes seconds; writing a list captured before that would
+          // discard every turn's usage, status and resume-id written in the
+          // meantime, and would resurrect any session created in the window.
+          yield* atomically(
+            Effect.gen(function* () {
+              const current = yield* readAll()
+              yield* writeAll(current.filter((s) => s.id !== id))
+            })
+          )
         })
 
       return {

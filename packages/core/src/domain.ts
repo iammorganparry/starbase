@@ -195,6 +195,18 @@ export const Session = Schema.Struct({
   updatedAt: Schema.String,
   /** Absolute path to this session's isolated git worktree, when one exists. */
   worktreePath: Schema.optional(Schema.String),
+  /**
+   * Absolute path to the ORIGIN repo this session was forked from.
+   *
+   * Needed to clean up after a worktree whose directory no longer exists: git
+   * is normally asked which repo owns a worktree by running it INSIDE that
+   * worktree, which a deleted directory makes impossible. Without this, such a
+   * worktree's registration can never be pruned and git keeps reporting it.
+   *
+   * Optional because sessions created before this existed do not carry it; the
+   * cleanup then degrades to what it did before rather than failing.
+   */
+  repoPath: Schema.optional(Schema.String),
   /** The branch this session's worktree was forked from. */
   baseBranch: Schema.optional(Schema.String),
   /**

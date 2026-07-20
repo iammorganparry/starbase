@@ -26,6 +26,7 @@ import { TerminalError } from "@starbase/core"
 import type { TerminalChunk, TerminalInfo } from "@starbase/core"
 import { Effect, Exit, Mailbox, Stream } from "effect"
 import { neutralCwd } from "./cwd.js"
+import { worktreeEnv } from "./worktree-env.js"
 
 /** Last-N-bytes of output kept for re-attach replay (per terminal). */
 const RING_CAP = 256 * 1024
@@ -112,10 +113,17 @@ const defaultShell = (): string =>
  */
 const shellArgs = (): string[] => (isWindows ? [] : ["-l"])
 
-/** process.env minus undefined values, with terminal-friendly TERM/COLORTERM. */
-const shellEnv = (): Record<string, string> => {
-  const env: Record<string, string> = {}
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
+/**
+ * The environment for a session's shell: terminal-friendly, and scrubbed of the
+ * toolchain configuration Starbase itself was launched with.
+ *
+ * `worktreeEnv` is what stops this shell inheriting the ORIGIN repo's `.npmrc`
+ * (as `npm_config_*`) and its `node_modules/.bin` on `PATH` — see that module
+ * for why an operator typing `pnpm install` in here would otherwise get the
+ * launching repository's settings instead of this worktree's.
+ */
+const shellEnv = (worktree: string | undefined): Record<string, string> => {
+  const env = worktreeEnv(process.env, worktree)
   env.TERM = "xterm-256color"
   env.COLORTERM = "truecolor"
   return env
@@ -160,13 +168,17 @@ export class TerminalService extends Effect.Service<TerminalService>()("@starbas
           // A terminal with no session anchors to the user's home, NOT the app's
           // cwd — which in dev is whichever worktree Starbase was launched from,
           // so commands typed here would run inside an unrelated repo.
-          const cwd = input.cwd?.trim() || neutralCwd()
+          const worktree = input.cwd?.trim() || undefined
+          const cwd = worktree ?? neutralCwd()
           const pty = spawn(shell, shellArgs(), {
             name: "xterm-256color",
             cols: Math.max(1, input.cols || 80),
             rows: Math.max(1, input.rows || 24),
             cwd,
-            env: shellEnv()
+            // A session-less terminal passes `undefined`, so EVERY
+            // `node_modules/.bin` on PATH is treated as foreign — there is no
+            // worktree whose tooling it could legitimately be.
+            env: shellEnv(worktree)
           })
           const id = randomUUID()
           const info: MutableInfo = {

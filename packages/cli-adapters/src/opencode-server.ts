@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process"
 import { parseServerUrl } from "./opencode-adapter.js"
 import { stopChild, trackChild } from "./child-registry.js"
+import { worktreeEnv } from "./worktree-env.js"
 
 /**
  * Boot a throwaway opencode server, hand its URL to `fn`, and shut it down.
@@ -48,7 +49,9 @@ export const withOpencodeServer = async <A>(
   const proc = trackChild(
     spawn(binPath, ["serve", "--hostname=127.0.0.1", "--port=0"], {
       stdio: ["ignore", "pipe", "ignore"],
-      env: process.env
+      // A probe with no worktree of its own: every `node_modules/.bin` on PATH
+      // belongs to the repo Starbase was launched from. See `worktree-env.ts`.
+      env: worktreeEnv(process.env, undefined)
     })
   )
   const kill = (): void => stopChild(proc)

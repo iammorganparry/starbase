@@ -5,6 +5,7 @@ import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
 import { requireWorktree } from "./cwd.js"
+import { worktreeEnv } from "./worktree-env.js"
 import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 
 /**
@@ -261,7 +262,14 @@ export const runCodex = (
           // Run on the operator's ChatGPT plan where they have one. The SDK does
           // not inherit `process.env` when this is given, so it is a complete
           // copy minus the metered key. See `subscription.ts`.
-          env: harnessEnv("codex", process.env, hasSubscriptionAuth("codex"))
+          // Layered over `worktreeEnv` so the agent also stops inheriting the
+          // toolchain config of whatever repo Starbase was launched from —
+          // the env-var counterpart of the `cwd` hazard noted below.
+          env: harnessEnv(
+            "codex",
+            worktreeEnv(process.env, spec.cwd ?? undefined),
+            hasSubscriptionAuth("codex")
+          )
         })
         const threadOptions = {
           // See `requireWorktree`: inheriting the app's cwd would run this

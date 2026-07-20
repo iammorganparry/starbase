@@ -29,7 +29,11 @@ describe("retitleSession", () => {
     repos.cleanup()
   })
 
-  const services = Layer.mergeAll(SessionStore.Default, TranscriptStore.Default, GitService.Default)
+  const services = Layer.mergeAll(
+  SessionStore.Default,
+  TranscriptStore.Default,
+  GitService.Default
+)
   const input = (over: Partial<CreateSessionInput> = {}): CreateSessionInput => ({
     repoPath,
     repoName: "app",
