@@ -145,10 +145,17 @@ export interface SessionGridProps {
  * uniform `grid-cols-2 grid-rows-2` cannot express without spanning tricks. A
  * column of flex children says the same thing directly.
  *
- * Panes are keyed by session id so a session dragged between slots KEEPS its
- * mounted transcript (React moves the subtree rather than remounting it). Keying
- * by slot index instead would remount on every rearrange, throwing away scroll
- * position and the virtualizer's measurement cache.
+ * Slots are keyed by INDEX and the pane inside is deliberately unkeyed, so a slot
+ * that swaps session keeps its `SessionPane` mounted and therefore keeps its tab
+ * selection — matching how switching sessions behaved before the grid existed.
+ * The conversation subtree inside is keyed by session id, which is what resets
+ * the transcript itself.
+ *
+ * Note this does mean dragging a session from one slot to another remounts its
+ * transcript (keys only reconcile among siblings, and the two slots are different
+ * parents), costing scroll position and the virtualizer's measurement cache. That
+ * is the same cost a session switch has always paid, and the conversation ACTOR
+ * survives regardless — it lives in a module-level registry, not in the tree.
  */
 export function SessionGrid(props: SessionGridProps) {
   const { layout, sessions, onAssignSlot } = props
@@ -157,6 +164,12 @@ export function SessionGrid(props: SessionGridProps) {
   // slot highlights: `dragleave` fires when crossing into a CHILD element too, so
   // a per-slot boolean would flicker as the cursor moves over the pane's contents.
   const [dropTarget, setDropTarget] = useState<number | null>(null)
+  // Who owns the app-wide docks. Normally the focused slot — but a focused slot
+  // can be EMPTY (you just closed its pane), and an empty slot renders no
+  // SessionPane, so nothing would mount the terminal or browser dock at all.
+  // Fall back to the first filled slot so the docks stay reachable.
+  const focusedFilled = layout.slots[layout.focused] != null
+  const dockOwner = focusedFilled ? layout.focused : layout.slots.findIndex((id) => id !== null)
 
   const renderSlot = (index: number) => {
     const sessionId = layout.slots[index] ?? null
@@ -206,7 +219,6 @@ export function SessionGrid(props: SessionGridProps) {
               <EmptySlot index={index} />
             ) : (
               <SessionPane
-                key={session.id}
                 session={session}
                 renderConversation={props.renderConversation}
                 conversationPane={props.conversationPane}
@@ -227,8 +239,8 @@ export function SessionGrid(props: SessionGridProps) {
                 // Exactly one pane may drive the native browser preview and the
                 // terminal dock. In 1-up that's trivially the only pane; in a grid
                 // it follows focus, so the docks travel with the operator's attention.
-                ownsDocks={isFocused}
-                dockOwnerLabel={`pane ${layout.focused + 1}`}
+                ownsDocks={index === dockOwner}
+                dockOwnerLabel={`pane ${dockOwner + 1}`}
                 // No close control in 1-up: with one slot there is nothing to
                 // close back to, so it would only be a way to blank the app.
                 onClosePane={

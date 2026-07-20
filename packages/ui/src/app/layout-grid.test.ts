@@ -288,6 +288,17 @@ describe("persistence", () => {
     expect(load().mode).toBe("2|1")
   })
 
+  it("never restores the same session into two slots", () => {
+    // load() is the one entry point that doesn't go through `assign`, so it is
+    // the only place the one-session-one-pane invariant can be violated. Two
+    // panes on one session means two subtrees fighting over one actor.
+    localStorage.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({ mode: "1|1", slots: ["s1", "s1"], focused: 0 })
+    )
+    expect(load().slots).toEqual(["s1", null])
+  })
+
   it("coerces non-string slot entries to empty", () => {
     localStorage.setItem(
       LAYOUT_STORAGE_KEY,

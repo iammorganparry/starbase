@@ -8,11 +8,9 @@ import {
   type LayoutMode,
   load,
   prune,
-  remove,
   save,
   setMode,
-  slotIndexBySession,
-  swap
+  slotIndexBySession
 } from "./layout-grid.js"
 
 /**
@@ -71,21 +69,12 @@ export function useGridLayout(
     setLayout((current) => clear(current, slot))
   }, [])
 
-  const swapSlots = useCallback((a: number, b: number) => {
-    setLayout((current) => swap(current, a, b))
-  }, [])
-
   const focusSlot = useCallback((slot: number) => {
     setLayout((current) => focus(current, slot))
   }, [])
 
   const changeMode = useCallback((mode: LayoutMode) => {
     setLayout((current) => setMode(current, mode))
-  }, [])
-
-  /** Drop a session from the grid entirely — call when one is deleted. */
-  const removeSession = useCallback((sessionId: string) => {
-    setLayout((current) => remove(current, sessionId))
   }, [])
 
   const slotBySession = useMemo(() => slotIndexBySession(layout), [layout])
@@ -98,9 +87,7 @@ export function useGridLayout(
     selectSession,
     assignToSlot,
     clearSlot,
-    swapSlots,
     focusSlot,
-    changeMode,
-    removeSession
+    changeMode
   }
 }

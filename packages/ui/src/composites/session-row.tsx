@@ -138,7 +138,10 @@ export function SessionRow({
    * the sidebar — the row stays put and simply gains a slot badge.
    */
   const dragProps = {
-    draggable: true,
+    // Never while renaming: in Chromium a `draggable` ancestor swallows
+    // press-and-drag inside a descendant text input, so selecting part of the
+    // title would start dragging the row instead.
+    draggable: draft === null,
     onDragStart: (e: DragEvent) => {
       e.dataTransfer.setData(SESSION_DND_MIME, session.id)
       e.dataTransfer.effectAllowed = "copyMove"

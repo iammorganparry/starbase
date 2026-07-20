@@ -256,9 +256,16 @@ export const load = (): GridLayout => {
     const count = SLOT_COUNT[mode]
     // Rebuild the slot array to the mode's length rather than trusting the stored
     // length — the two can disagree if the mode list ever changes shape.
+    // Drop duplicates as well as junk. `assign` guarantees one-session-one-slot,
+    // but load() reads whatever is on disk — a hand-edited or stale store naming
+    // the same session twice would mount two panes onto ONE conversation actor,
+    // which then has two subtrees fighting over its subscription.
+    const seen = new Set<string>()
     const slots = Array.from({ length: count }, (_, i) => {
       const id = stored[i]
-      return typeof id === "string" && id !== "" ? id : null
+      if (typeof id !== "string" || id === "" || seen.has(id)) return null
+      seen.add(id)
+      return id
     })
     const focused =
       typeof parsed.focused === "number" && Number.isInteger(parsed.focused)

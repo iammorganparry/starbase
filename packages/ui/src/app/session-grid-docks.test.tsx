@@ -83,6 +83,17 @@ describe("singleton dock ownership", () => {
   })
 })
 
+describe("when the focused slot is empty", () => {
+  it("hands the docks to the first filled pane rather than unmounting them", () => {
+    // You just closed the focused pane. `clear` leaves focus on the now-empty
+    // slot, and an empty slot renders no SessionPane — so without a fallback
+    // NOTHING would mount the terminal or browser dock.
+    renderGrid(1, ["a", null])
+    expect(screen.getByTestId("browser-dock-a")).toBeTruthy()
+    expect(screen.getByTestId("terminal-dock-a")).toBeTruthy()
+  })
+})
+
 describe("closing a pane", () => {
   const renderClosable = (slots: ReadonlyArray<string | null>, onClearSlot = vi.fn()) => {
     render(

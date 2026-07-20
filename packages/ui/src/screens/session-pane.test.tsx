@@ -111,6 +111,30 @@ describe("SessionPane", () => {
     expect(screen.getByText("transcript a")).toBeTruthy()
   })
 
+  it("keeps the selected tab when the SAME pane swaps to another session", () => {
+    // Pre-grid, `tab` lived in SessionConversation which was not keyed by
+    // session, so switching sessions kept your tab. The grid must not regress
+    // that: SessionPane is deliberately left unkeyed inside its slot.
+    const { rerender } = render(
+      <SessionPane
+        session={session({ id: "a", prNumber: 1 })}
+        renderConversation={(s) => <div>transcript {s.id}</div>}
+        renderPullRequest={(s) => <div>pr view {s.id}</div>}
+      />
+    )
+    fireEvent.click(screen.getByText("Pull Request"))
+    expect(screen.getByText("pr view a")).toBeTruthy()
+
+    rerender(
+      <SessionPane
+        session={session({ id: "b", prNumber: 2 })}
+        renderConversation={(s) => <div>transcript {s.id}</div>}
+        renderPullRequest={(s) => <div>pr view {s.id}</div>}
+      />
+    )
+    expect(screen.getByText("pr view b")).toBeTruthy()
+  })
+
   it("routes a plan deep-link to the Plan view for its own session", () => {
     render(
       <SessionPane

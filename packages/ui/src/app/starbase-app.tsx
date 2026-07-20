@@ -365,11 +365,16 @@ export function StarbaseApp({
 
   const active = sessions.find((s) => s.id === selected) ?? null
   // `renderConversation` is passed straight down now. It used to be wrapped in a
-  // closure that baked in the single active session; SessionPane keys and mounts
-  // the pane itself, which is what lets the grid render several at once.
-  // In the real app (renderConversation wired) with nothing selected, show the
-  // empty state rather than the Storybook-only seeded demo transcript.
-  const showEmpty = Boolean(renderConversation) && active === null
+  // closure that baked in the single active session; each SessionPane calls it
+  // with its OWN session, which is what lets the grid render several at once.
+  //
+  // The empty state is for an empty GRID, never merely an empty focused SLOT.
+  // `selected` is the focused slot's session, which is legitimately null the
+  // moment you close a pane or click a "Drag a session here" placeholder — keying
+  // the empty state off that would replace every other live pane with the
+  // first-launch screen, and the only way back would be a sidebar click.
+  const showEmpty =
+    Boolean(renderConversation) && grid.layout.slots.every((id) => id === null)
 
   // ⌘N / Ctrl-N opens the New Session dialog (only when creation is wired).
   useEffect(() => {

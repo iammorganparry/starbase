@@ -66,11 +66,14 @@ describe("useGridLayout", () => {
     expect(result.current.slotBySession.has("b")).toBe(false)
   })
 
-  it("removes a session from the grid when it is deleted", () => {
-    const { result } = renderHook(() => useGridLayout(sessions, "a"))
+  it("drops a deleted session from the grid via the prune pass", () => {
+    const { result, rerender } = renderHook(({ list }) => useGridLayout(list, "a"), {
+      initialProps: { list: sessions as ReadonlyArray<{ id: string }> }
+    })
     act(() => result.current.changeMode("1|1"))
     act(() => result.current.assignToSlot(1, "b"))
-    act(() => result.current.removeSession("a"))
+    // Session a is deleted upstream — the grid must not keep pointing at it.
+    rerender({ list: [{ id: "b" }, { id: "c" }] })
     expect(result.current.layout.slots).toEqual([null, "b"])
   })
 
