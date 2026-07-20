@@ -175,7 +175,13 @@ export class GitService extends Effect.Service<GitService>()(
         targetDir: string,
         name: string,
         /** Real paths already being mirrored on this branch — the cycle guard. */
-        seen: Set<string>
+        seen: Set<string>,
+        /**
+         * Is `originDir` a `node_modules` ROOT, rather than a container dir
+         * inside one? Only a root holds install metadata worth copying — see the
+         * copy branch below, which is actively harmful anywhere else.
+         */
+        atRoot: boolean
       ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
         Effect.gen(function* () {
           const path = yield* Path.Path
@@ -201,22 +207,32 @@ export class GitService extends Effect.Service<GitService>()(
           }
 
           if (isContainerDir(name)) {
-            yield* mirrorDir(repoPath, worktreePath, originEntry, targetEntry, seen)
+            yield* mirrorDir(repoPath, worktreePath, originEntry, targetEntry, seen, false)
             return
           }
 
-          // A regular FILE — install metadata like `.yarn-state.yml`,
-          // `.package-lock.json`, `.modules.yaml`. Copied, never linked: these
-          // are the files a package manager REWRITES, and the recovery flow this
-          // whole design assumes ("a session that changes deps just installs
-          // over the links") opens exactly them for write. Linked, that write
-          // follows the symlink and rewrites the ORIGIN's install state to
-          // describe the worktree's tree — corrupting the source repo from a
-          // session that did nothing wrong. They are a few KB; copying is free.
-          const info = yield* fs.stat(resolved).pipe(Effect.option)
-          if (info._tag === "Some" && info.value.type === "File") {
-            yield* fs.copyFile(originEntry, targetEntry).pipe(Effect.ignore)
-            return
+          // A regular FILE at a node_modules ROOT — install metadata like
+          // `.yarn-state.yml`, `.package-lock.json`, `.modules.yaml`. Copied,
+          // never linked: these are the files a package manager REWRITES, and
+          // the recovery flow this whole design assumes ("a session that changes
+          // deps just installs over the links") opens exactly them for write.
+          // Linked, that write follows the symlink and rewrites the ORIGIN's
+          // install state to describe the worktree's tree — corrupting the
+          // source repo from a session that did nothing wrong. A few KB each.
+          //
+          // `atRoot` is load-bearing, not a tidy-up. Inside `.bin` every entry
+          // ALSO resolves to a file — the package's executable script — and
+          // copying one strands it: a shim reached at `.bin/tsc` resolves its
+          // own `require("../lib/tsc.js")` against `.bin/`, so every third-party
+          // CLI an agent runs (`tsc`, `eslint`, anything behind a package
+          // script) dies with MODULE_NOT_FOUND. Those must stay symlinks, which
+          // resolve back to the real script inside its own package.
+          if (atRoot) {
+            const info = yield* fs.stat(resolved).pipe(Effect.option)
+            if (info._tag === "Some" && info.value.type === "File") {
+              yield* fs.copyFile(originEntry, targetEntry).pipe(Effect.ignore)
+              return
+            }
           }
 
           yield* fs.symlink(originEntry, targetEntry).pipe(Effect.ignore)
@@ -237,7 +253,9 @@ export class GitService extends Effect.Service<GitService>()(
         worktreePath: string,
         originDir: string,
         targetDir: string,
-        seen: Set<string>
+        seen: Set<string>,
+        /** True only for a `node_modules` root — see `mirrorEntry`'s copy branch. */
+        atRoot: boolean
       ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
@@ -250,7 +268,7 @@ export class GitService extends Effect.Service<GitService>()(
           yield* fs.makeDirectory(targetDir, { recursive: true }).pipe(Effect.ignore)
           yield* Effect.forEach(
             entries,
-            (name) => mirrorEntry(repoPath, worktreePath, originDir, targetDir, name, seen),
+            (name) => mirrorEntry(repoPath, worktreePath, originDir, targetDir, name, seen, atRoot),
             // Bounded rather than unbounded: a large monorepo has thousands of
             // entries and each costs a `realPath` + a `symlink`. Sequential is
             // needlessly slow; unbounded exhausts the file-descriptor limit.
@@ -334,7 +352,8 @@ export class GitService extends Effect.Service<GitService>()(
             treeRoot,
             originNodeModules,
             path.join(worktreePath, "node_modules"),
-            new Set()
+            new Set(),
+            true
           )
           // pnpm (and npm with nested installs) give each workspace package its
           // OWN node_modules — `packages/<pkg>/node_modules` — holding that
@@ -348,7 +367,8 @@ export class GitService extends Effect.Service<GitService>()(
               treeRoot,
               path.join(repoPath, dir, "node_modules"),
               path.join(worktreePath, dir, "node_modules"),
-              new Set()
+              new Set(),
+              true
             )
           }
         })

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, lstatSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -153,6 +153,25 @@ describe("GitService.createWorktree", () => {
     // the same rule the root mirror applies, applied one level down.
     writeFileSync(join(exit.value.path, "packages", "app", "index.js"), "module.exports = 'branch-app'\n")
     expect(readFileSync(join(libNm, "@acme", "app", "index.js"), "utf-8")).toContain("branch-app")
+  })
+
+  it("LINKS .bin shims rather than copying them, so third-party CLIs still run", async () => {
+    // `.bin` is a container dir, so its entries recurse into the same classifier
+    // as the root's. Every one of them resolves to a FILE — the package's own
+    // executable — which put them in the install-metadata copy branch. A copied
+    // shim resolves its `require("../index.js")` against `.bin/` instead of the
+    // package, so every third-party binary an agent runs (tsc, eslint, anything
+    // behind a package script) would die with MODULE_NOT_FOUND.
+    const repoPath = initGitRepo(join(repos.dir, "bins"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "bins")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    const shim = join(exit.value.path, "node_modules", ".bin", "left-pad")
+    expect(lstatSync(shim).isSymbolicLink()).toBe(true)
+    // It resolves to the real script inside its package, where its relative
+    // requires still work — not to a detached copy sitting in `.bin`.
+    expect(realpathSync(shim)).toBe(realpathSync(join(repoPath, "node_modules", "left-pad", "cli.js")))
   })
 
   it("walks a scope dir that links to its own ancestor exactly once", async () => {

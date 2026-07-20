@@ -143,6 +143,12 @@ export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): stri
       writeFileSync(join(nm, "@acme", "vendor-kit", "index.js"), "module.exports = 'vendor'\n")
       // Install STATE — the file a package manager rewrites on every install.
       writeFileSync(join(nm, ".install-state.yml"), "origin-state\n")
+      // `.bin` shims, exactly as npm/yarn write them: a symlink to a SCRIPT
+      // inside the package. The script's own relative requires are why it must
+      // stay a link — copying its bytes strands them against `.bin/`.
+      writeFileSync(join(nm, "left-pad", "cli.js"), "require('./index.js')\n")
+      mkdirSync(join(nm, ".bin"), { recursive: true })
+      symlinkSync("../left-pad/cli.js", join(nm, ".bin", "left-pad"))
       // A build cache: written during ordinary work, not install.
       mkdirSync(join(nm, ".cache"), { recursive: true })
       writeFileSync(join(nm, ".cache", "build.json"), "origin-cache\n")

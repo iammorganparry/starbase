@@ -35,7 +35,7 @@ import { onSessionUpdate } from "./session-updates.js"
 import { setActiveSessionId } from "./active-session.js"
 import { prNotification } from "./notifier.js"
 import { completedSessionIds } from "./pr-refresh.js"
-import { issuesToCloseOnMerge } from "./pr-sweep.js"
+import { issuesToCloseOnMerge, prsToNotify } from "./pr-sweep.js"
 import { routeReviewToAgent } from "./auto-route.js"
 import { reviewQueryKey } from "./review-routing.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
@@ -411,11 +411,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   // the same merge forever.
   const notifiedPrsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    for (let i = 0; i < sweepTargets.length; i++) {
-      const session = sweepTargets[i]
-      const prState = prStates[i]
-      if (!session || (prState !== "merged" && prState !== "closed")) continue
-      if (notifiedPrsRef.current.has(session.id)) continue
+    for (const { session, state: prState } of prsToNotify(
+      prStates,
+      sweepTargets,
+      notifiedPrsRef.current
+    )) {
       notifiedPrsRef.current.add(session.id)
       const plan = prNotification(session.title, prState)
       void rpc
