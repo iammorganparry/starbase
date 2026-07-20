@@ -180,7 +180,8 @@ describe("wire types", () => {
       preparing: false,
       digestReady: false,
       lastCompactedAt: null,
-      compactions: 0
+      compactions: 0,
+      stalled: false
     }
     expect(
       Schema.decodeUnknownSync(ContextSnapshot)(Schema.encodeSync(ContextSnapshot)(snapshot))

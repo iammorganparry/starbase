@@ -237,7 +237,13 @@ export function ConversationPane({
   // either way — the actor lives in the registry, not this pane, so swapping the
   // view never aborts the run.
   return (
-    <div className="flex min-h-0 flex-1">
+    // `min-w-0` is load-bearing on BOTH rows, not decoration. A flex item
+    // defaults to `min-width: auto`, which refuses to shrink below its content —
+    // so a wide child (the sub-agent tab strip, whose cells are `flex-none` and
+    // `whitespace-nowrap`) pushes this row past the viewport instead of letting
+    // the strip's own `overflow-x-auto` take over. The inner column already had
+    // it; this outer row did not, so the constraint stopped one level short.
+    <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {barAgents.length > 0 && (
         <AgentTabBar
@@ -268,8 +274,10 @@ export function ConversationPane({
           busy={convo.busy}
           tokens={convo.tokens}
           contextTriggerAt={contextQuery.data?.triggerAt ?? null}
+          contextPhase={contextQuery.data?.phase ?? "unknown"}
           contextPreparing={preparing || requested}
           contextDigestReady={digestReady}
+          contextStalled={contextQuery.data?.stalled ?? false}
           onCompactNow={() => {
             setRequested(true)
             void rpc.contextCompactNow(session.id).catch(() => setRequested(false))

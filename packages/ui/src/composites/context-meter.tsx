@@ -1,3 +1,4 @@
+import type { ContextPhase } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 
 /** "42.6k" / "980" — compact token count. */
@@ -9,10 +10,23 @@ export interface ContextMeterProps {
   tokens: number
   /** Where compaction fires: `min(budget, window × safety)`. Null = unmeasurable. */
   triggerAt: number | null
+  /**
+   * What the context manager will ACTUALLY do with this session.
+   *
+   * The meter must not re-derive this from `tokens / triggerAt`. `triggerAt` is
+   * computed the moment the model's window is known, but compaction additionally
+   * requires auto-compaction to be enabled AND the harness to report usage — so
+   * `contextPhase` returns `"unknown"` in cases where the ratio is well past 1.
+   * Labelling off the ratio is what made the meter sit on "compacting soon"
+   * forever on sessions the manager had never intended to compact.
+   */
+  phase?: ContextPhase
   /** A summary is being built right now, on a background fiber. */
   preparing?: boolean
   /** A digest is built and the next turn will reseed. */
   digestReady?: boolean
+  /** Consecutive digest failures hit the ceiling; nothing more will be tried. */
+  stalled?: boolean
   /**
    * Compact this session now, ahead of the budget.
    *
@@ -41,8 +55,10 @@ export interface ContextMeterProps {
 export function ContextMeter({
   tokens,
   triggerAt,
+  phase = "unknown",
   preparing = false,
   digestReady = false,
+  stalled = false,
   onCompactNow,
   className
 }: ContextMeterProps) {
@@ -56,14 +72,19 @@ export function ContextMeter({
   // system working — a digest is being prepared and the next turn will be
   // cheaper — so the top of the range is "warm", never red. Red would train the
   // user to intervene in something that handles itself.
+  // A session that will never compact gets no warm tone: amber here reads as
+  // "something is about to happen", and nothing is.
+  const willCompact = phase === "prepare" || phase === "swap"
   const tone =
     preparing || digestReady
       ? "bg-blue/60"
-      : ratio >= 1
-        ? "bg-amber-400/70"
-        : ratio >= 0.8
-          ? "bg-amber-400/45"
-          : "bg-fg/25"
+      : stalled
+        ? "bg-fg/25"
+        : willCompact
+          ? "bg-amber-400/70"
+          : ratio >= 0.8 && phase !== "unknown"
+            ? "bg-amber-400/45"
+            : "bg-fg/25"
 
   /**
    * Four states, in the order they actually occur.
@@ -78,18 +99,24 @@ export function ContextMeter({
     ? "compacting…"
     : digestReady
       ? "compacts next turn"
-      : ratio >= 1
-        ? "compacting soon"
-        : "context"
+      : stalled
+        ? "compaction failed"
+        : willCompact
+          ? "compacting soon"
+          : "context"
 
   const title = `${tokens.toLocaleString()} of ~${triggerAt.toLocaleString()} tokens before Starbase compacts this session${
     preparing
       ? " · summarising in the background"
       : digestReady
         ? " · the next turn starts from a summary"
-        : onCompactNow
-          ? " · click to compact now"
-          : ""
+        : stalled
+          ? " · automatic compaction gave up after repeated failures; click to try again"
+          : phase === "unknown"
+            ? " · automatic compaction is off for this session"
+            : onCompactNow
+              ? " · click to compact now"
+              : ""
   }`
 
   // A plain span when there is nothing to click, so the meter never presents a

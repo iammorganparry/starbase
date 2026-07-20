@@ -152,7 +152,8 @@ describe("Settings → Context", () => {
             preparing: false,
             digestReady: false,
             lastCompactedAt: null,
-            compactions: 0
+            compactions: 0,
+            stalled: false
           }
         }
       ]

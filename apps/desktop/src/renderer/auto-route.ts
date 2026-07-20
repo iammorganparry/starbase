@@ -68,6 +68,21 @@ export const routeReviewToAgent = async (
   review: AdversarialReview,
   qc: QueryClient
 ): Promise<void> => {
+  /**
+   * The review must belong to the session it is about to be sent to.
+   *
+   * `session` and `review` arrive as independent arguments, so nothing in the
+   * type system stops a caller pairing them wrongly — and one did: App.tsx zipped
+   * sessions to review results by array index, and archiving a session shifted
+   * that mapping by one. The cost of the mistake is not a bad render, it is an
+   * irreversible agent turn against the wrong worktree, editing files on a branch
+   * the findings never described.
+   *
+   * Cheap, total, and checked BEFORE the claim is staked, so a mispaired call
+   * neither sends nor burns the guard key for the legitimate pairing.
+   */
+  if (review.sessionId !== session.id) return
+
   // Already routed for this head — the whole point of persisting the stamp.
   if (review.routedAt !== null) return
 

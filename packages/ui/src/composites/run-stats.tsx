@@ -3,24 +3,25 @@ import { Loader } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { fmtElapsed } from "../lib/relative-time.js"
 
-/** "42.6k" / "980" — compact token count. */
-const fmtTokens = (n: number): string =>
-  n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n)
-
 /**
- * Live session analytics — elapsed time (ticking while running) + the number of
- * tokens currently occupying the main agent's context window. Renders nothing
- * when there's no run and no context size to show.
+ * Live run analytics — elapsed time, ticking while running. Renders nothing
+ * when there is no run.
+ *
+ * The context size deliberately does NOT live here. `ContextMeter` owns that
+ * reading: it draws the same number against the point where compaction fires,
+ * which is the only framing that makes the count actionable. This component
+ * used to print it too, and the pair sat side by side above the composer
+ * showing the identical figure twice ("472.2k compacting soon · 472.2k context
+ * tokens") — a duplicate that survived because the meter was added ALONGSIDE
+ * this readout rather than replacing it.
  */
 export function RunStats({
   startedAt,
-  tokens,
   busy,
   className
 }: {
   /** Epoch ms the run started, or null when idle. */
   startedAt: number | null
-  tokens: number
   busy: boolean
   className?: string
 }) {
@@ -33,8 +34,8 @@ export function RunStats({
     return () => clearInterval(id)
   }, [busy, startedAt])
 
-  if (startedAt === null && tokens === 0) return null
-  const elapsed = startedAt !== null ? fmtElapsed(now - startedAt) : null
+  if (startedAt === null) return null
+  const elapsed = fmtElapsed(now - startedAt)
 
   return (
     <span
@@ -44,13 +45,7 @@ export function RunStats({
       )}
     >
       {busy && <Loader className="size-3 animate-spin text-dim" />}
-      {elapsed && <span>{elapsed}</span>}
-      {elapsed && tokens > 0 && <span className="text-dim">·</span>}
-      {tokens > 0 && (
-        <span>
-          {fmtTokens(tokens)} <span className="text-dim">context tokens</span>
-        </span>
-      )}
+      <span>{elapsed}</span>
     </span>
   )
 }
