@@ -1,27 +1,9 @@
-import type { Session } from "@starbase/core"
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 import { SessionPane, visibleTabs } from "./session-pane.js"
+import { testSession as session } from "../test-support.js"
 
 afterEach(cleanup)
-
-const session = (over: Partial<Session> & { id: string }): Session =>
-  ({
-    repo: "gtm-grid",
-    branch: `starbase/${over.id}`,
-    title: over.id,
-    status: "idle",
-    cli: "claude",
-    diff: { added: 0, removed: 0 },
-    prNumber: null,
-    costUsd: 0,
-    tokens: 0,
-    updatedAt: "2026-07-16T00:00:00.000Z",
-    worktreePath: `/tmp/${over.id}`,
-    baseBranch: "main",
-    mode: "auto",
-    ...over
-  }) as Session
 
 describe("visibleTabs", () => {
   it("shows only Conversation for a bare session", () => {
@@ -59,7 +41,7 @@ describe("SessionPane", () => {
   it("keeps tab state independent between two mounted panes", () => {
     // The whole reason for the extraction: a shared `tab` useState in the parent
     // could never let two gridded panes sit on different tabs.
-    const { container } = render(
+    render(
       <>
         <div data-testid="pane-a">
           <SessionPane
@@ -77,7 +59,6 @@ describe("SessionPane", () => {
         </div>
       </>
     )
-    expect(container).toBeTruthy()
 
     // Move pane A to its Pull Request tab; pane B must stay on Conversation.
     const paneA = screen.getByTestId("pane-a")

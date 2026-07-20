@@ -129,21 +129,6 @@ export const clear = (layout: GridLayout, slot: number): GridLayout => {
   return { ...layout, slots }
 }
 
-/** Remove a session from the grid wherever it happens to be (e.g. on delete). */
-export const remove = (layout: GridLayout, sessionId: string): GridLayout => {
-  const at = layout.slots.indexOf(sessionId)
-  return at === -1 ? layout : clear(layout, at)
-}
-
-/** Trade the contents of two slots. */
-export const swap = (layout: GridLayout, a: number, b: number): GridLayout => {
-  if (!isValidSlot(layout, a) || !isValidSlot(layout, b) || a === b) return layout
-  const slots = [...layout.slots]
-  slots[a] = layout.slots[b] ?? null
-  slots[b] = layout.slots[a] ?? null
-  return { ...layout, slots, focused: b }
-}
-
 /**
  * Change the grid's shape, keeping the slots that still fit.
  *

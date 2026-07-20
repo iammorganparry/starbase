@@ -14,12 +14,10 @@ import {
   LAYOUT_STORAGE_KEY,
   load,
   prune,
-  remove,
   save,
   setMode,
   slotIndexBySession,
-  SLOT_COUNT,
-  swap
+  SLOT_COUNT
 } from "./layout-grid.js"
 
 /** A layout literal, so each test reads as its own starting picture. */
@@ -70,7 +68,7 @@ describe("assign", () => {
   })
 })
 
-describe("clear and remove", () => {
+describe("clear", () => {
   it("empties a slot", () => {
     expect(clear(layout("1|1", ["a", "b"]), 0).slots).toEqual([null, "b"])
   })
@@ -80,34 +78,6 @@ describe("clear and remove", () => {
     expect(clear(before, 0)).toBe(before)
   })
 
-  it("removes a session wherever it sits", () => {
-    expect(remove(layout("2|2", ["a", "b", "c", null]), "b").slots).toEqual([
-      "a",
-      null,
-      "c",
-      null
-    ])
-  })
-
-  it("leaves the layout untouched when the session is not on the grid", () => {
-    const before = layout("1|1", ["a", null])
-    expect(remove(before, "zzz")).toBe(before)
-  })
-})
-
-describe("swap", () => {
-  it("trades two slots", () => {
-    expect(swap(layout("2|2", ["a", "b", "c", "d"]), 0, 3).slots).toEqual(["d", "b", "c", "a"])
-  })
-
-  it("handles a swap with an empty slot", () => {
-    expect(swap(layout("1|1", ["a", null]), 0, 1).slots).toEqual([null, "a"])
-  })
-
-  it("ignores a swap of a slot with itself", () => {
-    const before = layout("1|1", ["a", "b"])
-    expect(swap(before, 1, 1)).toBe(before)
-  })
 })
 
 describe("setMode", () => {

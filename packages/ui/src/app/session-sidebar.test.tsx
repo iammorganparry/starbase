@@ -1,27 +1,9 @@
-import type { Session } from "@starbase/core"
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 import { SessionSidebar } from "./session-sidebar.js"
+import { testSession as session } from "../test-support.js"
 
 afterEach(cleanup)
-
-const session = (over: Partial<Session> & { id: string }): Session =>
-  ({
-    repo: "gtm-grid",
-    branch: `starbase/${over.id}`,
-    title: over.id,
-    status: "idle",
-    cli: "claude",
-    diff: { added: 0, removed: 0 },
-    prNumber: null,
-    costUsd: 0,
-    tokens: 0,
-    updatedAt: "2026-07-16T00:00:00.000Z",
-    worktreePath: `/tmp/${over.id}`,
-    baseBranch: "main",
-    mode: "auto",
-    ...over
-  }) as Session
 
 const rowOrder = () =>
   Array.from(document.querySelectorAll("[data-testid^='session-row-']")).map((el) =>

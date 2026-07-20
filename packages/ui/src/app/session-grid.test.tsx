@@ -1,28 +1,10 @@
-import type { Session } from "@starbase/core"
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { GridLayout } from "./layout-grid.js"
 import { LayoutPicker, SessionGrid } from "./session-grid.js"
+import { testSession as session } from "../test-support.js"
 
 afterEach(cleanup)
-
-const session = (over: Partial<Session> & { id: string }): Session =>
-  ({
-    repo: "gtm-grid",
-    branch: `starbase/${over.id}`,
-    title: over.id,
-    status: "idle",
-    cli: "claude",
-    diff: { added: 0, removed: 0 },
-    prNumber: null,
-    costUsd: 0,
-    tokens: 0,
-    updatedAt: "2026-07-16T00:00:00.000Z",
-    worktreePath: `/tmp/${over.id}`,
-    baseBranch: "main",
-    mode: "auto",
-    ...over
-  }) as Session
 
 const sessions = [session({ id: "a" }), session({ id: "b" }), session({ id: "c" })]
 
