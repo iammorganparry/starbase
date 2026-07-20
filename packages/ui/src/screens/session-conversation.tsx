@@ -1,55 +1,36 @@
-import { type ReactNode, useState } from "react"
-import type { ActivityKind, CliInfo, DiffStat, PrState, Session, SessionActivity, User } from "@starbase/core"
-import { activityLabel } from "@starbase/core"
-import { cn } from "../lib/cn.js"
+import type { ReactNode } from "react"
+import type { CliInfo, DiffStat, PrState, Session, SessionActivity, User } from "@starbase/core"
 import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
-import { TabBar, type TabKey } from "../app/tab-bar.js"
-import { ConversationView } from "../app/conversation-view.js"
-import { SEED_CONVERSATION } from "../seed.js"
+import { SessionGrid } from "../app/session-grid.js"
+import type { GridLayout } from "../app/layout-grid.js"
 import { EmptyConversation } from "./empty-conversation.js"
-import { StubScreen } from "./stub-screen.js"
+import type { ConversationPaneCtx } from "./session-pane.js"
 
-/**
- * The tab-bar pill's accent per activity. Blue means "you're needed" and is
- * reserved for exactly that — anything the agent is doing under its own steam is
- * yellow, however long it takes. (Monitoring a PR is still the agent's work, not
- * yours; tinting it blue would dilute the one signal that should pull an eye.)
- */
-const ACTIVITY_TONE: Record<ActivityKind, "yellow" | "blue" | "green"> = {
-  thinking: "yellow",
-  reading: "yellow",
-  editing: "yellow",
-  running: "yellow",
-  monitoring: "yellow",
-  watching: "yellow",
-  web: "yellow",
-  delegating: "yellow",
-  "needs-input": "blue",
-  "needs-approval": "blue"
-}
-
-/**
- * What the host hands the live conversation pane so it can drive the Plan tab.
- * There's no router here — this tiny ctx IS the app's plan-review navigation.
- */
-export interface ConversationPaneCtx {
-  /**
-   * Switch to the Plan Review tab, optionally focused on a step (the Conversation
-   * progress rail deep-links; the inline plan card calls it bare).
-   */
-  onOpenPlanReview: (stepId?: string) => void
-  /** The step Plan Review should open at, until the user picks another. */
-  planStepId?: string | null
-  /** Plan Review's selection moved — retires a spent `planStepId`. */
-  onPlanStepSelected?: () => void
-}
+// The pane ctx is part of this screen's public surface (StarbaseApp types its
+// `renderConversation` callback with it), so keep it importable from here even
+// though it's now defined alongside the pane that consumes it.
+export type { ConversationPaneCtx } from "./session-pane.js"
 
 export interface SessionConversationProps {
   sessions: ReadonlyArray<Session>
   clis: ReadonlyArray<CliInfo>
   activeSessionId: string | null
   onSelectSession: (id: string) => void
+  /**
+   * The session grid — which sessions sit in which slots, and which slot has the
+   * operator's attention. Absent in stories, where a single implicit 1-up slot
+   * holding `activeSessionId` is synthesised instead.
+   */
+  layout?: GridLayout
+  /** Move the focus ring to a slot (a click anywhere inside that pane). */
+  onFocusSlot?: (slot: number) => void
+  /** Put a session in a specific slot — what a sidebar drag-and-drop means. */
+  onAssignSlot?: (slot: number, sessionId: string) => void
+  /** Empty a slot, leaving the session itself running. */
+  onClearSlot?: (slot: number) => void
+  /** Which slot each gridded session occupies, for the sidebar's badges. */
+  slotBySession?: ReadonlyMap<string, number>
   /** Manually rename a session (double-click its sidebar title). */
   onRenameSession?: (id: string, title: string) => void
   /** Archive an active session from the sidebar quick-actions (undoable). */
@@ -68,16 +49,23 @@ export interface SessionConversationProps {
    * The real app's session-keyed pane, rendered for BOTH the Conversation and
    * Plan tabs from the same machine (so switching to Plan never aborts a parked
    * plan run). `view` selects the face; `ctx.onOpenPlanReview` switches the tab.
+   *
+   * Takes the session explicitly rather than closing over the active one: the
+   * grid mounts several panes at once, and each must render its OWN session.
    */
-  renderConversationPane?: (
+  renderConversation?: (
+    session: Session,
     view: "conversation" | "plan" | "split",
     ctx: ConversationPaneCtx
   ) => ReactNode
   /** Session ids that should surface a Plan Review tab (plan mode / has a plan). */
   planSessions?: ReadonlySet<string>
   /**
-   * Show the empty state instead of a transcript — the real app sets this when
-   * no session is active (first launch), so the seeded demo never renders.
+   * Show the empty state instead of the grid. The HOST owns this rule — it is
+   * not re-derived here. `StarbaseApp` sets it when the grid is entirely empty
+   * AND a live `renderConversation` is wired, so the Storybook/standalone path
+   * (no live renderer) still shows its seeded transcript rather than the
+   * first-launch screen.
    */
   showEmpty?: boolean
   /** Unified-diff patch for the Changes rail (fallback demo only). */
@@ -145,79 +133,27 @@ export interface SessionConversationProps {
 }
 
 /**
- * The tabs relevant to a session — extra tabs only appear once they have data.
- * The Pull Request tab also shows for a branch with changes but no PR yet, so the
- * "Create pull request" empty state is reachable; Code Review needs a linked PR.
+ * Screen 01 — the primary session workspace.
+ *
+ * Owns the app-level furniture: the sidebar, the Settings takeover, and the
+ * first-launch empty state. Everything belonging to ONE session (its tab bar,
+ * tab body and docks) lives in `SessionPane`, which is what the grid multiplies.
  */
-const visibleTabs = (
-  active: Session | null,
-  planSessions?: ReadonlySet<string>
-): ReadonlyArray<TabKey> => {
-  const tabs: TabKey[] = ["conversation"]
-  // A linked GitHub issue gets its own rich Issue tab, right after Conversation.
-  if (active?.issueNumber != null) tabs.push("issue")
-  if (active && planSessions?.has(active.id)) tabs.push("plan")
-  if (active?.prNumber != null) tabs.push("pr", "review")
-  // No PR yet: the local worktree diff gets its own Changes tab (Code Review
-  // covers local diffs only once a PR exists).
-  else if (active?.worktreePath) tabs.push("pr", "changes")
-  return tabs
-}
-
-/** Screen 01 — the primary session workspace. */
 export function SessionConversation(props: SessionConversationProps) {
-  const [tab, setTab] = useState<TabKey>("conversation")
-  // A pending deep link into Plan Review (set when the Conversation rail jumps to
-  // a step). One-shot: Plan Review reports its own selection back and we drop it,
-  // so a later manual pick isn't overridden by a stale target.
-  //
-  // Tagged with the session it belongs to, and read back only for THAT session —
-  // this component isn't keyed by session, and step ids are per-plan ordinals
-  // (s_01, s_02…) that collide across sessions. Untagged, deep-linking in session
-  // A would snap session B's Plan tab to an unrelated same-numbered step.
-  const [target, setTarget] = useState<{ sessionId: string; stepId: string } | null>(null)
-  const [split, setSplit] = useState(false)
-  const planStepTarget = target?.sessionId === props.activeSessionId ? target.stepId : null
-  const active = props.sessions.find((s) => s.id === props.activeSessionId) ?? null
-
-  const tabs = visibleTabs(active, props.planSessions)
-  // Never leave a hidden tab selected (e.g. after switching to a PR-less session).
-  const activeTab = tabs.includes(tab) ? tab : "conversation"
-  // Plan Review beside the transcript. Derived, never merely stored: a session
-  // with no plan has nothing to split, so the same reasoning that hides the Plan
-  // tab collapses the split — otherwise switching to a plan-less session would
-  // leave an empty column pinned open with no control on screen to close it.
-  const splitAvailable = activeTab === "conversation" && tabs.includes("plan")
-  const splitOpen = split && splitAvailable
-  const connectGithub = props.onOpenSettings ?? (() => {})
-  // What the active session's agent is doing — drives the tab bar's pill.
-  const activeActivity = (active && props.liveActivity?.[active.id]) ?? null
-  // The live terminal dock for the active session (desktop app only).
-  const dock = active && props.renderTerminalDock ? props.renderTerminalDock(active) : null
-  // The embedded browser-preview dock — session-agnostic (localhost), so it shows
-  // even without an active session. Each dock hides itself (display:none) when its
-  // pane is closed, so rendering both is layout-free until opened.
-  const browserDock = props.renderBrowserDock ? props.renderBrowserDock(active) : null
-  const termSide = props.terminalDockSide ?? "bottom"
-  const browserSide = props.browserDockSide ?? "right"
-  const rightDocks = (
-    <>
-      {termSide === "right" ? dock : null}
-      {browserSide === "right" ? browserDock : null}
-    </>
-  )
-  const bottomDocks = (
-    <>
-      {termSide === "bottom" ? dock : null}
-      {browserSide === "bottom" ? browserDock : null}
-    </>
-  )
+  // Stories and standalone use pass no layout — synthesise the 1-up grid holding
+  // whatever `activeSessionId` says, so this screen renders identically either way.
+  const layout: GridLayout = props.layout ?? {
+    mode: "1",
+    slots: [props.activeSessionId],
+    focused: 0
+  }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <SessionSidebar
         sessions={props.sessions}
         activeSessionId={props.activeSessionId}
+        slotBySession={props.slotBySession}
         onSelect={props.onSelectSession}
         onRename={props.onRenameSession}
         onArchive={props.onArchiveSession}
@@ -248,95 +184,29 @@ export function SessionConversation(props: SessionConversationProps) {
             onNewSession={props.onNewSession}
           />
         ) : (
-          <>
-            <TabBar
-              tabs={tabs}
-              active={activeTab}
-              onChange={setTab}
-              prNumber={active?.prNumber ?? null}
-              changes={(active && props.liveDiff?.[active.id]) ?? null}
-              status={
-                activeActivity
-                  ? { label: activityLabel(activeActivity), tone: ACTIVITY_TONE[activeActivity.kind] }
-                  : undefined
-              }
-              onToggleBrowser={props.renderBrowserDock ? props.onToggleBrowser : undefined}
-              browserActive={props.browserActive}
-              onToggleSplit={splitAvailable ? () => setSplit((v) => !v) : undefined}
-              splitActive={splitOpen}
-            />
-
-            {/*
-              Dock area: any RIGHT-docked panes sit beside the content column (a
-              flex-row), and any BOTTOM-docked panes stack beneath that row. Each
-              dock CSS-hides itself when closed, so this holds for 0, 1, or 2 open
-              docks on independent sides (terminal + browser preview).
-            */}
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <div className="flex min-h-0 min-w-0 flex-1 flex-row">
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                {/*
-                  The Conversation + Plan tabs share ONE persistent pane (same
-                  conversation machine), so switching to Plan Review never unmounts —
-                  and thus never aborts — a parked plan run. The pane swaps its own
-                  inner view; only the OTHER tabs (pr/review/stub) fully unmount on
-                  switch (keyed by activeTab), since the virtualized transcript's
-                  measurement cache corrupts if kept mounted-but-hidden.
-                */}
-                {activeTab === "conversation" || activeTab === "plan" ? (
-                  props.renderConversationPane ? (
-                    props.renderConversationPane(
-                      activeTab === "plan" ? "plan" : splitOpen ? "split" : "conversation",
-                      {
-                      onOpenPlanReview: (stepId) => {
-                        setTarget(
-                          stepId && props.activeSessionId
-                            ? { sessionId: props.activeSessionId, stepId }
-                            : null
-                        )
-                        // Already split? Plan Review is on screen — switching tabs
-                        // would close the transcript the operator just clicked from.
-                        // Just move its selection.
-                        if (!splitOpen) setTab("plan")
-                      },
-                      planStepId: planStepTarget,
-                      onPlanStepSelected: () => setTarget(null)
-                      }
-                    )
-                  ) : (
-                    <div key="conversation" className="flex min-h-0 min-w-0 flex-1">
-                      {props.conversationPane ?? (
-                        <ConversationView messages={SEED_CONVERSATION} mode="accept-edits" />
-                      )}
-                    </div>
-                  )
-                ) : (
-                  <div key={activeTab} className="flex min-h-0 min-w-0 flex-1">
-                    {activeTab === "issue" && active ? (
-                      (props.renderIssue?.(active, { onConnectGithub: connectGithub }) ?? (
-                        <StubScreen tab="issue" />
-                      ))
-                    ) : activeTab === "pr" && active ? (
-                      (props.renderPullRequest?.(active, { onConnectGithub: connectGithub }) ?? (
-                        <StubScreen tab="pr" />
-                      ))
-                    ) : activeTab === "review" && active ? (
-                      (props.renderReview?.(active, { onConnectGithub: connectGithub }) ?? (
-                        <StubScreen tab="review" />
-                      ))
-                    ) : activeTab === "changes" && active ? (
-                      (props.renderCode?.(active, { onConnectGithub: connectGithub }) ?? <StubScreen tab="changes" />)
-                    ) : (
-                      <StubScreen tab={activeTab} />
-                    )}
-                  </div>
-                )}
-              </div>
-                {rightDocks}
-              </div>
-              {bottomDocks}
-            </div>
-          </>
+          <SessionGrid
+            layout={layout}
+            sessions={props.sessions}
+            onFocusSlot={props.onFocusSlot ?? (() => {})}
+            onAssignSlot={props.onAssignSlot}
+            onClearSlot={props.onClearSlot}
+            renderConversation={props.renderConversation}
+            conversationPane={props.conversationPane}
+            planSessions={props.planSessions}
+            liveActivity={props.liveActivity}
+            liveDiff={props.liveDiff}
+            onOpenSettings={props.onOpenSettings}
+            renderPullRequest={props.renderPullRequest}
+            renderReview={props.renderReview}
+            renderCode={props.renderCode}
+            renderIssue={props.renderIssue}
+            renderTerminalDock={props.renderTerminalDock}
+            terminalDockSide={props.terminalDockSide}
+            renderBrowserDock={props.renderBrowserDock}
+            browserDockSide={props.browserDockSide}
+            onToggleBrowser={props.onToggleBrowser}
+            browserActive={props.browserActive}
+          />
         )}
       </div>
     </div>

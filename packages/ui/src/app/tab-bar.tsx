@@ -8,7 +8,8 @@ import {
   MessagesSquare,
   PanelRight,
   Waypoints,
-  Workflow
+  Workflow,
+  X
 } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Pill } from "../components/pill.js"
@@ -53,7 +54,8 @@ export function TabBar({
   onToggleBrowser,
   browserActive = false,
   onToggleSplit,
-  splitActive = false
+  splitActive = false,
+  onClosePane
 }: {
   tabs: ReadonlyArray<TabKey>
   active: TabKey
@@ -76,6 +78,12 @@ export function TabBar({
   onToggleSplit?: () => void
   /** Whether the plan is currently split beside the conversation. */
   splitActive?: boolean
+  /**
+   * Empty this pane's grid slot. Shown only in a multi-pane layout: in 1-up there
+   * is nothing to close back TO, and the control would just be a way to blank the
+   * app. Closing a slot never touches the session — its agent keeps running.
+   */
+  onClosePane?: () => void
 }) {
   return (
     <div
@@ -150,6 +158,7 @@ export function TabBar({
             onClick={onToggleBrowser}
             aria-label="Browser preview"
             aria-pressed={browserActive}
+            data-testid="toggle-browser"
             title="Toggle browser preview (⌃⇧B)"
             className={cn(
               "flex size-6 items-center justify-center rounded transition-colors hover:bg-hairline",
@@ -157,6 +166,18 @@ export function TabBar({
             )}
           >
             <Globe className="size-4" />
+          </button>
+        )}
+        {onClosePane && (
+          <button
+            type="button"
+            onClick={onClosePane}
+            aria-label="Close pane"
+            data-testid="close-pane"
+            title="Close pane (the session keeps running)"
+            className="flex size-6 items-center justify-center rounded text-dim transition-colors hover:bg-hairline hover:text-text-bright"
+          >
+            <X className="size-4" />
           </button>
         )}
       </div>
