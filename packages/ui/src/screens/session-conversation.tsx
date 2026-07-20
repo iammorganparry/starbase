@@ -174,7 +174,7 @@ export function SessionConversation(props: SessionConversationProps) {
         version={props.version}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col bg-editor">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-editor">
         {props.settingsView ? (
           props.settingsView
         ) : props.showEmpty ? (
