@@ -81,6 +81,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
 
   // Renderer-side rpc reads, via react-query.
   const configQuery = useQuery({ queryKey: ["config"], queryFn: () => rpc.configGet() })
+  // Settings' Gigaplan pane needs both: the catalogue to choose an orchestrator
+  // model from, and readiness to explain itself when the mode cannot run here.
+  const catalogQuery = useQuery({ queryKey: ["models-catalog"], queryFn: () => rpc.modelsCatalog() })
+  const readinessQuery = useQuery({ queryKey: ["plan-readiness"], queryFn: () => rpc.planReadiness() })
+  const billingQuery = useQuery({ queryKey: ["billing-paths"], queryFn: () => rpc.billingPaths() })
   const ghStatusQuery = useQuery({ queryKey: ["gh-status"], queryFn: () => rpc.ghStatus() })
   const usageQuery = useQuery({ queryKey: ["usage"], queryFn: () => rpc.usageGet(), enabled: false })
 
@@ -116,6 +121,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       // snapshots rather than leaving meters reading against the old one.
       void qc.invalidateQueries({ queryKey: ["context"] })
     })
+  const saveOrchestrator = (cli: CliKind, model: string) => {
+    void rpc.configSetOrchestrator(cli, model).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  }
 
   // Toggle a repo's starred state, persist the whole list, and update the cache.
   const toggleStar = (repoPath: string) => {
@@ -430,6 +440,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveProvider={saveProvider}
       contextConfig={contextConfig}
       onSaveContextConfig={saveContextConfig}
+      modelCatalog={catalogQuery.data ?? []}
+      orchestrator={configQuery.data?.orchestrator ?? null}
+      onSaveOrchestrator={saveOrchestrator}
+      gigaplanUnavailableReason={readinessQuery.data?.ready === false ? readinessQuery.data.reason : null}
+      billing={billingQuery.data ?? []}
       loadModels={rpc.modelsList}
       loadOpencodeProviders={rpc.opencodeListProviders}
       onSetOpencodeAuth={rpc.opencodeSetAuth}

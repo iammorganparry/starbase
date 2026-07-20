@@ -5,6 +5,7 @@ import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
 import { requireWorktree } from "./cwd.js"
+import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 
 /**
  * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
@@ -31,11 +32,18 @@ import { requireWorktree } from "./cwd.js"
  */
 export const mapCodexPolicy = (
   mode: PermissionMode,
-  readOnly = false
+  readOnly = false,
+  /**
+   * Nobody is watching this run. Caps the policy at `workspace-write` however
+   * permissive the session's mode is: `danger-full-access` is a reasonable thing
+   * for an operator to choose for a session they are supervising, and an
+   * indefensible thing to inherit silently for a planning role or a plan step.
+   */
+  unattended = false
 ): { sandboxMode: SandboxMode; approvalPolicy: ApprovalMode } =>
   readOnly
     ? { sandboxMode: "read-only", approvalPolicy: "never" }
-    : mode === "auto"
+    : mode === "auto" && !unattended
       ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
       : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
@@ -248,14 +256,20 @@ export const runCodex = (
     yield* Effect.tryPromise({
       try: async () => {
         const { Codex } = await import("@openai/codex-sdk")
-        const codex = new Codex({ codexPathOverride: spec.binPath ?? undefined })
+        const codex = new Codex({
+          codexPathOverride: spec.binPath ?? undefined,
+          // Run on the operator's ChatGPT plan where they have one. The SDK does
+          // not inherit `process.env` when this is given, so it is a complete
+          // copy minus the metered key. See `subscription.ts`.
+          env: harnessEnv("codex", process.env, hasSubscriptionAuth("codex"))
+        })
         const threadOptions = {
           // See `requireWorktree`: inheriting the app's cwd would run this
           // session against an unrelated repository.
           workingDirectory: requireWorktree(spec.cwd, `session ${sessionId}`),
           skipGitRepoCheck: true,
           ...(spec.model ? { model: spec.model } : {}),
-          ...mapCodexPolicy(spec.mode, spec.readOnly ?? false)
+          ...mapCodexPolicy(spec.mode, spec.readOnly ?? false, spec.unattended ?? false)
         }
         // Prefer the live in-memory thread id (this launch), else the id persisted
         // on the session (survives an app restart), so "continue" resumes the

@@ -363,7 +363,7 @@ describe("ContextManager.observe", () => {
       }),
       recordingAdapter(GOOD_REPLY, rec)
     )
-    expect((session as Session).tokens).toBe(123_456)
+    expect((session as Session).contextTokens).toBe(123_456)
   })
 
   it("ignores a garbage reading", async () => {
@@ -484,7 +484,7 @@ describe("mid-turn readings", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     // The reading still lands — the meter and a reload both depend on it.
-    expect(session.tokens).toBe(180_000)
+    expect(session.contextTokens).toBe(180_000)
     // …but nothing was summarised from a half-written transcript.
     expect(rec.runs.count).toBe(0)
   })
@@ -670,7 +670,7 @@ describe("ContextManager.snapshot", () => {
     const rec = recorder()
     const snap = await run(
       Effect.gen(function* () {
-        yield* seed({ tokens: 175_000 })
+        yield* seed({ contextTokens: 175_000 })
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)

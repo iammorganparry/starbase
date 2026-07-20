@@ -12,16 +12,21 @@ import {
   ModelsService,
   ReviewService,
   ReviewStore,
+  AdversarialPlanService,
+  PlanExecutor,
+  PlanRoundStore,
   SessionStore,
+  TranscriptStore,
   SkillsService,
   TerminalService,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
+import type { Plan, StreamEvent } from "@starbase/core"
 import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
 import type { CommandExecutor } from "@effect/platform"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DialogService } from "./dialog.js"
 import {
@@ -42,6 +47,8 @@ import {
   sessionDiff,
   skillsList,
   workspaceRevertFile,
+  planAdversarial,
+  planExecute,
   workspaceRevertLines
 } from "./rpc.js"
 
@@ -969,5 +976,246 @@ describe("RPC handlers", () => {
         expect(stamp).not.toBeNull()
       })
     })
+  })
+})
+
+/**
+ * The round → approve path, end to end through the two handlers that own it.
+ *
+ * This is the flow the feature exists for and it was untested: `Plan.adversarial`
+ * streamed its plan to the screen while `Plan.execute` re-read the approved plan
+ * from the transcript, so nothing connected them. The operator saw a plan,
+ * approved it, and was told it was "no longer in this session".
+ */
+describe("Gigaplan round persistence", () => {
+  let dir: string
+  let root: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "starbase-round-"))
+    root = join(dir, "starbase")
+    mkdirSync(root, { recursive: true })
+    writeFileSync(
+      join(root, "sessions.json"),
+      JSON.stringify([
+        {
+          id: SESSION,
+          repo: "widget",
+          branch: "b",
+          title: "t",
+          status: "idle",
+          cli: "starbase",
+          diff: { added: 0, removed: 0 },
+          prNumber: null,
+          costUsd: 0,
+          tokens: 0,
+          updatedAt: "2026-07-19T00:00:00.000Z",
+          worktreePath: root
+        }
+      ])
+    )
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  const SESSION = "s_round"
+
+  /**
+   * Everything `planAdversarial` touches, against a real temp root so the
+   * transcript write is a real write rather than a mock that always agrees.
+   */
+  const roundLayer = (r: string) =>
+    Layer.mergeAll(
+      Layer.succeed(AppPaths, appPathsFor(r)),
+      NodeContext.layer,
+      ConfigService.Default,
+      GitService.Default,
+      TranscriptStore.Default,
+      PlanRoundStore.Default,
+      SessionStore.Default,
+      Layer.succeed(DiscoveryService, new DiscoveryService({ list: () => Effect.succeed([]) })),
+      Layer.succeed(
+        ModelsService,
+        new ModelsService({
+          list: () => Effect.succeed([]),
+          catalog: () => Effect.succeed([])
+        })
+      ),
+      fakeCommandExecutor(() => ({ exitCode: 0, stdout: "" })),
+      // Never reached — the round is faked — but it is in the handler's
+      // environment, so the test has to satisfy the same contract the app does.
+      Layer.succeed(
+        CliAdapter,
+        CliAdapter.of({
+          run: (() => Effect.void) as unknown as CliAdapterShape["run"],
+          stop: (() => Effect.void) as unknown as CliAdapterShape["stop"]
+        })
+      ),
+      fakeService
+    )
+
+
+  /**
+   * Spelled out in full rather than cast from a partial literal. A fixture that
+   * only satisfies the TYPE can still fail to DECODE off disk, and decoding is
+   * the half of the round trip this test exists to check — an `as Plan` cast
+   * here would have made the test pass against a transcript the app cannot read.
+   */
+  const PLAN: Plan = {
+    id: "plan_1",
+    summary: "Add rate limiting",
+    steps: [
+      {
+        id: "s1",
+        number: "01",
+        title: "Add the limiter",
+        intent: "throttle refunds",
+        approach: [],
+        kind: "step",
+        condition: null,
+        parentId: null,
+        dependsOn: [],
+        blocks: [],
+        files: [],
+        guards: [],
+        code: null,
+        diff: null,
+        status: "proposed",
+        flagged: false
+      }
+    ],
+    comments: [],
+    status: "proposed",
+    structured: true,
+    raw: "summary: Add rate limiting"
+  }
+
+  /** Stands in for the round: emits the plan the real service would produce. */
+  /** The executor is faked: this is about persistence, not about running steps. */
+  const fakeExecutor = Layer.succeed(
+    PlanExecutor,
+    new PlanExecutor({
+      run: (input: {
+        plan: Plan
+        onStepDone?: (step: Plan["steps"][number]) => Effect.Effect<void>
+      }) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            // A real executor reports each finished step; the fake does too, or
+            // the wiring under test is never exercised.
+            const first = input.plan.steps[0]
+            if (first !== undefined && input.onStepDone !== undefined) {
+              yield* input.onStepDone(first)
+            }
+            return Stream.fromIterable([
+              { _tag: "Assistant", text: "ran step 01" } as unknown as StreamEvent,
+              { _tag: "Done", costUsd: 0, tokens: 0 } as unknown as StreamEvent
+            ])
+          })
+        )
+    } as unknown as ConstructorParameters<typeof PlanExecutor>[0])
+  )
+
+  const execLayer = (r: string) => Layer.mergeAll(roundLayer(r), fakeExecutor)
+
+  const fakeService = Layer.succeed(
+    AdversarialPlanService,
+    new AdversarialPlanService({
+      run: () =>
+        Stream.fromIterable([
+          { _tag: "PlanProposed", plan: PLAN } as StreamEvent,
+          { _tag: "Done", costUsd: 0, tokens: 0, sessionId: SESSION } as unknown as StreamEvent
+        ])
+    } as unknown as ConstructorParameters<typeof AdversarialPlanService>[0])
+  )
+
+  it("writes the round's plan into the transcript, so approving it can find it", async () => {
+    const found = await Effect.gen(function* () {
+      yield* planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      // The plan must be reachable exactly the way `planExecute` reaches it.
+      return messages.flatMap((m) =>
+        m.parts.flatMap((p) => (p._tag === "Plan" && p.plan.id === PLAN.id ? [p.plan] : []))
+      )
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(found).toHaveLength(1)
+    expect(found[0]?.summary).toBe("Add rate limiting")
+  })
+
+  it("keeps the operator's brief, so a reopened session shows what was asked", async () => {
+    const texts = await Effect.gen(function* () {
+      yield* planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.filter((m) => m.role === "user").map((m) => m.parts)
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
+  })
+
+  /**
+   * Approving is a durable act, not a screen state.
+   *
+   * `settleLoaded` rewrites a still-`proposed` plan to `stale` on the next
+   * transcript load. So a plan that was approved and RAN, but whose approval was
+   * only ever held in the renderer, comes back looking like one that never
+   * started — and can be approved a second time, running the whole thing again.
+   */
+  it("records the approval, so a completed plan doesn't come back as stale", async () => {
+    const status = await Effect.gen(function* () {
+      // Seed the approved-from plan the way a finished round leaves it.
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.flatMap((m) =>
+        m.parts.flatMap((p) => (p._tag === "Plan" && p.plan.id === PLAN.id ? [p.plan.status] : []))
+      )
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
+
+    expect(status).toStrictEqual(["approved"])
+  })
+
+  it("persists the execution's own turns, so the run survives a reopen", async () => {
+    const roles = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.map((m) => m.role)
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
+
+    // The seeded plan turn, plus the approval turn and the run's own turn.
+    expect(roles).toStrictEqual(["assistant", "user", "assistant"])
+  })
+
+  it("ticks a finished step on the stored plan, so a crash mid-run loses only the tail", () => {
+    // `planExecute` marks the plan `approved` BEFORE the run so it can't be
+    // approved twice. Without per-step persistence that combination is the
+    // worst of both: an approved plan, a half-applied worktree, and no record
+    // of which steps actually ran.
+    return Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      const stored = messages.flatMap((m) =>
+        m.parts.flatMap((p) => (p._tag === "Plan" && p.plan.id === PLAN.id ? [p.plan] : []))
+      )[0]
+      expect(stored?.steps[0]?.status).toBe("done")
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
   })
 })

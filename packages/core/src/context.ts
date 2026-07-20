@@ -78,7 +78,13 @@ const DEFAULT_WINDOW: Record<CliKind, number | null> = {
   claude: 200_000,
   codex: 272_000,
   cursor: null,
-  opencode: null
+  opencode: null,
+  // The orchestrator is not one model with one window — it fans a round out
+  // across independent vendors, so there is no single ceiling to name. It also
+  // reports no `Usage` of its own, so `contextReporting` already keeps
+  // compaction away from it; `null` states the same thing in the one place that
+  // computes a budget.
+  starbase: null
 }
 
 /**
@@ -178,7 +184,12 @@ export const DEFAULT_DIGEST_MODEL: Record<CliKind, string> = {
   cursor: "auto",
   // opencode Zen's free tier: the honest zero-config answer for a harness whose
   // catalogue comes from the user's own credentials.
-  opencode: "opencode/north-mini-code-free"
+  opencode: "opencode/north-mini-code-free",
+  // Unreachable in practice — the orchestrator reports no context, so a digest
+  // is never requested for it. Present because the record must be total, and
+  // matching its sole catalogue entry so the "names a model the harness offers"
+  // guard keeps holding.
+  starbase: "auto"
 }
 
 /** The digest model for `cli`, honouring the user's `backgroundModel` override. */

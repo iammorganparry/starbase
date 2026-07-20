@@ -9,11 +9,13 @@
  * the transcript with the same `applyStreamEvent` the main process persists with.
  */
 import type {
+  PlanningReadiness,
   Attachment,
   CliKind,
   GateDecision,
   Message,
   PermissionMode,
+  Plan,
   PlanComment,
   ProviderModels,
   QuestionAnswer,
@@ -84,6 +86,27 @@ export interface ConversationContext {
    * turn starts.
    */
   readonly resumePlanId: string | null
+  /**
+   * When set, the running turn is an adversarial planning round for this brief
+   * rather than a normal `Agent.run`. Follows `resumePlanId` exactly: one flag on
+   * the context that redirects `agentStream` to a different RPC, so the machine
+   * keeps ONE running state instead of growing a parallel one per run kind.
+   */
+  readonly adversarialBrief: string | null
+  /**
+   * When set, the running turn is a Gigaplan EXECUTION of this plan — each step
+   * on the harness the plan assigned it — rather than a normal run. Follows
+   * `resumePlanId` and `adversarialBrief` exactly: one flag that redirects
+   * `agentStream` to a different RPC, so the machine keeps one running state
+   * instead of a parallel one per run kind.
+   */
+  readonly executePlanId: string | null
+  /**
+   * Whether adversarial planning is offerable, and the reason when it isn't.
+   * Null until the first load — the entry stays disabled until we actually know,
+   * so it can never flash enabled and then refuse.
+   */
+  readonly planReadiness: PlanningReadiness | null
   /** Tokens currently occupying the main agent's context window. */
   readonly tokens: number
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
@@ -132,6 +155,8 @@ type ConversationEvent =
   | { type: "SET_HARNESS"; cli: CliKind; model: string }
   | { type: "SKILLS_LOADED"; skills: ReadonlyArray<Skill> }
   | { type: "CATALOG_LOADED"; catalog: ReadonlyArray<ProviderModels> }
+  | { type: "READINESS_LOADED"; readiness: PlanningReadiness }
+  | { type: "PLAN_ADVERSARIALLY"; brief: string }
   | { type: "REVIEW_EVENT"; event: StreamEvent }
   | { type: "COMMENT_PLAN_STEP"; planId: string; stepId: string; body: string }
   | { type: "REVISE_PLAN"; planId: string }
@@ -181,14 +206,29 @@ const refreshDiff = fromPromise<string, { session: Session }>(({ input }) =>
 /** Subscribe to the agent's event stream, forwarding each event into the machine. */
 const agentStream = fromCallback<
   ConversationEvent,
-  { sessionId: string; text: string; images: ReadonlyArray<Attachment>; resumePlanId: string | null }
+  {
+    sessionId: string
+    text: string
+    images: ReadonlyArray<Attachment>
+    resumePlanId: string | null
+    adversarialBrief: string | null
+    executePlanId: string | null
+  }
 >(({ sendBack, input }) => {
   const onEvent = (event: StreamEvent) => sendBack({ type: "STREAM_EVENT", event })
-  // A stale-plan approval re-drives execution via `resumePlan` (which restores the
-  // exec mode and prompts with the plan embedded); a normal turn uses `run`.
-  const cancel = input.resumePlanId
-    ? rpc.agentResumePlan(input.sessionId, input.resumePlanId, onEvent)
-    : rpc.agentRun(input.sessionId, input.text, onEvent, input.images)
+  // Three run kinds, one actor. An adversarial round is a planning round rather
+  // than a turn; a stale-plan approval re-drives execution via `resumePlan`
+  // (which restores the exec mode and prompts with the plan embedded); anything
+  // else is a normal turn. They share the `running` state because they share
+  // everything that matters downstream — the same StreamEvents, the same fold,
+  // the same stop button.
+  const cancel = input.adversarialBrief
+    ? rpc.planAdversarial(input.sessionId, input.adversarialBrief, onEvent)
+    : input.executePlanId
+      ? rpc.planExecute(input.sessionId, input.executePlanId, onEvent)
+      : input.resumePlanId
+        ? rpc.agentResumePlan(input.sessionId, input.resumePlanId, onEvent)
+        : rpc.agentRun(input.sessionId, input.text, onEvent, input.images)
   return cancel
 })
 
@@ -238,27 +278,82 @@ export const conversationMachine = setup({
     isTerminal: ({ event }) =>
       event.type === "STREAM_EVENT" &&
       (event.event._tag === "Done" || event.event._tag === "Failed"),
-    hasQueued: ({ context }) => context.queued.length > 0
+    hasQueued: ({ context }) => context.queued.length > 0,
+    canPlanAdversarially: ({ context }) => context.planReadiness?.ready === true,
+    /**
+     * Whether an ordinary send should become a planning round.
+     *
+     * Both halves matter. The harness check is the operator's choice; the
+     * readiness check is the same one the explicit trigger uses, because a round
+     * the service would only refuse must not be started from a keyboard path
+     * either. When readiness says no, the send falls through to a normal turn
+     * rather than failing — the session still works, it just isn't orchestrated.
+     */
+    /**
+     * Whether this send is a Gigaplan round.
+     *
+     * Reads `context.mode`, which tracks the live mode rather than whatever was
+     * persisted — the operator can switch mid-session, and orchestrating after
+     * they switched away (or refusing after they switched to it) would both be
+     * wrong. The readiness half is not redundant: the mode can be persisted on a
+     * machine that HAD two providers and reopened on one that doesn't, and a
+     * round the service would only refuse must not start from a keyboard path.
+     * When readiness says no the send falls through to an ordinary turn, so the
+     * session still works — it just isn't orchestrated.
+     */
+    orchestrates: ({ context }) =>
+      context.mode === "gigaplan" && context.planReadiness?.ready === true,
+
+    /**
+     * Whether THIS plan needs the per-step executor — asked of the plan, not of
+     * the composer.
+     *
+     * `orchestrates` is the right question for a SEND, which is about what the
+     * operator is doing now. It is the wrong question for approving a plan,
+     * which is about what an earlier round already produced: a Gigaplan whose
+     * steps carry assignees still has to run per-step even if the operator has
+     * since flipped the mode chip, and readiness can go false simply by a
+     * harness disappearing. Guarding approval on the live mode silently dropped
+     * the click in both cases — the plan sat there with a button that did
+     * nothing.
+     */
+    planExecutesPerStep: ({ context, event }) => {
+      if (event.type !== "APPROVE_PLAN" && event.type !== "RESUME_PLAN") return false
+      const planId = event.planId
+      const plan = context.messages.reduce<Plan | null>(
+        (found, m) =>
+          m.parts.reduce<Plan | null>(
+            (inner, p) => (p._tag === "Plan" && p.plan.id === planId ? p.plan : inner),
+            found
+          ),
+        null
+      )
+      return plan !== null && plan.steps.some((st) => st.assignee !== undefined)
+    },
+
   },
   actions: {
     appendTurns: assign(({ context, event }) => {
       if (event.type !== "SEND") return {}
+      const text = event.text
+      const images = event.images ?? []
       const now = new Date().toISOString()
       const id = stamp()
-      const images = event.images ?? []
       return {
-        pendingText: event.text,
+        pendingText: text,
         pendingImages: images,
         // A fresh turn starts with no sub-agents (any from a prior turn are gone).
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         resumePlanId: null,
+        adversarialBrief: null,
+        executePlanId: null,
         // Reset the live analytics for the new run.
         tokens: 0,
         runStartedAt: Date.now(),
         messages: [
           ...context.messages,
-          userMessage(`u_local_${id}`, event.text, now, images),
+          userMessage(`u_local_${id}`, text, now, images),
           assistantMessage(`a_local_${id}`, now)
         ]
       }
@@ -267,11 +362,22 @@ export const conversationMachine = setup({
     // turn, and flag the run so `agentStream` calls `resumePlan` (which restores
     // the exec mode + prompts the agent with the plan embedded).
     startResumePlan: assign(({ context, event }) => {
-      if (event.type !== "RESUME_PLAN") return {}
+      // Also the fallback for APPROVE_PLAN on a plan with no per-step
+      // assignees — an ordinary plan approved in an ordinary mode. Re-driving it
+      // on the session's own harness is the honest behaviour; dropping the click
+      // is not.
+      if (event.type !== "RESUME_PLAN" && event.type !== "APPROVE_PLAN") return {}
       const now = new Date().toISOString()
       const id = stamp()
       return {
         resumePlanId: event.planId,
+        // Both cleared, because `agentStream` picks its RPC by checking these in
+        // order and `adversarialBrief` wins. Leaving the finished round's brief
+        // set meant approving its plan started a WHOLE SECOND ROUND — two
+        // flagship models and minutes of wall clock — instead of re-driving.
+        // Every other run-starting action clears them; this one didn't.
+        adversarialBrief: null,
+        executePlanId: null,
         pendingText: "",
         pendingImages: [],
         // A fresh run (the plan re-drive) starts with no sub-agents carried over.
@@ -325,6 +431,8 @@ export const conversationMachine = setup({
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         resumePlanId: null,
+        adversarialBrief: null,
+        executePlanId: null,
         tokens: 0,
         runStartedAt: Date.now(),
         messages: [
@@ -460,6 +568,38 @@ export const conversationMachine = setup({
       void rpc.agentRevisePlan(context.session.id, event.planId)
       return { messages: context.messages.map((m) => setPlanStatus(m, event.planId, "revising")) }
     }),
+    /**
+     * Start executing an approved Gigaplan.
+     *
+     * Unlike `startResumePlan`, this does NOT prompt one harness with the plan
+     * embedded — it hands the plan to the executor, which runs each step on the
+     * harness that step was assigned. That is the entire point of the mode, and
+     * until this ran the round's per-step assignment was decoration.
+     */
+    beginPlanExecution: assign(({ context, event }) => {
+      if (event.type !== "APPROVE_PLAN" && event.type !== "RESUME_PLAN") return {}
+      const now = new Date().toISOString()
+      const id = stamp()
+      return {
+        executePlanId: event.planId,
+        resumePlanId: null,
+        adversarialBrief: null,
+        pendingText: "",
+        pendingImages: [],
+        subagents: [],
+        reviewer: keepReviewer(context.reviewer),
+        tokens: 0,
+        runStartedAt: Date.now(),
+        // The same two turns every other run kind appends, and for the same
+        // reason: `applyStreamEvent` folds into the LAST message, so without an
+        // assistant turn to land in, every step's output would be dropped.
+        messages: [
+          ...context.messages.map((m) => setPlanStatus(m, event.planId, "approved")),
+          userMessage(`u_local_${id}`, "Approved — run the plan.", now),
+          assistantMessage(`a_local_${id}`, now)
+        ]
+      }
+    }),
     optimisticPlanApprove: assign(({ context, event }) => {
       if (event.type !== "APPROVE_PLAN") return {}
       void rpc.agentApprovePlan(context.session.id, event.planId)
@@ -505,6 +645,61 @@ export const conversationMachine = setup({
      * dropped; gating the transcript on a CLI probe would widen that hole from
      * imperceptible to seconds. The chip just fills itself in a beat later.
      */
+    /**
+     * Ask whether adversarial planning is offerable. Fire-and-forget on entry,
+     * like the catalogue: a failure leaves `planReadiness` null, which renders
+     * the entry disabled — the safe direction, since offering a round we cannot
+     * run is worse than not offering one we could.
+     */
+    loadReadiness: ({ self }) => {
+      void rpc
+        .planReadiness()
+        .then((readiness) => self.send({ type: "READINESS_LOADED", readiness }))
+        .catch(() => {})
+    },
+    applyReadiness: assign(({ event }) =>
+      event.type === "READINESS_LOADED" ? { planReadiness: event.readiness } : {}
+    ),
+    /**
+     * Start an adversarial planning round. The brief rides on the context and
+     * `agentStream` redirects on it, so the round reuses the whole running-state
+     * machinery — stop, streaming, sub-agent tabs — rather than duplicating it.
+     */
+    beginAdversarial: assign(({ context, event }) => {
+      // Two ways in, one behaviour: the explicit trigger, and an ordinary send
+      // on a session whose harness IS the orchestrator. On that harness there is
+      // no separate "plan adversarially" gesture to make — driving the round is
+      // the whole reason the operator picked it — so the brief is just whatever
+      // they typed.
+      const brief =
+        event.type === "PLAN_ADVERSARIALLY"
+          ? event.brief
+          : event.type === "SEND"
+            ? event.text
+            : null
+      if (brief === null || brief.trim().length === 0) return {}
+      const now = new Date().toISOString()
+      const id = stamp()
+      return {
+        adversarialBrief: brief,
+        pendingText: "",
+        pendingImages: [],
+        subagents: [],
+        reviewer: keepReviewer(context.reviewer),
+        resumePlanId: null,
+        tokens: 0,
+        runStartedAt: Date.now(),
+        // The same two turns a normal send appends, and for the same reason:
+        // `applyStreamEvent` folds into the LAST message, so without an
+        // assistant turn to land in, the round's plan — and every event before
+        // it — would be silently dropped.
+        messages: [
+          ...context.messages,
+          userMessage(`u_local_${id}`, brief, now, []),
+          assistantMessage(`a_local_${id}`, now)
+        ]
+      }
+    }),
     loadCatalog: ({ self }) => {
       void rpc
         .modelsCatalog()
@@ -608,7 +803,7 @@ export const conversationMachine = setup({
   initial: "loading",
   // Kick the (slow, out-of-band) model catalogue + `/` menu fetches off once, at
   // start. Both probe a CLI, so neither may gate the transcript — see below.
-  entry: ["loadCatalog", "loadSkills"],
+  entry: ["loadCatalog", "loadSkills", "loadReadiness"],
   // Watch the reviewer for the machine's whole life — a review is not part of a
   // turn, so it can start, run and finish in any state.
   invoke: { src: "reviewStream", input: ({ context }) => ({ sessionId: context.session.id }) },
@@ -618,6 +813,7 @@ export const conversationMachine = setup({
   // loading, and a per-state handler would drop it on the floor.
   on: {
     CATALOG_LOADED: { actions: "applyCatalog" },
+    READINESS_LOADED: { actions: "applyReadiness" },
     SKILLS_LOADED: { actions: "applySkills" },
     REVIEW_EVENT: { actions: "applyReview" }
   },
@@ -636,6 +832,9 @@ export const conversationMachine = setup({
     queued: [],
     subagents: [],
     resumePlanId: null,
+    adversarialBrief: null,
+    executePlanId: null,
+    planReadiness: null,
     tokens: 0,
     runStartedAt: null,
     persistedStatus: input.session.status,
@@ -710,11 +909,38 @@ export const conversationMachine = setup({
       // status can be recorded truthfully.
       entry: "persistSettledStatus",
       on: {
-        SEND: { target: "running", actions: "appendTurns" },
-        // Approve a stale plan (its original run is gone) → re-drive execution.
-        RESUME_PLAN: { target: "running", actions: "startResumePlan" },
+        SEND: [
+          // In Gigaplan, a send IS the round — that is what selecting the mode
+          // asks for. Every other mode is an ordinary turn on the model the
+          // operator picked.
+          { guard: "orchestrates", target: "running", actions: "beginAdversarial" },
+          { target: "running", actions: "appendTurns" }
+        ],
+        // Approving a finished Gigaplan runs it per-step; anything else
+        // re-drives a stale plan on the session's own harness. Both arrive here
+        // rather than in `running` because neither has a live run to resume:
+        // the round ended, or the app was restarted.
+        // Two arms, never zero: a single guarded transition meant a click that
+        // failed the guard was swallowed with nothing on screen to explain it.
+        APPROVE_PLAN: [
+          { guard: "planExecutesPerStep", target: "running", actions: "beginPlanExecution" },
+          { target: "running", actions: "startResumePlan" }
+        ],
+        RESUME_PLAN: [
+          { guard: "planExecutesPerStep", target: "running", actions: "beginPlanExecution" },
+          { target: "running", actions: "startResumePlan" }
+        ],
         SET_MODE: { actions: "persistMode" },
         SET_HARNESS: { actions: "persistHarness" },
+        // Start an adversarial planning round. Guarded on readiness rather than
+        // trusted from the UI: the entry is disabled without two vendors, but a
+        // stale readiness or a keyboard path must not start a round that the
+        // service would only refuse.
+        PLAN_ADVERSARIALLY: {
+          guard: "canPlanAdversarially",
+          target: "running",
+          actions: "beginAdversarial"
+        },
         // Re-read the worktree diff on demand (e.g. after a revert from the rail).
         REFRESH_DIFF: { target: "refreshingDiff" }
       }
@@ -726,7 +952,9 @@ export const conversationMachine = setup({
           sessionId: context.session.id,
           text: context.pendingText,
           images: context.pendingImages,
-          resumePlanId: context.resumePlanId
+          resumePlanId: context.resumePlanId,
+          adversarialBrief: context.adversarialBrief,
+          executePlanId: context.executePlanId
         })
       },
       on: {

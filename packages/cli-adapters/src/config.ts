@@ -1,4 +1,10 @@
-import type { CliKind, ContextConfig, GitConfig, GithubConfig, ProviderConfig } from "@starbase/core"
+import type {
+  CliKind,
+  ContextConfig,
+  GitConfig,
+  GithubConfig,
+  ProviderConfig
+} from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
@@ -55,6 +61,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.collapsedRepos ? { collapsedRepos: existing.collapsedRepos } : {}),
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...(existing?.providers ? { providers: existing.providers } : {}),
+            ...(existing?.orchestrator ? { orchestrator: existing.orchestrator } : {}),
+            // MANDATORY: omit a section here and every unrelated save silently
+            // drops it, because `patch` is a whole-object read-modify-write.
             ...patch
           }
           return yield* persist(config)
@@ -78,6 +87,10 @@ export class ConfigService extends Effect.Service<ConfigService>()(
       const setContext = (context: ContextConfig) => patch({ context })
 
       /** Upsert one CLI's provider defaults, preserving the other providers. */
+      /** Persist the orchestrator's harness+model. Absent ⇒ the curated default. */
+      const setOrchestrator = (cli: CliKind, model: string) =>
+        patch({ orchestrator: { cli, model } })
+
       const setProvider = (cli: CliKind, provider: ProviderConfig) =>
         Effect.gen(function* () {
           const existing = yield* get()
@@ -112,7 +125,8 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setCollapsedRepos,
         setLastRepoPath,
         setContext,
-        setProvider
+        setProvider,
+        setOrchestrator
       }
     }
   }

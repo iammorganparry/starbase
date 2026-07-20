@@ -75,7 +75,8 @@ export const statusPulses = (s: SessionStatus): boolean =>
  * Semantic accent per HITL permission mode — used to "nightlight" the composer
  * (border + background tint + ambient glow) and colour the mode chip so the
  * active mode is legible at a glance. ask=blue, accept-edits=green, auto=orange
- * (more autonomy), plan=purple (the special, Claude-only mode). Glows reuse the
+ * (more autonomy), plan=purple (the special, Claude-only mode), gigaplan=a
+ * cyan→purple gradient (the orchestrated one). Glows reuse the
  * arbitrary box-shadow idiom from status-dot.tsx (an sb-colour CSS var).
  */
 export const modeAccent: Record<
@@ -109,6 +110,25 @@ export const modeAccent: Record<
     glow: "shadow-[0_0_12px_-2px_var(--sb-purple)]",
     chip: "border-purple/40 text-purple",
     dot: "bg-purple"
+  },
+  /**
+   * Gigaplan gets the loudest treatment in the set, and deliberately so: it is
+   * the only mode that spends minutes and real money before showing anything,
+   * and the only one that takes model choice out of the operator's hands. A
+   * chip that read like the other four would leave that running unnoticed.
+   *
+   * Two colours rather than one — a cyan→purple gradient — because every other
+   * accent here is a single hue, so the gradient alone says "this one is not
+   * like the others" before the label is read.
+   */
+  gigaplan: {
+    border: "border-cyan/60",
+    bg: "bg-cyan/8",
+    glow: "shadow-[0_0_16px_-2px_var(--sb-cyan)]",
+    chip:
+      "border-transparent bg-gradient-to-r from-cyan/20 to-purple/20 text-cyan " +
+      "shadow-[0_0_10px_-3px_var(--sb-cyan)]",
+    dot: "bg-gradient-to-r from-cyan to-purple"
   }
 }
 

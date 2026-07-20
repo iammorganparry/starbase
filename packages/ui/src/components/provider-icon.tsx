@@ -29,6 +29,13 @@ const ICONS: Record<CliKind, { viewBox: string; d: string; fillRule?: "evenodd" 
     viewBox: "0 0 512 512",
     fillRule: "evenodd",
     d: "M384 416H128V96H384V416ZM320 160H192V352H320V160ZM320 224V352H192V224H320Z"
+  },
+  // Ours. A four-point star rather than a borrowed brand mark, matching the
+  // sparkle already used for Starbase itself on the sign-in and empty states —
+  // so the orchestrator reads as *this app* in a list of other people's logos.
+  starbase: {
+    viewBox: "0 0 24 24",
+    d: "M12 1.5 14.3 9.7 22.5 12 14.3 14.3 12 22.5 9.7 14.3 1.5 12 9.7 9.7Z"
   }
 }
 
@@ -38,7 +45,8 @@ export const PROVIDER_LABEL: Record<CliKind, string> = {
   codex: "Codex",
   cursor: "Cursor",
   // Lowercase is opencode's own styling, not a typo.
-  opencode: "opencode"
+  opencode: "opencode",
+  starbase: "Starbase"
 }
 
 /**
@@ -49,7 +57,10 @@ export const PROVIDER_COLOR: Record<CliKind, string> = {
   claude: "#d97757",
   codex: "#d7dae0",
   cursor: "#d7dae0",
-  opencode: "#d7dae0"
+  opencode: "#d7dae0",
+  // `--sb-blue`, the app's own accent — the one colour in this map that is ours
+  // rather than a vendor's.
+  starbase: "#61afef"
 }
 
 export function ProviderIcon({

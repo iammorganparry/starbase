@@ -261,12 +261,12 @@ describe("SessionStore", () => {
    * in renderer state — so a session reopened at 290k read as 0 and would happily
    * run to the hard ceiling before anything noticed.
    */
-  describe("setTokens / clearResumeId", () => {
+  describe("setContextTokens / clearResumeId", () => {
     it("persists the latest context reading across a fresh read", async () => {
       const exit = await runExit(
         Effect.gen(function* () {
           const created = yield* SessionStore.create(input({ title: "Long Runner" }))
-          yield* SessionStore.setTokens(created.id, 290_000)
+          yield* SessionStore.setContextTokens(created.id, 290_000)
           return created.id
         }).pipe(Effect.provide(services)),
         temp.layer
@@ -280,7 +280,7 @@ describe("SessionStore", () => {
       )
       expect(reread._tag).toBe("Success")
       if (reread._tag !== "Success") return
-      expect(reread.value.tokens).toBe(290_000)
+      expect(reread.value.contextTokens).toBe(290_000)
     })
 
     // A LATEST reading, never a high-water mark: compaction legitimately shrinks
@@ -289,31 +289,31 @@ describe("SessionStore", () => {
       const exit = await runExit(
         Effect.gen(function* () {
           const created = yield* SessionStore.create(input({ title: "Compacted" }))
-          yield* SessionStore.setTokens(created.id, 290_000)
-          yield* SessionStore.setTokens(created.id, 12_000)
+          yield* SessionStore.setContextTokens(created.id, 290_000)
+          yield* SessionStore.setContextTokens(created.id, 12_000)
           return yield* SessionStore.get(created.id)
         }).pipe(Effect.provide(services)),
         temp.layer
       )
       expect(exit._tag).toBe("Success")
       if (exit._tag !== "Success") return
-      expect(exit.value.tokens).toBe(12_000)
+      expect(exit.value.contextTokens).toBe(12_000)
     })
 
     it("ignores a garbage reading rather than persisting NaN", async () => {
       const exit = await runExit(
         Effect.gen(function* () {
           const created = yield* SessionStore.create(input({ title: "Garbage" }))
-          yield* SessionStore.setTokens(created.id, 5_000)
-          yield* SessionStore.setTokens(created.id, Number.NaN)
-          yield* SessionStore.setTokens(created.id, -1)
+          yield* SessionStore.setContextTokens(created.id, 5_000)
+          yield* SessionStore.setContextTokens(created.id, Number.NaN)
+          yield* SessionStore.setContextTokens(created.id, -1)
           return yield* SessionStore.get(created.id)
         }).pipe(Effect.provide(services)),
         temp.layer
       )
       expect(exit._tag).toBe("Success")
       if (exit._tag !== "Success") return
-      expect(exit.value.tokens).toBe(5_000)
+      expect(exit.value.contextTokens).toBe(5_000)
     })
 
     // How compaction reseeds: drop the harness thread, keep everything else. The

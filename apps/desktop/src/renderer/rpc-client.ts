@@ -7,6 +7,8 @@
 import type {
   BackgroundTask,
   AdversarialReview,
+  PlanningReadiness,
+  PlanRound,
   ArchiveReason,
   Attachment,
   AuthProvider,
@@ -20,6 +22,7 @@ import type {
   GateDecision,
   GhStatus,
   GitConfig,
+  HarnessBilling,
   GithubConfig,
   Issue,
   IssueAutomations,
@@ -101,6 +104,8 @@ const run = <A>(
 
 /** The typed calls the renderer consumes. */
 export const rpc = {
+  /** What each installed harness will actually be billed to. */
+  billingPaths: (): Promise<ReadonlyArray<HarnessBilling>> => run((c) => c.Billing.paths()),
   discoveryList: (): Promise<ReadonlyArray<CliInfo>> =>
     run((c) => c.Discovery.list()),
   configGet: (): Promise<WorkspaceConfig | null> =>
@@ -225,6 +230,9 @@ export const rpc = {
     run((c) => c.Config.setCollapsedRepos({ paths })),
   configSetLastRepoPath: (path: string): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setLastRepoPath({ path })),
+  /** Which harness+model Gigaplan itself runs on. */
+  configSetOrchestrator: (cli: CliKind, model: string): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setOrchestrator({ cli, model })),
   configSetProvider: (cli: CliKind, provider: ProviderConfig): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setProvider({ cli, provider })),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
@@ -425,6 +433,66 @@ export const rpc = {
    * nothing is running — it just stays quiet until a review starts. Returns the
    * unsubscribe.
    */
+  /**
+   * Run an adversarial planning round and stream its events. Returns a canceller.
+   *
+   * Shaped like `agentRun` rather than `reviewWatch` because the caller IS the
+   * trigger here — a planning round only exists because the operator asked for
+   * it, so there is no already-in-flight run to attach to.
+   */
+  planAdversarial: (
+    sessionId: string,
+    brief: string,
+    onEvent: (event: StreamEvent) => void
+  ): (() => void) => {
+    let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
+    let cancelled = false
+    void clientPromise.then((client) => {
+      if (cancelled) return
+      fiber = runtime.runFork(
+        client.Plan.adversarial({ sessionId, brief }).pipe(
+          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
+        )
+      )
+    })
+    return () => {
+      cancelled = true
+      if (fiber) runtime.runFork(Fiber.interrupt(fiber))
+    }
+  },
+
+  /** The stored planning round for a session, or null. */
+  /** Turn learning from finished work on or off. */
+
+  planRound: (sessionId: string): Promise<PlanRound | null> =>
+    run((c) => c.Plan.round({ sessionId })),
+
+  /** Whether adversarial planning is offerable here, and the reason when not. */
+  planReadiness: (): Promise<PlanningReadiness> => run((c) => c.Plan.readiness({})),
+
+  /** Run an approved plan step by step. Returns a cancel handle, like `agentRun`. */
+  planExecute: (
+    sessionId: string,
+    planId: string,
+    onEvent: (event: StreamEvent) => void
+  ): (() => void) => {
+    let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
+    let cancelled = false
+    void clientPromise.then((client) => {
+      if (cancelled) return
+      fiber = runtime.runFork(
+        client.Plan.execute({ sessionId, planId }).pipe(
+          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
+        )
+      )
+    })
+    return () => {
+      cancelled = true
+      if (fiber) runtime.runFork(Fiber.interrupt(fiber))
+    }
+  },
+
+
   reviewWatch: (sessionId: string, onEvent: (event: StreamEvent) => void): (() => void) => {
     let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
     let cancelled = false

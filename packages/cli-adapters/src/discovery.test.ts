@@ -5,6 +5,14 @@ import { fakeCommandExecutor, runExit } from "./test-support.js"
 import type { FakeCommandHandler } from "./test-support.js"
 
 /**
+ * Just the harnesses this module actually probes the host for. `starbase` is
+ * the app itself and is always present, so including it would make every
+ * "nothing is installed" assertion permanently false.
+ */
+const external = (cs: ReadonlyArray<{ kind: string; available: boolean }>) =>
+  cs.filter((c) => c.kind !== "starbase")
+
+/**
  * DiscoveryService probes the host for coding CLIs. Those binaries aren't present
  * in CI, so we drive detection with canned `which` / `--version` output and
  * assert the resulting availability per CLI — never the probe's two-phase steps.
@@ -56,7 +64,11 @@ describe("DiscoveryService.list — pinned bin dir", () => {
 
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
-    expect(exit.value.every((c) => !c.available)).toBe(true)
+    // Starbase ships with the app, so it is always available and has no binary
+    // — it is not part of what "probing the host" means. Excluded by kind rather
+    // than by relaxing the assertion, so a REAL harness leaking through still
+    // fails this.
+    expect(external(exit.value).every((c) => !c.available)).toBe(true)
     expect(exit.value.every((c) => c.binPath === null)).toBe(true)
   })
 
@@ -93,7 +105,7 @@ describe("DiscoveryService.list — pinned bin dir", () => {
 
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
-    expect(exit.value.every((c) => !c.available)).toBe(true)
+    expect(external(exit.value).every((c) => !c.available)).toBe(true)
   })
 
   it("still probes the real host when the pin is unset or blank", async () => {
@@ -121,7 +133,7 @@ describe("DiscoveryService.list", () => {
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
     const byKind = Object.fromEntries(exit.value.map((c) => [c.kind, c]))
-    expect(exit.value).toHaveLength(4) // one entry per CLI spec
+    expect(exit.value).toHaveLength(5) // one entry per CLI spec, incl. starbase
 
     expect(byKind.claude).toMatchObject({ available: true, version: "claude 2.1.0" })
     expect(byKind.claude?.binPath).toBe("/usr/local/bin/claude")
@@ -134,8 +146,21 @@ describe("DiscoveryService.list", () => {
     const exit = await run(() => ({ stdout: "" }))
     expect(exit._tag).toBe("Success")
     if (exit._tag === "Success") {
-      expect(exit.value.every((c) => !c.available)).toBe(true)
+      expect(external(exit.value).every((c) => !c.available)).toBe(true)
     }
+  })
+
+  it("still offers Starbase itself on a host with no CLI at all", async () => {
+    // The orchestrator is the app, not something installed beside it. Reporting
+    // it unavailable here would be both false and unactionable — there is
+    // nothing the operator could install to fix it. Whether a round can RUN is a
+    // separate question (`planningReadiness` wants two vendors), answered in the
+    // picker as a disabled entry with a reason.
+    const exit = await run(() => ({ stdout: "" }))
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const starbase = exit.value.find((c) => c.kind === "starbase")
+    expect(starbase).toMatchObject({ available: true, binPath: null })
   })
 
   /**

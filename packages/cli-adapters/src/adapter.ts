@@ -58,6 +58,31 @@ export interface SessionSpec {
    * field only one adapter understands is a guarantee only one adapter keeps.
    */
   readonly readOnly?: boolean
+  /**
+   * This agent runs with nobody watching, so apply the protections that implies.
+   *
+   * Two mechanisms, deliberately kept separate because they fail differently:
+   *
+   *  1. **File-tool confinement to `cwd`** (`confinement.ts`). Read tools are
+   *     never gated — `toPermissionRequest` returns null for them — so without
+   *     this an agent reads anything on disk. A planning proposer was observed
+   *     doing exactly that, pulling 403 lines of an unrelated private repository
+   *     into its context. Pure, and works on every platform.
+   *  2. **A credential denylist sandbox** (`sandbox.ts`). The check above cannot
+   *     see a shell, and a plan step needs Bash to build and test, so `cat
+   *     ~/.ssh/id_rsa` walked straight through it. The sandbox blocks that at the
+   *     OS level — but it needs platform support and degrades silently when
+   *     absent, which is why (1) is kept rather than replaced.
+   *
+   * NEITHER IS CONFINEMENT TO THE WORKTREE, and the gap is measured rather than
+   * assumed: `denyRead` is absolute with no carve-out, so denying `~` also denies
+   * a worktree under `~`. A step that cannot read its own repository is useless.
+   * Anything outside the denylist and outside the file tools remains reachable.
+   *
+   * Deliberately NOT set for the operator's own session: they are watching, and a
+   * coding agent that cannot read a sibling repo on request is less useful.
+   */
+  readonly unattended?: boolean
 }
 
 /** What the agent is asking permission to do, surfaced before it acts. */
@@ -490,6 +515,27 @@ export const scriptedRun =
  * A deterministic adapter driving the full contract without a real process —
  * the tests/e2e/fallback path. `delayMs` paces the stream.
  */
+/**
+ * Whether an event is a CHILD run's own lifecycle, and must not reach the
+ * parent stream.
+ *
+ * `Started`, `Done` and `Failed` describe a whole run. When an orchestrator
+ * (the planning round, the plan executor) drives a nested `CliAdapter.run`, the
+ * nested run emits its own — and unlike every other event they carry no
+ * `agentId`, so they cannot be scoped to a subagent and arrive looking exactly
+ * like the PARENT finishing.
+ *
+ * The renderer believes them: one `Done` ends the turn, tears down the stream
+ * actor and interrupts the fiber behind it. Measured, this killed the plan
+ * executor midway through step 2 and the adversarial round straight after the
+ * proposer — the orchestrator was cut off by its own first child reporting
+ * success.
+ *
+ * So orchestrators swallow these and emit their own once, at the real end.
+ */
+export const isChildLifecycle = (event: StreamEvent): boolean =>
+  event._tag === "Started" || event._tag === "Done" || event._tag === "Failed"
+
 export const makeScriptedCliAdapter = (delayMs: number): Layer.Layer<CliAdapter> =>
   Layer.succeed(CliAdapter, CliAdapter.of({ run: scriptedRun(delayMs), stop: () => Effect.void }))
 

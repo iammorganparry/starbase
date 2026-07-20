@@ -216,3 +216,24 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([])
   })
 })
+
+describe("mapCodexPolicy — unattended", () => {
+  it("never hands an unattended run full disk access", () => {
+    // `auto` is a reasonable choice for a session the operator is supervising.
+    // Inheriting it silently for a planning role or a plan step is not: nobody
+    // is there to stop it. Codex confines writes to the workspace, which is
+    // more than Claude's own default does.
+    expect(mapCodexPolicy("auto", false, true).sandboxMode).toBe("workspace-write")
+    expect(mapCodexPolicy("auto", false, false).sandboxMode).toBe("danger-full-access")
+  })
+
+  it("still prefers read-only when the spec asks for it", () => {
+    // Planning roles are read-only AND unattended; the stricter one wins.
+    expect(mapCodexPolicy("auto", true, true).sandboxMode).toBe("read-only")
+  })
+
+  it("leaves the ordinary modes alone", () => {
+    expect(mapCodexPolicy("accept-edits", false, true).sandboxMode).toBe("workspace-write")
+    expect(mapCodexPolicy("ask", false, false).sandboxMode).toBe("workspace-write")
+  })
+})

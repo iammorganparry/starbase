@@ -1,6 +1,7 @@
 import type { Plan, PlanStep, PlanStepStatus } from "@starbase/core"
 import { Check, GitBranch, MessageSquareText } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { ChallengeBadge } from "./plan-challenges.js"
 import { StatusDot } from "../components/status-dot.js"
 
 /**
@@ -115,6 +116,7 @@ function Row({
           updated
         </span>
       )}
+      <ChallengeBadge step={step} />
       {comments > 0 && (
         <span className="flex flex-none items-center gap-1 font-mono text-[9.5px] text-yellow">
           <MessageSquareText className="size-3" />

@@ -19,6 +19,8 @@ import type {
   PrState,
   PrSummary,
   ProviderConfig,
+  ProviderModels,
+  HarnessBilling,
   ProvidersConfig,
   Repo,
   Session,
@@ -101,6 +103,15 @@ export interface StarbaseAppProps {
   providersConfig?: ProvidersConfig | null
   /** Persist one CLI's provider defaults; presence wires the Settings gear. */
   onSaveProvider?: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
+  /** Every installed harness + its models, for Gigaplan's orchestrator picker. */
+  modelCatalog?: ReadonlyArray<ProviderModels>
+  /** The configured orchestrator harness+model, or null for the default. */
+  orchestrator?: { readonly cli: CliKind; readonly model: string } | null
+  onSaveOrchestrator?: (cli: CliKind, model: string) => void
+  /** Why Gigaplan can't run on this host, when it can't. */
+  gigaplanUnavailableReason?: string | null
+  /** What each installed harness is charged to. */
+  billing?: ReadonlyArray<HarnessBilling>
   /** Load the selectable models for a CLI (Settings · Providers). */
   loadModels?: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
   /** opencode's resolved providers + credential origins (Settings · Providers). */
@@ -213,6 +224,11 @@ export function StarbaseApp({
   onRecheckGh,
   providersConfig,
   onSaveProvider,
+  modelCatalog,
+  orchestrator,
+  onSaveOrchestrator,
+  gigaplanUnavailableReason,
+  billing,
   loadModels,
   loadOpencodeProviders,
   onSetOpencodeAuth,
@@ -388,6 +404,11 @@ export function StarbaseApp({
               clis={clis}
               providers={providersConfig}
               onSaveProvider={onSaveProvider}
+              catalog={modelCatalog}
+              orchestrator={orchestrator}
+              onSaveOrchestrator={onSaveOrchestrator}
+              gigaplanUnavailableReason={gigaplanUnavailableReason}
+              billing={billing}
               loadModels={loadModels ?? (async () => [])}
               loadOpencodeProviders={loadOpencodeProviders}
               onSetOpencodeAuth={onSetOpencodeAuth}

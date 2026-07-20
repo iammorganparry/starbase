@@ -301,7 +301,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           yield* setState(sessionId, (s) => ({ ...s, tokens }))
           // Persist so the reading survives a restart — otherwise a session
           // reopened at 290k reads as 0 and runs to the ceiling.
-          yield* SessionStore.setTokens(sessionId, tokens).pipe(Effect.ignore)
+          yield* SessionStore.setContextTokens(sessionId, tokens).pipe(Effect.ignore)
         })
 
       /**
@@ -414,7 +414,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           const settings = yield* settingsFor(sessionId)
           // Prefer the live in-memory reading, fall back to the persisted one so a
           // freshly reopened session shows its real size before its first turn.
-          const tokens = state.tokens > 0 ? state.tokens : settings?.session.tokens ?? 0
+          const tokens = state.tokens > 0 ? state.tokens : settings?.session.contextTokens ?? 0
           const window = settings?.window ?? null
           const budget = settings?.budget ?? DEFAULT_CONTEXT_CONFIG.budgetTokens
           return {
