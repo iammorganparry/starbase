@@ -18,3 +18,14 @@ blob-report/
 
 # electron-builder output
 release/
+
+# Stray files written into the repo by tools that are not this project.
+#
+# MCP servers configured with a RELATIVE data path write wherever the agent's
+# cwd happens to be, which is a session's worktree. `data/wowlogs-mcp.db` turned
+# up in two worktrees this way — nothing to do with Starbase, but it shows up as
+# untracked in every `git status` and invites being committed by accident.
+#
+# Anchored at the repo root, so a legitimate nested fixture dir
+# (`packages/*/data/`) is still tracked.
+/data/
