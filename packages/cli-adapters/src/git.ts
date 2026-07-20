@@ -1,5 +1,6 @@
 import type { ResolvingCommit, Worktree } from "@starbase/core"
 import { GitError } from "@starbase/core"
+import { relative, sep } from "node:path"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Effect } from "effect"
@@ -15,7 +16,12 @@ import { gitLine, runGit, runString } from "./command.js"
  * be already-resolved absolute paths.
  */
 const isWithin = (root: string, candidate: string): boolean =>
-  candidate === root || candidate.startsWith(root.endsWith("/") ? root : `${root}/`)
+  // `sep`, not a hardcoded "/". `path.join` yields backslashes on Windows, so a
+  // "/"-terminated prefix test is ALWAYS false there — which would classify
+  // every workspace package as third-party and silently reinstate the exact
+  // origin-resolution bug this file exists to fix. `confinement.ts` compares
+  // paths the same way, for the same reason.
+  candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep)
 
 /**
  * Is `resolved` a WORKSPACE package of the repo at `repoRoot` — the repo's own
@@ -30,10 +36,12 @@ const isWithin = (root: string, candidate: string): boolean =>
  *
  * Both arguments must already be canonical (see `linkNodeModules`).
  */
-const isWorkspacePath = (repoRoot: string, resolved: string): boolean => {
+export const isWorkspacePath = (repoRoot: string, resolved: string): boolean => {
   if (!isWithin(repoRoot, resolved)) return false
-  const rel = resolved.slice(repoRoot.length).replace(/^\/+/, "")
-  return rel.length > 0 && !rel.split("/").includes("node_modules")
+  // `relative` + split on `sep` rather than slicing and splitting on "/", so the
+  // segment test holds on Windows too. See `isWithin`.
+  const rel = relative(repoRoot, resolved)
+  return rel.length > 0 && !rel.split(sep).includes("node_modules")
 }
 
 /** Parameters for forking an isolated worktree from a repo. */
@@ -165,7 +173,9 @@ export class GitService extends Effect.Service<GitService>()(
         worktreePath: string,
         originDir: string,
         targetDir: string,
-        name: string
+        name: string,
+        /** Real paths already being mirrored on this branch — the cycle guard. */
+        seen: Set<string>
       ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
         Effect.gen(function* () {
           const path = yield* Path.Path
@@ -191,7 +201,7 @@ export class GitService extends Effect.Service<GitService>()(
           }
 
           if (isContainerDir(name)) {
-            yield* mirrorDir(repoPath, worktreePath, originEntry, targetEntry)
+            yield* mirrorDir(repoPath, worktreePath, originEntry, targetEntry, seen)
             return
           }
 
@@ -212,20 +222,35 @@ export class GitService extends Effect.Service<GitService>()(
           yield* fs.symlink(originEntry, targetEntry).pipe(Effect.ignore)
         })
 
-      /** Rebuild one directory in the worktree, mirroring each of its entries. */
+      /**
+       * Rebuild one directory in the worktree, mirroring each of its entries.
+       *
+       * `seen` holds the REAL paths already being mirrored on this branch of the
+       * recursion. Without it, a container-dir symlink pointing at its own
+       * ancestor (`node_modules/@a -> .`) re-lists the same tree forever: session
+       * creation hangs or blows the stack, losing an operation everything else
+       * here is careful to make unfailable. Contrived, but nothing prevents it,
+       * and the cost of the guard is one Set.
+       */
       const mirrorDir = (
         repoPath: string,
         worktreePath: string,
         originDir: string,
-        targetDir: string
+        targetDir: string,
+        seen: Set<string>
       ): Effect.Effect<void, never, Path.Path | FileSystem.FileSystem> =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem
+          // Keyed on the resolved path, so two routes to one directory count as
+          // the same visit — which is exactly what a cycle is.
+          const real = yield* fs.realPath(originDir).pipe(Effect.orElseSucceed(() => originDir))
+          if (seen.has(real)) return
+          seen.add(real)
           const entries = yield* fs.readDirectory(originDir).pipe(Effect.orElseSucceed(() => []))
           yield* fs.makeDirectory(targetDir, { recursive: true }).pipe(Effect.ignore)
           yield* Effect.forEach(
             entries,
-            (name) => mirrorEntry(repoPath, worktreePath, originDir, targetDir, name),
+            (name) => mirrorEntry(repoPath, worktreePath, originDir, targetDir, name, seen),
             // Bounded rather than unbounded: a large monorepo has thousands of
             // entries and each costs a `realPath` + a `symlink`. Sequential is
             // needlessly slow; unbounded exhausts the file-descriptor limit.
@@ -300,11 +325,16 @@ export class GitService extends Effect.Service<GitService>()(
           const treeRoot = yield* fs
             .realPath(worktreePath)
             .pipe(Effect.orElseSucceed(() => worktreePath))
+          // A FRESH visited-set per top-level mirror. Sharing one across the
+          // per-package installs below would treat a directory legitimately
+          // reached from two different packages as a cycle and skip it the
+          // second time, leaving that package's deps unmirrored.
           yield* mirrorDir(
             repoRoot,
             treeRoot,
             originNodeModules,
-            path.join(worktreePath, "node_modules")
+            path.join(worktreePath, "node_modules"),
+            new Set()
           )
           // pnpm (and npm with nested installs) give each workspace package its
           // OWN node_modules — `packages/<pkg>/node_modules` — holding that
@@ -317,7 +347,8 @@ export class GitService extends Effect.Service<GitService>()(
               repoRoot,
               treeRoot,
               path.join(repoPath, dir, "node_modules"),
-              path.join(worktreePath, dir, "node_modules")
+              path.join(worktreePath, dir, "node_modules"),
+              new Set()
             )
           }
         })

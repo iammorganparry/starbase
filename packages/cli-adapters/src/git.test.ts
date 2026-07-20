@@ -155,6 +155,30 @@ describe("GitService.createWorktree", () => {
     expect(readFileSync(join(libNm, "@acme", "app", "index.js"), "utf-8")).toContain("branch-app")
   })
 
+  it("walks a scope dir that links to its own ancestor exactly once", async () => {
+    // `node_modules/@loop -> .` resolves to node_modules itself: it isn't a
+    // workspace path, and it matches isContainerDir, so an unguarded mirror
+    // recurses into the same tree again.
+    //
+    // It does NOT hang — the kernel's symlink-loop detection returns ELOOP at
+    // ~31 levels and the read folds to empty. What it does instead is quietly
+    // build 31 levels of junk directories in the worktree, because each level
+    // creates its target before discovering there's nothing to put in it. The
+    // visited-set stops it at the first repeat.
+    const repoPath = initGitRepo(join(repos.dir, "loop"), { nodeModules: true })
+    symlinkSync(".", join(repoPath, "node_modules", "@loop"))
+
+    const exit = await create(repoPath, "loop")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const nm = join(exit.value.path, "node_modules")
+
+    // Visited once: the scope dir exists, but nothing was mirrored THROUGH it.
+    expect(existsSync(join(nm, "@loop", "@loop"))).toBe(false)
+    // And the healthy entries still landed — the guard skips the cycle, not the run.
+    expect(existsSync(join(nm, ".marker"))).toBe(true)
+  })
+
   it("survives a broken link in the origin's node_modules", async () => {
     // A dep removed since the last install leaves a dangling entry. It must be
     // skipped, not propagated — and must not fail the session create, which is
