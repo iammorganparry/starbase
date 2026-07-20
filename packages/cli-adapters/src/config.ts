@@ -1,5 +1,11 @@
 import type {
-  CliKind, GitConfig, GithubConfig, NotificationsConfig, ProviderConfig } from "@starbase/core"
+  CliKind,
+  ContextConfig,
+  GitConfig,
+  GithubConfig,
+  NotificationsConfig,
+  ProviderConfig
+} from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
@@ -49,6 +55,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
           const config: WorkspaceConfig = {
             reposDir: existing?.reposDir ?? null,
             createdAt,
+            ...(existing?.context ? { context: existing.context } : {}),
             ...(existing?.github ? { github: existing.github } : {}),
             ...(existing?.git ? { git: existing.git } : {}),
             ...(existing?.starredRepos ? { starredRepos: existing.starredRepos } : {}),
@@ -78,6 +85,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         patch({ collapsedRepos })
 
       const setLastRepoPath = (lastRepoPath: string) => patch({ lastRepoPath })
+
+      /** Save the auto-compaction levers (master switch + working-set budget). */
+      const setContext = (context: ContextConfig) => patch({ context })
 
       /** Upsert one CLI's provider defaults, preserving the other providers. */
       /** Persist the orchestrator's harness+model. Absent ⇒ the curated default. */
@@ -118,6 +128,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setStarredRepos,
         setCollapsedRepos,
         setLastRepoPath,
+        setContext,
         setProvider,
         setOrchestrator
       }

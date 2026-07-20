@@ -448,7 +448,53 @@ export type QuestionPart = Schema.Schema.Type<typeof QuestionPart>
 export const PlanPart = Schema.TaggedStruct("Plan", { plan: Plan })
 export type PlanPart = Schema.Schema.Type<typeof PlanPart>
 
-/** One ordered piece of a turn — text, an image, thinking, a tool card, a gate, a question, or a plan. */
+/**
+ * The carried-forward summary of a conversation, produced by a background run
+ * over our own transcript and used to seed a fresh harness conversation.
+ *
+ * Deliberately STRUCTURED rather than a prose blob. Structure is what lets the
+ * compaction divider show the user exactly what survived, and what lets a
+ * malformed model reply be rejected wholesale — a half-parsed digest that
+ * silently dropped "decisions" would reseed a session with its own reasoning
+ * amputated, and nothing downstream could tell.
+ */
+export const ContextDigest = Schema.Struct({
+  /** What the user is ultimately trying to achieve in this session. */
+  goal: Schema.String,
+  /** Choices made and why — the part a summary most often destroys. */
+  decisions: Schema.Array(Schema.String),
+  /** Files created or modified, so the fresh conversation knows where it is. */
+  filesTouched: Schema.Array(Schema.String),
+  /** Work explicitly left unfinished. */
+  openThreads: Schema.Array(Schema.String),
+  /** Standing instructions the user gave that must keep applying. */
+  preferences: Schema.Array(Schema.String),
+  /**
+   * The last message this digest covers. Everything AFTER it is replayed
+   * verbatim at swap time, so a digest built two turns ago is still correct
+   * without being rebuilt.
+   */
+  throughMessageId: Schema.String,
+  builtAt: Schema.String
+})
+export type ContextDigest = Schema.Schema.Type<typeof ContextDigest>
+
+/**
+ * A marker recording that the harness conversation was reseeded from a summary.
+ *
+ * The transcript itself is NEVER truncated — the user can still scroll back
+ * through everything. This part exists so that what the model kept is legible:
+ * without it the context meter would simply drop with no explanation, which is
+ * exactly how `/compact` behaves today and exactly why it feels like data loss.
+ */
+export const ContextPart = Schema.TaggedStruct("Context", {
+  digest: ContextDigest,
+  /** The working set immediately before the reseed, for the "290k → 12k" line. */
+  tokensBefore: Schema.Number
+})
+export type ContextPart = Schema.Schema.Type<typeof ContextPart>
+
+/** One ordered piece of a turn — text, an image, thinking, a tool card, a gate, a question, a plan, or a compaction marker. */
 export const ContentPart = Schema.Union(
   TextPart,
   ImagePart,
@@ -456,7 +502,8 @@ export const ContentPart = Schema.Union(
   ToolPart,
   GatePart,
   QuestionPart,
-  PlanPart
+  PlanPart,
+  ContextPart
 )
 export type ContentPart = Schema.Schema.Type<typeof ContentPart>
 
@@ -714,6 +761,15 @@ export const StreamEvent = Schema.Union(
   }),
   /** The latest main-agent context-window size reported by the harness. */
   Schema.TaggedStruct("Usage", { tokens: Schema.Number }),
+  /**
+   * The harness conversation was reseeded from a summary to keep the working set
+   * inside the quality band. Emitted at the START of the turn that applies it, so
+   * the marker sits above the reply that first ran on the compacted context.
+   */
+  Schema.TaggedStruct("ContextCompacted", {
+    digest: ContextDigest,
+    tokensBefore: Schema.Number
+  }),
   /** Terminal context size, or 0 when the harness cannot report it. */
   Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
@@ -974,14 +1030,34 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
     // the session's task registry, which drives one `backgroundTaskMachine` per
     // task; putting them in a message would tie a task to a turn that has
     // already ended.
-    Match.tag("BackgroundTaskStarted", () => msg),
-    Match.tag("BackgroundTaskProgress", () => msg),
-    Match.tag("BackgroundTaskSettled", () => msg),
-    Match.tag("BackgroundTasksChanged", () => msg),
+    //
+    // Folded as ONE arm rather than four. `pipe` has a fixed maximum arity, and
+    // this chain sits close to it — adding a 29th argument silently drops every
+    // overload, which infers the match subject as `never` and reports errors on
+    // unrelated arms at the top of the chain. Grouping tags that share a handler
+    // keeps headroom for the next event that needs adding.
+    Match.tag(
+      "BackgroundTaskStarted",
+      "BackgroundTaskProgress",
+      "BackgroundTaskSettled",
+      "BackgroundTasksChanged",
+      () => msg
+    ),
 
     // Live usage is run-level analytics (tracked in the machine/session), not part
     // of the transcript — no-op in the per-message fold.
     Match.tag("Usage", () => msg),
+
+    // A compaction IS part of the transcript: it is the only visible trace that
+    // the model's memory was rebuilt, and the only place the user can check what
+    // survived. It lands on the turn that applied it, above that turn's reply.
+    Match.tag("ContextCompacted", (e) => ({
+      ...msg,
+      parts: [
+        ...parts,
+        { _tag: "Context", digest: e.digest, tokensBefore: e.tokensBefore } as ContextPart
+      ]
+    })),
 
     Match.exhaustive
   )

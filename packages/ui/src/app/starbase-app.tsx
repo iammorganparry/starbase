@@ -1,5 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
 import type {
+  ContextConfig,
+  ContextSnapshot,
   CliInfo,
   CliKind,
   CreateSessionFromIssueInput,
@@ -82,6 +84,16 @@ export interface StarbaseAppProps {
   githubConfig?: GithubConfig | null
   /** Persist GitHub preferences; presence wires the GitHub settings entry point. */
   onSaveGithubConfig?: (config: GithubConfig) => Promise<void> | void
+  /** Auto-compaction levers, persisted to `WorkspaceConfig.context`. */
+  contextConfig?: ContextConfig | null
+  onSaveContextConfig?: (config: ContextConfig) => Promise<void> | void
+  /** Live per-session context readings, so the budget can be set against reality. */
+  contextSessions?: ReadonlyArray<{
+    id: string
+    title: string
+    cli: CliKind
+    snapshot: ContextSnapshot
+  }>
   /** Persisted git preferences (for the settings modal's Git section). */
   gitConfig?: GitConfig | null
   /** Persist git preferences (the "share checked-out branches" lever). */
@@ -217,6 +229,9 @@ export function StarbaseApp({
   onLoadUsage,
   githubConfig,
   onSaveGithubConfig,
+  contextConfig,
+  onSaveContextConfig,
+  contextSessions,
   gitConfig,
   onSaveGitConfig,
   notificationsConfig,
@@ -442,6 +457,9 @@ export function StarbaseApp({
               git={gitConfig}
               rechecking={ghRechecking}
               onRecheck={onRecheckGh ? handleRecheckGh : undefined}
+              context={contextConfig}
+              onSaveContext={onSaveContextConfig}
+              contextSessions={contextSessions}
               onSaveGithub={onSaveGithubConfig}
               onSaveGit={onSaveGitConfig}
               notifications={notificationsConfig}

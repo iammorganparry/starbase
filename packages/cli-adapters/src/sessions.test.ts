@@ -255,6 +255,88 @@ describe("SessionStore", () => {
    * something unrelated or error — and `plan` mode is Claude-only. Both must be
    * reconciled atomically with the switch, or the next turn runs wrong.
    */
+  /**
+   * Context accounting has to survive a restart. Until now `tokens` was written
+   * as `0` at creation and never touched again, while the real reading lived only
+   * in renderer state — so a session reopened at 290k read as 0 and would happily
+   * run to the hard ceiling before anything noticed.
+   */
+  describe("setContextTokens / clearResumeId", () => {
+    it("persists the latest context reading across a fresh read", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Long Runner" }))
+          yield* SessionStore.setContextTokens(created.id, 290_000)
+          return created.id
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      // Fresh provide → reads sessions.json from disk, i.e. survives a restart.
+      const reread = await runExit(
+        SessionStore.get(exit.value).pipe(Effect.provide(SessionStore.Default)),
+        temp.layer
+      )
+      expect(reread._tag).toBe("Success")
+      if (reread._tag !== "Success") return
+      expect(reread.value.contextTokens).toBe(290_000)
+    })
+
+    // A LATEST reading, never a high-water mark: compaction legitimately shrinks
+    // it, and that drop is the signal the feature worked.
+    it("lets the reading fall, because compaction is supposed to shrink it", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Compacted" }))
+          yield* SessionStore.setContextTokens(created.id, 290_000)
+          yield* SessionStore.setContextTokens(created.id, 12_000)
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.contextTokens).toBe(12_000)
+    })
+
+    it("ignores a garbage reading rather than persisting NaN", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Garbage" }))
+          yield* SessionStore.setContextTokens(created.id, 5_000)
+          yield* SessionStore.setContextTokens(created.id, Number.NaN)
+          yield* SessionStore.setContextTokens(created.id, -1)
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.contextTokens).toBe(5_000)
+    })
+
+    // How compaction reseeds: drop the harness thread, keep everything else. The
+    // transcript on disk is deliberately untouched.
+    it("drops the resume id so the next turn starts a fresh conversation", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Reseeded" }))
+          yield* SessionStore.setResumeId(created.id, "thread_abc")
+          yield* SessionStore.clearResumeId(created.id)
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.resumeId).toBeUndefined()
+      // The session itself is otherwise intact — only the thread pointer went.
+      expect(exit.value.title).toBe("Reseeded")
+      expect(exit.value.cli).toBe("claude")
+    })
+  })
+
   describe("setHarness", () => {
     it("keeps the resume id when only the model changes", async () => {
       const exit = await runExit(

@@ -38,6 +38,7 @@ import {
   ReviewService,
   ReviewStore,
   SessionStore,
+  ContextManager,
   setOpencodeAuth,
   SkillsService,
   TerminalService,
@@ -1206,6 +1207,21 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Opencode.listProviders": () => opencodeListProviders(),
   "Opencode.setAuth": ({ providerId, key }) => opencodeSetAuth(providerId, key),
   "Usage.get": () => Effect.flatMap(DiscoveryService.list(), (clis) => UsageService.get(clis)),
+  "Context.state": ({ sessionId }) => ContextManager.snapshot(sessionId),
+  // Fire-and-forget by design: the digest builds on a background fiber and lands
+  // on the next turn, so the button returns instantly rather than parking the UI
+  // on a summary the user is not waiting for.
+  "Context.compactNow": ({ sessionId }) => ContextManager.compactNow(sessionId),
+  "Config.setContext": (context) => ConfigService.setContext(context),
+  // Returns the updated session so the renderer can patch its cache without a
+  // refetch, matching every other session mutation.
+  "Sessions.setAutoCompact": ({ id, autoCompact }) =>
+    SessionStore.setAutoCompact(id, autoCompact).pipe(
+      Effect.zipRight(SessionStore.get(id)),
+      Effect.catchTag("SessionNotFoundError", (cause) =>
+        Effect.fail(new GitError({ message: "Session not found", cause }))
+      )
+    ),
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),
   "Config.setGit": (git) => ConfigService.setGit(git),
@@ -1356,8 +1372,13 @@ const ServerProtocolLive = Layer.effect(
 /**
  * The running RPC server: the group's handlers served over the IPC protocol.
  * Building this layer forks the server daemon and registers the `ipcMain`
- * listener; it still requires `CommandExecutor | DiscoveryService | SessionStore`,
- * which `AppLayer` provides.
+ * listener; it still requires `CommandExecutor | DiscoveryService | SessionStore
+ * | ContextManager`, which `AppLayer` provides.
+ *
+ * `ContextManager` must be imported as a VALUE here even though this file never
+ * calls it: it appears in the inferred requirement set via the handlers, and
+ * TypeScript cannot NAME an inferred type that reaches into a workspace
+ * package's internals without a reference to it in scope.
  */
 export const RpcServerLive = RpcServer.layer(StarbaseRpcs).pipe(
   Layer.provide(HandlersLayer),

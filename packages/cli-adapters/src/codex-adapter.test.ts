@@ -1,6 +1,12 @@
 import type { ThreadEvent } from "@openai/codex-sdk"
 import { describe, expect, it } from "vitest"
-import { codexEventToStreamEvents, mapCodexPolicy } from "./codex-adapter.js"
+import {
+  codexContextTokens,
+  codexEventToStreamEvents,
+  mapCodexPolicy,
+  rememberThread,
+  threadIdFor
+} from "./codex-adapter.js"
 
 /**
  * Codex's live path needs a real `codex` login, so we test the PURE seam — the
@@ -116,16 +122,89 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([{ _tag: "Thinking", text: "planning", seconds: null, done: true }])
   })
 
-  it("does not present aggregate turn usage as current context size", () => {
+  // A Codex turn resends the whole thread, so the turn's `input_tokens` IS the
+  // conversation as the model saw it; adding the reply gives what the next turn
+  // inherits. Without this, Codex sessions could never take part in
+  // auto-compaction — the reading was hard-coded to 0.
+  it("reports context occupancy from turn.completed", () => {
     expect(
       codexEventToStreamEvents(
         ev({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 10 } }),
         "s1"
       )
-    ).toStrictEqual([{ _tag: "Done", costUsd: 0, tokens: 0 }])
+    ).toStrictEqual([
+      { _tag: "Usage", tokens: 140 },
+      { _tag: "Done", costUsd: 0, tokens: 140 }
+    ])
     expect(
       codexEventToStreamEvents(ev({ type: "turn.failed", error: { message: "boom" } }), "s1")
     ).toStrictEqual([{ _tag: "Failed", message: "boom" }])
+  })
+
+  /**
+   * `fresh` was silently ignored here while Claude and opencode honoured it, so
+   * BOTH one-shot callers quietly no-opped on Codex: the adversarial reviewer
+   * resumed the previous review's thread, and a compaction resumed the very
+   * conversation it had just summarised — paying for the digest and shedding
+   * nothing. Only an app restart cleared it.
+   */
+  describe("fresh threads", () => {
+    it("resumes the live thread on a normal turn", () => {
+      const resume = new Map<string, string>([["s1", "thread_live"]])
+      expect(threadIdFor({ resume, sessionId: "s1", resumeId: "thread_persisted" })).toBe("thread_live")
+    })
+
+    it("falls back to the persisted id after a restart cleared the map", () => {
+      expect(
+        threadIdFor({ resume: new Map(), sessionId: "s1", resumeId: "thread_persisted" })
+      ).toBe("thread_persisted")
+    })
+
+    // The map WINS over the spec, so clearing the persisted id is not enough on
+    // its own — this is the case that was broken.
+    it("starts a brand-new thread when fresh, even with a live thread in the map", () => {
+      const resume = new Map<string, string>([["s1", "thread_live"]])
+      expect(
+        threadIdFor({ resume, sessionId: "s1", resumeId: "thread_persisted", fresh: true })
+      ).toBeUndefined()
+    })
+
+    it("leaves no trace, so the next turn cannot resume the one-shot thread", () => {
+      const resume = new Map<string, string>()
+      rememberThread({ resume, sessionId: "s1", threadId: "thread_oneshot", fresh: true })
+      expect(resume.has("s1")).toBe(false)
+      rememberThread({ resume, sessionId: "s1", threadId: "thread_real" })
+      expect(resume.get("s1")).toBe("thread_real")
+    })
+  })
+
+  describe("codexContextTokens", () => {
+    // The subset trap. `cached_input_tokens` is part of `input_tokens` (codex
+    // derives non-cached input by subtracting it) and `reasoning_output_tokens`
+    // is part of `output_tokens`. Summing all four double-counts both — and on a
+    // long, heavily-cached session the cache IS most of the input, so the reading
+    // would run to nearly double reality and compact at half the real budget.
+    it("excludes cached input, which is a subset of input_tokens", () => {
+      expect(
+        codexContextTokens({ input_tokens: 100_000, cached_input_tokens: 90_000, output_tokens: 2_000 })
+      ).toBe(102_000)
+    })
+
+    it("excludes reasoning output, which is a subset of output_tokens", () => {
+      expect(
+        codexContextTokens({ input_tokens: 1_000, output_tokens: 500, reasoning_output_tokens: 400 })
+      ).toBe(1_500)
+    })
+
+    // A malformed or partial usage payload must read as 0 — which `contextPhase`
+    // treats as idle — rather than NaN, which would poison every comparison
+    // downstream and silently disable compaction for the session.
+    it("degrades to zero on a missing or malformed payload", () => {
+      expect(codexContextTokens({})).toBe(0)
+      expect(codexContextTokens({ input_tokens: Number.NaN, output_tokens: 5 })).toBe(5)
+      expect(codexContextTokens({ input_tokens: -10, output_tokens: 5 })).toBe(5)
+      expect(codexContextTokens(undefined as never)).toBe(0)
+    })
   })
 
   it("ignores intermediate events with no card to fill (turn.started, a non-command item.updated)", () => {

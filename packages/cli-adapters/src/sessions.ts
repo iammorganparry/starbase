@@ -369,6 +369,46 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       /** Persist the harness session id so the conversation resumes after a restart. */
       const setResumeId = (id: string, resumeId: string) => update(id, (s) => ({ ...s, resumeId }))
 
+      /**
+       * Drop the harness session id so the NEXT turn starts a fresh conversation.
+       *
+       * This is how compaction reseeds: the transcript on disk is untouched, but
+       * the harness is asked to begin again from a summary. `undefined` rather
+       * than null because `resumeId` is `optional` — writing null would persist a
+       * key the schema rejects on the next read.
+       */
+      const clearResumeId = (id: string) => update(id, (s) => ({ ...s, resumeId: undefined }))
+
+      /**
+       * Persist the session's latest context-window OCCUPANCY.
+       *
+       * Distinct from `addUsage`, which accrues the session's lifetime totals.
+       * That number only grows; this one must be able to fall, because a
+       * compaction shrinking it is exactly the outcome being recorded. Writing
+       * both to `tokens` would make a compaction read as negative usage on the
+       * sidebar and make the meter measure a lifetime sum as a working set.
+       *
+       * It has to be persisted at all because the reading otherwise lived only
+       * in renderer state and died on reload — a session reopened at 290k would
+       * read as 0 and run to the hard ceiling before anything noticed.
+       */
+      const setContextTokens = (id: string, contextTokens: number) =>
+        update(id, (s) =>
+          Number.isFinite(contextTokens) && contextTokens >= 0 ? { ...s, contextTokens } : s
+        )
+
+      /**
+       * Pin auto-compaction on or off for this session; `null` clears the
+       * override so it follows the global setting again.
+       *
+       * `undefined` on clear, not null — `autoCompact` is `optional`, so writing
+       * null would persist a key the schema rejects on the next read, and
+       * `TranscriptStore`-style best-effort decoding would then drop the whole
+       * session record.
+       */
+      const setAutoCompact = (id: string, autoCompact: boolean | null) =>
+        update(id, (s) => ({ ...s, autoCompact: autoCompact ?? undefined }))
+
       /** Persist an auto-generated title (leaves `autoTitle` untouched). */
       const setTitle = (id: string, title: string) => update(id, (s) => ({ ...s, title }))
 
@@ -483,6 +523,9 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         addUsage,
         setHarness,
         setResumeId,
+        clearResumeId,
+        setContextTokens,
+        setAutoCompact,
         setTitle,
         renameTitle,
         setStatus,
