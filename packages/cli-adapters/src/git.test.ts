@@ -3,8 +3,8 @@ import { existsSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { GitService } from "./git.js"
-import { advanceOrigin, initGitRepo, initGitRepoWithOrigin, mkTemp, runExit, withTempRoot } from "./test-support.js"
+import { GitService, mainTreeHoldsBranch } from "./git.js"
+import { advanceOrigin, failureOf, initGitRepo, initGitRepoWithOrigin, mkTemp, runExit, withTempRoot } from "./test-support.js"
 
 /**
  * GitService.createWorktree runs real `git worktree add`. We assert the real
@@ -275,5 +275,100 @@ describe("GitService.commitsSince", () => {
     const exit = await since(dir, base)
     if (exit._tag !== "Success") throw new Error("expected success")
     expect(exit.value[0]!.subject).toBe("fix(auth): compare tokens with timingSafeEqual - not ===")
+  })
+})
+
+/**
+ * The parse that decides whether a branch is held by the MAIN working tree.
+ * Pure, so these cases need no repo — the integration behaviour is asserted
+ * separately against real git below.
+ */
+describe("mainTreeHoldsBranch", () => {
+  // `git worktree list --porcelain`: blank-line separated records, main first.
+  const porcelain = [
+    "worktree /repos/widget\nHEAD abc123\nbranch refs/heads/main",
+    "worktree /starbase/worktrees/widget/fix-auth\nHEAD def456\nbranch refs/heads/starbase/fix-auth",
+    "worktree /starbase/worktrees/widget/detached\nHEAD 789abc\ndetached"
+  ].join("\n\n")
+
+  it("reports a branch held by the main working tree", () => {
+    expect(mainTreeHoldsBranch(porcelain, "main")).toBe(true)
+  })
+
+  it("does NOT report a branch held only by another session worktree", () => {
+    // Sharing between two sessions is the case the lever legitimately opts into.
+    expect(mainTreeHoldsBranch(porcelain, "starbase/fix-auth")).toBe(false)
+  })
+
+  it("does not match a branch nobody has checked out", () => {
+    expect(mainTreeHoldsBranch(porcelain, "feature/new")).toBe(false)
+  })
+
+  it("does not confuse a branch whose name PREFIXES another", () => {
+    // `refs/heads/main` must not match a query for `mai`, nor `main` match a
+    // main tree sitting on `main-2` — the compare is on the whole ref line.
+    expect(mainTreeHoldsBranch(porcelain, "mai")).toBe(false)
+    expect(
+      mainTreeHoldsBranch("worktree /repos/widget\nHEAD abc123\nbranch refs/heads/main-2", "main")
+    ).toBe(false)
+  })
+
+  it("treats a detached main working tree as holding nothing", () => {
+    expect(mainTreeHoldsBranch("worktree /repos/widget\nHEAD abc123\ndetached", "main")).toBe(false)
+  })
+
+  it("folds empty output to false rather than throwing", () => {
+    expect(mainTreeHoldsBranch("", "main")).toBe(false)
+  })
+})
+
+/**
+ * checkoutBranch against real git. The guard exists to stop an agent's commits
+ * moving the branch the developer is standing on, so the assertion that matters
+ * is that the refusal happens BEFORE any checkout runs.
+ */
+describe("GitService.checkoutBranch", () => {
+  let temp: ReturnType<typeof withTempRoot>
+  let repos: ReturnType<typeof mkTemp>
+  beforeEach(() => {
+    temp = withTempRoot()
+    repos = mkTemp("starbase-repos-")
+  })
+  afterEach(() => {
+    temp.cleanup()
+    repos.cleanup()
+  })
+
+  const git = (dir: string, args: Array<string>) =>
+    execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" })
+
+  const checkout = (cwd: string, branch: string) =>
+    runExit(
+      GitService.checkoutBranch(cwd, branch).pipe(Effect.provide(GitService.Default)),
+      temp.layer
+    )
+
+  it("refuses a branch checked out in the main working tree", async () => {
+    const repo = initGitRepo(join(repos.dir, "widget"))
+    // The developer's own checkout is on `main`; a session worktree sits beside it.
+    const wt = join(temp.root, "wt")
+    git(repo, ["worktree", "add", "--detach", wt, "main"])
+
+    const exit = await checkout(wt, "main")
+    expect(exit._tag).toBe("Failure")
+    expect(failureOf(exit)?.message).toMatch(/main working tree/i)
+    // The worktree must be untouched — still detached, not sharing `main`.
+    expect(git(wt, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("HEAD")
+  })
+
+  it("allows a branch no other worktree holds", async () => {
+    const repo = initGitRepo(join(repos.dir, "widget"))
+    git(repo, ["branch", "feature/x"])
+    const wt = join(temp.root, "wt")
+    git(repo, ["worktree", "add", "--detach", wt, "main"])
+
+    const exit = await checkout(wt, "feature/x")
+    expect(exit._tag).toBe("Success")
+    expect(git(wt, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/x")
   })
 })
