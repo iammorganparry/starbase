@@ -120,7 +120,10 @@ describe("SessionStore", () => {
 
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
-    expect(basename(exit.value.worktreePath!).length).toBeLessThanOrEqual(120)
+    // MAX_SLUG (100) plus the "-<base36 stamp>" suffix. Pinned tightly rather
+    // than to a round number, so raising the cap has to be a deliberate edit
+    // here too.
+    expect(basename(exit.value.worktreePath!).length).toBeLessThanOrEqual(100 + 1 + 12)
     // Truncation must not leave a trailing dash on the branch name.
     expect(exit.value.branch).not.toMatch(/-$/)
     expect(existsSync(exit.value.worktreePath!)).toBe(true)

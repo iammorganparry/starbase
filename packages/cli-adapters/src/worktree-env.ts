@@ -105,7 +105,16 @@ const isForeignBin = (entry: string, worktreePath: string | undefined): boolean 
   const normalised = resolve(entry)
   const tail = `${sep}node_modules${sep}.bin`
   if (!normalised.endsWith(tail)) return false
-  if (worktreePath === undefined) return true
+  // A BLANK worktree is "no worktree", not "the current directory".
+  //
+  // `resolve("")` returns the process cwd — which for Starbase is the checkout
+  // it was launched from. Treating that as "our" worktree would mark the
+  // launcher's own `.bin` as legitimately ours and keep it, silently
+  // reinstating the exact leak this module exists to close. Callers pass
+  // `spec.cwd ?? undefined`, which converts null but NOT "", so without this
+  // the safety of the whole module rests on an unrelated guard elsewhere
+  // happening to throw first.
+  if (worktreePath === undefined || worktreePath.trim() === "") return true
   return !isWithin(resolve(worktreePath), normalised)
 }
 

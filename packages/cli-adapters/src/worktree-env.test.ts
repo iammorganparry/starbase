@@ -142,6 +142,27 @@ describe("worktreeEnv", () => {
   })
 
   it("survives an environment with no PATH at all", () => {
-    expect(() => worktreeEnv({ HOME: "/Users/dev" }, WORKTREE)).not.toThrow()
+    const env = worktreeEnv({ HOME: "/Users/dev", npm_config_registry: "x" }, WORKTREE)
+
+    // Asserting on the RESULT, not merely that nothing threw: a `not.toThrow()`
+    // here would also pass if the function silently returned nothing useful.
+    expect(env).not.toHaveProperty("PATH")
+    expect(env.HOME).toBe("/Users/dev")
+    expect(env.npm_config_registry).toBeUndefined()
+  })
+
+  /**
+   * A blank worktree must mean "no worktree", never "the current directory".
+   *
+   * `resolve("")` is the process cwd — the checkout Starbase was launched from
+   * — so treating `""` as a worktree would mark the LAUNCHER's own `.bin` as
+   * ours and keep it, reinstating the leak. Three of the call sites pass
+   * `spec.cwd ?? undefined`, which converts null but not `""`.
+   */
+  it("treats a blank worktree as no worktree, not as the process cwd", () => {
+    const launcherBin = `${process.cwd()}/node_modules/.bin`
+    const env = worktreeEnv({ ...LEAKED, PATH: [launcherBin, "/usr/bin"].join(delimiter) }, "")
+
+    expect(env.PATH!.split(delimiter)).toEqual(["/usr/bin"])
   })
 })
