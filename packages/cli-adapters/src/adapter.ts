@@ -259,9 +259,7 @@ export const scriptedRun =
       // nowhere to put a marker that a real harness wouldn't also receive.
       if (spec.prompt.includes("You are compacting a coding session's context")) {
         yield* emit({ _tag: "Started", sessionId })
-        yield* emit({
-          _tag: "Assistant",
-          text: `\`\`\`json
+        const digestReply = `\`\`\`json
 {
   "goal": "Add rate limiting to the refund endpoint",
   "decisions": ["Reused the token bucket in lib/ratelimit.ts rather than adding a dependency"],
@@ -270,7 +268,17 @@ export const scriptedRun =
   "preferences": ["Prefers Effect over raw async"]
 }
 \`\`\``
-        })
+        // Stream the reply as many small deltas, NOT one blob. A real harness
+        // emits assistant text token by token (`text_delta`), so a faithful
+        // scripted digest must too — otherwise the e2e path never exercises how
+        // the manager REASSEMBLES those fragments. Fixed-size chunks guarantee a
+        // boundary lands mid-string, which is exactly the shape that regressed:
+        // reassembling with "\n" instead of "" put a raw newline inside a JSON
+        // string and made every real digest fail to parse. Chunking the whole
+        // string keeps this true even if the reply above is later edited.
+        for (let i = 0; i < digestReply.length; i += 17) {
+          yield* emit({ _tag: "Assistant", text: digestReply.slice(i, i + 17) })
+        }
         yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
         return
       }

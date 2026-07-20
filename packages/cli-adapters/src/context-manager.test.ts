@@ -78,6 +78,29 @@ const recordingAdapter = (
     } satisfies CliAdapterShape)
   )
 
+/**
+ * A `CliAdapter` that STREAMS its reply as several `Assistant` deltas — the shape
+ * a real harness produces (text arrives token by token via `text_delta`), and the
+ * one `recordingAdapter` never exercised because it emits the whole reply at once.
+ *
+ * This is the regression harness for the join bug: the manager concatenates these
+ * fragments, and if it joins them with anything but "" a boundary that falls
+ * inside a JSON string value corrupts the reply into invalid JSON.
+ */
+const streamingAdapter = (parts: ReadonlyArray<string>): Layer.Layer<CliAdapter> =>
+  Layer.succeed(
+    CliAdapter,
+    CliAdapter.of({
+      run: (_sessionId, _spec, ctx) =>
+        Effect.gen(function* () {
+          for (const text of parts) {
+            yield* ctx.emit({ _tag: "Assistant", text } as StreamEvent)
+          }
+        }),
+      stop: () => Effect.void
+    } satisfies CliAdapterShape)
+  )
+
 const layersFor = (adapter: Layer.Layer<CliAdapter>) =>
   Layer.mergeAll(
     ContextManager.Default,
@@ -244,6 +267,33 @@ describe("ContextManager.observe", () => {
     expect(digest!.goal).toContain("rate limiting")
     // The digest covers the transcript as it stood when it was built.
     expect(digest!.throughMessageId).toBe("m2")
+  })
+
+  /**
+   * The regression: a real harness streams its reply token by token, so the
+   * manager sees many `Assistant` deltas, not one. Joining them with "\n" put a
+   * raw newline inside the "goal" string below — invalid JSON — so `parseDigest`
+   * failed on EVERY real digest while the single-blob scripted path stayed green.
+   * The boundaries here deliberately split the goal string and the JSON syntax.
+   */
+  it("parses a digest whose reply streamed across deltas", async () => {
+    const parts = [
+      "```json\n{\n  \"goal\": \"Add rate",
+      " limiting to the refund route\",",
+      "\n  \"decisions\": [], \"filesTouched\": [],",
+      " \"openThreads\": [], \"preferences\": []\n}\n```"
+    ]
+    const digest = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* ContextManager.settle(SESSION, 180_000)
+        yield* awaitDigest()
+        return yield* ContextManager.applyIfReady(SESSION)
+      }),
+      streamingAdapter(parts)
+    )
+    expect(digest).not.toBeNull()
+    expect(digest!.goal).toBe("Add rate limiting to the refund route")
   })
 
   /**
