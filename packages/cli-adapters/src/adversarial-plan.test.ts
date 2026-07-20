@@ -53,7 +53,9 @@ const MOONSHOT = reach("moonshot", "opencode", "openrouter/moonshot/kimi-k3")
  * without a harness. Keyed by role because the same session drives three runs.
  */
 const fakeAdapter = (
-  replies: Partial<Record<"propose" | "attack" | "revise", string | CliExecError>>
+  replies: Partial<
+    Record<"propose" | "attack" | "revise", string | CliExecError | { readonly failure: string }>
+  >
 ): Layer.Layer<CliAdapter> =>
   Layer.succeed(CliAdapter, {
     run: (sessionId, _spec, ctx) => {
@@ -65,6 +67,7 @@ const fakeAdapter = (
       const reply = replies[role]
       if (reply === undefined) return Effect.void
       if (reply instanceof CliExecError) return Effect.fail(reply)
+      if (typeof reply !== "string") return ctx.emit({ _tag: "Failed", message: reply.failure })
       return ctx.emit({ _tag: "Assistant", text: reply, agentId: undefined })
     },
     stop: () => Effect.void
@@ -309,6 +312,35 @@ describe("AdversarialPlanService", () => {
     // Still a plan — but every step is left UNEXAMINED, not marked clean.
     expect(plan?.steps).toHaveLength(2)
     expect(plan?.steps[0]!.challenges).toBeUndefined()
+  })
+
+  it("surfaces the proposer harness's actionable failure", async () => {
+    const { events } = await runRound({
+      propose: new CliExecError({
+        kind: "claude",
+        message: "Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+      })
+    })
+
+    expect(events).toContainEqual({
+      _tag: "Failed",
+      message:
+        "The Proposing step failed: Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+    })
+  })
+
+  it("does not swallow a failed lifecycle event from a Gigaplan role", async () => {
+    const { events } = await runRound({
+      propose: {
+        failure: "Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+      }
+    })
+
+    expect(events).toContainEqual({
+      _tag: "Failed",
+      message:
+        "The Proposing step failed: Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+    })
   })
 
   it("does not present an unparseable critique as a clean bill of health", async () => {

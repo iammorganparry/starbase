@@ -7,6 +7,7 @@ import { contextBridge, ipcRenderer } from "electron"
 
 const RPC_CHANNEL = "starbase/rpc"
 const AUTH_COMPLETE_CHANNEL = "starbase/auth-complete"
+const NOTIFICATION_ACTIVATED_CHANNEL = "starbase/notification-activated"
 
 interface AuthCompletePayload {
   readonly ok: boolean
@@ -34,5 +35,16 @@ contextBridge.exposeInMainWorld("starbase", {
       cb(payload)
     ipcRenderer.on(AUTH_COMPLETE_CHANNEL, listener)
     return () => ipcRenderer.removeListener(AUTH_COMPLETE_CHANNEL, listener)
+  },
+  /**
+   * Subscribe to notification clicks. Main has already focused the window; the
+   * payload names the session the operator was told about, so the renderer can
+   * select it. Returns an unsubscribe fn.
+   */
+  onNotificationActivated: (cb: (payload: { readonly sessionId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { readonly sessionId: string }) =>
+      cb(payload)
+    ipcRenderer.on(NOTIFICATION_ACTIVATED_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(NOTIFICATION_ACTIVATED_CHANNEL, listener)
   }
 })

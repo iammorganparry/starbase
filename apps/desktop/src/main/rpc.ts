@@ -52,6 +52,7 @@ import { applyStreamEvent, assistantMessage, GhError, GitError, PlanError, plann
 import type {
   AdversarialReview,
   CliKind,
+  ExecutionMode,
   Message,
   Plan,
   PlanRound,
@@ -75,7 +76,8 @@ import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
 import { Effect, Layer, Mailbox, Option, Runtime, Stream } from "effect"
 import type { WebContents } from "electron"
-import { ipcMain } from "electron"
+import { BrowserWindow, ipcMain } from "electron"
+import { showNotification, shouldNotify } from "./notifications.js"
 import { BrowserPreviewService } from "./browser-preview.js"
 import { DialogService } from "./dialog.js"
 
@@ -557,7 +559,8 @@ type PlanExecuteEnv =
  */
 export const planExecute = (
   sessionId: string,
-  planId: string
+  planId: string,
+  executionMode?: ExecutionMode
 ): Stream.Stream<StreamEvent, PlanError, PlanExecuteEnv> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -633,6 +636,9 @@ export const planExecute = (
         )
 
       const executor = yield* PlanExecutor
+      if (executionMode !== undefined) {
+        yield* SessionStore.setMode(sessionId, executionMode).pipe(Effect.ignore)
+      }
       return executor.run({
         sessionId,
         repo: session.repo,
@@ -644,6 +650,7 @@ export const planExecute = (
         // the same identity Gigaplan speaks as, rather than an arbitrary pick.
         fallback: resolveOrchestrator(config),
         binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null,
+        executionMode,
         // Wired, not just declared. `onStepDone` documents itself as the thing
         // that makes progress survive a crash mid-run, and nothing was passing
         // it — so a 12-step plan killed after step 9 came back with the plan
@@ -1181,8 +1188,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(AgentRunner, (runner) => runner.commentPlanStep(sessionId, planId, stepId, body)),
   "Agent.revisePlan": ({ sessionId, planId }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.revisePlan(sessionId, planId)),
-  "Agent.approvePlan": ({ sessionId, planId }) =>
-    Effect.flatMap(AgentRunner, (runner) => runner.approvePlan(sessionId, planId)),
+  "Agent.approvePlan": ({ sessionId, planId, executionMode }) =>
+    Effect.flatMap(AgentRunner, (runner) => runner.approvePlan(sessionId, planId, executionMode)),
   "Agent.resumePlan": ({ sessionId, planId }) =>
     Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.resumePlan(sessionId, planId))),
   "Agent.setHarness": ({ sessionId, cli, model }) =>
@@ -1218,6 +1225,34 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Gh.status": () => GhService.status(),
   "Config.setGithub": (github) => ConfigService.setGithub(github),
   "Config.setGit": (git) => ConfigService.setGit(git),
+  "Config.setNotifications": (notifications) => ConfigService.setNotifications(notifications),
+  /**
+   * Deliver an OS notification. Main decides whether to actually show it: it
+   * owns the window's focus state, which the renderer cannot observe reliably,
+   * and the stored prefs. A config read that fails must not swallow the alert,
+   * so it falls back to `undefined` — which `shouldNotify` reads as "defaults".
+   */
+  "Notify.show": ({ sessionId, kind, title, body, isActiveSession }) =>
+    ConfigService.get().pipe(
+      Effect.catchAll(() => Effect.succeed(null)),
+      Effect.map((config) => config?.notifications),
+      Effect.flatMap((prefs) =>
+        Effect.sync(() => {
+          const win = BrowserWindow.getAllWindows()[0] ?? null
+          if (
+            !shouldNotify({
+              kind,
+              windowFocused: win?.isFocused() ?? false,
+              isActiveSession,
+              config: prefs
+            })
+          ) {
+            return
+          }
+          showNotification({ sessionId, kind, title, body }, prefs)
+        })
+      )
+    ),
   "Config.setStarredRepos": ({ paths }) => ConfigService.setStarredRepos(paths),
   "Config.setCollapsedRepos": ({ paths }) => ConfigService.setCollapsedRepos(paths),
   "Config.setLastRepoPath": ({ path }) => ConfigService.setLastRepoPath(path),
@@ -1236,7 +1271,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Plan.adversarial": ({ sessionId, brief }) => planAdversarial(sessionId, brief),
   "Plan.round": ({ sessionId }) => planRound(sessionId),
   "Plan.readiness": () => planReadiness,
-  "Plan.execute": ({ sessionId, planId }) => planExecute(sessionId, planId),
+  "Plan.execute": ({ sessionId, planId, executionMode }) =>
+    planExecute(sessionId, planId, executionMode),
   "Review.run": ({ sessionId, force }) => reviewRun(sessionId, force),
   // Unwrapped from the service like `Terminal.attach` — the reviewer outlives any
   // one watcher, so the stream attaches to it rather than starting it.

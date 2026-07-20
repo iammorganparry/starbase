@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
@@ -10,6 +10,7 @@ import type {
   GhStatus,
   GitConfig,
   GithubConfig,
+  NotificationsConfig,
   ProviderConfig,
   Session,
   SessionActivity,
@@ -32,8 +33,10 @@ import { usePlanSessions } from "./plan-presence.js"
 import { disposeConversationActor } from "./conversation-registry.js"
 import { clearDraft } from "./draft-store.js"
 import { onSessionUpdate } from "./session-updates.js"
+import { setActiveSessionId } from "./active-session.js"
+import { prNotification } from "./notifier.js"
 import { completedSessionIds } from "./pr-refresh.js"
-import { issuesToCloseOnMerge } from "./pr-sweep.js"
+import { issuesToCloseOnMerge, prsToNotify } from "./pr-sweep.js"
 import { routeReviewToAgent } from "./auto-route.js"
 import { reviewQueryKey } from "./review-routing.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
@@ -72,6 +75,28 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   // rendering the pre-write status (its fallback when a session has no live
   // activity) until the next restart.
   useEffect(() => onSessionUpdate((session) => send({ type: "SESSION_UPDATED", session })), [send])
+
+  // Clicking an OS notification focuses the window (main does that) and lands on
+  // the session it was about. The nonce makes a repeat click on the SAME session
+  // a fresh request — see `selectSessionRequest`.
+  const [selectRequest, setSelectRequest] = useState<{
+    sessionId: string
+    nonce: number
+  } | null>(null)
+  useEffect(
+    () =>
+      window.starbase.onNotificationActivated(({ sessionId }) =>
+        setSelectRequest((prev) => ({ sessionId, nonce: (prev?.nonce ?? 0) + 1 }))
+      ),
+    []
+  )
+  // Keep the module-level cell the conversation registry reads in sync. It can't
+  // use a hook: it outlives every component. See `active-session.ts`.
+  const onActiveSessionChange = useCallback(
+    (id: string | null) => setActiveSessionId(id),
+    []
+  )
+
   const liveActivity = useSessionActivities()
   const liveDiff = useSessionDiffs()
   const planSessions = usePlanSessions()
@@ -91,6 +116,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
 
   const githubConfig = configQuery.data?.github ?? null
   const gitConfig = configQuery.data?.git ?? null
+  const notificationsConfig = configQuery.data?.notifications ?? null
   const providersConfig = configQuery.data?.providers ?? null
   const contextConfig = configQuery.data?.context ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
@@ -108,6 +134,10 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     })
   const saveGitConfig = (config: GitConfig) =>
     rpc.configSetGit(config).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  const saveNotificationsConfig = (config: NotificationsConfig) =>
+    rpc.configSetNotifications(config).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
   const saveProvider = (cli: CliKind, config: ProviderConfig) =>
@@ -384,6 +414,46 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     }
   }, [prStates, sessions])
 
+  // Tell the operator when a session's PR resolves on GitHub. Guarded by its own
+  // ref for the same reason as the issue-closing sweep above: the poll re-runs
+  // every minute and a merged PR stays merged, so without this it would announce
+  // the same merge forever.
+  const notifiedPrsRef = useRef<Set<string>>(new Set())
+  // Whether the first poll of this launch has been absorbed. Everything it
+  // reports is PRE-EXISTING — merged is permanent, but this ref is memory-only,
+  // so without a baseline every launch would re-announce every already-merged
+  // session in the sidebar. The first poll is recorded silently; only later
+  // transitions are news. Same rule the transcript notifier applies to a
+  // restored session.
+  const prBaselineRef = useRef(false)
+  useEffect(() => {
+    // An empty first result is the "still loading" state, not a real baseline —
+    // taking it would let the genuine first result through as an edge.
+    const seeding = !prBaselineRef.current && Object.keys(prStates).length > 0
+    for (const { session, state: prState } of prsToNotify(
+      prStates,
+      sweepTargets,
+      notifiedPrsRef.current
+    )) {
+      notifiedPrsRef.current.add(session.id)
+      if (seeding) continue
+      const plan = prNotification(session.title, prState)
+      void rpc
+        .notifyShow({
+          sessionId: session.id,
+          kind: plan.kind,
+          title: plan.title,
+          body: plan.body,
+          // A resolved PR is worth surfacing even while its session is open —
+          // the merge happened on GitHub, not here, so there is nothing on
+          // screen that already told them.
+          isActiveSession: false
+        })
+        .catch(() => {})
+    }
+    if (seeding) prBaselineRef.current = true
+  }, [prStates, sweepTargets])
+
   if (state.matches("loading") || state.matches("starting")) {
     return <LoadingScreen />
   }
@@ -417,6 +487,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     <>
     <StarbaseApp
       clis={clis}
+      selectSessionRequest={selectRequest}
+      onActiveSessionChange={onActiveSessionChange}
       sessions={sessions}
       user={user}
       onSignOut={onSignOut}
@@ -436,6 +508,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveGithubConfig={saveGithubConfig}
       gitConfig={gitConfig}
       onSaveGitConfig={saveGitConfig}
+      notificationsConfig={notificationsConfig}
+      onSaveNotificationsConfig={saveNotificationsConfig}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
       contextConfig={contextConfig}

@@ -3,6 +3,7 @@ import type { AdversarialReview, ReviewFinding, ReviewPhase, ReviewSeverity } fr
 import { destinationOf, findingLocation, partitionFindings, resolvedCount } from "@starbase/core"
 import {
   AlertTriangle,
+  ChevronRight,
   CornerDownRight,
   GitCommitHorizontal,
   type LucideIcon,
@@ -187,6 +188,14 @@ export function ReviewFindingRow({
   const location = findingLocation(finding)
   const outcome = outcomeOf(finding, review, { sent })
   const resolved = outcome.kind === "resolved"
+  // Resolved findings collapse to their title + outcome. The rationale and
+  // suggestion are the bulk of a card, and once a finding is dealt with they are
+  // archive rather than work — left expanded they push the findings that still
+  // need attention (and the merge box below them) off-screen. Re-openable,
+  // because "what was raised and how was it answered" is exactly what you go
+  // looking for when reviewing the fix.
+  const [expanded, setExpanded] = useState(false)
+  const collapsed = resolved && !expanded
   return (
     <div
       data-testid={`finding-${finding.id}`}
@@ -216,21 +225,41 @@ export function ReviewFindingRow({
         )}
       </div>
 
-      <span
-        className={cn(
-          "text-[12.5px] font-semibold leading-[1.35]",
-          resolved ? "text-muted-foreground line-through decoration-dim" : "text-text-bright"
-        )}
-      >
-        {finding.title}
-      </span>
+      {resolved ? (
+        // The title doubles as the disclosure control once resolved. A real
+        // button, so it's reachable by keyboard and announces its state.
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-start gap-[5px] text-left text-[12.5px] font-semibold leading-[1.35] text-muted-foreground line-through decoration-dim"
+        >
+          <ChevronRight
+            size={12}
+            aria-hidden
+            className={cn(
+              "mt-[3px] flex-none no-underline transition-transform",
+              expanded && "rotate-90"
+            )}
+          />
+          <span className="min-w-0 flex-1">{finding.title}</span>
+        </button>
+      ) : (
+        <span className="text-[12.5px] font-semibold leading-[1.35] text-text-bright">
+          {finding.title}
+        </span>
+      )}
 
-      <p className="text-[11.5px] leading-[1.5] text-text">{finding.rationale}</p>
+      {!collapsed && (
+        <>
+          <p className="text-[11.5px] leading-[1.5] text-text">{finding.rationale}</p>
 
-      {finding.suggestion !== null && (
-        <p className="rounded-[3px] border-l border-line bg-editor/40 py-[5px] pl-[7px] pr-[6px] text-[11px] leading-[1.45] text-muted-foreground">
-          {finding.suggestion}
-        </p>
+          {finding.suggestion !== null && (
+            <p className="rounded-[3px] border-l border-line bg-editor/40 py-[5px] pl-[7px] pr-[6px] text-[11px] leading-[1.45] text-muted-foreground">
+              {finding.suggestion}
+            </p>
+          )}
+        </>
       )}
 
       {(outcome.kind !== "manual" || onSendToAgent) && (

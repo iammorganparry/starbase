@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import type { GateDecision, Message, PermissionMode, Plan, Session, StreamEvent } from "@starbase/core"
-import { findApprovedPlan, STOPPED_NOTE } from "@starbase/core"
+import { CliExecError, findApprovedPlan, STOPPED_NOTE } from "@starbase/core"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
@@ -488,6 +488,26 @@ describe("AgentRunner plan mode", () => {
         return (yield* SessionStore.get(SESSION)).mode
       }).pipe(Effect.provide(base()))
     )
+    expect(mode).toBe("auto")
+  })
+
+  it("uses the explicit auto override when approving from another execution mode", async () => {
+    seedSession("accept-edits")
+    const mode = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "accept-edits")
+        yield* runner.setMode(SESSION, "plan")
+        yield* runner.prompt(SESSION, "[[plan]] refactor auth").pipe(
+          Stream.tap((ev) =>
+            ev._tag === "PlanProposed" ? runner.approvePlan(SESSION, ev.plan.id, "auto") : Effect.void
+          ),
+          Stream.runDrain
+        )
+        return (yield* SessionStore.get(SESSION)).mode
+      }).pipe(Effect.provide(base()))
+    )
+
     expect(mode).toBe("auto")
   })
 
@@ -1043,6 +1063,69 @@ const noHarnesses: Layer.Layer<DiscoveryService> = Layer.succeed(
   DiscoveryService,
   new DiscoveryService({ list: () => Effect.succeed([]) })
 )
+
+describe("AgentRunner failures", () => {
+  it("surfaces an adapter's actionable failure instead of replacing it with a generic message", async () => {
+    mkdirSync(temp.root, { recursive: true })
+    writeFileSync(
+      join(temp.root, "sessions.json"),
+      JSON.stringify([
+        {
+          id: SESSION,
+          repo: "acme/widget",
+          branch: "starbase/auth",
+          title: "Auth failure",
+          status: "idle",
+          cli: "claude",
+          diff: { added: 0, removed: 0 },
+          prNumber: null,
+          costUsd: 0,
+          tokens: 0,
+          updatedAt: "2026-07-20T00:00:00.000Z",
+          worktreePath: temp.root,
+          mode: "auto"
+        }
+      ])
+    )
+    const failingAdapter = Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: () =>
+          Effect.fail(
+            new CliExecError({
+              kind: "claude",
+              message: "Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+            })
+          ),
+        stop: () => Effect.void
+      })
+    )
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      ConfigService.Default,
+      ContextManager.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      BackgroundTaskStore.Default,
+      PlanStore.Default,
+      failingAdapter,
+      noHarnesses,
+      temp.layer
+    )
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        return yield* runner.prompt(SESSION, "hello").pipe(Stream.runCollect)
+      }).pipe(Effect.provide(base))
+    )
+
+    expect(Array.from(events)).toContainEqual({
+      _tag: "Failed",
+      message: "Claude authentication failed. Run `claude auth login` in a terminal, then try again."
+    })
+  })
+})
 
 describe("AgentRunner stop", () => {
   /**

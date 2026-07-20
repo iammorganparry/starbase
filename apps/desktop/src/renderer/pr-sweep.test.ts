@@ -1,6 +1,6 @@
 import type { PrState, Session } from "@starbase/core"
 import { describe, expect, it } from "vitest"
-import { issuesToCloseOnMerge } from "./pr-sweep.js"
+import { issuesToCloseOnMerge, prsToNotify } from "./pr-sweep.js"
 
 /**
  * `issuesToCloseOnMerge` is all that survives of what used to be the "archive
@@ -92,5 +92,46 @@ describe("issuesToCloseOnMerge", () => {
     // longer any code path from "PR merged" to "session archived".
     const plain = session({ id: "multi-pr", prNumber: 204 })
     expect(issuesToCloseOnMerge({ "multi-pr": "merged" }, [plain], none)).toStrictEqual([])
+  })
+})
+
+/**
+ * `prsToNotify` decides which resolved PRs raise a desktop notification.
+ *
+ * The regression it guards is a lookup, not a policy: the first version indexed
+ * this `Record<sessionId, PrState>` with the enclosing loop's numeric INDEX.
+ * That is always `undefined` for a real session id, so the "PR merged/closed"
+ * notification never fired — a whole kind the feature ships and exposes a
+ * Settings toggle for was dead code. It typechecked, because TypeScript permits
+ * numeric indexing of a `Record<string, T>`.
+ */
+describe("prsToNotify", () => {
+  const merged = session({ id: "s1" })
+  const closed = session({ id: "s2" })
+  const open = session({ id: "s3" })
+  const states: Record<string, PrState> = { s1: "merged", s2: "closed", s3: "open" }
+
+  it("finds resolved PRs by SESSION ID, not by position", () => {
+    // Ordered so a positional lookup can't accidentally agree: reversed here,
+    // and the numeric keys 0/1/2 simply don't exist on this Record.
+    const out = prsToNotify(states, [open, closed, merged], new Set())
+    expect(out.map((n) => [n.session.id, n.state])).toStrictEqual([
+      ["s2", "closed"],
+      ["s1", "merged"]
+    ])
+  })
+
+  it("ignores a PR that is still open", () => {
+    expect(prsToNotify(states, [open], new Set())).toStrictEqual([])
+  })
+
+  it("ignores a session whose PR state hasn't loaded yet", () => {
+    expect(prsToNotify({}, [merged], new Set())).toStrictEqual([])
+  })
+
+  it("announces each resolution once — the poll re-runs every minute", () => {
+    // A merged PR stays merged forever; without this the sweep would re-announce
+    // it on every tick for as long as the app is open.
+    expect(prsToNotify(states, [merged], new Set(["s1"]))).toStrictEqual([])
   })
 })

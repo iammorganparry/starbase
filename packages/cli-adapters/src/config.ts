@@ -3,6 +3,7 @@ import type {
   ContextConfig,
   GitConfig,
   GithubConfig,
+  NotificationsConfig,
   ProviderConfig
 } from "@starbase/core"
 import { WorkspaceConfig } from "@starbase/core"
@@ -75,6 +76,8 @@ export class ConfigService extends Effect.Service<ConfigService>()(
 
       const setGit = (git: GitConfig) => patch({ git })
 
+      const setNotifications = (notifications: NotificationsConfig) => patch({ notifications })
+
       const setStarredRepos = (starredRepos: ReadonlyArray<string>) =>
         patch({ starredRepos })
 
@@ -121,6 +124,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setReposDir,
         setGithub,
         setGit,
+        setNotifications,
         setStarredRepos,
         setCollapsedRepos,
         setLastRepoPath,

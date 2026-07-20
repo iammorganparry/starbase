@@ -557,6 +557,14 @@ export const Subagent = Schema.Struct({
   description: Schema.String,
   /** The spawning sub-agent's id, or null when spawned by the main agent. */
   parentId: Schema.NullOr(Schema.String),
+  /**
+   * The harness actually running this sub-agent. Absent for harness-spawned
+   * `Task` sub-agents (they inherit the session's CLI); set explicitly when the
+   * orchestrator picks a DIFFERENT harness per role — adversarial planning runs
+   * its attacker on a rival lab, so the transcript must not be branded with the
+   * session's CLI.
+   */
+  cli: Schema.optional(CliKind),
   status: SubagentStatus,
   message: Message
 })
@@ -708,7 +716,9 @@ export const StreamEvent = Schema.Union(
      * The spawning sub-agent's id, or null when the main agent spawned it — i.e.
      * the `parent_tool_use_id` of the message carrying the `Task` call.
      */
-    parentId: Schema.NullOr(Schema.String)
+    parentId: Schema.NullOr(Schema.String),
+    /** The harness running it, when it differs from the session's own CLI. */
+    cli: Schema.optional(CliKind)
   }),
   /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
   Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
@@ -1054,6 +1064,37 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
 }
 
 /**
+ * The event tags that DECLARE an `agentId` — i.e. the content events that can be
+ * attributed to one sub-agent's tab.
+ *
+ * Kept as an explicit set rather than probing with `"agentId" in event`, which is
+ * the trap this exists to close: `agentId` is `Schema.optional`, so an event
+ * emitted WITHOUT one has no such key at all and the `in` check reports false.
+ * Any orchestrator using that check to decide "may I attribute this?" therefore
+ * silently declined to attribute exactly the events it needed to — every
+ * unattributed Assistant/Tool event, which is all of them — and the sub-agent's
+ * tab stayed empty while its output landed on the main turn.
+ */
+const AGENT_SCOPED_TAGS: ReadonlySet<string> = new Set([
+  "Thinking",
+  "Assistant",
+  "ToolStart",
+  "ToolDelta",
+  "ToolEnd"
+])
+
+/**
+ * Attribute an event to `agentId`, if the event is one that can carry it and is
+ * not already attributed to a NESTED agent (whose own claim is more specific and
+ * must win). Anything else passes through untouched — adding a field a
+ * `TaggedStruct` doesn't declare would fail to encode across the RPC boundary.
+ */
+export const scopeToAgent = (event: StreamEvent, agentId: string): StreamEvent =>
+  AGENT_SCOPED_TAGS.has(event._tag) && (event as { agentId?: string }).agentId == null
+    ? ({ ...event, agentId } as StreamEvent)
+    : event
+
+/**
  * True when a `StreamEvent` belongs to a spawned sub-agent rather than the main
  * turn — either a sub-agent lifecycle event, or a content event tagged with an
  * `agentId`. Callers use this to route such events into `applySubagentEvent`
@@ -1062,7 +1103,7 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
 export const isSubagentEvent = (event: StreamEvent): boolean =>
   event._tag === "SubagentStarted" ||
   event._tag === "SubagentEnded" ||
-  ("agentId" in event && event.agentId != null)
+  (event as { agentId?: string }).agentId != null
 
 /**
  * Whether this event belongs to the session's background-task registry rather
@@ -1183,6 +1224,7 @@ export const applySubagentEvent = (
         name: event.name,
         description: event.description,
         parentId: event.parentId,
+        ...(event.cli === undefined ? {} : { cli: event.cli }),
         status: "working",
         message: assistantMessage(event.id, "")
       }
@@ -1219,8 +1261,9 @@ export const applySubagentEvent = (
       return s
     })
   }
-  if ("agentId" in event && event.agentId != null) {
-    const agentId = event.agentId
+  const scoped = (event as { agentId?: string }).agentId
+  if (scoped != null) {
+    const agentId = scoped
     // Unknown id — leave the list untouched so the renderer doesn't re-render on
     // an event it can't place. Nested sub-agents DO resolve here: the SDK stamps
     // the immediate parent, so a nested agent's own id is registered by its

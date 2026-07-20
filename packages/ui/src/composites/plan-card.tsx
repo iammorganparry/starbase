@@ -1,9 +1,10 @@
-import type { Plan } from "@starbase/core"
+import type { ExecutionMode, Plan } from "@starbase/core"
 import { ClipboardList, GitBranch } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { Pill } from "../components/pill.js"
+import { PlanApprovalActions } from "./plan-approval-actions.js"
 
 const WIDTH = "w-full"
 const branchCount = (plan: Plan): number => plan.steps.filter((s) => s.kind === "branch").length
@@ -22,7 +23,7 @@ export function PlanCard({
   className
 }: {
   plan: Plan
-  onApprove?: () => void
+  onApprove?: (executionMode?: ExecutionMode) => void
   /** Approve a STALE plan (its original run is gone) — re-drives execution. */
   onResume?: () => void
   /** Open the full Plan Review view (step drill-in, comments, revise). */
@@ -80,9 +81,7 @@ export function PlanCard({
           </Button>
         )}
         {pending && (
-          <Button size="sm" onClick={onApprove}>
-            Approve plan &amp; start
-          </Button>
+          <PlanApprovalActions onApprove={onApprove} />
         )}
         {stale && onResume && (
           <Button size="sm" onClick={onResume}>

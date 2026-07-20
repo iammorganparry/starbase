@@ -18,6 +18,8 @@ import {
   GhStatus,
   GitConfig,
   GithubConfig,
+  NotificationKind,
+  NotificationsConfig,
   Issue,
   IssueAutomations,
   IssueSummary,
@@ -26,6 +28,7 @@ import {
   Message,
   ModelOption,
   OpencodeProviderInfo,
+  ExecutionMode,
   PermissionMode,
   PrFileChange,
   McpServer,
@@ -319,7 +322,11 @@ export class StarbaseRpcs extends RpcGroup.make(
 
   /** Approve a plan — restore the exec mode and start execution. */
   Rpc.make("Agent.approvePlan", {
-    payload: { sessionId: Schema.String, planId: Schema.String }
+    payload: {
+      sessionId: Schema.String,
+      planId: Schema.String,
+      executionMode: Schema.optional(ExecutionMode)
+    }
   }),
 
   /**
@@ -481,6 +488,39 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: GitConfig
   }),
 
+  /** Persist the user's desktop-notification preferences. */
+  Rpc.make("Config.setNotifications", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: NotificationsConfig
+  }),
+
+  /**
+   * Raise an OS notification for a session.
+   *
+   * Main owns the Electron `Notification` API, but only the RENDERER knows
+   * whether this session is the one the operator is already looking at — so the
+   * decision to notify is made there and this call is the delivery mechanism.
+   * Deliberately fire-and-forget: a notification that fails to show must never
+   * disturb the run that triggered it.
+   */
+  Rpc.make("Notify.show", {
+    success: Schema.Void,
+    payload: {
+      sessionId: Schema.String,
+      kind: NotificationKind,
+      title: Schema.String,
+      body: Schema.String,
+      /**
+       * Is this the session the operator currently has open? Only the renderer
+       * knows; main pairs it with the window's own focus state (which only main
+       * knows authoritatively) to decide whether the operator can already see
+       * what we're about to tell them.
+       */
+      isActiveSession: Schema.Boolean
+    }
+  }),
+
   /** Persist the full set of starred repo paths (replaces the stored list). */
   Rpc.make("Config.setStarredRepos", {
     success: WorkspaceConfig,
@@ -584,7 +624,11 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("Plan.execute", {
     success: StreamEvent,
     error: PlanError,
-    payload: { sessionId: Schema.String, planId: Schema.String },
+    payload: {
+      sessionId: Schema.String,
+      planId: Schema.String,
+      executionMode: Schema.optional(ExecutionMode)
+    },
     stream: true
   }),
 

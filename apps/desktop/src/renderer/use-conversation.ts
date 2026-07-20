@@ -13,6 +13,7 @@ import { useMemo } from "react"
 import { useSelector } from "@xstate/react"
 import type {
   Attachment,
+  ExecutionMode,
   GateDecision,
   Message,
   CliKind,
@@ -69,7 +70,7 @@ export interface Conversation {
   readonly plan: Plan | null
   readonly commentPlanStep: (planId: string, stepId: string, body: string) => void
   readonly revisePlan: (planId: string) => void
-  readonly approvePlan: (planId: string) => void
+  readonly approvePlan: (planId: string, executionMode?: ExecutionMode) => void
   readonly resumePlan: (planId: string) => void
   /** Live status for the sidebar/tab bar, or null when idle (use persisted). */
   readonly status: SessionStatus | null
@@ -146,7 +147,7 @@ export function useConversation(session: Session): Conversation {
     plan,
     commentPlanStep: (planId, stepId, body) => send({ type: "COMMENT_PLAN_STEP", planId, stepId, body }),
     revisePlan: (planId) => send({ type: "REVISE_PLAN", planId }),
-    approvePlan: (planId) => send({ type: "APPROVE_PLAN", planId }),
+    approvePlan: (planId, executionMode) => send({ type: "APPROVE_PLAN", planId, executionMode }),
     resumePlan: (planId) => send({ type: "RESUME_PLAN", planId }),
     status,
     sendPrompt: (text, images) => send({ type: "SEND", text, images }),

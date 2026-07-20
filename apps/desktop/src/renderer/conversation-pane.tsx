@@ -218,10 +218,11 @@ export function ConversationPane({
   const planReview = (
     <PlanReview
       plan={convo.plan}
+      compact={view === "split"}
       patch={convo.patch}
       selectedStepId={planStepId}
       onSelectStep={onPlanStepSelected}
-      onApprove={() => planId && convo.approvePlan(planId)}
+      onApprove={(executionMode) => planId && convo.approvePlan(planId, executionMode)}
       onResume={() => planId && convo.resumePlan(planId)}
       onRevise={() => planId && convo.revisePlan(planId)}
       onComment={(stepId, body) => planId && convo.commentPlanStep(planId, stepId, body)}
@@ -255,7 +256,7 @@ export function ConversationPane({
         />
       )}
       {activeSubagent ? (
-        <SubagentView subagent={activeSubagent} />
+        <SubagentView subagent={activeSubagent} cli={convo.cli} />
       ) : (
         <ConversationView
           messages={convo.messages}

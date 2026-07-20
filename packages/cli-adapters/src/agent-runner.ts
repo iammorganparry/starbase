@@ -1,6 +1,7 @@
 import type {
   ApprovalGate,
   Attachment,
+  ExecutionMode,
   GateDecision,
   Message,
   PermissionMode,
@@ -14,6 +15,7 @@ import type {
 import {
   applyStreamEvent,
   assistantMessage,
+  CliExecError,
   defaultModel,
   findApprovedPlan,
   isBackgroundTaskEvent,
@@ -26,7 +28,7 @@ import {
 } from "@starbase/core"
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
-import { Cause, Deferred, Effect, Fiber, Mailbox, Ref, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Mailbox, Option, Ref, Stream } from "effect"
 import { AppPaths } from "./app-paths.js"
 import { ConfigService } from "./config.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
@@ -342,7 +344,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
       })
 
     /** Approve a plan: mark it approved, restore the exec mode, and start execution. */
-    const approvePlan = (sessionId: string, planId: string) =>
+    const approvePlan = (sessionId: string, planId: string, executionMode?: ExecutionMode) =>
       Effect.gen(function* () {
         const run = (yield* Ref.get(active)).get(sessionId)
         if (run !== undefined) yield* run.applyPlan(planId, (p) => ({ ...p, status: "approved" }))
@@ -355,6 +357,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         // set a config default, which would silently override the "auto" (or other
         // mode) the operator picked in the composer, re-gating every command.
         const mode =
+          executionMode ??
           (yield* Ref.get(priorModes)).get(sessionId) ??
           (yield* Ref.get(execDefaults)).get(sessionId) ??
           "accept-edits"
@@ -906,11 +909,14 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             Effect.onInterrupt(() => emit({ _tag: "Failed", message: STOPPED_NOTE })),
             // A stop is not a crash — don't report the operator's own interrupt as
             // "the agent run failed" on top of the note we just wrote.
-            Effect.catchAllCause((cause) =>
-              Cause.isInterruptedOnly(cause)
-                ? Effect.void
-                : emit({ _tag: "Failed", message: "The agent run failed." })
-            ),
+            Effect.catchAllCause((cause) => {
+              if (Cause.isInterruptedOnly(cause)) return Effect.void
+              const failure = Option.getOrUndefined(Cause.failureOption(cause))
+              return emit({
+                _tag: "Failed",
+                message: failure instanceof CliExecError ? failure.message : "The agent run failed."
+              })
+            }),
             Effect.ensuring(
               Ref.update(active, (m) => {
                 const nextMap = new Map(m)

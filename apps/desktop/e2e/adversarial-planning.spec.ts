@@ -56,6 +56,7 @@ test("Gigaplan is offered in the mode chip, beside the ordinary modes", async ({
   const { window } = await openSession(launchApp)
 
   await window.getByRole("button", { name: "accept edits" }).click()
+  await expect(window.getByRole("menuitem", { name: "plan", exact: true })).toBeVisible()
   await expect(window.getByRole("menuitem", { name: "Gigaplan" })).toBeVisible()
 })
 
@@ -71,10 +72,15 @@ test("selecting Gigaplan takes the model picker away, and changing mode brings i
   const modelChip = window.getByRole("button", { name: /opus/ })
   await expect(modelChip).toBeVisible()
 
-  await window.getByRole("button", { name: "accept edits" }).click()
+  const ordinaryMode = window.getByRole("button", { name: "accept edits" })
+  const ordinaryWidth = await ordinaryMode.evaluate((element) => element.getBoundingClientRect().width)
+  await ordinaryMode.click()
   await window.getByRole("menuitem", { name: "Gigaplan" }).click()
 
-  await expect(window.getByRole("button", { name: "Gigaplan" })).toBeVisible()
+  const gigaplanMode = window.getByRole("button", { name: "Gigaplan" })
+  await expect(gigaplanMode).toBeVisible()
+  const gigaplanWidth = await gigaplanMode.evaluate((element) => element.getBoundingClientRect().width)
+  expect(Math.abs(gigaplanWidth - ordinaryWidth)).toBeLessThan(1)
   await expect(modelChip).toHaveCount(0)
 
   // Back to an ordinary mode → the picker returns, on the same model.
@@ -199,7 +205,11 @@ test("approving a Gigaplan runs its steps, each on the harness the plan assigned
   await expect(window.getByRole("button", { name: "Gigaplan" })).toBeVisible()
 
   await window.getByText("Plan Review").first().click()
-  await window.getByRole("button", { name: /Approve/ }).first().click()
+  await expect(window.getByLabel("Assigned to codex gpt-5.6-sol")).toBeVisible()
+  await window.getByRole("button", { name: /^02 Backfill it/ }).click()
+  await expect(window.getByText("Assigned model", { exact: true })).toBeVisible()
+  await expect(window.getByLabel("Assigned to claude opus").last()).toBeVisible()
+  await window.getByRole("button", { name: "Approve & implement", exact: true }).click()
 
   await expect(window.getByText(/Execution started/i)).toBeVisible({ timeout: 30_000 })
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
@@ -52,16 +52,164 @@ describe("GitService.createWorktree", () => {
     expect(worktrees).toContain(worktree.path)
   })
 
-  it("symlinks node_modules to the origin repo when the origin has one", async () => {
-    const repoPath = initGitRepo(join(repos.dir, "app"), { nodeModules: true })
+  it("shares the origin's third-party packages rather than copying them", async () => {
+    const repoPath = initGitRepo(join(repos.dir, "app"), { nodeModules: true, workspace: true })
     const exit = await create(repoPath, "app")
     expect(exit._tag).toBe("Success")
     if (exit._tag !== "Success") return
+    const nm = join(exit.value.path, "node_modules")
 
-    const link = join(exit.value.path, "node_modules")
-    expect(lstatSync(link).isSymbolicLink()).toBe(true)
-    // The marker in the origin's node_modules is readable *through* the link.
-    expect(readFileSync(join(link, ".marker"), "utf-8")).toContain("origin-node-modules")
+    // The anti-bloat win, and the reason the whole design exists: a dependency
+    // DIRECTORY is linked, not duplicated. Bulk is shared; only the small
+    // metadata files are copied (see the install-state test).
+    expect(lstatSync(join(nm, "left-pad")).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(nm, "left-pad", "index.js"), "utf-8")).toContain("vendor")
+    // Contents remain readable from the worktree either way.
+    expect(readFileSync(join(nm, ".marker"), "utf-8")).toContain("origin-node-modules")
+  })
+
+  it("resolves a WORKSPACE package to the worktree's own source, not the origin's", async () => {
+    // The regression this whole mirror exists for. A package manager writes
+    // workspace links RELATIVE (`@acme/lib -> ../../packages/lib`), so
+    // symlinking node_modules wholesale made every workspace import in the
+    // worktree resolve back into the ORIGIN checkout. Agents then edited the
+    // branch and type-checked main.
+    const repoPath = initGitRepo(join(repos.dir, "mono"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "mono")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const worktree = exit.value.path
+
+    // Change the branch's copy. The origin's copy still says "origin-source".
+    writeFileSync(join(worktree, "packages", "lib", "index.js"), "module.exports = 'branch-source'\n")
+
+    const throughLink = readFileSync(join(worktree, "node_modules", "@acme", "lib", "index.js"), "utf-8")
+    expect(throughLink).toContain("branch-source")
+    expect(throughLink).not.toContain("origin-source")
+    // And the origin is untouched — the worktree must not write through to it.
+    expect(readFileSync(join(repoPath, "packages", "lib", "index.js"), "utf-8")).toContain("origin-source")
+  })
+
+  it("tells workspace and third-party apart INSIDE the same scope dir", async () => {
+    // `@acme` holds both a workspace link and a vendored package, so the scope
+    // dir can't be classified as a whole — only entry by entry.
+    const repoPath = initGitRepo(join(repos.dir, "mixed"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "mixed")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const nm = join(exit.value.path, "node_modules")
+
+    // The scope dir itself is REAL (rebuilt), or its entries couldn't differ.
+    expect(lstatSync(join(nm, "@acme")).isDirectory()).toBe(true)
+    expect(lstatSync(join(nm, "@acme")).isSymbolicLink()).toBe(false)
+    // Vendored code is still shared with the origin.
+    expect(readFileSync(join(nm, "@acme", "vendor-kit", "index.js"), "utf-8")).toContain("vendor")
+    expect(readFileSync(join(nm, "left-pad", "index.js"), "utf-8")).toContain("vendor")
+  })
+
+  it("COPIES install state, so an install in the worktree can't rewrite the origin's", async () => {
+    // The recovery flow this design assumes — "a session that changes deps just
+    // installs over the links" — opens exactly these files for write. Linked,
+    // that write follows the symlink and rewrites the ORIGIN's install state to
+    // describe the worktree's tree, corrupting the source repo from a session
+    // that did nothing wrong.
+    const repoPath = initGitRepo(join(repos.dir, "state"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "state")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    const stateFile = join(exit.value.path, "node_modules", ".install-state.yml")
+    expect(lstatSync(stateFile).isSymbolicLink()).toBe(false)
+    writeFileSync(stateFile, "worktree-state\n")
+    expect(readFileSync(join(repoPath, "node_modules", ".install-state.yml"), "utf-8")).toContain(
+      "origin-state"
+    )
+  })
+
+  it("leaves build caches out entirely rather than sharing one between branches", async () => {
+    // A cache is written during ordinary work, not install — sharing it hands
+    // every parallel session the same dir to write concurrently.
+    const repoPath = initGitRepo(join(repos.dir, "cache"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "cache")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(existsSync(join(exit.value.path, "node_modules", ".cache"))).toBe(false)
+  })
+
+  it("mirrors PER-PACKAGE node_modules, so a pnpm layout resolves too", async () => {
+    // pnpm gives each workspace package its own node_modules. They're gitignored,
+    // so a fresh worktree checkout has none — mirroring only the root would leave
+    // every import from inside `packages/*` unresolved on the layout this product
+    // itself uses.
+    const repoPath = initGitRepo(join(repos.dir, "pnpm"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "pnpm")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const libNm = join(exit.value.path, "packages", "lib", "node_modules")
+
+    // Its third-party dep is shared with the origin …
+    expect(readFileSync(join(libNm, "dep-of-lib", "index.js"), "utf-8")).toContain("vendor")
+    // … and its link to a SIBLING workspace package follows the branch, which is
+    // the same rule the root mirror applies, applied one level down.
+    writeFileSync(join(exit.value.path, "packages", "app", "index.js"), "module.exports = 'branch-app'\n")
+    expect(readFileSync(join(libNm, "@acme", "app", "index.js"), "utf-8")).toContain("branch-app")
+  })
+
+  it("LINKS .bin shims rather than copying them, so third-party CLIs still run", async () => {
+    // `.bin` is a container dir, so its entries recurse into the same classifier
+    // as the root's. Every one of them resolves to a FILE — the package's own
+    // executable — which put them in the install-metadata copy branch. A copied
+    // shim resolves its `require("../index.js")` against `.bin/` instead of the
+    // package, so every third-party binary an agent runs (tsc, eslint, anything
+    // behind a package script) would die with MODULE_NOT_FOUND.
+    const repoPath = initGitRepo(join(repos.dir, "bins"), { nodeModules: true, workspace: true })
+    const exit = await create(repoPath, "bins")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+
+    const shim = join(exit.value.path, "node_modules", ".bin", "left-pad")
+    expect(lstatSync(shim).isSymbolicLink()).toBe(true)
+    // It resolves to the real script inside its package, where its relative
+    // requires still work — not to a detached copy sitting in `.bin`.
+    expect(realpathSync(shim)).toBe(realpathSync(join(repoPath, "node_modules", "left-pad", "cli.js")))
+  })
+
+  it("walks a scope dir that links to its own ancestor exactly once", async () => {
+    // `node_modules/@loop -> .` resolves to node_modules itself: it isn't a
+    // workspace path, and it matches isContainerDir, so an unguarded mirror
+    // recurses into the same tree again.
+    //
+    // It does NOT hang — the kernel's symlink-loop detection returns ELOOP at
+    // ~31 levels and the read folds to empty. What it does instead is quietly
+    // build 31 levels of junk directories in the worktree, because each level
+    // creates its target before discovering there's nothing to put in it. The
+    // visited-set stops it at the first repeat.
+    const repoPath = initGitRepo(join(repos.dir, "loop"), { nodeModules: true })
+    symlinkSync(".", join(repoPath, "node_modules", "@loop"))
+
+    const exit = await create(repoPath, "loop")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    const nm = join(exit.value.path, "node_modules")
+
+    // Visited once: the scope dir exists, but nothing was mirrored THROUGH it.
+    expect(existsSync(join(nm, "@loop", "@loop"))).toBe(false)
+    // And the healthy entries still landed — the guard skips the cycle, not the run.
+    expect(existsSync(join(nm, ".marker"))).toBe(true)
+  })
+
+  it("survives a broken link in the origin's node_modules", async () => {
+    // A dep removed since the last install leaves a dangling entry. It must be
+    // skipped, not propagated — and must not fail the session create, which is
+    // the expensive thing to lose.
+    const repoPath = initGitRepo(join(repos.dir, "stale"), { nodeModules: true })
+    symlinkSync(join(repoPath, "node_modules", "gone"), join(repoPath, "node_modules", "dangling"))
+    const exit = await create(repoPath, "stale")
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(existsSync(join(exit.value.path, "node_modules", "dangling"))).toBe(false)
+    // The healthy entries still landed.
+    expect(existsSync(join(exit.value.path, "node_modules", ".marker"))).toBe(true)
   })
 
   it("creates no node_modules link when the origin has none (and does not fail)", async () => {

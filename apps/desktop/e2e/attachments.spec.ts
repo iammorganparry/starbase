@@ -83,7 +83,7 @@ test("a message sent while the agent is busy is queued, then processed", async (
   // The plan card lands and the run is parked → the button becomes "Stop" (the
   // agent is working, so the primary action is to halt it) and the composer
   // placeholder switches to its busy form, which we type into.
-  await expect(window.getByRole("button", { name: /Approve plan & start/ }).first()).toBeVisible({
+  await expect(window.getByRole("button", { name: "Approve", exact: true }).first()).toBeVisible({
     timeout: 15_000
   })
   await expect(window.getByRole("button", { name: /^Stop$/ })).toBeVisible()
@@ -97,6 +97,6 @@ test("a message sent while the agent is busy is queued, then processed", async (
   await expect(window.getByText("and then open a PR")).toBeVisible()
 
   // Approving the plan lets the run finish → the queued turn is dispatched (chip clears).
-  await window.getByRole("button", { name: /Approve plan & start/ }).first().click()
+  await window.getByRole("button", { name: "Approve", exact: true }).first().click()
   await expect(window.getByText("Queued", { exact: true })).toHaveCount(0, { timeout: 25_000 })
 })

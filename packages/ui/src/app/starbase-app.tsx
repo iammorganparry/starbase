@@ -10,6 +10,7 @@ import type {
   GhStatus,
   GitConfig,
   GithubConfig,
+  NotificationsConfig,
   DiffStat,
   IssueSummary,
   McpServer,
@@ -97,6 +98,9 @@ export interface StarbaseAppProps {
   gitConfig?: GitConfig | null
   /** Persist git preferences (the "share checked-out branches" lever). */
   onSaveGitConfig?: (config: GitConfig) => Promise<void> | void
+  /** Desktop-notification prefs; absent means the defaults, not "off". */
+  notificationsConfig?: NotificationsConfig | null
+  onSaveNotificationsConfig?: (config: NotificationsConfig) => Promise<void> | void
   /** Re-run `gh auth status` (the settings "Recheck" button); may be async. */
   onRecheckGh?: () => Promise<void> | void
   /** Persisted per-CLI provider defaults (Settings · Providers view). */
@@ -143,6 +147,15 @@ export interface StarbaseAppProps {
   /** Whether the browser-preview pane is currently open. */
   browserActive?: boolean
   activeSessionId?: string | null
+  /**
+   * Select a session from OUTSIDE the shell — a notification click, a deep link.
+   * Bump this to a new value to jump there; the shell owns the selection
+   * otherwise, so a plain prop would fight the operator's own clicks. Ignored
+   * when null.
+   */
+  selectSessionRequest?: { readonly sessionId: string; readonly nonce: number } | null
+  /** Notified whenever the shell's selected session changes (including to null). */
+  onActiveSessionChange?: (sessionId: string | null) => void
   patch?: string
   /**
    * Render the live conversation for the active session. Called with the active
@@ -221,6 +234,8 @@ export function StarbaseApp({
   contextSessions,
   gitConfig,
   onSaveGitConfig,
+  notificationsConfig,
+  onSaveNotificationsConfig,
   onRecheckGh,
   providersConfig,
   onSaveProvider,
@@ -245,6 +260,8 @@ export function StarbaseApp({
   onToggleBrowser,
   browserActive,
   activeSessionId,
+  selectSessionRequest,
+  onActiveSessionChange,
   patch = SEED_PATCH,
   renderConversation,
   planSessions,
@@ -268,6 +285,27 @@ export function StarbaseApp({
   const [usageLoading, setUsageLoading] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [ghRechecking, setGhRechecking] = useState(false)
+
+  // An outside request to jump to a session (notification click). Keyed on the
+  // NONCE, not the id: clicking two notifications for the same session must
+  // still land there the second time, and depending on the id alone would fight
+  // the operator every time they navigated away from it themselves.
+  const requestNonce = selectSessionRequest?.nonce
+  const requestId = selectSessionRequest?.sessionId
+  useEffect(() => {
+    if (requestId === undefined) return
+    setSelected(requestId)
+    // Jumping to a session means SHOWING it — a notification that lands the
+    // operator behind the Settings dialog has not done its job.
+    setSettingsOpen(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- nonce is the trigger
+  }, [requestNonce])
+
+  // Publish the selection so the notifier can tell whether a session is the one
+  // already on screen (see `active-session.ts` in the desktop renderer).
+  useEffect(() => {
+    onActiveSessionChange?.(selected)
+  }, [selected, onActiveSessionChange])
 
   const openUsage = useCallback(() => {
     setUsageOpen(true)
@@ -424,6 +462,8 @@ export function StarbaseApp({
               contextSessions={contextSessions}
               onSaveGithub={onSaveGithubConfig}
               onSaveGit={onSaveGitConfig}
+              notifications={notificationsConfig}
+              onSaveNotifications={onSaveNotificationsConfig}
               onClose={() => setSettingsOpen(false)}
             />
           ) : undefined
