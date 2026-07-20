@@ -39,6 +39,15 @@ export interface LaunchOptions {
   readonly home?: string
   /** Reuse a previous launch's repos dir; pair with `home` for a restart. */
   readonly reposDir?: string
+  /**
+   * Reuse a previous launch's Chromium profile, so `localStorage` survives the
+   * restart too. `home` alone restarts the app's JSON state but hands it a FRESH
+   * profile — which silently resets anything stored in localStorage (panel
+   * widths, dock sides, the session grid layout). Pass this alongside `home`
+   * when the thing under test is one of those. The original launch still owns
+   * teardown.
+   */
+  readonly userDataDir?: string
   /** Seed config.json so the app boots configured (past first-run). */
   readonly configured?: boolean
   /** Create a real git repo in the seeded repos dir (for the create-session flow). */
@@ -376,6 +385,11 @@ export interface LaunchedApp {
   readonly home: string
   /** The seeded repos directory (when `configured`). */
   readonly reposDir: string
+  /**
+   * This launch's Chromium profile. Pass it back as `userDataDir` on a restart
+   * to carry `localStorage` across — panel widths, dock sides, the grid layout.
+   */
+  readonly userDataDir: string
   /** The seeded repo's path (when `withRepo`). */
   readonly repoPath: string
   /** The offline fake auth backend this launch talks to. */
@@ -726,8 +740,12 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
       // preview leaked into later tests forever: at the 1320px default window the
       // extra rail squeezed the Plan Review step spec to zero width, and its
       // assertions failed on an element that was rendered but had no box.
-      const userDataDir = mkdtempSync(join(tmpdir(), "starbase-e2e-userdata-"))
-      cleanups.push(() => rmSync(userDataDir, { recursive: true, force: true }))
+      const userDataDir = options.userDataDir ?? mkdtempSync(join(tmpdir(), "starbase-e2e-userdata-"))
+      // Only the launch that CREATED the profile tears it down, or a restart
+      // would delete the directory its predecessor is still cleaning up.
+      if (!options.userDataDir) {
+        cleanups.push(() => rmSync(userDataDir, { recursive: true, force: true }))
+      }
 
       const app = await electron.launch({
         args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
@@ -795,6 +813,7 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         window,
         home,
         reposDir,
+        userDataDir,
         repoPath,
         authServer,
         completeDeepLinkSignIn,

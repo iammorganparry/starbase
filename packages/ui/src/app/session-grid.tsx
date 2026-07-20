@@ -192,6 +192,10 @@ export function SessionGrid(props: SessionGridProps) {
             key={index}
             data-testid={`grid-slot-${index}`}
             data-focused={isFocused || undefined}
+            // Which session this slot is actually rendering. The e2e suite reads
+            // the grid's arrangement off these rather than off titles, which are
+            // operator-editable and repeat across panes.
+            data-session={sessionId ?? undefined}
             // Focus follows a mousedown anywhere in the pane, captured so a click
             // on a control inside still registers the pane as focused first.
             onMouseDownCapture={() => props.onFocusSlot(index)}
@@ -281,7 +285,11 @@ export function SessionGrid(props: SessionGridProps) {
   const grid = (
     <div
       data-testid="session-grid"
-      data-mode={layout.mode}
+      // NOT `data-mode`: the composer already owns that attribute for its
+      // execution mode, and this element is an ANCESTOR of it — an unscoped
+      // `[data-mode]` locator would match the grid first and read "2|1" where a
+      // caller expected "accept-edits". (It did; chat.spec.ts caught it.)
+      data-layout-mode={layout.mode}
       className="flex min-h-0 min-w-0 flex-1 gap-px bg-hairline"
     >
       {columnsOf(layout.mode).map((slotIndices, col) => (
