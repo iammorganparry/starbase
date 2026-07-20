@@ -13,7 +13,7 @@
  *     only for `gh`/CLI detection, where the real binaries aren't present in CI.
  */
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CommandExecutor } from "@effect/platform"
@@ -78,16 +78,6 @@ export interface InitGitRepoOptions {
   readonly remote?: string
   /** Extra branches to create off the initial commit. */
   readonly branches?: ReadonlyArray<string>
-  /** Create a `node_modules` dir (with a marker file) in the repo. */
-  readonly nodeModules?: boolean
-  /**
-   * Build a WORKSPACE monorepo layout on top of `nodeModules`: a committed
-   * `packages/lib` whose source names the branch, linked from `node_modules`
-   * the way a package manager does it — `@acme/lib -> ../../packages/lib`, a
-   * RELATIVE link. That relative link is the whole reason worktree dependency
-   * resolution needs care, so the fixture has to reproduce it exactly.
-   */
-  readonly workspace?: boolean
   /** Name of the initial branch (default "main"). */
   readonly initialBranch?: string
 }
@@ -101,8 +91,8 @@ const git = (cwd: string, args: ReadonlyArray<string>): string =>
 
 /**
  * Initialise a real git repo at `dir` (created if needed) with one commit, and
- * optional remote / branches / node_modules. Returns `dir`. Used by the git,
- * workspace and sessions suites so their assertions are about real outcomes.
+ * optional remote / branches. Returns `dir`. Used by the git, workspace and
+ * sessions suites so their assertions are about real outcomes.
  */
 export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): string => {
   const branch = options.initialBranch ?? "main"
@@ -112,55 +102,10 @@ export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): stri
   git(dir, ["config", "user.name", "Starbase Test"])
   git(dir, ["config", "commit.gpgsign", "false"])
   writeFileSync(join(dir, "README.md"), `# ${dir}\n`)
-  if (options.workspace) {
-    // Tracked, so `git worktree add` checks it out into the worktree — which is
-    // what makes "did the link follow the branch or the origin?" observable.
-    mkdirSync(join(dir, "packages", "lib"), { recursive: true })
-    writeFileSync(join(dir, "packages", "lib", "index.js"), "module.exports = 'origin-source'\n")
-    // A second workspace package, so a per-package node_modules has a sibling
-    // to link to — the pnpm case.
-    mkdirSync(join(dir, "packages", "app"), { recursive: true })
-    writeFileSync(join(dir, "packages", "app", "index.js"), "module.exports = 'origin-app'\n")
-  }
   git(dir, ["add", "-A"])
   git(dir, ["commit", "-m", "init", "--no-gpg-sign"])
   if (options.remote) git(dir, ["remote", "add", "origin", options.remote])
   for (const b of options.branches ?? []) git(dir, ["branch", b])
-  if (options.nodeModules) {
-    const nm = join(dir, "node_modules")
-    mkdirSync(nm, { recursive: true })
-    writeFileSync(join(nm, ".marker"), "origin-node-modules\n")
-    if (options.workspace) {
-      // A third-party package: branch-independent, so it should stay shared.
-      mkdirSync(join(nm, "left-pad"), { recursive: true })
-      writeFileSync(join(nm, "left-pad", "index.js"), "module.exports = 'vendor'\n")
-      // The workspace link, RELATIVE exactly as yarn/pnpm/npm write it.
-      mkdirSync(join(nm, "@acme"), { recursive: true })
-      symlinkSync("../../packages/lib", join(nm, "@acme", "lib"))
-      // A scoped THIRD-PARTY package sharing the scope dir with the workspace
-      // link, so the fixture proves the two are told apart per-entry.
-      mkdirSync(join(nm, "@acme", "vendor-kit"), { recursive: true })
-      writeFileSync(join(nm, "@acme", "vendor-kit", "index.js"), "module.exports = 'vendor'\n")
-      // Install STATE — the file a package manager rewrites on every install.
-      writeFileSync(join(nm, ".install-state.yml"), "origin-state\n")
-      // `.bin` shims, exactly as npm/yarn write them: a symlink to a SCRIPT
-      // inside the package. The script's own relative requires are why it must
-      // stay a link — copying its bytes strands them against `.bin/`.
-      writeFileSync(join(nm, "left-pad", "cli.js"), "require('./index.js')\n")
-      mkdirSync(join(nm, ".bin"), { recursive: true })
-      symlinkSync("../left-pad/cli.js", join(nm, ".bin", "left-pad"))
-      // A build cache: written during ordinary work, not install.
-      mkdirSync(join(nm, ".cache"), { recursive: true })
-      writeFileSync(join(nm, ".cache", "build.json"), "origin-cache\n")
-      // pnpm's per-package install: `packages/lib` gets its OWN node_modules,
-      // holding a dep and a link to a sibling workspace package.
-      const libNm = join(dir, "packages", "lib", "node_modules")
-      mkdirSync(join(libNm, "dep-of-lib"), { recursive: true })
-      writeFileSync(join(libNm, "dep-of-lib", "index.js"), "module.exports = 'vendor'\n")
-      mkdirSync(join(libNm, "@acme"), { recursive: true })
-      symlinkSync("../../../../packages/app", join(libNm, "@acme", "app"))
-    }
-  }
   return dir
 }
 
@@ -172,13 +117,13 @@ export const initGitRepo = (dir: string, options: InitGitRepoOptions = {}): stri
  */
 export const initGitRepoWithOrigin = (
   dir: string,
-  options: Pick<InitGitRepoOptions, "initialBranch" | "nodeModules"> = {}
+  options: Pick<InitGitRepoOptions, "initialBranch"> = {}
 ): { origin: string } => {
   const branch = options.initialBranch ?? "main"
   const origin = `${dir}-origin.git`
   mkdirSync(origin, { recursive: true })
   git(origin, ["init", "--bare", "-b", branch])
-  initGitRepo(dir, { initialBranch: branch, nodeModules: options.nodeModules })
+  initGitRepo(dir, { initialBranch: branch })
   git(dir, ["remote", "add", "origin", origin])
   git(dir, ["push", "-u", "origin", branch])
   return { origin }

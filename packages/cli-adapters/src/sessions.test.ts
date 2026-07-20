@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { Effect, Layer } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type {
@@ -50,6 +50,58 @@ describe("SessionStore", () => {
     cli: "claude",
     baseBranch: "main",
     ...over
+  })
+
+  /**
+   * A slug becomes a directory name, and most filesystems cap one name at 255
+   * bytes. Issue and PR titles have no such limit, so an unbounded slug made
+   * `git worktree add` fail with ENAMETOOLONG and lost the create outright.
+   */
+  it("caps a very long title so the worktree path stays creatable", async () => {
+    const exit = await runExit(
+      SessionStore.create(input({ title: "a very long title ".repeat(40) })).pipe(
+        Effect.provide(services)
+      ),
+      temp.layer
+    )
+
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(basename(exit.value.worktreePath!).length).toBeLessThanOrEqual(120)
+    // Truncation must not leave a trailing dash on the branch name.
+    expect(exit.value.branch).not.toMatch(/-$/)
+    expect(existsSync(exit.value.worktreePath!)).toBe(true)
+  })
+
+  /**
+   * `createWorktree` reclaims whatever sits at the target path with an `rm -rf`,
+   * so a slug collision against a LIVE session would delete that session's
+   * worktree and everything uncommitted in it. `createFromPr` and
+   * `createFromIssue` already refused that; `create` did not.
+   *
+   * The guard is defence-in-depth and cannot be provoked through this API — a
+   * `create` slug always carries a unique stamp. What IS worth pinning is the
+   * property that makes it safe: two identically-titled sessions get distinct
+   * worktrees and BOTH survive, so the guard never fires as a false positive on
+   * the ordinary path.
+   */
+  it("gives two identically-titled sessions distinct worktrees, and keeps both", async () => {
+    const first = await runExit(
+      SessionStore.create(input({ title: "Same Name" })).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    const second = await runExit(
+      SessionStore.create(input({ title: "Same Name" })).pipe(Effect.provide(services)),
+      temp.layer
+    )
+
+    expect(first._tag).toBe("Success")
+    expect(second._tag).toBe("Success")
+    if (first._tag !== "Success" || second._tag !== "Success") return
+    expect(first.value.worktreePath).not.toBe(second.value.worktreePath)
+    // The first session's worktree was NOT reclaimed out from under it.
+    expect(existsSync(first.value.worktreePath!)).toBe(true)
+    expect(existsSync(second.value.worktreePath!)).toBe(true)
   })
 
   it("creates an idle session with a starbase/<slug> branch and a worktree path", async () => {
@@ -341,7 +393,11 @@ describe("SessionStore", () => {
   // (`gh pr checkout`). `gh` isn't available in CI and the fork isn't real, so we
   // drive both binaries with a fake executor overlaid on the real temp FS: the
   // worktree dir + sessions.json are real, only the git/gh *processes* are canned.
-  const prServices = Layer.mergeAll(SessionStore.Default, GitService.Default, GhService.Default)
+  const prServices = Layer.mergeAll(
+  SessionStore.Default,
+  GitService.Default,
+  GhService.Default
+)
 
   const prInput = (over: Partial<CreateSessionFromPrInput["pr"]> = {}): CreateSessionFromPrInput => ({
     repoPath,
