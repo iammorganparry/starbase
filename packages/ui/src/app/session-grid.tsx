@@ -222,7 +222,11 @@ export function SessionGrid(props: SessionGridProps) {
               if (droppedId) onAssignSlot(index, droppedId)
             }}
             className={cn(
-              "relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-editor",
+              // `flex-1 basis-0` (not bare flex-1): stacked slots in a column
+              // split height evenly rather than sizing to content. Without it the
+              // slot collapses to its transcript's height and the composer floats
+              // mid-pane instead of pinning to the bottom.
+              "relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden bg-editor",
               // The focus ring is noise when there's only one pane — with nothing
               // to disambiguate, it would just be a permanent border.
               !single && isFocused && "ring-1 ring-inset ring-blue/40",

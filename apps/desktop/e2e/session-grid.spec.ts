@@ -216,3 +216,92 @@ test("a foreign drag (a file) is ignored by the grid", async ({ launchApp }) => 
   // Still empty — nothing was assigned.
   await expect(window.getByTestId("grid-slot-empty-1")).toBeVisible()
 })
+
+/**
+ * Pane GEOMETRY, as opposed to the interaction tests above.
+ *
+ * These exist because of a regression the whole interaction suite sailed past:
+ * the grid slot carried `min-h-0 min-w-0 flex-col` but no `flex-1`, so it sized
+ * to its CONTENT instead of filling its column. Every drag/swap/focus/restart
+ * test still passed — a pane half the height it should be holds the same
+ * sessions and answers the same clicks — while the composer visibly floated in
+ * the middle of an empty pane.
+ *
+ * So the assertions here are on measured boxes, not on behaviour. An empty
+ * session is deliberately the fixture: a short transcript is the case where a
+ * content-sized slot collapses most, and it is what the bug was reported on.
+ */
+
+/** The measured box of one element, via the real layout engine. */
+const boxOf = async (page: Page, selector: string) => {
+  const box = await page.locator(selector).first().boundingBox()
+  if (box === null) throw new Error(`no box for ${selector}`)
+  return box
+}
+
+const bottomOf = (box: { y: number; height: number }) => box.y + box.height
+
+test("a single pane fills its container, pinning the composer to the bottom", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  const grid = await boxOf(window, "[data-layout-mode]")
+  const slot = await boxOf(window, '[data-testid="grid-slot-0"]')
+
+  // The slot fills the grid rather than shrinking to its (empty) transcript.
+  expect(Math.abs(slot.height - grid.height)).toBeLessThanOrEqual(2)
+
+  // And the composer sits at the slot's bottom edge, not partway up it. The
+  // tolerance covers the composer wrapper's own padding (pb-[18px]).
+  const composer = await boxOf(window, '[data-testid="composer"]')
+  expect(bottomOf(slot) - bottomOf(composer)).toBeLessThanOrEqual(30)
+})
+
+test("both columns of a 1|1 split fill their height", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  await window.getByTestId("layout-mode-1|1").click()
+  await dragTo(window, "session-row-s_beta", "grid-slot-1")
+  expect(await slotSessions(window)).toEqual(["s_alpha", "s_beta"])
+
+  const grid = await boxOf(window, "[data-layout-mode]")
+  for (const index of [0, 1]) {
+    const slot = await boxOf(window, `[data-testid="grid-slot-${index}"]`)
+    expect(Math.abs(slot.height - grid.height)).toBeLessThanOrEqual(2)
+  }
+
+  // The second pane is the one from the bug report: freshly filled, empty
+  // transcript, composer stranded at the top.
+  const second = await boxOf(window, '[data-testid="grid-slot-1"]')
+  const composer = await window
+    .getByTestId("grid-slot-1")
+    .getByTestId("composer")
+    .boundingBox()
+  if (composer === null) throw new Error("no composer in slot 1")
+  expect(bottomOf(second) - bottomOf(composer)).toBeLessThanOrEqual(30)
+})
+
+test("stacked panes split their column evenly rather than sizing to content", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  // `2|1` stacks two slots in the left column — the case that needs `basis-0`
+  // and not merely `flex-1`. With `flex-1` alone the two slots grow from their
+  // CONTENT heights, so an empty session and a long one split the column
+  // unevenly; `basis-0` makes them start from zero and share it equally.
+  await window.getByTestId("layout-mode-2|1").click()
+  await dragTo(window, "session-row-s_beta", "grid-slot-1")
+
+  const top = await boxOf(window, '[data-testid="grid-slot-0"]')
+  const bottom = await boxOf(window, '[data-testid="grid-slot-1"]')
+  const grid = await boxOf(window, "[data-layout-mode]")
+
+  // Equal halves, and each genuinely half — not one full pane and one sliver.
+  expect(Math.abs(top.height - bottom.height)).toBeLessThanOrEqual(2)
+  expect(top.height).toBeGreaterThan(grid.height * 0.4)
+})

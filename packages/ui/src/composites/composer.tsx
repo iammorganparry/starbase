@@ -348,7 +348,10 @@ export function Composer({
   }
 
   return (
-    <div className={cn("relative flex flex-col gap-2", className)}>
+    // `data-testid` anchors the e2e geometry assertions: they measure where the
+    // composer's OUTER box sits in its pane, which the textarea alone cannot
+    // stand in for (the model / MCP / Send row hangs ~80px below it).
+    <div data-testid="composer" className={cn("relative flex flex-col gap-2", className)}>
       {menu && count > 0 && (
         <div className="absolute inset-x-0 bottom-full z-10 mb-2">
           {menu.kind === "slash" ? (

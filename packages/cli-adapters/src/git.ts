@@ -25,6 +25,27 @@ type GitEnv =
   | CommandExecutor.CommandExecutor
 
 /**
+ * Whether `branch` is checked out in the repo's MAIN working tree, per the
+ * output of `git worktree list --porcelain`.
+ *
+ * Records are blank-line separated and the FIRST record is always the main
+ * working tree — the developer's own checkout. That asymmetry is the whole
+ * point: sharing a branch ref between two SESSION worktrees is recoverable
+ * noise, but sharing one with the main checkout means an agent's commits
+ * silently move the branch the developer is standing on. That is how sessions
+ * ended up appearing to "commit to main".
+ *
+ * Pure, so the decision is testable without a real repo.
+ */
+export const mainTreeHoldsBranch = (porcelain: string, branch: string): boolean => {
+  const [mainRecord] = porcelain.trim().split(/\n\s*\n/)
+  if (mainRecord === undefined) return false
+  return mainRecord
+    .split("\n")
+    .some((line) => line.trim() === `branch refs/heads/${branch}`)
+}
+
+/**
  * Creates isolated git worktrees for sessions. A worktree is added under
  * `~/starbase/worktrees/<repo>/<slug>` on a fresh `starbase/<slug>` branch forked
  * from `baseBranch`.
@@ -195,16 +216,43 @@ export class GitService extends Effect.Service<GitService>()(
 
       /**
        * Check out an existing local `branch` into the worktree at `cwd`, even
-       * when that branch is already checked out in another worktree (the main
-       * repo, typically). `--ignore-other-worktrees` bypasses git's safeguard so
-       * a PR whose branch you already have checked out locally can still be
-       * opened as a session — the two worktrees then share the branch ref.
+       * when that branch is already checked out in ANOTHER SESSION's worktree.
+       * `--ignore-other-worktrees` bypasses git's safeguard so a PR whose branch
+       * you already have checked out locally can still be opened as a session —
+       * the two worktrees then share the branch ref.
+       *
+       * REFUSES when the holder is the repo's MAIN working tree. Sharing a ref
+       * with the developer's own checkout is not a milder version of the same
+       * trade-off, it is a different one: every commit the agent lands moves the
+       * branch under the developer's feet, with no indication in either place
+       * that it happened. The user-facing "share checked-out branches" lever
+       * opts into sharing with other SESSIONS; it was never a request to have an
+       * agent write into the checkout you are standing in.
+       *
+       * The caller (`createFromPr`) already treats a failure here as "this PR
+       * cannot be opened as a session", which is the correct outcome — the fix
+       * is to check the PR out in your main repo yourself, or move it off the
+       * shared branch.
        */
       const checkoutBranch = (
         cwd: string,
         branch: string
       ): Effect.Effect<void, GitError, CommandExecutor.CommandExecutor> =>
-        runGit(cwd, ["checkout", "--ignore-other-worktrees", branch]).pipe(Effect.asVoid)
+        Effect.gen(function* () {
+          const porcelain = yield* runString("git", "-C", cwd, "worktree", "list", "--porcelain")
+          if (porcelain !== null && mainTreeHoldsBranch(porcelain, branch)) {
+            return yield* Effect.fail(
+              new GitError({
+                message:
+                  `Branch "${branch}" is checked out in this repo's main working tree. ` +
+                  `Opening it as a session would share the branch ref, so the agent's ` +
+                  `commits would move your own checkout. Switch your main checkout to ` +
+                  `another branch first.`
+              })
+            )
+          }
+          yield* runGit(cwd, ["checkout", "--ignore-other-worktrees", branch])
+        })
 
       /**
        * Remove the worktree at `worktreePath` (deleting a session). Resolves the
