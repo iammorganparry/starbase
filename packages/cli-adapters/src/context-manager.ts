@@ -184,7 +184,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
       const buildDigest = (sessionId: string): Effect.Effect<void, never, DigestEnv> =>
         Effect.gen(function* () {
           const settings = yield* settingsFor(sessionId)
-          if (settings === null) return yield* fail(sessionId)
+          if (settings === null) return yield* fail(sessionId, "session or config unavailable")
 
           const messages = yield* TranscriptStore.list(sessionId).pipe(
             Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
@@ -249,25 +249,52 @@ export class ContextManager extends Effect.Service<ContextManager>()(
               Effect.as(true),
               Effect.orElseSucceed(() => false)
             )
-          if (!ok) return yield* fail(sessionId)
+          if (!ok) return yield* fail(sessionId, "run errored or timed out")
 
-          const raw = (yield* Ref.get(collected)).join("\n")
+          // Concatenate with "", NOT "\n". `collected` holds one entry per
+          // streamed text DELTA (see `emit` above), and a harness streams its
+          // reply token by token — so joining with "\n" injects a newline at
+          // every fragment boundary. When a boundary lands inside a JSON string
+          // value (near-certain with token-level streaming) that newline becomes
+          // a raw newline inside the string, which is invalid JSON: `parseDigest`
+          // then throws and the digest fails EVERY time. The bug was invisible in
+          // tests because the scripted adapter emits the whole reply as a single
+          // event, where the separator never bites. Deltas are contiguous, so ""
+          // reproduces the harness's literal output (its own newlines included).
+          const raw = (yield* Ref.get(collected)).join("")
+          // An empty reply and an unparseable one are different failures: the
+          // first means the run produced no main-thread text at all (deny-all
+          // gate, a harness that only emitted tool chatter), the second means it
+          // spoke but not in the shape we asked for.
+          if (raw.trim().length === 0) return yield* fail(sessionId, "empty digest reply")
           const builtAt = yield* Effect.sync(() => new Date().toISOString())
           const digest = parseDigest(raw, through, builtAt)
           // A null digest is a real answer, not an error to smooth over: we simply
           // don't compact, and the session behaves exactly as it does today.
-          if (digest === null) return yield* fail(sessionId)
+          if (digest === null) return yield* fail(sessionId, "digest reply did not parse")
 
           yield* setState(sessionId, (s) => ({ ...s, status: "ready", digest, failures: 0 }))
         })
 
-      const fail = (sessionId: string): Effect.Effect<void> =>
-        setState(sessionId, (s) => ({
-          ...s,
-          status: "idle",
-          digest: null,
-          failures: s.failures + 1
-        }))
+      /**
+       * Record a failed digest attempt and say WHY.
+       *
+       * The counter + stall behaviour is unchanged — one retry then silence — but
+       * the reason is logged so a systematically-failing digest is diagnosable
+       * instead of a session that mysteriously stops compacting. This class of bug
+       * (a reply that never parsed) was invisible precisely because `fail` said
+       * nothing.
+       */
+      const fail = (sessionId: string, reason: string): Effect.Effect<void> =>
+        Effect.zipRight(
+          Effect.logWarning(`context digest failed for ${sessionId}: ${reason}`),
+          setState(sessionId, (s) => ({
+            ...s,
+            status: "idle",
+            digest: null,
+            failures: s.failures + 1
+          }))
+        )
 
       /** Fork the digest as a daemon so it outlives the turn that triggered it. */
       const fork = (sessionId: string): Effect.Effect<void, never, DigestEnv> =>

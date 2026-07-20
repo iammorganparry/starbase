@@ -87,6 +87,62 @@ test("compacts a session and keeps its history intact", async ({ launchApp }) =>
   await expect(window.getByText(/token bucket/).first()).toBeVisible()
 })
 
+/**
+ * The regression guard for the streamed-digest bug.
+ *
+ * A real harness streams its summary token by token, so the manager collects the
+ * reply as many `Assistant` deltas and reassembles them. It once joined those
+ * fragments with "\n" instead of "": a newline injected inside a JSON string
+ * value made the reply invalid JSON, `parseDigest` returned null, and EVERY real
+ * digest failed — the session showed "compaction failed" and never compacted.
+ *
+ * Unit tests missed it because the fake adapters emit the reply as ONE event,
+ * where the separator is a no-op. This test only means anything because the
+ * scripted digest now streams in chunks (see `scriptedRun` in adapter.ts), so a
+ * boundary lands mid-string exactly as it does in production. If the join
+ * regresses, the digest fails to parse and every assertion below times out.
+ */
+test("reassembles a digest that arrives as streamed deltas", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions
+  })
+
+  const composer = window.getByPlaceholder("Message Claude…")
+  await expect(composer).toBeVisible()
+
+  await composer.click()
+  await composer.pressSequentially("Add rate limiting to the refund endpoint.")
+  await composer.press("Enter")
+  await expect(window.getByText("src/routes/billing.ts").first()).toBeVisible({ timeout: 20_000 })
+
+  const meter = window.getByRole("button", { name: "Compact now" })
+  await expect(meter).toBeVisible({ timeout: 20_000 })
+  await meter.click()
+
+  // The digest PARSED. With the "\n" join this never happens: the reply is
+  // invalid JSON, the manager fails, and the meter reads "compaction failed".
+  await expect(window.getByText("compacts next turn")).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByText("compaction failed")).toHaveCount(0)
+
+  // Apply the swap, then inspect the summary the manager reassembled.
+  await composer.click()
+  await composer.pressSequentially("What did we decide about the token bucket?")
+  await composer.press("Enter")
+  await expect(window.getByText("Context compacted")).toBeVisible({ timeout: 20_000 })
+  await window.getByText("Context compacted").click()
+
+  // Multi-word strings that the chunker split ACROSS delta boundaries, rendered
+  // intact. Any of these surviving whole proves the fragments were concatenated
+  // faithfully — a "\n" join would have corrupted the JSON before it ever parsed.
+  await expect(
+    window.getByText("Reused the token bucket in lib/ratelimit.ts rather than adding a dependency")
+  ).toBeVisible()
+  await expect(window.getByText("The 429 test still needs writing")).toBeVisible()
+  await expect(window.getByText("Prefers Effect over raw async")).toBeVisible()
+})
+
 test("exposes the token levers in Settings", async ({ launchApp }) => {
   const { window } = await launchApp({
     configured: true,
