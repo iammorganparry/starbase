@@ -94,6 +94,30 @@ describe("worktreeEnv", () => {
     expect(env.PATH!.split(delimiter)).toEqual(["/usr/bin"])
   })
 
+  /**
+   * pnpm only ever publishes the lowercase form, so an uppercase
+   * `NPM_CONFIG_*` is not launcher leakage — it is npm's documented way to set
+   * config from the environment, and what corporate profiles and Dockerfiles
+   * use. Stripping it broke private registries asymmetrically: the integrated
+   * terminal is a LOGIN shell and re-sources the profile, so it kept working
+   * while the agent's non-login child did not.
+   */
+  it("keeps uppercase NPM_CONFIG_ vars, which are user intent rather than leakage", () => {
+    const env = worktreeEnv(
+      {
+        ...LEAKED,
+        NPM_CONFIG_REGISTRY: "https://artifactory.corp/api/npm/npm-virtual/",
+        "NPM_CONFIG_//artifactory.corp/:_authToken": "corp-token"
+      },
+      WORKTREE
+    )
+
+    expect(env.NPM_CONFIG_REGISTRY).toBe("https://artifactory.corp/api/npm/npm-virtual/")
+    expect(env["NPM_CONFIG_//artifactory.corp/:_authToken"]).toBe("corp-token")
+    // …while the lowercase form pnpm actually exports is still stripped.
+    expect(env.npm_config_registry).toBeUndefined()
+  })
+
   it("leaves credentials and ordinary variables untouched", () => {
     // Registry auth lives in ~/.npmrc, which the child reads directly — so
     // stripping npm_config_* must not be able to sign anyone out.

@@ -61,10 +61,24 @@ const DROP_EXACT: ReadonlySet<string> = new Set([
  */
 const DROP_PREFIXES: ReadonlyArray<string> = ["npm_config_", "npm_package_", "npm_lifecycle_"]
 
-const isDropped = (key: string): boolean => {
-  const lower = key.toLowerCase()
-  return DROP_EXACT.has(key) || DROP_PREFIXES.some((p) => lower.startsWith(p))
-}
+/**
+ * Case-SENSITIVE, deliberately.
+ *
+ * pnpm and npm only ever publish the lowercase `npm_config_*` form, so matching
+ * case-insensitively buys nothing against the leak this module exists for — it
+ * only catches `NPM_CONFIG_*`, which is the form npm documents for setting
+ * config through the environment on purpose, and the form corporate shell
+ * profiles and Dockerfiles use (`NPM_CONFIG_REGISTRY`,
+ * `NPM_CONFIG_USERCONFIG`, `NPM_CONFIG_//registry.corp/:_authToken`).
+ *
+ * Stripping those would break private-registry setups whose config is
+ * env-sourced rather than file-sourced — and break them ASYMMETRICALLY, since
+ * the integrated terminal spawns a LOGIN shell that re-sources the profile and
+ * restores the variable, while an agent's non-login child does not. Same
+ * session, opposite behaviour, for a variable we had no reason to touch.
+ */
+const isDropped = (key: string): boolean =>
+  DROP_EXACT.has(key) || DROP_PREFIXES.some((p) => key.startsWith(p))
 
 /** Whether `child` is `parent` or sits underneath it. Separator-safe. */
 const isWithin = (parent: string, child: string): boolean => {

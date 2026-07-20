@@ -244,16 +244,22 @@ export class GitService extends Effect.Service<GitService>()(
               Effect.ignore
             )
           }
-          // Always prune, from whichever repo we can reach.
+          // Prune ONLY when the directory was already gone.
           //
-          // `worktree remove` fails outright on a directory that no longer
-          // exists, so on that path it is `prune` — which drops registrations
-          // whose working tree has vanished — that does the actual work. Running
-          // it after a successful remove is harmless and clears any sibling
-          // entries left by earlier failures.
-          const pruneFrom = mainPath ?? repoPath ?? null
-          if (pruneFrom) {
-            yield* runGit(pruneFrom, ["worktree", "prune"]).pipe(Effect.ignore)
+          // `worktree remove` handles the normal case completely, and prune is
+          // not scoped to one worktree: it drops the registration of EVERY
+          // worktree of the repo whose directory is not currently present. Run
+          // unconditionally that reaches beyond this session — a developer's own
+          // worktree of the same repo on an unmounted volume would be
+          // unregistered by deleting an unrelated session, and orphaned when the
+          // volume came back.
+          //
+          // When `mainPath` is null the directory is gone, `worktree remove`
+          // cannot run at all, and prune is the only thing that clears the
+          // registration. That is the case worth its blast radius, because a
+          // vanished directory is exactly what prune is defined to collect.
+          if (mainPath === null && repoPath) {
+            yield* runGit(repoPath, ["worktree", "prune"]).pipe(Effect.ignore)
           }
         })
 

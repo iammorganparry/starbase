@@ -48,9 +48,13 @@ const kebab = (input: string): string =>
 
 type PersistEnv = FileSystem.FileSystem | AppPaths
 
-/** Monotonic id making each write's temp file unique within this process. */
-let writeSeq = 0
-const nextWriteId = (): number => ++writeSeq
+/**
+ * A process-wide monotonic counter, used wherever `Date.now()` is too coarse to
+ * distinguish two operations. Two things happening in the same millisecond are
+ * routine here — session creation is driven by the UI and by automation.
+ */
+let opSeq = 0
+const nextOpId = (): number => ++opSeq
 
 /**
  * The session store, persisted to `~/starbase/sessions.json`. Starts empty — real
@@ -133,7 +137,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           // which is a corrupted write dressed up as a missing file. The store
           // lock orders writers within a process; this keeps the scheme correct
           // even when it does not (a second Starbase instance, a stray fibre).
-          const tempFile = `${paths.sessionsFile}.${process.pid}.${nextWriteId()}.tmp`
+          const tempFile = `${paths.sessionsFile}.${process.pid}.${nextOpId()}.tmp`
           yield* fs
             .writeFileString(tempFile, JSON.stringify(encoded, null, 2))
             .pipe(Effect.mapError((cause) => new GitError({ message: "Failed to persist session", cause })))
@@ -195,7 +199,13 @@ export class SessionStore extends Effect.Service<SessionStore>()(
                 // collides on one name.
                 .map((s) => basename(s.worktreePath!))
             )
-            const seed = yield* Effect.sync(() => Date.now())
+            // `Date.now()` ALONE is not a distinct seed. Two untitled sessions
+            // created in the same millisecond get the same clock reading and the
+            // same (still empty) used-set, so `freeCreativeName` hands both the
+            // same name — and the second create's reclaim step would then
+            // `rm -rf` the first's worktree. Mixing in a per-process counter
+            // makes the seed differ even when the clock does not.
+            const seed = yield* Effect.sync(() => Date.now() + nextOpId() * 7919)
             slug = freeCreativeName(usedSlugs, seed, `${kebab(title)}-${stamp}`)
           }
           // Refuse if a live session already owns this path — the same guard
@@ -234,6 +244,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
+            repoPath: worktree.repoPath,
             baseBranch: input.baseBranch,
             // Seed the session's permission mode / model from the provider's
             // configured defaults (omitted → the harness falls back on its own).
@@ -331,6 +342,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
+            repoPath: worktree.repoPath,
             baseBranch: input.pr.baseRefName
           }
           const existing = yield* readAll()
@@ -415,6 +427,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             tokens: 0,
             updatedAt: now,
             worktreePath: worktree.path,
+            repoPath: worktree.repoPath,
             baseBranch: input.baseBranch,
             ...(options.defaultMode ? { mode: options.defaultMode } : {}),
             ...(options.defaultModel ? { model: options.defaultModel } : {})
@@ -593,13 +606,24 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         GitService | FileSystem.FileSystem | Path.Path | CommandExecutor.CommandExecutor | AppPaths
       > =>
         Effect.gen(function* () {
-          const all = yield* readAll()
-          const target = all.find((s) => s.id === id)
+          const target = (yield* readAll()).find((s) => s.id === id)
           if (!target) return
           if (target.worktreePath) {
-            yield* GitService.removeWorktreeAt(target.worktreePath).pipe(Effect.ignore)
+            yield* GitService.removeWorktreeAt(target.worktreePath, target.repoPath).pipe(
+              Effect.ignore
+            )
           }
-          yield* writeAll(all.filter((s) => s.id !== id))
+          // Re-read INSIDE the lock rather than filtering the list read above.
+          // `removeWorktreeAt` shells out to git (`worktree remove --force`, then
+          // a prune) and takes seconds; writing a list captured before that would
+          // discard every turn's usage, status and resume-id written in the
+          // meantime, and would resurrect any session created in the window.
+          yield* atomically(
+            Effect.gen(function* () {
+              const current = yield* readAll()
+              yield* writeAll(current.filter((s) => s.id !== id))
+            })
+          )
         })
 
       return {

@@ -53,6 +53,59 @@ describe("SessionStore", () => {
   })
 
   /**
+   * The store is one JSON file rewritten wholesale, so concurrent mutations
+   * race: each reads the array, edits its own session, writes the WHOLE thing
+   * back, and the later write discards the earlier one's change.
+   *
+   * These use ONE service instance (`Effect.provide` once, around the whole
+   * concurrent block) because the semaphore lives on the instance — providing
+   * the layer per call would hand each fibre its own lock and test nothing.
+   */
+  describe("concurrent writers", () => {
+    it("does not lose a session when two are created at once", async () => {
+      const result = await runExit(
+        Effect.gen(function* () {
+          const store = yield* SessionStore
+          yield* Effect.all(
+            [store.create(input({ title: "Alpha" })), store.create(input({ title: "Beta" }))],
+            { concurrency: 2 }
+          )
+          return yield* store.list()
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+
+      expect(result._tag).toBe("Success")
+      if (result._tag !== "Success") return
+      // Both survive. Unserialised, the second create appends to a list read
+      // before the first existed, and Alpha vanishes.
+      expect(result.value.map((s) => s.title).sort()).toEqual(["Alpha", "Beta"])
+    })
+
+    it("does not lose a concurrent update while a session is being deleted", async () => {
+      const result = await runExit(
+        Effect.gen(function* () {
+          const store = yield* SessionStore
+          const doomed = yield* store.create(input({ title: "Doomed" }))
+          const keeper = yield* store.create(input({ title: "Keeper" }))
+          // `remove` shells out to git for seconds; a write landing in that
+          // window was previously discarded by a list captured before it.
+          yield* Effect.all([store.remove(doomed.id), store.setModel(keeper.id, "opus")], {
+            concurrency: 2
+          })
+          return yield* store.list()
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+
+      expect(result._tag).toBe("Success")
+      if (result._tag !== "Success") return
+      expect(result.value.map((s) => s.title)).toEqual(["Keeper"])
+      expect(result.value[0]!.model).toBe("opus")
+    })
+  })
+
+  /**
    * A slug becomes a directory name, and most filesystems cap one name at 255
    * bytes. Issue and PR titles have no such limit, so an unbounded slug made
    * `git worktree add` fail with ENAMETOOLONG and lost the create outright.
