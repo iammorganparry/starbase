@@ -36,6 +36,8 @@ import { UsageModal } from "../composites/usage-modal.js"
 import { SettingsView } from "../composites/settings-view.js"
 import { type ConversationPaneCtx, SessionConversation } from "../screens/session-conversation.js"
 import { ARCHIVED_GROUP_KEY } from "./session-sidebar.js"
+import { LayoutPicker } from "./session-grid.js"
+import { useGridLayout } from "./use-grid-layout.js"
 import { SEED_PATCH } from "../seed.js"
 
 const GH_UNAVAILABLE: GhStatus = {
@@ -277,9 +279,13 @@ export function StarbaseApp({
   onCreateSessionFromIssue,
   version
 }: StarbaseAppProps) {
-  const [selected, setSelected] = useState<string | null>(
-    activeSessionId ?? sessions[0]?.id ?? null
-  )
+  // The session grid replaces what used to be a single `selected` useState. The
+  // focused slot's session IS the old "selected" — every existing call site below
+  // still reads `selected` / calls `setSelected` and behaves as it always did when
+  // the layout is 1-up.
+  const grid = useGridLayout(sessions, activeSessionId ?? sessions[0]?.id ?? null)
+  const selected = grid.activeSessionId
+  const setSelected = grid.selectSession
   const [newOpen, setNewOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageLoading, setUsageLoading] = useState(false)
@@ -358,17 +364,9 @@ export function StarbaseApp({
   )
 
   const active = sessions.find((s) => s.id === selected) ?? null
-  // Key the pane by session id so each session drives a fresh conversation
-  // machine (the deterministic per-session reset — no session-sync effect). The
-  // same pane serves both the Conversation and Plan tabs (see SessionConversation).
-  const renderConversationPane =
-    active && renderConversation
-      ? (view: "conversation" | "plan" | "split", ctx: ConversationPaneCtx) => (
-          <div key={active.id} className="flex min-h-0 min-w-0 flex-1">
-            {renderConversation(active, view, ctx)}
-          </div>
-        )
-      : undefined
+  // `renderConversation` is passed straight down now. It used to be wrapped in a
+  // closure that baked in the single active session; SessionPane keys and mounts
+  // the pane itself, which is what lets the grid render several at once.
   // In the real app (renderConversation wired) with nothing selected, show the
   // empty state rather than the Storybook-only seeded demo transcript.
   const showEmpty = Boolean(renderConversation) && active === null
@@ -414,17 +412,25 @@ export function StarbaseApp({
   )
 
   return (
-    <AppShell title="Starbase">
+    <AppShell
+      title="Starbase"
+      actions={<LayoutPicker mode={grid.layout.mode} onChange={grid.changeMode} />}
+    >
       <SessionConversation
         sessions={sessions}
         clis={clis}
         activeSessionId={selected}
         onSelectSession={setSelected}
+        layout={grid.layout}
+        onFocusSlot={grid.focusSlot}
+        onAssignSlot={grid.assignToSlot}
+        onClearSlot={grid.clearSlot}
+        slotBySession={grid.slotBySession}
         onRenameSession={onRenameSession}
         onArchiveSession={onArchiveSession}
         onRestoreSession={onRestoreSession}
         onDeleteSession={onDeleteSession}
-        renderConversationPane={renderConversationPane}
+        renderConversation={renderConversation}
         planSessions={planSessions}
         showEmpty={showEmpty}
         patch={patch}

@@ -1,5 +1,6 @@
 import { useState } from "react"
-import type { ReactNode } from "react"
+import type { DragEvent, ReactNode } from "react"
+import { SESSION_DND_MIME } from "../app/layout-grid.js"
 import type { PrState, Session, SessionActivity } from "@starbase/core"
 import { activityLabel, displayStatusOf } from "@starbase/core"
 import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
@@ -23,6 +24,7 @@ export function SessionRow({
   onArchive,
   onRestore,
   onDelete,
+  slotIndex = null,
   className
 }: {
   session: Session
@@ -48,6 +50,12 @@ export function SessionRow({
   onRestore?: (id: string) => void
   /** Permanently delete a session (the caller confirms first). */
   onDelete?: (id: string) => void
+  /**
+   * Which grid slot this session currently occupies, or null when it isn't on
+   * screen. Drives the numbered badge — the answer to "where did that one go?"
+   * when four sessions are live at once.
+   */
+  slotIndex?: number | null
   className?: string
 }) {
   // One rollup, three jobs: what the row says, what colour it says it in, and
@@ -122,6 +130,41 @@ export function SessionRow({
   const withMenu = (node: ReactNode) =>
     actions.length > 0 ? <ContextMenu items={actions}>{node}</ContextMenu> : node
 
+  /**
+   * Drag props shared by both row variants. The row is the drag SOURCE for the
+   * session grid; the slots downstream are the targets.
+   *
+   * `effectAllowed = "copyMove"` because a drop doesn't remove the session from
+   * the sidebar — the row stays put and simply gains a slot badge.
+   */
+  const dragProps = {
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      e.dataTransfer.setData(SESSION_DND_MIME, session.id)
+      e.dataTransfer.effectAllowed = "copyMove"
+    }
+  }
+
+  /**
+   * The numbered badge marking a session that's live in the grid. 1-based for
+   * display — the operator counts panes from one, even though slots are indexed
+   * from zero everywhere in the model.
+   */
+  const slotBadge =
+    slotIndex == null ? null : (
+      <span
+        data-testid={`session-slot-badge-${session.id}`}
+        title={`Showing in pane ${slotIndex + 1}`}
+        className="flex-none"
+      >
+        {/* Blue, unlike the neutral `count` badges beside it: this one says "on
+            screen right now", which is a different kind of fact from a PR number. */}
+        <Badge tone="blue" size="xs">
+          {slotIndex + 1}
+        </Badge>
+      </span>
+    )
+
   const commit = () => {
     if (draft === null) return
     const next = draft.trim()
@@ -136,6 +179,7 @@ export function SessionRow({
     return withMenu(
       <div
         data-testid={`session-row-${session.id}`}
+        {...dragProps}
         onClick={() => onSelect?.(session.id)}
         className={cn(
           "group relative flex cursor-pointer flex-col gap-[6px] rounded-lg border px-2.5 py-2 transition-colors",
@@ -154,6 +198,7 @@ export function SessionRow({
           >
             {session.title}
           </span>
+          {slotBadge}
         </div>
         <div className="flex items-center gap-[7px] font-mono text-[10.5px] text-muted-foreground">
           <Badge tone={closed ? "red" : "purple"} size="sm">
@@ -178,6 +223,7 @@ export function SessionRow({
   return withMenu(
     <div
       data-testid={`session-row-${session.id}`}
+      {...dragProps}
       onClick={() => onSelect?.(session.id)}
       className={cn(
         "group relative flex cursor-pointer flex-col gap-[7px] rounded-lg border px-2.5 py-2 transition-colors",
@@ -219,6 +265,7 @@ export function SessionRow({
             {session.title}
           </span>
         )}
+        {slotBadge}
         {/* The harness in use, so it's visible at a glance in the list. */}
         <ProviderIcon cli={session.cli} size={13} />
       </div>

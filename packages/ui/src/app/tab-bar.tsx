@@ -8,7 +8,8 @@ import {
   MessagesSquare,
   PanelRight,
   Waypoints,
-  Workflow
+  Workflow,
+  X
 } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Pill } from "../components/pill.js"
@@ -52,8 +53,11 @@ export function TabBar({
   status,
   onToggleBrowser,
   browserActive = false,
+  browserDisabled = false,
+  browserDisabledReason,
   onToggleSplit,
-  splitActive = false
+  splitActive = false,
+  onClosePane
 }: {
   tabs: ReadonlyArray<TabKey>
   active: TabKey
@@ -68,6 +72,14 @@ export function TabBar({
   /** Whether the browser preview pane is currently open (highlights the toggle). */
   browserActive?: boolean
   /**
+   * Greys out the browser toggle. The preview is a single native view owned by
+   * the whole app, so only the FOCUSED pane in a grid can drive it — the others
+   * show the control (its absence would read as a missing feature) but inert.
+   */
+  browserDisabled?: boolean
+  /** Tooltip explaining why the toggle is inert, e.g. "Browser preview is in pane 1". */
+  browserDisabledReason?: string
+  /**
    * Open Plan Review beside the transcript. Omitted — and so hidden — unless the
    * split is actually available: the session has a plan AND the conversation tab
    * is the one on screen. A control that does nothing where it sits is worse than
@@ -76,6 +88,12 @@ export function TabBar({
   onToggleSplit?: () => void
   /** Whether the plan is currently split beside the conversation. */
   splitActive?: boolean
+  /**
+   * Empty this pane's grid slot. Shown only in a multi-pane layout: in 1-up there
+   * is nothing to close back TO, and the control would just be a way to blank the
+   * app. Closing a slot never touches the session — its agent keeps running.
+   */
+  onClosePane?: () => void
 }) {
   return (
     <div
@@ -148,15 +166,32 @@ export function TabBar({
           <button
             type="button"
             onClick={onToggleBrowser}
+            disabled={browserDisabled}
             aria-label="Browser preview"
             aria-pressed={browserActive}
-            title="Toggle browser preview (⌃⇧B)"
+            data-testid="toggle-browser"
+            title={browserDisabledReason ?? "Toggle browser preview (⌃⇧B)"}
             className={cn(
-              "flex size-6 items-center justify-center rounded transition-colors hover:bg-hairline",
-              browserActive ? "text-blue" : "text-dim hover:text-text-bright"
+              "flex size-6 items-center justify-center rounded transition-colors",
+              browserDisabled
+                ? "cursor-not-allowed text-dim/40"
+                : "hover:bg-hairline " +
+                  (browserActive ? "text-blue" : "text-dim hover:text-text-bright")
             )}
           >
             <Globe className="size-4" />
+          </button>
+        )}
+        {onClosePane && (
+          <button
+            type="button"
+            onClick={onClosePane}
+            aria-label="Close pane"
+            data-testid="close-pane"
+            title="Close pane (the session keeps running)"
+            className="flex size-6 items-center justify-center rounded text-dim transition-colors hover:bg-hairline hover:text-text-bright"
+          >
+            <X className="size-4" />
           </button>
         )}
       </div>

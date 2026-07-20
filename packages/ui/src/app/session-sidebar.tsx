@@ -45,6 +45,11 @@ const STATUS_ORDER: ReadonlyArray<SessionDisplayStatus> = [
 export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
   activeSessionId: string | null
+  /**
+   * Which grid slot each session occupies, for the numbered "on screen" badges.
+   * Absent when the grid isn't wired (stories) — rows then show no badge.
+   */
+  slotBySession?: ReadonlyMap<string, number>
   onSelect: (id: string) => void
   /** Manually rename a session (double-click its title) — pins the auto-name. */
   onRename?: (id: string, title: string) => void
@@ -90,6 +95,7 @@ export interface SessionSidebarProps {
 export function SessionSidebar({
   sessions,
   activeSessionId,
+  slotBySession,
   onSelect,
   onRename,
   onArchive,
@@ -325,6 +331,7 @@ export function SessionSidebar({
                       activity={liveActivity?.[s.id]}
                       prState={prStates?.[s.id]}
                       active={s.id === activeSessionId}
+                      slotIndex={slotBySession?.get(s.id) ?? null}
                       onSelect={onSelect}
                       onRename={onRename}
                       onArchive={onArchive}
@@ -377,6 +384,7 @@ export function SessionSidebar({
                       key={s.id}
                       session={s}
                       active={s.id === activeSessionId}
+                      slotIndex={slotBySession?.get(s.id) ?? null}
                       onSelect={onSelect}
                       onRestore={onRestore}
                       onDelete={onDelete}
