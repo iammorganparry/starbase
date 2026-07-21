@@ -178,6 +178,24 @@ describe("useSplitLayout", () => {
       expect(result.current.activeSessionId).toBe("c")
     })
 
+    it("KEEPS an archived session that is alone in its group", () => {
+      // Reading an archived session is a supported thing to do — it gets a "was
+      // merged" banner and a locked composer — and clicking its sidebar row puts
+      // it in a group of one. Evicting archived panes outright made that view
+      // unreachable: the pane was removed on the very next render, so the app
+      // fell through to the first-launch screen. A group of one draws no pill,
+      // so there is no duplicate `layoutId` to avoid here either.
+      const { result } = renderHook(() => useSplitLayout(archiving(["a"]), "a"))
+      expect(paneIds(result)).toEqual(["a"])
+      expect(result.current.activeSessionId).toBe("a")
+    })
+
+    it("keeps an archived session viewable after it is clicked", () => {
+      const { result } = renderHook(() => useSplitLayout(archiving(["e"]), "a"))
+      act(() => result.current.selectSession("e"))
+      expect(paneIds(result)).toEqual(["e"])
+    })
+
     it("does not put a restored session back into the split it left", () => {
       // Rejoining a split is something you ask for by dragging — not a side
       // effect of un-retiring a session.

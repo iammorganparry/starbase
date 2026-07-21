@@ -140,28 +140,48 @@ export function useSplitLayout(
     }
   }, [flushSave])
 
-  // Which sessions may occupy a pane: the ones that still exist AND are still
-  // active.
-  //
-  // Deleted, because a workspace restored from storage names sessions that may
-  // since have gone (deleted in another window, or by wiping sessions.json), and
-  // a pane pointed at nothing is worse than no pane.
-  //
-  // Archived, because archiving is how you retire a session, and a retired
-  // session holding a pane open contradicts that. It also had a concrete cost:
-  // the sidebar would draw the session TWICE — once as a segment of its split's
-  // pill and once as a row under Archived — and both carry the same `motion`
-  // `layoutId`. Two mounted elements sharing a layoutId is undefined in motion;
-  // the shared-element tween can snap one to the other's box, so the archived
-  // row would fly across the sidebar and land on the pill.
-  //
-  // Restoring puts the session back in the list as its own row, not back into
-  // the split it was archived out of. That's the right way round: rejoining a
-  // split is a thing you ask for by dragging, not a side effect of un-retiring.
-  const knownIds = useMemo(
-    () => new Set(sessions.filter((s) => !s.archived).map((s) => s.id)),
-    [sessions]
-  )
+  const sessionIndex = useMemo(() => {
+    const exists = new Set<string>()
+    const archived = new Set<string>()
+    for (const s of sessions) {
+      exists.add(s.id)
+      if (s.archived) archived.add(s.id)
+    }
+    return { exists, archived }
+  }, [sessions])
+
+  /**
+   * Keep the workspace honest about which sessions may hold a pane.
+   *
+   * Two rules, and the second is narrower than it first looks:
+   *
+   * 1. **Gone means gone.** A workspace restored from storage names sessions
+   *    that may since have been deleted (in another window, or by wiping
+   *    sessions.json). A pane pointed at nothing is worse than no pane.
+   *
+   * 2. **Archiving takes a session out of a SPLIT, but not off the screen.** An
+   *    archived session sharing a group with others is dropped from it; one that
+   *    is alone in its group keeps it.
+   *
+   * The asymmetry in (2) is the point, and it is the sidebar that forces it. A
+   * session in a multi-pane group is drawn as a segment of that group's pill —
+   * and if it is also archived it is drawn AGAIN as a row under Archived, with
+   * both elements carrying `layoutId="session-<id>"`. Two mounted elements
+   * sharing a layoutId is undefined in motion; the shared-element tween can snap
+   * either to the other's box, so the archived row would fly across the sidebar
+   * and land on the pill. A group of ONE has no pill — it is an ordinary row —
+   * so there is no duplicate to create and nothing to fix.
+   *
+   * Dropping archived sessions outright was the first attempt, and it broke
+   * something real: reading an archived session is a supported thing to do (it
+   * gets a "was merged" banner and a locked composer), and clicking its row puts
+   * it in a group of one. Evicting those made the read-only view unreachable —
+   * the pane was removed on the very next render.
+   *
+   * Restoring does not put a session back into the split it was archived out of.
+   * Rejoining is something you ask for by dragging, not a side effect of
+   * un-retiring.
+   */
   useEffect(() => {
     // Unconditional, including for an EMPTY list. `StarbaseApp` only mounts once
     // the app machine has left `loading`/`starting` (App.tsx renders LoadingScreen
@@ -169,8 +189,18 @@ export function useSplitLayout(
     // not that they haven't arrived yet. Skipping the prune in that case left the
     // old grid holding ids of deleted sessions and persisting them across
     // restarts.
-    setWorkspace((current) => prune(current, knownIds))
-  }, [knownIds])
+    setWorkspace((current) => {
+      const eligible = new Set<string>()
+      for (const group of current.groups) {
+        for (const pane of group.panes) {
+          if (!sessionIndex.exists.has(pane.sessionId)) continue
+          if (group.panes.length > 1 && sessionIndex.archived.has(pane.sessionId)) continue
+          eligible.add(pane.sessionId)
+        }
+      }
+      return prune(current, eligible)
+    })
+  }, [sessionIndex])
 
   /** Show a session — what a sidebar CLICK means. Never moves it if it's on screen. */
   const selectSession = useCallback((sessionId: string) => {
