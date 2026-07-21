@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { WidthTierValue } from "../hooks/width-tier.js"
 import { testSession as session } from "../test-support.js"
@@ -47,7 +47,7 @@ describe("SessionSidebar at shell width", () => {
 
   it("honours a pin over the width rule, and persists it", () => {
     renderAt(820)
-    fireEvent.click(screen.getByLabelText("Pin sidebar open"))
+    fireEvent.click(screen.getByLabelText("Expand sidebar"))
     expect(screen.getByTestId("session-sidebar")).toBeTruthy()
 
     cleanup()
@@ -55,17 +55,38 @@ describe("SessionSidebar at shell width", () => {
     expect(screen.getByTestId("session-sidebar")).toBeTruthy()
   })
 
-  it("opens the overlay only after hover INTENT, not on first contact", () => {
-    vi.useFakeTimers()
-    try {
-      renderAt(820)
-      fireEvent.mouseEnter(screen.getByTestId("session-rail"))
-      // A pointer merely crossing the rail on its way elsewhere must not open it.
-      expect(screen.queryByTestId("sidebar-overlay")).toBeNull()
-      act(() => void vi.advanceTimersByTime(200))
-      expect(screen.getByTestId("sidebar-overlay")).toBeTruthy()
-    } finally {
-      vi.useRealTimers()
-    }
+  it("shows one session's details on hover — not the whole sidebar back again", async () => {
+    renderAt(820)
+    // Radix opens on FOCUS as well as on hover, which is both the keyboard story
+    // and the only one jsdom can drive — it has no real pointer to rest.
+    fireEvent.focus(screen.getByRole("button", { name: "Add auth" }))
+
+    const card = await screen.findByTestId("hover-card")
+    expect(card.textContent).toContain("Add auth")
+    // The card is the detail view now. Re-floating the entire sidebar on hover
+    // meant one gesture did two things, the second covering the first.
+    expect(screen.queryByTestId("sidebar-overlay")).toBeNull()
+    expect(screen.queryByTestId("session-sidebar")).toBeNull()
+  })
+
+  it("expands from the rail's button, and collapses again from the header's", () => {
+    renderAt(820)
+    fireEvent.click(screen.getByLabelText("Expand sidebar"))
+    expect(screen.getByTestId("session-sidebar")).toBeTruthy()
+
+    fireEvent.click(screen.getByLabelText("Collapse sidebar"))
+    expect(screen.getByTestId("session-rail")).toBeTruthy()
+  })
+
+  it("collapses a roomy shell from the header button, and remembers it", () => {
+    renderAt(1400)
+    fireEvent.click(screen.getByLabelText("Collapse sidebar"))
+    expect(screen.getByTestId("session-rail")).toBeTruthy()
+
+    // The pin outranks the width rule in BOTH directions — a collapse that the
+    // next mount silently undoes is a control that lies about its state.
+    cleanup()
+    renderAt(1400)
+    expect(screen.getByTestId("session-rail")).toBeTruthy()
   })
 })

@@ -88,8 +88,10 @@ export const DockedVsRail: Story = {
       <LookFor>
         <strong className="text-text-bright">Look for:</strong> the full sidebar at 1400 and 1100,
         the 52px rail at 900 and 820. In rail mode each session is two initials plus a status dot,
-        and the active one carries a blue ring. Hover the rail for ~150ms to float the full sidebar
-        over the content — the content behind must NOT reflow.
+        and the active one carries a blue ring. Rest on one cell for ~150ms: a card opens to its
+        right with the title, repo/branch, live status, diff and PR — one hover, one session. The
+        content behind must NOT reflow, and the card must flip rather than run off the bottom of
+        the frame. The top button (and ⌘B) puts the full sidebar back.
       </LookFor>
       <div className="flex items-start gap-5 overflow-auto p-6">
         <Shell width={1400} label="docked" />
@@ -134,7 +136,8 @@ export const Resizable: Story = {
       <LookFor>
         <strong className="text-text-bright">Look for:</strong> a drag handle on the sidebar&apos;s
         right edge that highlights blue on hover, clamping at 200px and 380px. Also press{" "}
-        <code>⌘B</code> — it pins the sidebar open regardless of width, and the pin persists.
+        <code>⌘B</code>, or click the panel button left of &ldquo;Sessions&rdquo; — either collapses
+        to the rail regardless of width, and the choice persists across a reload.
       </LookFor>
       <div className="flex h-[calc(100vh-64px)]">
         <WidthTierProvider>

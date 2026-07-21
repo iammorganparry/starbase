@@ -11,7 +11,10 @@ import { Button } from "../components/button.js"
 import { StatusDot } from "../components/status-dot.js"
 import { SearchInput } from "../components/search-input.js"
 import { FilterMenu } from "../components/filter-menu.js"
+import { HoverCard } from "../components/hover-card.js"
+import { ProviderIcon } from "../components/provider-icon.js"
 import { SessionRow } from "../composites/session-row.js"
+import { SessionHoverCard } from "../composites/session-hover-card.js"
 import { SplitRow } from "../composites/split-row.js"
 import { displayStatusLabel, displayStatusTone } from "../tokens.js"
 import { UserMenu } from "../composites/user-menu.js"
@@ -139,12 +142,15 @@ function SidebarBody({
   collapsedRepoNames,
   onToggleCollapsed,
   version,
-  defaultFilters
+  defaultFilters,
+  onCollapse
 }: SessionSidebarProps & {
-  /** Current docked width in px (the overlay passes its own fixed width). */
+  /** Current docked width in px. */
   width: number
-  /** Drag deltas from the edge handle. Omitted in the overlay, which can't be resized. */
+  /** Drag deltas from the edge handle. */
   onResize?: (deltaX: number) => void
+  /** Collapse to the icon rail (the header's `PanelLeft` button). */
+  onCollapse?: () => void
 }) {
   const [filter, setFilter] = React.useState("")
   const [filters, setFiltersState] = React.useState<SessionFilters>(
@@ -319,9 +325,22 @@ function SidebarBody({
         />
       )}
       {/* Header */}
-      <div className="flex items-center justify-between px-4 pb-2 pt-4">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-5 items-center justify-center rounded-md bg-blue font-mono text-[12px] font-semibold text-editor">
+      <div className="flex items-center justify-between gap-1.5 px-3 pb-2 pt-4">
+        <div className="flex min-w-0 items-center gap-2">
+          {/* The rail's expand button lives in the same corner, so the control
+              that changes this state is in one place rather than two. */}
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              aria-label="Collapse sidebar"
+              title="Collapse sidebar (⌘B)"
+              className="flex size-6 flex-none items-center justify-center rounded-md text-dim outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <PanelLeft size={14} />
+            </button>
+          )}
+          <span className="flex size-5 flex-none items-center justify-center rounded-md bg-blue font-mono text-[12px] font-semibold text-editor">
             ⌘
           </span>
           <span className="text-[13px] font-semibold text-text-bright">Sessions</span>
@@ -536,7 +555,7 @@ const RAIL_WIDTH = 52
 
 const PIN_STORAGE_KEY = "sb.sidebar.pinned"
 
-/** How long the pointer must rest on the rail before the overlay opens. */
+/** How long the pointer must rest on a rail cell before its card opens. */
 const HOVER_INTENT_MS = 150
 
 const readPinned = (): boolean | null => {
@@ -554,24 +573,32 @@ const readPinned = (): boolean | null => {
  * Deliberately NOT a scaled-down copy of the full sidebar. Grouping, filtering
  * and the group-by control all need labels to mean anything, so the rail drops
  * them entirely and keeps only the two things that survive at 52px: which
- * sessions exist, and which one you're in. Everything else is one hover away.
+ * sessions exist, and which one you're in. Everything else is one hover away —
+ * per CELL, in a `SessionHoverCard`.
+ *
+ * That per-cell card replaced an earlier design where hovering the rail ANYWHERE
+ * floated the entire sidebar back over the content. One hover gesture now means
+ * one thing: "tell me about THIS session". Expanding is a deliberate click (or
+ * ⌘B), because re-opening the whole sidebar is a layout change and layout
+ * changes shouldn't happen to you in passing.
  */
 function SessionRail({
   sessions,
   activeSessionId,
   liveActivity,
+  prStates,
   onSelect,
   onNewSession,
-  onExpand,
-  onPin
+  onExpand
 }: {
   sessions: ReadonlyArray<Session>
   activeSessionId: string | null
   liveActivity?: Record<string, SessionActivity | undefined>
+  prStates?: Record<string, SessionPrStatus>
   onSelect?: (id: string) => void
   onNewSession?: () => void
+  /** Re-dock the sidebar (the top button). */
   onExpand: () => void
-  onPin: () => void
 }) {
   const live = sessions.filter((s) => !s.archived)
   return (
@@ -579,13 +606,12 @@ function SessionRail({
       style={{ width: RAIL_WIDTH }}
       data-testid="session-rail"
       className="flex flex-none flex-col items-center gap-1 border-r border-hairline bg-panel py-2"
-      onMouseEnter={onExpand}
     >
       <button
         type="button"
-        onClick={onPin}
-        aria-label="Pin sidebar open"
-        title="Pin sidebar open (⌘B)"
+        onClick={onExpand}
+        aria-label="Expand sidebar"
+        title="Expand sidebar (⌘B)"
         className="flex size-8 flex-none items-center justify-center rounded-md text-dim outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
       >
         <PanelLeft size={15} />
@@ -605,30 +631,72 @@ function SessionRail({
           const active = s.id === activeSessionId
           const status = displayStatusOf(liveActivity?.[s.id], s.status)
           return (
-            <button
+            <HoverCard
               key={s.id}
-              type="button"
-              onClick={() => onSelect?.(s.id)}
-              aria-current={active ? "page" : undefined}
-              // The title is the ONLY place the session's name exists in this
-              // mode, so it carries the status word too — at 52px there is no
-              // second line to put it on.
-              title={`${s.title || UNTITLED_SESSION} — ${displayStatusLabel[status]}`}
-              aria-label={s.title || UNTITLED_SESSION}
-              className={cn(
-                "relative flex size-8 flex-none items-center justify-center rounded-md text-[11px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                active
-                  ? "bg-surface text-text-bright ring-1 ring-blue/50"
-                  : "text-muted-foreground hover:bg-surface hover:text-text"
-              )}
+              delayMs={HOVER_INTENT_MS}
+              content={
+                <SessionHoverCard
+                  session={s}
+                  activity={liveActivity?.[s.id]}
+                  prState={prStates?.[s.id]}
+                />
+              }
             >
-              {(s.title || UNTITLED_SESSION).slice(0, 2).toUpperCase()}
-              {/* Bottom-right rather than inline: a 32px cell has no room for a
-                  dot beside the initials without pushing them off-centre. */}
-              <span className="absolute -bottom-px -right-px">
-                <StatusDot status={displayStatusTone[status]} size={7} />
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => onSelect?.(s.id)}
+                aria-current={active ? "page" : undefined}
+                // No `title` — the card IS the tooltip, and a native tooltip
+                // fading in on top of it would cover the thing it duplicates.
+                // The accessible NAME still carries the session's title.
+                aria-label={s.title || UNTITLED_SESSION}
+                className={cn(
+                  "group relative flex size-8 flex-none items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  // The active cell was a half-opacity blue ring on a surface
+                  // fill — two low-contrast signals that, at 32px against a
+                  // panel that is nearly the same value, read as "slightly
+                  // smudged" rather than as "you are here". It now gets the
+                  // accent BAR (see below) plus a solid fill, and the ring is
+                  // gone: a ring and a bar both claiming selection is one signal
+                  // too many, and the bar is the one that survives at a glance.
+                  // `bg-surface` for the fill matches `SessionRow`'s active
+                  // treatment, so the same session looks selected the same way
+                  // in both sidebar states.
+                  active ? "bg-surface" : "hover:bg-surface/40"
+                )}
+              >
+                {/* The rail's own left edge, not the cell's: 32px of cell centred
+                    in 52px of rail leaves exactly 10px, so `-left-2.5` lands the
+                    bar on the panel border where every editor puts it. */}
+                {active && (
+                  <span
+                    aria-hidden
+                    className="absolute -left-2.5 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-blue"
+                  />
+                )}
+                {/* The HARNESS, not two initials. Initials of an auto-generated
+                    title ("UN" for Untitled) say nothing you didn't already
+                    know, and two sessions on the same feature collide; which
+                    agent is driving is the fact you actually navigate by. */}
+                <ProviderIcon
+                  cli={s.cli}
+                  size={16}
+                  // Brand colour for the active session, monochrome for the
+                  // rest — so the rail reads as one selected thing among peers
+                  // rather than as a row of competing logos.
+                  mono={!active}
+                  className={cn(
+                    "transition-colors",
+                    !active && "text-muted-foreground group-hover:text-text"
+                  )}
+                />
+                {/* Bottom-right rather than inline: a 32px cell has no room for a
+                    dot beside the icon without pushing it off-centre. */}
+                <span className="absolute -bottom-px -right-px">
+                  <StatusDot status={displayStatusTone[status]} size={7} />
+                </span>
+              </button>
+            </HoverCard>
           )
         })}
       </div>
@@ -640,11 +708,14 @@ function SessionRail({
  * The session sidebar, at whatever width the shell can spare.
  *
  * Above `RAIL_THRESHOLD` this is the docked, drag-resizable column it has always
- * been. Below it, the column becomes a 52px rail and the full sidebar moves to a
- * hover overlay — which FLOATS rather than pushing, so opening it costs the
- * content nothing and closing it causes no reflow. ⌘B pins the full sidebar open
- * at any width, and the pin is persisted: an operator who would rather give up
- * content width than navigate by hover should only have to say so once.
+ * been. Below it, the column becomes a 52px rail whose cells each carry a
+ * `SessionHoverCard` — so collapsing costs REACH (one hover, one click) rather
+ * than information.
+ *
+ * Either state can be forced with ⌘B or with the `PanelLeft` button, which
+ * exists in both: in the docked header to collapse, at the top of the rail to
+ * expand. The choice is persisted, so an operator who would rather give up
+ * content width than navigate by hover only has to say so once.
  */
 export function SessionSidebar(props: SessionSidebarProps) {
   // The SHELL's width, from the provider in `app-shell.tsx` — not this
@@ -653,8 +724,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const { width: shellWidth } = usePaneWidth()
   const { width, adjust } = useResizableWidth(SIDEBAR_WIDTH)
   const [pinned, setPinned] = React.useState<boolean | null>(readPinned)
-  const [hovering, setHovering] = React.useState(false)
-  const hoverTimer = React.useRef(0)
 
   // `shellWidth === 0` is the pre-measurement frame; treat it as roomy so the
   // sidebar doesn't flash a rail on every launch before the observer reports.
@@ -683,64 +752,27 @@ export function SessionSidebar(props: SessionSidebarProps) {
     return () => window.removeEventListener("keydown", onKey)
   }, [pinned, cramped, setPin])
 
-  // Escape closes the overlay without disturbing the pin.
-  React.useEffect(() => {
-    if (!hovering) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setHovering(false)
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [hovering])
-
-  React.useEffect(() => () => window.clearTimeout(hoverTimer.current), [])
-
-  // Hover INTENT, not hover. Opening on the first pixel of contact means the
-  // overlay fires every time the pointer crosses the rail on its way somewhere
-  // else — the classic reason hover menus feel hostile.
-  const openSoon = () => {
-    window.clearTimeout(hoverTimer.current)
-    hoverTimer.current = window.setTimeout(() => setHovering(true), HOVER_INTENT_MS)
+  if (expanded) {
+    return (
+      <SidebarBody
+        {...props}
+        width={width}
+        onResize={adjust}
+        onCollapse={() => setPin(false)}
+      />
+    )
   }
-  const closeNow = () => {
-    window.clearTimeout(hoverTimer.current)
-    setHovering(false)
-  }
-
-  if (expanded) return <SidebarBody {...props} width={width} onResize={adjust} />
 
   return (
-    <div className="relative flex flex-none" onMouseLeave={closeNow}>
-      <SessionRail
-        sessions={props.sessions}
-        activeSessionId={props.activeSessionId}
-        liveActivity={props.liveActivity}
-        onSelect={props.onSelect}
-        onNewSession={props.onNewSession}
-        onExpand={openSoon}
-        onPin={() => setPin(true)}
-      />
-      {hovering && (
-        <div
-          data-testid="sidebar-overlay"
-          // `absolute` + `left-full`: the overlay hangs off the rail's right
-          // edge in its own layer, so the panes behind it neither reflow when it
-          // opens nor jump when it closes.
-          className="absolute inset-y-0 left-full z-40 flex shadow-2xl"
-        >
-          <SidebarBody
-            {...props}
-            width={SIDEBAR_WIDTH.initial}
-            // Selecting a session is the overlay's whole purpose, so it closes
-            // on the way out rather than lingering over the pane you just chose.
-            onSelect={(id) => {
-              closeNow()
-              props.onSelect?.(id)
-            }}
-          />
-        </div>
-      )}
-    </div>
+    <SessionRail
+      sessions={props.sessions}
+      activeSessionId={props.activeSessionId}
+      liveActivity={props.liveActivity}
+      prStates={props.prStates}
+      onSelect={props.onSelect}
+      onNewSession={props.onNewSession}
+      onExpand={() => setPin(true)}
+    />
   )
 }
 
