@@ -53,6 +53,7 @@ export function TabBar({
   prNumber = null,
   changes = null,
   status,
+  pane,
   onToggleBrowser,
   browserActive = false,
   onToggleSplit,
@@ -75,6 +76,18 @@ export function TabBar({
    * the hover title, where they can't grow the pill on every tool call.
    */
   status?: { label: string; tone: "yellow" | "blue" | "green"; detail?: string }
+  /**
+   * Which session this pane holds, when that is a question worth answering —
+   * i.e. only in a split. A tab bar says what you can look at and never said
+   * whose; with two transcripts side by side the only way to tell them apart was
+   * to read them.
+   *
+   * `index` is 0-based here and rendered 1-based, matching the sidebar's slot
+   * badge and the ⌃⇧1..4 chords — one numbering for a pane, wherever it's named.
+   * Omit entirely in a group of one, where the sidebar's selection already says
+   * it and a chip would be a label on the only thing on screen.
+   */
+  pane?: { index: number; title: string; focused: boolean }
   /** Toggle the embedded browser preview pane (desktop only; absent in stories). */
   onToggleBrowser?: () => void
   /** Whether the browser preview pane is currently open (highlights the toggle). */
@@ -107,6 +120,24 @@ export function TabBar({
       data-testid="session-tab-bar"
       className="flex h-9 flex-none items-stretch border-b border-hairline bg-sunken"
     >
+      {pane && (
+        <div
+          data-testid={`pane-chip-${pane.index}`}
+          title={`Pane ${pane.index + 1} — ${pane.title} (⌃⇧${pane.index + 1})`}
+          className={cn(
+            "flex flex-none items-center gap-1.5 border-r border-hairline pl-3 pr-3.5",
+            // Dimmed when the pane isn't the focused one, so the chips answer
+            // "which is which" and "which is listening" with one glance rather
+            // than competing with the focus ring for the second question.
+            pane.focused ? "text-text" : "text-dim"
+          )}
+        >
+          <Badge tone={pane.focused ? "blue" : "count"} size="xs">
+            {pane.index + 1}
+          </Badge>
+          <span className="max-w-[170px] truncate text-[12px]">{pane.title}</span>
+        </div>
+      )}
       <div className="flex items-stretch">
         {tabs.map((key) => {
           const Icon = ICON[key]

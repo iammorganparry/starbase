@@ -88,6 +88,39 @@ describe("SessionSplit panes", () => {
   })
 })
 
+/**
+ * A tab bar says what you can look at; in a split it also has to say WHOSE. With
+ * two transcripts side by side and nothing naming them, the only way to tell one
+ * pane from the other was to read it.
+ */
+describe("pane identity chips", () => {
+  it("names each pane by number and title, in the same numbering as ⌃⇧1..4", () => {
+    renderSplit({
+      group: groupOf(["a", "b"]),
+      sessions: [session({ id: "a", title: "Fix auth redirect" }), session({ id: "b", title: "Bump deps" })]
+    })
+    const first = within(screen.getByTestId("split-pane-0")).getByTestId("pane-chip-0")
+    const second = within(screen.getByTestId("split-pane-1")).getByTestId("pane-chip-1")
+    expect(first.textContent).toContain("1")
+    expect(first.textContent).toContain("Fix auth redirect")
+    expect(second.textContent).toContain("2")
+    expect(second.textContent).toContain("Bump deps")
+  })
+
+  it("shows no chip in a group of one — there is nothing to disambiguate", () => {
+    renderSplit({ group: groupOf(["a"]) })
+    expect(screen.queryByTestId("pane-chip-0")).toBeNull()
+  })
+
+  it("dims every chip but the focused pane's", () => {
+    renderSplit({ group: groupOf(["a", "b"], 1) })
+    const unfocused = within(screen.getByTestId("split-pane-0")).getByTestId("pane-chip-0")
+    const focused = within(screen.getByTestId("split-pane-1")).getByTestId("pane-chip-1")
+    expect(unfocused.className).toContain("text-dim")
+    expect(focused.className).not.toContain("text-dim")
+  })
+})
+
 describe("pane controls", () => {
   it("offers no close control in a group of one — there is nothing to close back to", () => {
     renderSplit({ group: groupOf(["a"]), onClosePane: vi.fn() })

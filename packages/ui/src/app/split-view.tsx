@@ -1,8 +1,7 @@
 import { type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
-import { Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
-import { INSTANT, paneVariants, SPRING } from "../lib/motion.js"
+import { FAST, INSTANT, paneVariants, SPRING } from "../lib/motion.js"
 import { MAX_PANES, type Pane, type SplitGroup, SESSION_DND_MIME } from "./split-layout.js"
 
 /**
@@ -57,8 +56,6 @@ export interface SplitViewProps {
    * Deltas arrive continuously during the drag, not once at the end.
    */
   onResize?: (index: number, delta: number) => void
-  /** The operator asked for another pane (placeholder or ⌃⇧=). */
-  onAddSplit?: () => void
   /** Shown when there is no group at all — first launch, or everything closed. */
   emptyState?: ReactNode
 }
@@ -84,7 +81,6 @@ export function SplitView({
   onSplitWith,
   onReplacePane,
   onResize,
-  onAddSplit,
   emptyState
 }: SplitViewProps) {
   // Which pane is under the pointer mid-drag, and where it would land. Tracked
@@ -97,6 +93,40 @@ export function SplitView({
   // is stuck to elastic rather than to the cursor.
   const [draggingDivider, setDraggingDivider] = useState<number | null>(null)
   const rowRef = useRef<HTMLDivElement>(null)
+
+  const paneIds = group?.panes.map((p) => p.sessionId) ?? []
+  const presence = useRef<{ ids: ReadonlyArray<string>; token: number }>({ ids: paneIds, token: 0 })
+  /**
+   * Is this update an EDIT of the split on screen, or a SWITCH to a different
+   * one?
+   *
+   * An edit shares at least one session with what was here a moment ago — a pane
+   * was added, closed, reordered or resized, and the panes that stayed should
+   * visibly move to their new places. A switch shares none: the operator clicked
+   * a different session (or a different group) in the sidebar, and nothing on
+   * screen survives it.
+   *
+   * They were the same code path, so a plain chat switch played the split's
+   * whole choreography — the outgoing pane collapsing to a sliver while the
+   * incoming one grew out of one — which reads as a split being dismantled and
+   * rebuilt rather than as navigation.
+   */
+  const switched =
+    presence.current.ids.length > 0 &&
+    paneIds.length > 0 &&
+    paneIds.every((id) => !presence.current.ids.includes(id))
+  const presenceKey = switched ? presence.current.token + 1 : presence.current.token
+  // Derived-from-props state, written during render on purpose: the key has to
+  // be right in THIS commit (a switch is only visible in the frame it happens),
+  // so it can't wait for an effect. The write is idempotent — recomputing from
+  // the new ids yields the same token — which is what makes React's development
+  // double-render harmless here.
+  if (
+    presence.current.ids.length !== paneIds.length ||
+    paneIds.some((id, i) => presence.current.ids[i] !== id)
+  ) {
+    presence.current = { ids: paneIds, token: presenceKey }
+  }
 
   // A drag can end without any pane seeing `dragleave` — dropped outside the
   // window, cancelled with Escape, or aborted when the window loses focus —
@@ -179,7 +209,16 @@ export function SplitView({
       data-panes={group.panes.length}
       className="flex min-h-0 min-w-0 flex-1 bg-hairline"
     >
-      <AnimatePresence initial={false} mode="popLayout">
+      {/*
+        Keyed by the switch token, so a switch REMOUNTS the presence tree: the
+        panes that were here go in the same frame, with no exit animation to
+        play (motion can only run one from props the leaving element already
+        had, which is why this is a key rather than a different `exit` variant).
+        `initial` follows suit — normally false, so a pane already on screen when
+        the split mounts doesn't animate in, but true on a switch, which is what
+        lets the arriving panes fade.
+      */}
+      <AnimatePresence key={presenceKey} initial={switched} mode="popLayout">
         {group.panes.map((pane, index) => {
           const isFocused = index === group.focused
           const drop = dropAt?.index === index ? dropAt.zone : null
@@ -192,7 +231,11 @@ export function SplitView({
               layout={draggingDivider === null}
               custom={pane.ratio}
               variants={paneVariants}
-              initial="hidden"
+              // A pane inserted into the split you're looking at grows out of a
+              // sliver and pushes its neighbours aside, because that IS what
+              // happened. A pane that arrives by a switch starts at its final
+              // width and only fades — nothing was inserted.
+              initial={switched ? "swap" : "hidden"}
               animate="visible"
               exit="exit"
               // The other half of suspending `layout` below. `visible` is a
@@ -202,7 +245,11 @@ export function SplitView({
               // exactly as if `layout` had never been suspended. Mid-drag the
               // pointer IS the animation, so the width is written on the frame
               // it changes.
-              transition={draggingDivider === null ? SPRING : INSTANT}
+              // Mid-drag the pointer is the animation (INSTANT). A switch is a
+              // 140ms fade at full width (FAST) — the width is already right, so
+              // a spring would have nothing to travel but the opacity. Everything
+              // else springs.
+              transition={draggingDivider !== null ? INSTANT : switched ? FAST : SPRING}
               // `order` interleaves the panes with the dividers, which are
               // rendered as a separate run below (see the note there).
               style={{ flexGrow: pane.ratio, flexBasis: 0, order: index * 2 }}
@@ -281,26 +328,14 @@ export function SplitView({
           />
         ))}
 
-      {/* Arc's "Add right split" — a ghost panel on the right edge. Hidden at the
-          cap, where clicking it could only fail. */}
-      {onAddSplit && !full && (
-        <motion.button
-          layout
-          type="button"
-          transition={SPRING}
-          onClick={onAddSplit}
-          // Always last in the row, whatever the pane count.
-          style={{ order: MAX_PANES * 2 }}
-          data-testid="add-right-split"
-          title="Add right split (⌃⇧=)"
-          className="group flex w-10 flex-none flex-col items-center justify-center gap-2 border-l border-hairline bg-editor text-dim outline-none transition-colors hover:w-32 hover:bg-panel hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="flex size-6 items-center justify-center rounded border border-dashed border-line-strong group-hover:border-blue">
-            <Plus className="size-3.5" />
-          </span>
-          <span className="hidden whitespace-nowrap text-[11px] group-hover:block">Add right split</span>
-        </motion.button>
-      )}
+      {/*
+        There was a ghost "Add right split" panel here — Arc's, a 40px strip
+        pinned to the right edge of every split. It has been removed: it was on
+        screen permanently to serve an occasional act, and the two gestures that
+        actually express "put that session beside this one" both say WHICH
+        session while they do it. ⌃⇧= and a drag from the sidebar are those
+        gestures; the panel could only ever guess (`addNextSessionAsPane`).
+      */}
     </div>
   )
 }

@@ -21,8 +21,6 @@ export interface SessionSplitProps {
   onClosePane?: (index: number) => void
   /** Reorder the focused pane — Arc's Move Left / Move Right. */
   onMovePane?: (index: number, direction: -1 | 1) => void
-  /** The operator asked for another pane (the ghost panel, or ⌃⇧=). */
-  onAddSplit?: () => void
   /** Shown when nothing is on screen at all. */
   emptyState?: ReactNode
   /** Everything a pane needs to render one session. */
@@ -81,6 +79,9 @@ export function SessionSplit(props: SessionSplitProps) {
         liveActivity={props.liveActivity}
         liveDiff={props.liveDiff}
         onOpenSettings={props.onOpenSettings}
+        // Identity only where it disambiguates: a group of one needs no chip,
+        // and `group` is non-null wherever a pane is being rendered at all.
+        pane={single ? undefined : { index, focused: index === (group?.focused ?? 0) }}
         renderPullRequest={props.renderPullRequest}
         renderReview={props.renderReview}
         renderCode={props.renderCode}
@@ -138,7 +139,6 @@ export function SessionSplit(props: SessionSplitProps) {
           onSplitWith={props.onSplitWith}
           onReplacePane={props.onReplacePane}
           onResize={props.onResize}
-          onAddSplit={props.onAddSplit}
           emptyState={props.emptyState}
         />
         {termSide === "right" ? dock : null}

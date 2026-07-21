@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import type { Attachment, CliKind, PermissionMode, ProviderModels, Skill } from "@starbase/core"
 import { ImagePlus, Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -256,16 +256,8 @@ export function Composer({
 
   const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id))
 
-  // Auto-grow the textarea to fit its content (a multiline prompt expands the
-  // composer instead of scrolling internally), capped by the CSS `max-h` — past
-  // which it scrolls. Runs after each value change (including the reset on send).
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${el.scrollHeight}px`
-  }, [value])
-
+  // The textarea auto-grows in LAYOUT (`field-sizing: content`), not from a
+  // measurement taken here — see the note on the element itself.
   const skillMatches = useMemo(
     () =>
       menu?.kind === "slash"
@@ -439,7 +431,6 @@ export function Composer({
         <textarea
           ref={ref}
           value={value}
-          rows={1}
           disabled={paused}
           placeholder={
             paused
@@ -451,7 +442,29 @@ export function Composer({
           onChange={(e) => sync(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
-          className="max-h-64 min-h-[22px] w-full resize-none overflow-y-auto bg-transparent text-[14px] leading-[1.5] text-text-body outline-none placeholder:text-dim"
+          /*
+           * `field-sizing-content` — the height is a LAYOUT property, resolved
+           * by the browser from the content at whatever width the composer
+           * currently has, on every frame it changes.
+           *
+           * It replaces a `useLayoutEffect` that set `height: auto`, read
+           * `scrollHeight` and wrote it back, keyed on `[value]`. That ran
+           * exactly once per value change — and a pane MOUNTS about a pixel
+           * wide, because `paneVariants.hidden` enters from `flexGrow: 0.001`.
+           * At zero content width Chromium wraps the placeholder one glyph per
+           * line, so "Message Claude…" measured ~315px, was written to
+           * `style.height`, and stuck there (nothing re-measures — there is no
+           * ResizeObserver) until the first keystroke re-ran the effect at the
+           * real width. The composer opened at its `max-h` and snapped back as
+           * you typed. The same staleness sat under every divider drag and
+           * window resize; a measurement that has to be re-taken by hand is a
+           * measurement that will be missed.
+           *
+           * `min-h` still guarantees one line, `max-h` still caps the growth,
+           * and past the cap `overflow-y-auto` scrolls. Chromium 123+; this app
+           * ships its own (Electron 43 → Chromium 140).
+           */
+          className="field-sizing-content max-h-64 min-h-[22px] w-full resize-none overflow-y-auto bg-transparent text-[14px] leading-[1.5] text-text-body outline-none placeholder:text-dim"
         />
         <input
           ref={fileInputRef}

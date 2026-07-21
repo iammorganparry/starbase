@@ -330,8 +330,8 @@ test("the Arc keyboard map drives focus in a real browser", async ({ launchApp }
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()
 
-  await window.getByTestId("add-right-split").click()
-  await window.getByTestId("add-right-split").click()
+  await window.keyboard.press("Control+Shift+Equal")
+  await window.keyboard.press("Control+Shift+Equal")
   await expect.poll(() => paneSessions(window)).toHaveLength(3)
   await settle(window)
 
@@ -360,49 +360,40 @@ test("the Arc keyboard map drives focus in a real browser", async ({ launchApp }
   await expect.poll(() => paneSessions(window)).toEqual(["s_alpha", "s_beta"])
 })
 
-test("the add-right-split placeholder adds a pane, and stops when nothing is left", async ({
-  launchApp
-}) => {
+/**
+ * ⌃⇧= adds a pane, and stops when there is nothing left to add.
+ *
+ * This used to be two tests, because the same policy — "the first session not
+ * already on screen" — was reachable two ways: this chord, and a ghost "Add
+ * right split" panel pinned to the right edge of every split. The panel has been
+ * removed (it was on screen permanently to serve an occasional act, and unlike a
+ * sidebar drag it could only guess which session you meant), so what it proved
+ * about the two staying in agreement has nothing left to disagree with.
+ */
+test("⌃⇧= adds a pane, and stops when nothing is left to add", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()
 
-  // Two clicks, two more panes — each takes the first session not already shown.
-  await window.getByTestId("add-right-split").click()
-  await window.getByTestId("add-right-split").click()
+  // Two presses, two more panes — each takes the first session not already shown.
+  await window.keyboard.press("Control+Shift+Equal")
+  await window.keyboard.press("Control+Shift+Equal")
   await expect(window.getByTestId("split-view")).toHaveAttribute("data-panes", "3")
 
-  // Only three sessions exist, so a fourth click has nothing to add. The control
-  // stays (the cap is four) but the split does not grow.
-  await window.getByTestId("add-right-split").click()
+  // Only three sessions exist, so a third press has nothing to add. The chord
+  // falls through rather than being swallowed, and the split does not grow.
+  await window.keyboard.press("Control+Shift+Equal")
   await expect(window.getByTestId("split-view")).toHaveAttribute("data-panes", "3")
 })
 
-/**
- * ⌃⇧= and the ghost panel are two ways to ask for the same thing, so they must
- * pick the same session.
- *
- * They had a copy each of "the first session not already on screen", which is
- * the kind of duplication that goes wrong silently: change the policy once and
- * the two controls start disagreeing, with nothing failing to say so. They share
- * one definition now, and this is what would notice if they stopped.
- */
-test("the keyboard and the ghost panel add the SAME next session", async ({ launchApp }) => {
+/** The panel is gone from every pane count, not merely hidden at the cap. */
+test("no add-split panel is on screen", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()
+  await expect(window.getByTestId("add-right-split")).toHaveCount(0)
 
   await window.keyboard.press("Control+Shift+Equal")
   await expect.poll(() => paneSessions(window)).toHaveLength(2)
-  const byKeyboard = (await paneSessions(window))[1]
-
-  // Put it back the way it was, then ask the other way.
-  await settle(window)
-  await window.getByTestId("split-pane-1").getByTestId("close-pane").click()
-  await expect.poll(() => paneSessions(window)).toHaveLength(1)
-  await settle(window)
-  await window.getByTestId("add-right-split").click()
-  await expect.poll(() => paneSessions(window)).toHaveLength(2)
-
-  expect((await paneSessions(window))[1]).toBe(byKeyboard)
+  await expect(window.getByTestId("add-right-split")).toHaveCount(0)
 })
 
 test("Separate all tabs flies every pane out to its own row", async ({ launchApp }) => {
@@ -651,7 +642,97 @@ test("dragging the divider trades width between the two panes", async ({ launchA
   expect(after.width).toBeGreaterThan(before.width + 100)
   // ...and the two panes still add up to what they did before, so width was
   // TRADED rather than added. Compared against the panes' own total rather than
-  // the row's: the row also carries the divider and the 40px "Add right split"
-  // ghost panel, which are not the panes' to share.
+  // the row's, which also carries the divider.
   expect(Math.abs(after.width + secondAfter.width - (before.width + secondBefore.width))).toBeLessThanOrEqual(4)
+})
+
+/**
+ * A freshly mounted composer opened at its `max-h` — about 300px of empty box —
+ * and snapped back to one line on the first keystroke.
+ *
+ * The cause was a measurement, not a style: the composer sized itself by reading
+ * `scrollHeight` in a layout effect keyed on its value, and a pane MOUNTS about
+ * a pixel wide (`paneVariants.hidden` enters from `flexGrow: 0.001`). At zero
+ * content width Chromium wraps the placeholder one glyph per line, so the one
+ * measurement it ever took said ~315px. Sizing is `field-sizing: content` now,
+ * which layout re-resolves at every width.
+ *
+ * Measured on the SECOND pane, which is the one that mounts mid-animation — the
+ * first is already on screen when the split mounts and skips the enter entirely,
+ * which is why this was invisible on a cold boot.
+ */
+test("a freshly mounted composer is one line tall, not its max height", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  await dragTo(window, "session-row-s_beta", "split-pane-0", "after")
+  await expect.poll(() => paneSessions(window)).toEqual(["s_alpha", "s_beta"])
+  await settle(window)
+
+  const pane = window.getByTestId("split-pane-1")
+  const height = async () => {
+    const box = await pane.getByTestId("composer").boundingBox()
+    if (box === null) throw new Error("no composer in pane 1")
+    return box.height
+  }
+
+  // One line of text plus the composer's own chrome (mode chips, Send). Well
+  // under the 256px `max-h` it used to open at, and nothing was typed to get it
+  // there.
+  const untouched = await height()
+  expect(untouched).toBeLessThan(120)
+
+  // And typing does not RESIZE it — which is what the old bug looked like from
+  // the outside: the fix would be worthless if the correct height only arrived
+  // on the first keystroke.
+  await pane.getByPlaceholder("Message Claude…").pressSequentially("hello")
+  expect(Math.abs((await height()) - untouched)).toBeLessThanOrEqual(2)
+})
+
+/**
+ * Switching sessions is navigation, not a rearrangement of the split.
+ *
+ * Both were one code path, so clicking a session in the sidebar played the whole
+ * choreography — the outgoing pane collapsing to a sliver while the incoming one
+ * grew out of one. Like the divider test above, this measures BEFORE the spring
+ * would have finished: a pane that springs to full width 260ms late still ends
+ * at full width, so a settled assertion cannot see the difference.
+ */
+test("switching sessions puts the new pane at full width immediately", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+  await settle(window)
+  const view = await boxOf(window, '[data-testid="split-view"]')
+
+  await window.getByTestId("session-row-s_beta").click()
+  await window.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+  )
+
+  const pane = await boxOf(window, '[data-testid="split-pane-0"]')
+  expect(pane.width).toBeGreaterThan(view.width - 8)
+  await expect.poll(() => paneSessions(window)).toEqual(["s_beta"])
+})
+
+/**
+ * With two transcripts side by side, the tab bar has to say whose each one is.
+ * The numbering is the sidebar's and the keyboard's — pane 1 is ⌃⇧1.
+ */
+test("each pane of a split names its session in the top bar", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  // A lone pane needs no chip — the sidebar selection already says which it is.
+  await expect(window.getByTestId("pane-chip-0")).toHaveCount(0)
+
+  await dragTo(window, "session-row-s_beta", "split-pane-0", "after")
+  await expect.poll(() => paneSessions(window)).toEqual(["s_alpha", "s_beta"])
+  await settle(window)
+
+  await expect(window.getByTestId("split-pane-0").getByTestId("pane-chip-0")).toContainText(
+    "Alpha session"
+  )
+  await expect(window.getByTestId("split-pane-1").getByTestId("pane-chip-1")).toContainText(
+    "Beta session"
+  )
 })

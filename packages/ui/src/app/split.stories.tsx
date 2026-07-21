@@ -160,11 +160,6 @@ function SplitPlayground({ initial }: { initial: Workspace }) {
           group && setWs((w) => replacePane(w, group.id, index, sessionId))
         }
         onResize={(index, delta) => group && setWs((w) => resize(w, group.id, index, delta))}
-        onAddSplit={() => {
-          if (!group) return
-          const next = FIXTURE.find((s) => !ws.groups.some((g) => g.panes.some((p) => p.sessionId === s.id)))
-          if (next) setWs((w) => splitWith(w, group.id, next.id, group.panes.length))
-        }}
         emptyState={
           <div className="flex flex-col items-center gap-2 text-dim">
             <Columns2 size={22} />

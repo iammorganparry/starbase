@@ -47,8 +47,6 @@ export interface SessionConversationProps {
   onSeparateAll?: (groupId: string) => void
   /** Continuous divider drag, as a fraction of the split's width. */
   onResizePane?: (index: number, delta: number) => void
-  /** Add a pane to the active group (the ghost panel on the right edge). */
-  onAddSplit?: () => void
   /** Which pane each on-screen session occupies, for the sidebar's badges. */
   slotBySession?: ReadonlyMap<string, number>
   /** Manually rename a session (double-click its sidebar title). */
@@ -222,7 +220,6 @@ export function SessionConversation(props: SessionConversationProps) {
             onResize={props.onResizePane}
             onClosePane={props.onClosePane}
             onMovePane={props.onMovePane}
-            onAddSplit={props.onAddSplit}
             emptyState={
               <span className="text-[12px] text-dim">Nothing on screen — pick a session</span>
             }

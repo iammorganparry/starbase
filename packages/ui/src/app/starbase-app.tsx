@@ -546,9 +546,6 @@ export function StarbaseApp({
         onMovePane={(index, direction) => group && split.movePane(group.id, index, direction)}
         onSeparateAll={split.separateAll}
         onResizePane={(index, delta) => group && split.resizePane(group.id, index, delta)}
-        onAddSplit={() => {
-          addNextSessionAsPane()
-        }}
         slotBySession={paneBySession}
         onRenameSession={onRenameSession}
         onArchiveSession={onArchiveSession}

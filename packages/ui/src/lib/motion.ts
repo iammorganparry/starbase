@@ -76,7 +76,19 @@ export const INSTANT: Transition = { duration: 0 }
 export const paneVariants: Variants = {
   hidden: { flexGrow: 0.001, opacity: 0 },
   visible: (ratio: number) => ({ flexGrow: ratio, opacity: 1 }),
-  exit: { flexGrow: 0.001, opacity: 0, transition: SPRING }
+  exit: { flexGrow: 0.001, opacity: 0, transition: SPRING },
+  /**
+   * The entry state for a pane that arrives by a chat SWITCH rather than by an
+   * edit to the split — already the right width, only not yet visible.
+   *
+   * `hidden` describes a pane being inserted into a split you are looking at:
+   * it should push its neighbours aside, because that is what happened. A switch
+   * is not that. Nothing was inserted — the whole row was replaced — so growing
+   * the new pane out of a sliver animates a rearrangement that never occurred,
+   * and the app reads as if it dismantled a split and built another one every
+   * time you clicked a session in the sidebar.
+   */
+  swap: (ratio: number) => ({ flexGrow: ratio, opacity: 0 })
 }
 
 /**

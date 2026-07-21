@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from "react"
 import type { DiffStat, Session, SessionActivity, SessionDisplayStatus } from "@starbase/core"
-import { activityLabel, displayStatusOf } from "@starbase/core"
+import { activityLabel, displayStatusOf, UNTITLED_SESSION } from "@starbase/core"
 import { displayStatusLabel } from "../tokens.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
@@ -79,6 +79,12 @@ export interface SessionPaneProps {
   onToggleBrowser?: () => void
   /** Whether the browser-preview pane is currently open. */
   browserActive?: boolean
+  /**
+   * This pane's place in the split, for the tab bar's identity chip. Absent in a
+   * group of one — there, the pane IS the session and the chip would only label
+   * the single thing on screen.
+   */
+  pane?: { index: number; focused: boolean }
   /** Close this pane. Absent in a group of one, where there is nothing to close back to. */
   onClosePane?: () => void
   /** Swap this pane with its left-hand neighbour. Absent at the left-hand end. */
@@ -176,6 +182,11 @@ export function SessionPane(props: SessionPaneProps) {
                 detail: activityLabel(activeActivity)
               }
             : undefined
+        }
+        // The title comes from the session rather than from the caller, so the
+        // chip follows a rename the moment it lands.
+        pane={
+          props.pane ? { ...props.pane, title: active.title || UNTITLED_SESSION } : undefined
         }
         onToggleBrowser={props.onToggleBrowser}
         browserActive={props.browserActive}
