@@ -400,6 +400,54 @@ test("the split and its sessions survive a real app restart", async ({ launchApp
   await expect.poll(() => paneSessions(second.window)).toEqual(["s_alpha", "s_beta", "s_gamma"])
 })
 
+/**
+ * A DRAGGED divider survives a restart too.
+ *
+ * Its own test because ratios and structure are persisted on different paths:
+ * a structural change is written through, while a ratio-only change is
+ * coalesced, so one divider drag costs one write instead of one per
+ * pointer-move. That deferral is exactly the thing that could quietly stop a
+ * divider position ever reaching disk, and the structural test above would
+ * happily pass while it did.
+ */
+test("a dragged divider's position survives a real app restart", async ({ launchApp }) => {
+  const first = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(first.window.getByText("Alpha session")).toBeVisible()
+
+  await dragTo(first.window, "session-row-s_beta", "split-pane-0", "after")
+  await settle(first.window)
+
+  const divider = await boxOf(first.window, '[data-testid="split-divider-0"]')
+  const y = divider.y + divider.height / 2
+  await first.window.mouse.move(divider.x + divider.width / 2, y)
+  await first.window.mouse.down()
+  await first.window.mouse.move(divider.x + divider.width / 2 + 180, y, { steps: 8 })
+  await first.window.mouse.up()
+  await settle(first.window)
+
+  const widened = await boxOf(first.window, '[data-testid="split-pane-0"]')
+  const narrowed = await boxOf(first.window, '[data-testid="split-pane-1"]')
+  expect(widened.width).toBeGreaterThan(narrowed.width)
+
+  await first.app.close()
+
+  const second = await launchApp({
+    home: first.home,
+    reposDir: first.reposDir,
+    userDataDir: first.userDataDir
+  })
+  await expect(second.window.getByTestId("split-view")).toHaveAttribute("data-panes", "2")
+  await settle(second.window)
+
+  // Same proportions, not merely the same panes. Compared as a ratio of the
+  // row so the assertion doesn't depend on the window opening the same size.
+  const restoredWide = await boxOf(second.window, '[data-testid="split-pane-0"]')
+  const restoredNarrow = await boxOf(second.window, '[data-testid="split-pane-1"]')
+  const before = widened.width / (widened.width + narrowed.width)
+  const after = restoredWide.width / (restoredWide.width + restoredNarrow.width)
+  expect(Math.abs(after - before)).toBeLessThan(0.02)
+})
+
 test("a foreign drag (a file) is ignored by the split", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()

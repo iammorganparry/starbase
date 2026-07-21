@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   activate,
   activeGroup,
@@ -19,6 +19,29 @@ import {
   visibleSessionIds,
   type Workspace
 } from "./split-layout.js"
+
+/**
+ * How long a ratio-only change waits before it is written.
+ *
+ * Comfortably longer than the gap between pointer-moves (~8–16ms), so a drag
+ * coalesces to a single write, and short enough that letting go of a divider and
+ * immediately quitting still persists what you did.
+ */
+const RATIO_SAVE_DELAY_MS = 200
+
+/**
+ * Everything about a workspace EXCEPT the pane ratios.
+ *
+ * The discriminator between "the operator rearranged something" and "the
+ * operator is dragging a divider". Deliberately a string rather than a deep
+ * compare: it is computed on every state change, including every pointer-move,
+ * so it has to be cheap — and a workspace is at most a handful of groups of at
+ * most four panes, which makes this a few dozen characters.
+ */
+const structureOf = (ws: Workspace): string =>
+  `${ws.activeGroupId ?? ""}|${ws.groups
+    .map((g) => `${g.id}:${g.focused}:${g.panes.map((p) => p.sessionId).join(",")}`)
+    .join(";")}`
 
 /**
  * The live workspace: the persisted split state plus the operations the UI
@@ -45,9 +68,77 @@ export function useSplitLayout(
     return stored
   })
 
+  /**
+   * Persist — but never once per pointer-move.
+   *
+   * `resize` dispatches a fresh workspace for every `pointermove` of a divider
+   * drag, so a plain write-through effect ran `JSON.stringify` +
+   * `localStorage.setItem` at pointer rate for the length of the drag.
+   * `setItem` is synchronous and disk-backed, and it was landing on the one
+   * interaction with no frame budget to give away: a divider is supposed to
+   * track the cursor exactly, and the pointer handler is what makes it.
+   *
+   * So writes are split by what changed, not blanket-debounced:
+   *
+   * - **Structure** — which groups exist, which sessions are in which panes, in
+   *   what order, and which one has focus — is written THROUGH, exactly as
+   *   before. Those are discrete, deliberate acts (split, close, move, focus),
+   *   and each is worth a write the moment it happens.
+   * - **Ratios alone** — the divider drag, and nothing else in the model — are
+   *   coalesced, so one drag costs one write instead of several hundred.
+   *
+   * Keeping structure write-through is what makes the deferral safe to reason
+   * about: the only thing a lost debounce window can cost is a few pixels of
+   * divider position, never a pane.
+   */
+  const savedStructure = useRef<string | null>(null)
+  const pendingSave = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latest = useRef(workspace)
+
+  const flushSave = useCallback(() => {
+    if (pendingSave.current === null) return
+    clearTimeout(pendingSave.current)
+    pendingSave.current = null
+    save(latest.current)
+  }, [])
+
   useEffect(() => {
-    save(workspace)
+    latest.current = workspace
+    const structure = structureOf(workspace)
+    const structural = structure !== savedStructure.current
+    savedStructure.current = structure
+
+    if (structural) {
+      // Also covers the very first run, where `savedStructure` is null — which
+      // is what writes a freshly migrated `sb.layout.v1` back in the new shape
+      // immediately rather than a debounce later.
+      if (pendingSave.current !== null) {
+        clearTimeout(pendingSave.current)
+        pendingSave.current = null
+      }
+      save(workspace)
+      return
+    }
+
+    if (pendingSave.current !== null) clearTimeout(pendingSave.current)
+    pendingSave.current = setTimeout(() => {
+      pendingSave.current = null
+      save(latest.current)
+    }, RATIO_SAVE_DELAY_MS)
   }, [workspace])
+
+  // A pending ratio write must not be lost to the window going away. `pagehide`
+  // covers the app quitting or reloading; the unmount cleanup covers the shell
+  // being torn down with the window still up. Both are cheap no-ops when there
+  // is nothing pending.
+  useEffect(() => {
+    const onHide = () => flushSave()
+    window.addEventListener("pagehide", onHide)
+    return () => {
+      window.removeEventListener("pagehide", onHide)
+      flushSave()
+    }
+  }, [flushSave])
 
   // Which sessions may occupy a pane: the ones that still exist AND are still
   // active.

@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react"
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { LEGACY_LAYOUT_STORAGE_KEY, WORKSPACE_STORAGE_KEY } from "./split-layout.js"
 import { useSplitLayout } from "./use-split-layout.js"
 
@@ -9,6 +9,11 @@ const paneIds = (result: { current: ReturnType<typeof useSplitLayout> }): Readon
   result.current.group?.panes.map((p) => p.sessionId) ?? []
 
 beforeEach(() => localStorage.clear())
+// Fake timers are opt-in per test below; make sure one never leaks into the next.
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe("useSplitLayout", () => {
   it("seeds the initial session on a first run", () => {
@@ -187,6 +192,112 @@ describe("useSplitLayout", () => {
 
       expect(paneIds(result)).toEqual(["a"])
       expect(result.current.groupIdBySession.has("b")).toBe(false)
+    })
+  })
+
+  /**
+   * A divider drag dispatches one workspace per pointer-move, and
+   * `localStorage.setItem` is synchronous and disk-backed. Writing through on
+   * each one put hundreds of blocking writes on the one interaction that has no
+   * frame budget to give away — the divider is supposed to track the cursor, and
+   * the pointer handler is what makes it.
+   *
+   * These count real `setItem` calls rather than inspecting the stored value,
+   * because the cost being avoided is the CALL.
+   */
+  describe("persistence", () => {
+    const twoPaneSplit = (result: { current: ReturnType<typeof useSplitLayout> }) => {
+      act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+    }
+
+    it("writes a structural change through immediately", () => {
+      const { result } = renderHook(() => useSplitLayout(sessions, "a"))
+      const writes = vi.spyOn(Storage.prototype, "setItem")
+
+      twoPaneSplit(result)
+      expect(writes).toHaveBeenCalledTimes(1)
+
+      // Closing, moving and focusing are all structural too.
+      act(() => result.current.focusPane(result.current.group!.id, 0))
+      act(() => result.current.closePane(result.current.group!.id, 1))
+      expect(writes).toHaveBeenCalledTimes(3)
+      writes.mockRestore()
+    })
+
+    it("coalesces a whole divider drag into ONE write", () => {
+      vi.useFakeTimers()
+      const { result } = renderHook(() => useSplitLayout(sessions, "a"))
+      twoPaneSplit(result)
+      const writes = vi.spyOn(Storage.prototype, "setItem")
+
+      // A drag: sixty deltas, as `split-view` sends them.
+      const groupId = result.current.group!.id
+      for (let i = 0; i < 60; i++) {
+        act(() => result.current.resizePane(groupId, 0, 0.002))
+      }
+      expect(writes).not.toHaveBeenCalled()
+
+      act(() => vi.runAllTimers())
+      expect(writes).toHaveBeenCalledTimes(1)
+
+      // And what landed is the END of the drag, not some frame in the middle.
+      const stored = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY)!)
+      expect(stored.groups[0].panes[0].ratio).toBeCloseTo(
+        result.current.group!.panes[0]!.ratio,
+        10
+      )
+      writes.mockRestore()
+      vi.useRealTimers()
+    })
+
+    it("flushes a pending ratio write when the window goes away", () => {
+      vi.useFakeTimers()
+      const { result } = renderHook(() => useSplitLayout(sessions, "a"))
+      twoPaneSplit(result)
+      const writes = vi.spyOn(Storage.prototype, "setItem")
+      act(() => result.current.resizePane(result.current.group!.id, 0, 0.1))
+      expect(writes).not.toHaveBeenCalled()
+
+      act(() => {
+        window.dispatchEvent(new Event("pagehide"))
+      })
+
+      expect(writes).toHaveBeenCalledTimes(1)
+      writes.mockRestore()
+      vi.useRealTimers()
+    })
+
+    it("flushes a pending ratio write on unmount", () => {
+      vi.useFakeTimers()
+      const { result, unmount } = renderHook(() => useSplitLayout(sessions, "a"))
+      twoPaneSplit(result)
+      act(() => result.current.resizePane(result.current.group!.id, 0, 0.1))
+      const ratio = result.current.group!.panes[0]!.ratio
+      const writes = vi.spyOn(Storage.prototype, "setItem")
+
+      unmount()
+
+      expect(writes).toHaveBeenCalledTimes(1)
+      const stored = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY)!)
+      expect(stored.groups[0].panes[0].ratio).toBeCloseTo(ratio, 10)
+      writes.mockRestore()
+      vi.useRealTimers()
+    })
+
+    it("does not let a deferred ratio write clobber a later structural change", () => {
+      // The ordering hazard: drag a divider, then close a pane before the debounce
+      // fires. The close must win, and the stale ratios must never land after it.
+      vi.useFakeTimers()
+      const { result } = renderHook(() => useSplitLayout(sessions, "a"))
+      twoPaneSplit(result)
+      act(() => result.current.resizePane(result.current.group!.id, 0, 0.1))
+      act(() => result.current.closePane(result.current.group!.id, 1))
+
+      act(() => vi.runAllTimers())
+
+      const stored = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY)!)
+      expect(stored.groups[0].panes.map((p: { sessionId: string }) => p.sessionId)).toEqual(["a"])
+      vi.useRealTimers()
     })
   })
 
