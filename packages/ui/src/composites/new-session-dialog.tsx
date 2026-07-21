@@ -10,7 +10,7 @@ import type {
   Repo
 } from "@starbase/core"
 import { useMachine } from "@xstate/react"
-import { CircleDot, GitBranch, GitPullRequest, Sparkles, Star } from "lucide-react"
+import { CircleDot, GitBranch, GitPullRequest, Sparkles } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
@@ -23,12 +23,11 @@ import {
   DialogTitle
 } from "../components/dialog.js"
 import { Eyebrow } from "../components/eyebrow.js"
+import { RepoPicker } from "./repo-picker.js"
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue
 } from "../components/select.js"
@@ -107,52 +106,6 @@ function AutomationRow({
 }
 
 /**
- * A star toggle rendered inside a Radix `Select.Item`. It swallows the pointer
- * and click events so tapping the star toggles the pin without selecting the
- * repo (which would close the dropdown).
- */
-function StarToggle({ starred, onToggle }: { starred: boolean; onToggle: () => void }) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      type="button"
-      aria-label={starred ? "Unstar repo" : "Star repo"}
-      aria-pressed={starred}
-      onPointerDown={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-      }}
-      // Radix `Select.Item` commits its selection on pointer *up*, so stopping
-      // pointerdown + click alone still lets the tap select the repo and close
-      // the dropdown — swallow pointerup (and keyboard activation) too.
-      onPointerUp={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-      }}
-      onClick={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        onToggle()
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault()
-          e.stopPropagation()
-          onToggle()
-        }
-      }}
-      className={cn(
-        "size-5 rounded hover:bg-surface",
-        starred && "text-yellow hover:text-yellow"
-      )}
-    >
-      <Star size={13} className={starred ? "fill-current" : undefined} />
-    </Button>
-  )
-}
-
-/**
  * The ⌘N "New Session" form, rendered inside the One Dark Dialog. All form state
  * lives in `newSessionMachine` (edit / submit lifecycle + debounced branch & PR
  * loading); this component is a thin projection — it maps `context` to inputs
@@ -177,18 +130,6 @@ export function NewSessionDialog({
   const availableClis = React.useMemo(() => clis.filter((c) => c.available), [clis])
   const canFromPr = Boolean(loadPrs && onCreateFromPr)
   const canFromIssue = Boolean(loadIssues && onCreateFromIssue)
-
-  // Partition repos into starred (surfaced first) and the rest, preserving the
-  // incoming (alphabetical) order within each group.
-  const starredSet = React.useMemo(() => new Set(starredRepos), [starredRepos])
-  const starredList = React.useMemo(
-    () => repos.filter((r) => starredSet.has(r.path)),
-    [repos, starredSet]
-  )
-  const otherList = React.useMemo(
-    () => repos.filter((r) => !starredSet.has(r.path)),
-    [repos, starredSet]
-  )
 
   // The machine reads live deps through a stable getter so changing props never
   // tear down and rebuild it mid-edit.
@@ -253,21 +194,6 @@ export function NewSessionDialog({
   React.useEffect(() => {
     if (open) send({ type: "OPEN" })
   }, [open, send])
-
-  const renderRepoItem = (r: Repo) => (
-    <SelectItem
-      key={r.path}
-      value={r.path}
-      className="font-mono"
-      trailing={
-        onToggleStar ? (
-          <StarToggle starred={starredSet.has(r.path)} onToggle={() => void onToggleStar(r.path)} />
-        ) : undefined
-      }
-    >
-      {r.name}
-    </SelectItem>
-  )
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -337,29 +263,13 @@ export function NewSessionDialog({
             {/* Repo */}
             <div className="flex flex-col gap-1.5">
               <Eyebrow>Repo</Eyebrow>
-              <Select value={repoPath} onValueChange={(v) => send({ type: "SET_REPO", repoPath: v })}>
-                <SelectTrigger className="font-mono">
-                  <SelectValue placeholder="No repositories" />
-                </SelectTrigger>
-                <SelectContent>
-                  {starredList.length > 0 ? (
-                    <>
-                      <SelectGroup>
-                        <SelectLabel>Starred</SelectLabel>
-                        {starredList.map(renderRepoItem)}
-                      </SelectGroup>
-                      {otherList.length > 0 && (
-                        <SelectGroup>
-                          <SelectLabel>All repos</SelectLabel>
-                          {otherList.map(renderRepoItem)}
-                        </SelectGroup>
-                      )}
-                    </>
-                  ) : (
-                    repos.map(renderRepoItem)
-                  )}
-                </SelectContent>
-              </Select>
+              <RepoPicker
+                repos={repos}
+                value={repoPath}
+                onChange={(v) => send({ type: "SET_REPO", repoPath: v })}
+                starredRepos={starredRepos}
+                onToggleStar={onToggleStar}
+              />
             </div>
 
             {/* No title field — the agent auto-names each session from the work. */}

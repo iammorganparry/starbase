@@ -79,8 +79,12 @@ export interface SessionPaneProps {
   onToggleBrowser?: () => void
   /** Whether the browser-preview pane is currently open. */
   browserActive?: boolean
-  /** Empty this pane's slot. Absent in 1-up, where there is nothing to close back to. */
+  /** Close this pane. Absent in a group of one, where there is nothing to close back to. */
   onClosePane?: () => void
+  /** Swap this pane with its left-hand neighbour. Absent at the left-hand end. */
+  onMovePaneLeft?: () => void
+  /** Swap this pane with its right-hand neighbour. Absent at the right-hand end. */
+  onMovePaneRight?: () => void
 }
 
 /**
@@ -107,9 +111,9 @@ export const visibleTabs = (
  * One session's full workspace: its tab bar and its tab body.
  *
  * Not its docks — the terminal and browser preview are mounted once by
- * `SessionGrid`, outside every pane. See the comment there for why.
+ * `SessionSplit`, outside every pane. See the comment there for why.
  *
- * Extracted out of `SessionConversation` so the grid can mount SEVERAL of these
+ * Extracted out of `SessionConversation` so the split can mount SEVERAL of these
  * at once. The important consequence of the split is that `tab`, `target` and
  * `split` are per-pane state now — two panes showing different sessions must be
  * able to sit on different tabs, which a single shared `useState` in the parent
@@ -178,6 +182,8 @@ export function SessionPane(props: SessionPaneProps) {
         onToggleSplit={splitAvailable ? () => setSplit((v) => !v) : undefined}
         splitActive={splitOpen}
         onClosePane={props.onClosePane}
+        onMovePaneLeft={props.onMovePaneLeft}
+        onMovePaneRight={props.onMovePaneRight}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">

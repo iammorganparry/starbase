@@ -1,6 +1,8 @@
 import { useState } from "react"
 import type { DragEvent, ReactNode } from "react"
-import { SESSION_DND_MIME } from "../app/layout-grid.js"
+import { motion } from "motion/react"
+import { SPRING } from "../lib/motion.js"
+import { SESSION_DND_MIME } from "../app/split-layout.js"
 import type { PrState, Session, SessionActivity } from "@starbase/core"
 import { activityLabel, displayStatusOf } from "@starbase/core"
 import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
@@ -224,6 +226,29 @@ export function SessionRow({
     session.diff.added > 0 ||
     session.diff.removed > 0
   return withMenu(
+    // The motion element is a WRAPPER rather than the row itself because
+    // `motion.div` claims `onDragStart` for its own pan gesture, whose signature
+    // is incompatible with the HTML5 drag handler this row needs to be a drag
+    // source. Wrapping keeps both: motion owns the box, the inner div owns the
+    // drag.
+    //
+    // `layoutId` pairs this row with the same session's SEGMENT inside a
+    // `SplitRow` pill. When the session is dragged into a split (or separated
+    // back out) `motion` matches the two elements across the unmount and tweens
+    // between their boxes, so the row visibly travels into the pill instead of
+    // vanishing here and appearing there. The id must match `split-row.tsx`.
+    //
+    // An ARCHIVED row carries no id at all. Archiving evicts a session from its
+    // split (see the prune in `use-split-layout`), so an archived row has no
+    // segment left to morph with — and an id with no counterpart is pure risk:
+    // if a stale persisted workspace ever named an archived session, both
+    // elements would mount with the same id for a frame, which is undefined in
+    // motion and can snap either one to the other's box.
+    <motion.div
+      layoutId={session.archived ? undefined : `session-${session.id}`}
+      layout
+      transition={SPRING}
+    >
     <div
       data-testid={`session-row-${session.id}`}
       {...dragProps}
@@ -306,6 +331,7 @@ export function SessionRow({
         </div>
       )}
     </div>
+    </motion.div>
   )
 }
 
