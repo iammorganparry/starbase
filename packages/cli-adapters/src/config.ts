@@ -78,6 +78,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
 
       const setNotifications = (notifications: NotificationsConfig) => patch({ notifications })
 
+      /** Whether plan mode runs its (read-only) commands without asking. */
+      const setPlanAutoRun = (planAutoRun: boolean) => patch({ planAutoRun })
+
       const setStarredRepos = (starredRepos: ReadonlyArray<string>) =>
         patch({ starredRepos })
 
@@ -125,6 +128,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setGithub,
         setGit,
         setNotifications,
+        setPlanAutoRun,
         setStarredRepos,
         setCollapsedRepos,
         setLastRepoPath,

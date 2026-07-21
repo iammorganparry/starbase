@@ -1,28 +1,24 @@
 import { type ReactNode, useState } from "react"
-import type { ActivityKind, DiffStat, Session, SessionActivity } from "@starbase/core"
-import { activityLabel } from "@starbase/core"
+import type { DiffStat, Session, SessionActivity, SessionDisplayStatus } from "@starbase/core"
+import { activityLabel, displayStatusOf } from "@starbase/core"
+import { displayStatusLabel } from "../tokens.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
 import { SEED_CONVERSATION } from "../seed.js"
 import { StubScreen } from "./stub-screen.js"
 
 /**
- * The tab-bar pill's accent per activity. Blue means "you're needed" and is
+ * The tab-bar pill's accent per reported state. Blue means "you're needed" and is
  * reserved for exactly that — anything the agent is doing under its own steam is
  * yellow, however long it takes. (Monitoring a PR is still the agent's work, not
  * yours; tinting it blue would dilute the one signal that should pull an eye.)
  */
-const ACTIVITY_TONE: Record<ActivityKind, "yellow" | "blue" | "green"> = {
+const DISPLAY_TONE: Record<SessionDisplayStatus, "yellow" | "blue" | "green"> = {
   thinking: "yellow",
-  reading: "yellow",
-  editing: "yellow",
   running: "yellow",
   monitoring: "yellow",
-  watching: "yellow",
-  web: "yellow",
-  delegating: "yellow",
   "needs-input": "blue",
-  "needs-approval": "blue"
+  idle: "yellow"
 }
 
 /**
@@ -163,7 +159,18 @@ export function SessionPane(props: SessionPaneProps) {
         changes={props.liveDiff?.[active.id] ?? null}
         status={
           activeActivity
-            ? { label: activityLabel(activeActivity), tone: ACTIVITY_TONE[activeActivity.kind] }
+            ? {
+                // ONE vocabulary for a session's state, shared with the sidebar:
+                // "Thinking", "Running", "Needs Input", "Monitoring", "Idle". The
+                // pill used to read the raw activity ("Running npm test…"), so
+                // the same session answered "what are you doing?" two different
+                // ways depending on which part of the window you looked at — and
+                // the target string grew the pill on every tool call.
+                label: displayStatusLabel[displayStatusOf(activeActivity, active.status)],
+                tone: DISPLAY_TONE[displayStatusOf(activeActivity, active.status)],
+                // The specifics survive on hover, exactly as they do in the row.
+                detail: activityLabel(activeActivity)
+              }
             : undefined
         }
         onToggleBrowser={props.onToggleBrowser}

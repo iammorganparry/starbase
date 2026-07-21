@@ -465,6 +465,9 @@ export interface SettingsViewProps {
   /** Desktop-notification prefs; absent means the defaults, not "off". */
   notifications?: NotificationsConfig | null
   onSaveNotifications?: (config: NotificationsConfig) => void | Promise<void>
+  /** Whether plan mode runs commands unattended; absent means on. */
+  planAutoRun?: boolean | null
+  onSavePlanAutoRun?: (planAutoRun: boolean) => void | Promise<void>
   /** Close the view and return to the active session. */
   onClose?: () => void
 }
@@ -501,6 +504,8 @@ export function SettingsView({
   onSaveGit,
   notifications,
   onSaveNotifications,
+  planAutoRun,
+  onSavePlanAutoRun,
   onClose
 }: SettingsViewProps) {
   const [section, setSection] = React.useState<SectionKey>("providers")
@@ -557,6 +562,8 @@ export function SettingsView({
         <GeneralSection
           notifications={notifications}
           onSaveNotifications={onSaveNotifications}
+          planAutoRun={planAutoRun}
+          onSavePlanAutoRun={onSavePlanAutoRun}
         />
       ) : section === "providers" ? (
         <ProvidersSection
@@ -1218,11 +1225,18 @@ function ToggleRow({
  */
 function GeneralSection({
   notifications,
-  onSaveNotifications
+  onSaveNotifications,
+  planAutoRun,
+  onSavePlanAutoRun
 }: {
   notifications?: NotificationsConfig | null
   onSaveNotifications?: (config: NotificationsConfig) => void | Promise<void>
+  planAutoRun?: boolean | null
+  onSavePlanAutoRun?: (planAutoRun: boolean) => void | Promise<void>
 }) {
+  // Absent means ON, matching `PLAN_AUTO_RUN_DEFAULT` in the domain.
+  const [planDraft, setPlanDraft] = React.useState<boolean>(planAutoRun ?? true)
+  React.useEffect(() => setPlanDraft(planAutoRun ?? true), [planAutoRun])
   // Absent config means the DEFAULTS, not silence — an operator who never opened
   // this pane should still be told when an agent needs them.
   const [draft, setDraft] = React.useState<NotificationsConfig>(
@@ -1242,6 +1256,21 @@ function GeneralSection({
     <div className="flex min-w-0 flex-1 flex-col overflow-auto bg-editor p-6">
       <div className="mx-auto w-full max-w-[560px]">
         <div className="mb-1 flex items-center gap-2 border-b border-hairline pb-2.5">
+          <span className="text-[13px] font-semibold text-text-bright">Planning</span>
+        </div>
+        <div className="divide-y divide-hairline">
+          <ToggleRow
+            label="Run commands while planning"
+            description="Plan mode can't edit files, so its commands only read — git log, ripgrep, gh pr view. Leave this on and planning runs uninterrupted; switch it off to approve each command."
+            checked={planDraft}
+            onChange={(next) => {
+              setPlanDraft(next)
+              void onSavePlanAutoRun?.(next)
+            }}
+          />
+        </div>
+
+        <div className="mb-1 mt-6 flex items-center gap-2 border-b border-hairline pb-2.5">
           <span className="text-[13px] font-semibold text-text-bright">Notifications</span>
         </div>
         <div className="divide-y divide-hairline">

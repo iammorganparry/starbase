@@ -64,7 +64,13 @@ export function TabBar({
   prNumber?: number | null
   /** Live worktree diff totals, shown as `+N −N` on the Changes tab. */
   changes?: { added: number; removed: number } | null
-  status?: { label: string; tone: "yellow" | "blue" | "green" }
+  /**
+   * The session's state as ONE of the five reported words ("Thinking",
+   * "Running", …) — never the tool or target, which is what the sidebar row
+   * shows too. `detail` carries the specifics ("Running npm test -- auth") to
+   * the hover title, where they can't grow the pill on every tool call.
+   */
+  status?: { label: string; tone: "yellow" | "blue" | "green"; detail?: string }
   /** Toggle the embedded browser preview pane (desktop only; absent in stories). */
   onToggleBrowser?: () => void
   /** Whether the browser preview pane is currently open (highlights the toggle). */
@@ -133,7 +139,7 @@ export function TabBar({
       </div>
       <div className="flex flex-1 items-center justify-end gap-2.5 px-3.5">
         {status && (
-          <Pill tone={status.tone} pulse>
+          <Pill tone={status.tone} pulse title={status.detail}>
             {status.label}
           </Pill>
         )}

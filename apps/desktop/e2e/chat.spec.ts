@@ -70,18 +70,17 @@ test("streams a turn, pauses at a HITL gate, and resumes on approval", async ({ 
   await expect(window.getByRole("button", { name: /Allow once/ })).toBeVisible()
 
   // Paused for approval → the live status reaches BOTH surfaces: the sidebar row
-  // and the tab-bar pill. They deliberately speak different vocabularies, and the
-  // casing is the tell:
+  // and the tab-bar pill. They now speak ONE vocabulary — the five reported
+  // states, Title Case — so the same session gives the same answer wherever you
+  // look. The pill used to render the activity's own prose label ("Needs input",
+  // "Searching the web"), which made the two surfaces disagree and let the pill
+  // grow with every tool call; that detail lives on the pill's hover title now.
   //
-  //   - the row reports a fixed sidebar state, Title Case  → "Needs Input"
-  //   - the pill renders the activity's own label, prose    → "Needs input"
-  //     (the same register as "Searching the web" / "Wrapping up")
-  //
-  // So each is scoped to its surface and matched exactly — an unscoped matcher
+  // Each is still scoped to its surface and matched exactly — an unscoped matcher
   // would prove neither.
   await expect(row.getByText("Needs Input", { exact: true })).toBeVisible()
   await expect(
-    window.getByTestId("session-tab-bar").getByText("Needs input", { exact: true })
+    window.getByTestId("session-tab-bar").getByText("Needs Input", { exact: true })
   ).toBeVisible()
 
   await window.getByRole("button", { name: /Allow once/ }).click()

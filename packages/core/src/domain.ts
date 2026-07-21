@@ -535,9 +535,23 @@ export const WorkspaceConfig = Schema.Struct({
    */
   orchestrator: Schema.optional(
     Schema.Struct({ cli: CliKind, model: Schema.String })
-  )
+  ),
+  /**
+   * Whether a session in PLAN mode may run commands without stopping for
+   * approval. Absent means ON (see `PLAN_AUTO_RUN_DEFAULT`).
+   *
+   * On by default because plan mode cannot write: the harness refuses edits, so
+   * the commands a planning turn wants are reads — `git log`, `rg`, `gh pr view`.
+   * Gating those turned every plan into a queue of approval prompts for actions
+   * that cannot change anything, which is how operators learn to click "allow"
+   * without reading. Edits still gate exactly as before, in every mode.
+   */
+  planAutoRun: Schema.optional(Schema.Boolean)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
+
+/** Plan mode runs its (read-only) commands unattended unless told otherwise. */
+export const PLAN_AUTO_RUN_DEFAULT = true
 
 /** A git repository discovered under the configured repos directory. */
 export const Repo = Schema.Struct({

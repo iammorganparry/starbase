@@ -20,6 +20,7 @@ import {
   findApprovedPlan,
   isBackgroundTaskEvent,
   isSubagentEvent,
+  PLAN_AUTO_RUN_DEFAULT,
   resumePlanPrompt,
   setQuestionAnswers,
   STOPPED_NOTE,
@@ -69,6 +70,15 @@ const planPointerNote = (worktreePath: string, planFiles: ReadonlyArray<string>)
     "If this message asks you to implement, continue, or pick up the plan, read that file to recall the full plan, then do the work in the working directory above. Otherwise ignore this note.",
     "</session-context>"
   ].join("\n")
+
+/**
+ * Does this turn open with a slash command (`/babysit-pr …`)?
+ *
+ * Harnesses only expand a command when it leads the message, so anything we
+ * prepend silently demotes it to prose. Deliberately narrow: a bare `/` or a
+ * path like `/Users/...` is not a command.
+ */
+export const isSlashCommand = (text: string): boolean => /^\/[A-Za-z][\w:-]*(\s|$)/.test(text.trimStart())
 
 /** A gate awaiting the operator; the `Deferred` unblocks the paused agent. */
 interface PendingGate {
@@ -159,10 +169,17 @@ const basename = (target: string | null): string => target?.split("/").pop() ?? 
 const verdict = (
   mode: PermissionMode,
   allow: ReadonlySet<string>,
-  req: PermissionRequest
+  req: PermissionRequest,
+  planAutoRun: boolean = PLAN_AUTO_RUN_DEFAULT
 ): "allow" | "gate" => {
   if (mode === "auto") return "allow"
   if (isAllowlisted(allow, req.command)) return "allow"
+  // Planning is a read-only phase: the harness refuses edits outright, so the
+  // only thing left to approve is a command that cannot change the tree. Running
+  // those unattended is the default; the operator can restore the prompts from
+  // Settings. Edits are NOT covered — they fall through to the rule below and
+  // gate exactly as they always did.
+  if (mode === "plan" && planAutoRun && req.kind === "command") return "allow"
   if (req.kind === "edit") return mode === "accept-edits" ? "allow" : "gate"
   return "gate"
 }
@@ -503,9 +520,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // falls through to the scripted stub and the session silently does
           // nothing.
           const sessionCli = session?.cli ?? "claude"
-          const orchestrator = resolveOrchestrator(
-            yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
-          )
+          const workspaceConfig = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+          const orchestrator = resolveOrchestrator(workspaceConfig)
+          // Read once per turn: plan mode's commands run unattended unless the
+          // operator switched that off in Settings.
+          const planAutoRun = workspaceConfig?.planAutoRun ?? PLAN_AUTO_RUN_DEFAULT
           const cli = sessionCli === "starbase" ? orchestrator.cli : sessionCli
           // Cache the user's configured default exec mode so approving a plan can
           // restore it.
@@ -561,7 +580,14 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             repo: session?.repo ?? "",
             branch: session?.branch ?? "",
             cwd: worktreePath,
-            prompt: `${primer}${planNote}${text}`,
+            // A slash command is only expanded by the harness when it is the FIRST
+            // thing in the message. Prefixing a compaction primer or a plan pointer
+            // turned `/babysit-pr …` into prose, and the turn came back instantly
+            // with nothing to say — the empty "CLAUDE" block. When the operator
+            // opens with a command, the context rides along AFTER it instead.
+            prompt: isSlashCommand(text)
+              ? `${text}\n\n${primer}${planNote}`.trimEnd()
+              : `${primer}${planNote}${text}`,
             images,
             binPath,
             mode,
@@ -842,7 +868,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // Re-read the live mode each call so an in-run change (e.g. a plan
               // approval restoring the exec mode) takes effect on this same turn.
               const liveMode = (yield* Ref.get(modes)).get(sessionId) ?? mode
-              if (verdict(liveMode, allow, req) === "allow") return "allow" as const
+              if (verdict(liveMode, allow, req, planAutoRun) === "allow") return "allow" as const
               const gn = yield* nextId
               const gateId = `g_${sessionId}_${gn}`
               const gate = buildGate(gateId, req)

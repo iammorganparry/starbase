@@ -12,17 +12,12 @@ export function PlanApprovalActions({
 }) {
   return (
     <ButtonGroup aria-label="Plan approval options" className={className}>
-      <Button size="sm" className="min-h-10 px-3" onClick={() => onApprove?.()}>
-        <Check className="size-3.5" />
+      <Button size="sm" onClick={() => onApprove?.()}>
+        <Check className="size-3" />
         Approve
       </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        className="min-h-10 px-3"
-        onClick={() => onApprove?.("auto")}
-      >
-        <Zap className="size-3.5 text-yellow" />
+      <Button variant="secondary" size="sm" onClick={() => onApprove?.("auto")}>
+        <Zap className="size-3 text-yellow" />
         Approve and auto
       </Button>
     </ButtonGroup>

@@ -912,6 +912,12 @@ export const runClaude = (
         })
         planQuery = iterator
 
+        // Did this run ever settle? The SDK stream can close without a `result`
+        // message (child killed, CLI crash, stdout EOF) and a `for await` that
+        // simply ends is a normal return — nothing threw, so the `catch` below
+        // never fires. The turn was then left with `streaming: true` forever, or
+        // re-read as a silent empty assistant block after a reload.
+        let terminal = false
         try {
           for await (const msg of iterator) {
             const sid = (msg as { session_id?: unknown }).session_id
@@ -926,8 +932,21 @@ export const runClaude = (
               // otherwise a late poll could re-open the settled card. A no-op for
               // any tool that wasn't teed.
               if (event._tag === "ToolEnd") stopTee(event.id)
+              if (event._tag === "Done" || event._tag === "Failed") terminal = true
               await runP(ctx.emit(event))
             }
+          }
+          // The stream ended without saying how. An interrupt has its own
+          // terminal event (the stop path emits `Failed`), so only a silent
+          // close is reported here — better a visible reason than a turn that
+          // renders as an empty response.
+          if (!terminal && !abort.signal.aborted) {
+            await runP(
+              ctx.emit({
+                _tag: "Failed",
+                message: "Claude ended the turn without responding (the harness stream closed early). Try again."
+              })
+            )
           }
         } finally {
           // End of run (or a throw / interrupt-driven iterator close): tear down
