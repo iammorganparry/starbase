@@ -319,6 +319,20 @@ describe("useSplitLayout", () => {
     })
   })
 
+  // `StarbaseApp` puts this object in the deps of its window `keydown` effect. A
+  // bare object literal is a new reference every render, which tore the listener
+  // down and re-attached it on every keystroke in the composer and every activity
+  // tick — so the identity is part of the contract, not an implementation detail.
+  it("hands back the same object across a render that changed nothing", () => {
+    const { result, rerender } = renderHook(() => useSplitLayout(sessions, "a"))
+    const first = result.current
+    rerender()
+    expect(result.current).toBe(first)
+
+    act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+    expect(result.current).not.toBe(first)
+  })
+
   it("maps each session to the group holding it, for the sidebar", () => {
     const { result } = renderHook(() => useSplitLayout(sessions, "a"))
     act(() => result.current.splitInto(result.current.group!.id, "b", 1))

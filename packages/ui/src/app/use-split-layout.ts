@@ -280,27 +280,69 @@ export function useSplitLayout(
     return map
   }, [workspace])
 
-  return {
-    workspace,
-    /** The group on screen, or null when nothing is. */
-    group,
-    /** The session in the focused pane — the app's "active session". */
-    activeSessionId: focusedSessionId(workspace),
-    visibleSessionIds: visible,
-    groupIdBySession,
-    /** The group holding a session, for callers that only know the session. */
-    groupOfSession: useCallback((sessionId: string) => groupOf(workspace, sessionId), [workspace]),
-    selectSession,
-    splitInto,
-    replacePane: replace,
-    closePane: close,
-    closeFocused,
-    movePane: move,
-    moveFocused,
-    separateAll: separate,
-    resizePane,
-    focusPane: focus,
-    focusNeighbour,
-    activateGroup
-  }
+  /** The group holding a session, for callers that only know the session. */
+  const groupOfSession = useCallback(
+    (sessionId: string) => groupOf(workspace, sessionId),
+    [workspace]
+  )
+
+  /**
+   * Memoised, and that matters more than it looks.
+   *
+   * Every operation above is already a stable `useCallback` and every derived
+   * value a `useMemo` — but returning them in a bare object literal handed the
+   * caller a NEW reference on every render regardless, which defeats all of it.
+   * `StarbaseApp` lists this object in the deps of the window `keydown` effect,
+   * so the listener was torn down and re-attached on every render of the shell:
+   * every keystroke in the composer, every activity tick. Nothing broke — but
+   * the effect only has any reason to re-run when the workspace actually
+   * changes, which is what this makes true.
+   *
+   * The dependency list is exhaustive and every entry is either a value derived
+   * from `workspace` or a callback with an empty dep list, so the identity of
+   * this object changes exactly when the workspace does.
+   */
+  return useMemo(
+    () => ({
+      workspace,
+      /** The group on screen, or null when nothing is. */
+      group,
+      /** The session in the focused pane — the app's "active session". */
+      activeSessionId: focusedSessionId(workspace),
+      visibleSessionIds: visible,
+      groupIdBySession,
+      groupOfSession,
+      selectSession,
+      splitInto,
+      replacePane: replace,
+      closePane: close,
+      closeFocused,
+      movePane: move,
+      moveFocused,
+      separateAll: separate,
+      resizePane,
+      focusPane: focus,
+      focusNeighbour,
+      activateGroup
+    }),
+    [
+      workspace,
+      group,
+      visible,
+      groupIdBySession,
+      groupOfSession,
+      selectSession,
+      splitInto,
+      replace,
+      close,
+      closeFocused,
+      move,
+      moveFocused,
+      separate,
+      resizePane,
+      focus,
+      focusNeighbour,
+      activateGroup
+    ]
+  )
 }
