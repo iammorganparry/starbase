@@ -61,7 +61,7 @@ import type {
 import { StarbaseRpcs } from "@starbase/contracts"
 import { RpcClient } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
-import { Effect, Fiber, Layer, ManagedRuntime, Runtime, Scope, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, ManagedRuntime, Runtime, Scope, Stream } from "effect"
 
 /**
  * A custom `RpcClient.Protocol` bound to the preload bridge. `send` ships a
@@ -104,6 +104,43 @@ const clientPromise = runtime.runPromise(
 const run = <A>(
   f: (client: Awaited<typeof clientPromise>) => Effect.Effect<A, unknown>
 ): Promise<A> => clientPromise.then((client) => runtime.runPromise(f(client)))
+
+/**
+ * Forward a run's events to `onEvent`, guaranteeing the turn settles.
+ *
+ * The renderer's conversation machine only leaves `running` on a `Done`/`Failed`
+ * event. A transport-level failure used to die on this forked fiber in silence,
+ * and a stream that simply ended without a terminal event left the turn spinning
+ * (or, after a reload, rendered as an empty assistant block). Whatever happens to
+ * the stream, exactly one terminal event reaches the machine. Interruption is the
+ * one exception: that is the stop path, which emits its own.
+ */
+const drainRun = (
+  stream: Stream.Stream<StreamEvent, unknown>,
+  onEvent: (event: StreamEvent) => void
+): Effect.Effect<void> => {
+  let terminal = false
+  return stream.pipe(
+    Stream.runForEach((event) =>
+      Effect.sync(() => {
+        if (event._tag === "Done" || event._tag === "Failed") terminal = true
+        onEvent(event)
+      })
+    ),
+    Effect.onExit((exit) =>
+      Effect.sync(() => {
+        if (terminal || Exit.isInterrupted(exit)) return
+        onEvent({
+          _tag: "Failed",
+          message: Exit.isFailure(exit)
+            ? `The agent stream ended unexpectedly: ${Cause.pretty(exit.cause).split("\n")[0]}`
+            : "The agent ended the turn without responding. Try again."
+        })
+      })
+    ),
+    Effect.ignore
+  )
+}
 
 /** The typed calls the renderer consumes. */
 export const rpc = {
@@ -233,6 +270,9 @@ export const rpc = {
     run((c) => c.Config.setGit(git)),
   configSetNotifications: (notifications: NotificationsConfig): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setNotifications(notifications)),
+  /** Turn plan mode's unattended (read-only) command execution on or off. */
+  configSetPlanAutoRun: (planAutoRun: boolean): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setPlanAutoRun({ planAutoRun })),
   /**
    * Ask main to raise an OS notification. Main decides whether it actually
    * surfaces — it owns window focus and the stored prefs.
@@ -349,9 +389,7 @@ export const rpc = {
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        client.Agent.run({ sessionId, text, images }).pipe(
-          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
-        )
+        drainRun(client.Agent.run({ sessionId, text, images }), onEvent)
       )
     })
     return () => {
@@ -369,9 +407,7 @@ export const rpc = {
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        client.Agent.resumePlan({ sessionId, planId }).pipe(
-          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
-        )
+        drainRun(client.Agent.resumePlan({ sessionId, planId }), onEvent)
       )
     })
     return () => {
@@ -470,9 +506,7 @@ export const rpc = {
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        client.Plan.adversarial({ sessionId, brief }).pipe(
-          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
-        )
+        drainRun(client.Plan.adversarial({ sessionId, brief }), onEvent)
       )
     })
     return () => {
@@ -502,12 +536,9 @@ export const rpc = {
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        client.Plan.execute({
-          sessionId,
-          planId,
-          executionMode: executionMode ?? undefined
-        }).pipe(
-          Stream.runForEach((event) => Effect.sync(() => onEvent(event)))
+        drainRun(
+          client.Plan.execute({ sessionId, planId, executionMode: executionMode ?? undefined }),
+          onEvent
         )
       )
     })

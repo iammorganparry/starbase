@@ -117,6 +117,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const githubConfig = configQuery.data?.github ?? null
   const gitConfig = configQuery.data?.git ?? null
   const notificationsConfig = configQuery.data?.notifications ?? null
+  // Absent means on — plan mode's commands are read-only.
+  const planAutoRun = configQuery.data?.planAutoRun ?? true
   const providersConfig = configQuery.data?.providers ?? null
   const contextConfig = configQuery.data?.context ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
@@ -138,6 +140,10 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     })
   const saveNotificationsConfig = (config: NotificationsConfig) =>
     rpc.configSetNotifications(config).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  const savePlanAutoRun = (value: boolean) =>
+    rpc.configSetPlanAutoRun(value).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
   const saveProvider = (cli: CliKind, config: ProviderConfig) =>
@@ -525,6 +531,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveGitConfig={saveGitConfig}
       notificationsConfig={notificationsConfig}
       onSaveNotificationsConfig={saveNotificationsConfig}
+      planAutoRun={planAutoRun}
+      onSavePlanAutoRun={savePlanAutoRun}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
       contextConfig={contextConfig}

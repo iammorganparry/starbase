@@ -28,11 +28,13 @@ export interface PillProps extends VariantProps<typeof pill> {
   dot?: boolean
   pulse?: boolean
   className?: string
+  /** Hover text — where a detail too long for the pill itself goes. */
+  title?: string
 }
 
-export function Pill({ children, tone = "blue", dot = true, pulse, className }: PillProps) {
+export function Pill({ children, tone = "blue", dot = true, pulse, className, title }: PillProps) {
   return (
-    <span className={cn(pill({ tone }), className)}>
+    <span className={cn(pill({ tone }), className)} title={title}>
       {dot && <StatusDot tone={dotTone[tone ?? "blue"]} size={6} pulse={pulse} glow={false} />}
       {children}
     </span>

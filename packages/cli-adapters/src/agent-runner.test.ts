@@ -5,7 +5,7 @@ import { CliExecError, findApprovedPlan, STOPPED_NOTE } from "@starbase/core"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
-import type { CliAdapterShape } from "./adapter.js"
+import type { CliAdapterShape, PermissionDecision } from "./adapter.js"
 import { ConfigService } from "./config.js"
 import { AgentRunner } from "./agent-runner.js"
 import { ContextManager } from "./context-manager.js"
@@ -92,6 +92,81 @@ describe("AgentRunner HITL gating", () => {
     expect(gates(events)).toHaveLength(0)
     expect(ranTool(events, "edit-1")).toBe(true)
     expect(ranTool(events, "bash-1")).toBe(true)
+  })
+
+  /**
+   * An adapter that asks permission for one command and one edit, then ends.
+   * The scripted adapter can't be used here: in plan mode it proposes a plan and
+   * blocks on the decision instead of running tools.
+   */
+  const probeAdapter = (out: {
+    command: PermissionDecision | null
+    edit: PermissionDecision | null
+  }): Layer.Layer<CliAdapter> =>
+    Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: (_sessionId, _spec, ctx) =>
+          Effect.gen(function* () {
+            out.command = yield* ctx.canUseTool({
+              kind: "command",
+              tool: "Bash",
+              target: null,
+              command: "git log --oneline -5"
+            })
+            out.edit = yield* ctx.canUseTool({
+              kind: "edit",
+              tool: "Edit",
+              target: "src/auth/session.ts",
+              command: null
+            })
+            yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+          }) as ReturnType<CliAdapterShape["run"]>,
+        stop: () => Effect.void
+      })
+    )
+
+  const probe = (mode: PermissionMode) => {
+    const out: { command: PermissionDecision | null; edit: PermissionDecision | null } = {
+      command: null,
+      edit: null
+    }
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      ConfigService.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      BackgroundTaskStore.Default,
+      PlanStore.Default,
+      probeAdapter(out),
+      DiscoveryService.Default,
+      ContextManager.Default,
+      temp.layer
+    )
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, mode)
+        yield* runner.prompt(SESSION, "how does auth work?").pipe(
+          // Deny anything that does gate, so a gate is visible as a denial rather
+          // than a hang.
+          Stream.tap((ev) =>
+            ev._tag === "GateRequested" ? runner.decideGate(SESSION, ev.gate.id, "deny") : Effect.void
+          ),
+          Stream.runDrain
+        )
+      }).pipe(Effect.provide(base))
+    ).then(() => out)
+  }
+
+  it("plan: a command runs unattended (planning cannot write), an edit still gates", async () => {
+    // Planning reads — `git log`, `rg`, `gh pr view`. Gating those trained the
+    // operator to click "allow" on actions that cannot change anything.
+    expect(await probe("plan")).toStrictEqual({ command: "allow", edit: "deny" })
+  })
+
+  it("ask: the same command still gates", async () => {
+    expect(await probe("ask")).toStrictEqual({ command: "deny", edit: "deny" })
   })
 
   it("denying the command gate leaves it unrun", async () => {
@@ -822,6 +897,39 @@ describe("AgentRunner plan library", () => {
       }).pipe(Effect.provide(base))
     )
     expect(captured.prompt).toBe("just do X")
+  })
+
+  it("keeps a slash command first, so the harness still expands it", async () => {
+    seedSessionWithWorktree("auto")
+    const captured: { prompt: string | null } = { prompt: null }
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      ConfigService.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      BackgroundTaskStore.Default,
+      PlanStore.Default,
+      recordingAdapter(captured),
+      DiscoveryService.Default,
+      ContextManager.Default,
+      temp.layer
+    )
+    await Effect.runPromise(
+      PlanStore.write(WT, { ...scriptedPlan("s1", 1), summary: "Ship it", raw: "the full plan" }).pipe(
+        Effect.provide(Layer.merge(PlanStore.Default, temp.layer))
+      )
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "auto")
+        yield* runner.prompt(SESSION, "/babysit-pr get it to main").pipe(Stream.runDrain)
+      }).pipe(Effect.provide(base))
+    )
+    // Prefixing the pointer demoted the command to prose, and the turn came back
+    // empty. The context now rides along AFTER it.
+    expect(captured.prompt?.startsWith("/babysit-pr get it to main")).toBe(true)
+    expect(captured.prompt).toContain("<session-context>")
   })
 })
 

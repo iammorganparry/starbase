@@ -103,6 +103,9 @@ export interface StarbaseAppProps {
   /** Desktop-notification prefs; absent means the defaults, not "off". */
   notificationsConfig?: NotificationsConfig | null
   onSaveNotificationsConfig?: (config: NotificationsConfig) => Promise<void> | void
+  /** Whether plan mode runs its read-only commands unattended; absent means on. */
+  planAutoRun?: boolean | null
+  onSavePlanAutoRun?: (planAutoRun: boolean) => Promise<void> | void
   /** Re-run `gh auth status` (the settings "Recheck" button); may be async. */
   onRecheckGh?: () => Promise<void> | void
   /** Persisted per-CLI provider defaults (Settings · Providers view). */
@@ -242,6 +245,8 @@ export function StarbaseApp({
   onSaveGitConfig,
   notificationsConfig,
   onSaveNotificationsConfig,
+  planAutoRun,
+  onSavePlanAutoRun,
   onRecheckGh,
   providersConfig,
   onSaveProvider,
@@ -479,6 +484,8 @@ export function StarbaseApp({
               onSaveGit={onSaveGitConfig}
               notifications={notificationsConfig}
               onSaveNotifications={onSaveNotificationsConfig}
+              planAutoRun={planAutoRun}
+              onSavePlanAutoRun={onSavePlanAutoRun}
               onClose={() => setSettingsOpen(false)}
             />
           ) : undefined

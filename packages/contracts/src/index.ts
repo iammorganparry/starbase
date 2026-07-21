@@ -496,6 +496,16 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Persist whether plan mode runs commands unattended. Plan mode cannot edit,
+   * so this only ever covers read-only commands.
+   */
+  Rpc.make("Config.setPlanAutoRun", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: Schema.Struct({ planAutoRun: Schema.Boolean })
+  }),
+
+  /**
    * Raise an OS notification for a session.
    *
    * Main owns the Electron `Notification` API, but only the RENDERER knows
