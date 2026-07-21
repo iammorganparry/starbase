@@ -1,6 +1,7 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 import { SessionSidebar } from "./session-sidebar.js"
+import type { SplitGroup } from "./split-layout.js"
 import { testSession as session } from "../test-support.js"
 
 afterEach(cleanup)
@@ -56,5 +57,97 @@ describe("SessionSidebar archived group", () => {
 
     expect(rowOrder()).toStrictEqual(["multi-pr"])
     expect(screen.getByText(/#204 Merged/)).toBeDefined()
+  })
+})
+
+/**
+ * A split is ONE sidebar row, drawn at one of its members' positions. Which
+ * member owns that row is the whole subject here: the first version keyed on
+ * `panes[0]` outright, so any list that didn't happen to contain the first pane
+ * rendered no pill at all — and the split stayed on screen with nothing in the
+ * sidebar pointing at it.
+ */
+describe("SessionSidebar split pill ownership", () => {
+  const SPLIT: SplitGroup = {
+    id: "g:first",
+    panes: [
+      { sessionId: "first", ratio: 0.5 },
+      { sessionId: "second", ratio: 0.5 }
+    ],
+    focused: 0
+  }
+
+  const renderSidebar = (sessions: ReadonlyArray<ReturnType<typeof session>>) =>
+    render(
+      <SessionSidebar
+        activeSessionId="first"
+        onSelect={() => {}}
+        sessions={sessions}
+        splitGroups={[SPLIT]}
+        activeGroupId="g:first"
+      />
+    )
+
+  const both = [
+    session({ id: "first", title: "Refactor auth flow" }),
+    session({ id: "second", title: "Bump the toolchain" })
+  ]
+
+  it("draws the pill once, at the first pane, when everything is showing", () => {
+    renderSidebar(both)
+    expect(screen.getAllByTestId("split-row-g:first")).toHaveLength(1)
+    expect(screen.getByTestId("split-segment-first")).toBeDefined()
+    expect(screen.getByTestId("split-segment-second")).toBeDefined()
+    // And neither member is ALSO drawn as a plain row.
+    expect(rowOrder()).toStrictEqual([])
+  })
+
+  it("still draws the pill when the filter matches only a LATER pane", () => {
+    // The regression: searching for pane 2's title left pane 1 with no entry to
+    // hang the pill on, while pane 2's entry bowed out for not being first. The
+    // search found a session and then rendered nothing whatsoever.
+    renderSidebar(both)
+    fireEvent.change(screen.getByPlaceholderText("Filter sessions…"), {
+      target: { value: "toolchain" }
+    })
+
+    expect(screen.getAllByTestId("split-row-g:first")).toHaveLength(1)
+    expect(screen.getByTestId("split-segment-second")).toBeDefined()
+  })
+
+  it("still draws the pill when the FIRST pane's session is archived", () => {
+    // The other half of the regression: archiving pane 1 dropped it out of the
+    // active list, so no entry satisfied the check and the entire pill vanished
+    // — stranding pane 2's session with no sidebar presence at all, while the
+    // split it belongs to was still on screen.
+    renderSidebar([
+      session({ id: "first", title: "Refactor auth flow", archived: true, archivedAt: "2026-07-18T08:00:00.000Z" }),
+      session({ id: "second", title: "Bump the toolchain" })
+    ])
+
+    expect(screen.getAllByTestId("split-row-g:first")).toHaveLength(1)
+    // The archived member still appears in the Archived group as its own row —
+    // it IS archived, and it IS on screen; both are true and both are shown.
+    expect(rowOrder()).toStrictEqual(["first"])
+  })
+
+  it("draws no pill when the filter excludes every pane", () => {
+    renderSidebar(both)
+    fireEvent.change(screen.getByPlaceholderText("Filter sessions…"), {
+      target: { value: "nothing matches this" }
+    })
+
+    expect(screen.queryByTestId("split-row-g:first")).toBeNull()
+  })
+
+  it("draws ONE pill for a split that spans two repo groups", () => {
+    // Ownership is resolved against the whole active list, not per rendered
+    // group — resolving it per group would draw the same pill in both repos.
+    renderSidebar([
+      session({ id: "first", title: "Refactor auth flow", repo: "starbase" }),
+      session({ id: "second", title: "Bump the toolchain", repo: "gtm-grid" })
+    ])
+
+    expect(screen.getAllByTestId("split-row-g:first")).toHaveLength(1)
   })
 })

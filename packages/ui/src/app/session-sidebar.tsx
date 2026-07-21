@@ -219,17 +219,47 @@ export function SessionSidebar({
   }, [splitGroups])
 
   /**
+   * Which session's list entry DRAWS each split's pill.
+   *
+   * The first pane whose session is actually being rendered — not simply the
+   * first pane. Those differ whenever the list is a subset of the workspace, and
+   * keying on `panes[0]` unconditionally lost the pill entirely in two ordinary
+   * situations:
+   *
+   * - **Filtering.** Search for a title that only pane 2 matches: pane 1 has no
+   *   entry to hang the pill on, and pane 2's entry bowed out because it wasn't
+   *   first. The search found a session and then rendered nothing at all.
+   * - **Archiving.** Archive pane 1's session and it leaves the active list, so
+   *   no entry satisfied the check — the whole pill vanished while the split was
+   *   still on screen, stranding its other sessions with no sidebar presence.
+   *
+   * Resolved ONCE against the whole active list rather than per rendered group,
+   * so a split spanning two repos still draws exactly one pill (in whichever
+   * repo group its first surviving pane sits) instead of one per group.
+   */
+  const pillOwner = React.useMemo(() => {
+    const rendered = new Set(activeSessions.map((s) => s.id))
+    const owner = new Map<string, string>()
+    for (const g of splitGroups ?? []) {
+      if (g.panes.length < 2) continue
+      const first = g.panes.find((p) => rendered.has(p.sessionId))
+      // No surviving pane means nothing matched the filter — no pill is right.
+      if (first) owner.set(g.id, first.sessionId)
+    }
+    return owner
+  }, [splitGroups, activeSessions])
+
+  /**
    * One entry in a sidebar list — a pill for a split, a row for anything else.
    *
-   * A split is drawn ONCE, at the position of its first pane, and its other panes
+   * A split is drawn ONCE, at its owning entry (above), and its other panes
    * render nothing. Drawing it per-member would repeat the same pill two to four
    * times; drawing it in a group of its own would tear a split across repos apart.
-   * The first pane's place in the list is the split's place in the list.
    */
   const renderEntry = (s: Session) => {
     const split = splitBySession.get(s.id)
     if (split) {
-      if (split.panes[0]?.sessionId !== s.id) return null
+      if (pillOwner.get(split.id) !== s.id) return null
       return (
         <SplitRow
           key={split.id}
