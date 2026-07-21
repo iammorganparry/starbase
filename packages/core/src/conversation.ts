@@ -759,8 +759,25 @@ export const StreamEvent = Schema.Union(
   Schema.TaggedStruct("BackgroundTasksChanged", {
     ids: Schema.Array(Schema.String)
   }),
-  /** The latest main-agent context-window size reported by the harness. */
-  Schema.TaggedStruct("Usage", { tokens: Schema.Number }),
+  /**
+   * The latest main-agent context-window OCCUPANCY reported by the harness.
+   *
+   * Occupancy, emphatically not consumption. `Done.tokens` is the run's
+   * cumulative token spend (what `addUsage` accrues for the cost readout); this
+   * is how full the window is RIGHT NOW. Conflating them is not a rounding
+   * error: cumulative spend counts every cached re-read of the same context, so
+   * it scales with tool-call count and reports several times the window's size
+   * on a turn that never came close to filling it.
+   *
+   * `window` is the harness's OWN report of the model's ceiling, when it offers
+   * one. It beats the guessed table in `context.ts` because it is measured
+   * rather than inferred — no model-id prefix to keep current, and it already
+   * accounts for whatever the harness reserves for output.
+   */
+  Schema.TaggedStruct("Usage", {
+    tokens: Schema.Number,
+    window: Schema.optional(Schema.Number)
+  }),
   /**
    * The harness conversation was reseeded from a summary to keep the working set
    * inside the quality band. Emitted at the START of the turn that applies it, so

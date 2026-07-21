@@ -9,6 +9,7 @@ import {
   PLAN_REFORMAT,
   mapPermissionMode,
   parseSdkQuestions,
+  probeContextUsage,
   streamEventsFor,
   toPermissionRequest,
   type ToolMemo
@@ -247,6 +248,35 @@ describe("streamEventsFor", () => {
       new Map()
     )
     expect(events).toStrictEqual([{ _tag: "Usage", tokens: 1300 }])
+  })
+
+  /**
+   * The result message's usage is the run's CUMULATIVE spend: every sampling
+   * call in the turn, so a resident 90k context is counted once per tool call.
+   * Reading it as occupancy is what made a long tool-using turn report ~600k on
+   * a 200k model and compact on every single turn — so it must reach `Done`
+   * (where it is billed) and never a `Usage` (where it would be believed).
+   */
+  it("reports the result's cumulative usage as spend, never as a context reading", () => {
+    const events = streamEventsFor(
+      msg({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "done",
+        total_cost_usd: 1.25,
+        usage: {
+          input_tokens: 400,
+          output_tokens: 900,
+          cache_creation_input_tokens: 2_000,
+          // Ten tool calls against the same resident context.
+          cache_read_input_tokens: 900_000
+        }
+      }),
+      new Map()
+    )
+    expect(events.some((e) => e._tag === "Usage")).toBe(false)
+    expect(events).toStrictEqual([{ _tag: "Done", costUsd: 1.25, tokens: 903_300 }])
   })
 
   it("does not emit Usage for a sub-agent's assistant message (only the main run drives the readout)", () => {
@@ -636,5 +666,50 @@ describe("plan mode + AskUserQuestion (canUseTool path)", () => {
       { question: "Which?", header: "Pick", multiSelect: false, options: [] }
     ]
     expect(formatQuestionAnswer(questions, [])).toContain("(no selection)")
+  })
+})
+
+/**
+ * The end-of-turn context probe.
+ *
+ * This is the number compaction now runs on, so what matters is that it is
+ * either the harness's own measurement or nothing at all — a probe that guessed
+ * on failure would reintroduce exactly the class of bug it replaces.
+ */
+describe("probeContextUsage", () => {
+  const query = (over: Record<string, unknown>) =>
+    ({ getContextUsage: async () => over }) as unknown as Parameters<typeof probeContextUsage>[0]
+
+  it("reads the harness's own occupancy and raw ceiling", async () => {
+    const probe = await probeContextUsage(
+      query({ totalTokens: 143_210, maxTokens: 176_000, rawMaxTokens: 200_000 })
+    )
+    expect(probe).toStrictEqual({ tokens: 143_210, window: 200_000 })
+  })
+
+  // `maxTokens` is already discounted by the CLI's own autocompact reserve.
+  // Taking it would stack that reserve on the safety margin in `triggerAt` and
+  // compact materially earlier than the budget asks for — so it is only a
+  // fallback for a harness that doesn't report the raw figure.
+  it("falls back to maxTokens only when no raw ceiling is reported", async () => {
+    const probe = await probeContextUsage(query({ totalTokens: 1_000, maxTokens: 176_000 }))
+    expect(probe?.window).toBe(176_000)
+  })
+
+  it("returns null when the CLI is too old to answer", async () => {
+    expect(await probeContextUsage({} as Parameters<typeof probeContextUsage>[0])).toBeNull()
+  })
+
+  it("returns null rather than a zero reading", async () => {
+    expect(await probeContextUsage(query({ totalTokens: 0, rawMaxTokens: 200_000 }))).toBeNull()
+  })
+
+  it("returns null when the control request throws", async () => {
+    const throwing = {
+      getContextUsage: async () => {
+        throw new Error("worker gone")
+      }
+    } as unknown as Parameters<typeof probeContextUsage>[0]
+    expect(await probeContextUsage(throwing)).toBeNull()
   })
 })

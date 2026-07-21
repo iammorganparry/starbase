@@ -381,12 +381,75 @@ const contextTokens = (usage: unknown): number => {
   const iterations = Array.isArray(aggregate.iterations) ? aggregate.iterations : []
   const last = iterations.at(-1)
   const current = isRecord(last) ? last : aggregate
-  return (
-    numOf(current.input_tokens) +
-    numOf(current.cache_creation_input_tokens) +
-    numOf(current.cache_read_input_tokens) +
-    numOf(current.output_tokens)
-  )
+  return sumTokens(current)
+}
+
+/**
+ * Total tokens BILLED for a run — the result message's cumulative usage.
+ *
+ * Same arithmetic as `contextTokens`, deliberately a different function: this
+ * one is fed a total that has already been summed across every sampling call in
+ * the turn, so it answers "what did this cost" and never "how full is the
+ * window". Two names because one name was the bug — the result usage was read
+ * as an occupancy reading and drove compaction from a number that grows with
+ * tool-call count.
+ */
+const runTokens = (usage: unknown): number => sumTokens(isRecord(usage) ? usage : {})
+
+/** Cached input still occupies the window even though it is billed differently. */
+const sumTokens = (usage: Record<string, unknown>): number =>
+  numOf(usage.input_tokens) +
+  numOf(usage.cache_creation_input_tokens) +
+  numOf(usage.cache_read_input_tokens) +
+  numOf(usage.output_tokens)
+
+/**
+ * How long the end-of-turn context probe may take before we fall back.
+ *
+ * A control request travels to the CLI child and back, so it can hang exactly
+ * when the child is unhealthy — which is also when the turn is trying to end.
+ * The fallback (the last per-message reading) is good, so waiting is not worth
+ * much: bound it hard and move on.
+ */
+const CONTEXT_PROBE_MS = 3_000
+
+/**
+ * The authoritative end-of-turn context reading, straight from the harness.
+ *
+ * `getContextUsage()` is the same data the CLI's own context meter renders, so
+ * it needs no reconstruction from usage arithmetic and no model-id table to
+ * name the ceiling. Everything else here is best-effort around it: an older
+ * CLI may not implement the control request at all, and a wedged child may
+ * never answer — in both cases `null` sends the caller back to the per-message
+ * readings, which is exactly today's behaviour minus the inflation.
+ */
+export const probeContextUsage = async (
+  query: Query
+): Promise<{ tokens: number; window: number } | null> => {
+  const get = (query as Partial<Query>).getContextUsage
+  if (typeof get !== "function") return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const usage = await Promise.race([
+      get.call(query),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CONTEXT_PROBE_MS)
+      })
+    ])
+    if (usage === null || !isRecord(usage)) return null
+    const tokens = numOf(usage.totalTokens)
+    if (tokens <= 0) return null
+    // `rawMaxTokens` is the model's real ceiling; `maxTokens` is what the CLI
+    // will let itself fill before its OWN autocompact kicks in. Taking the
+    // discounted number would stack that reserve on top of the safety margin in
+    // `triggerAt`, compacting materially earlier than the budget asks for.
+    const window = numOf(usage.rawMaxTokens) || numOf(usage.maxTokens)
+    return { tokens, window: window > 0 ? window : 0 }
+  } catch {
+    return null
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /** Remembers a tool call's name/input between its `tool_use` and `tool_result`. */
@@ -690,9 +753,17 @@ export const streamEventsFor = (
         {
           _tag: "Done",
           costUsd: numOf((msg as { total_cost_usd?: unknown }).total_cost_usd),
-          // Fallback for harnesses/runs where no live Usage event arrived. The
-          // renderer keeps a live context reading in preference to this result.
-          tokens: contextTokens(msg.usage)
+          /**
+           * The run's CUMULATIVE token spend — what `addUsage` accrues into the
+           * session's lifetime total beside `costUsd`.
+           *
+           * NOT a context reading, and never to be used as one. The result
+           * message's `usage` sums every sampling call in the turn, so its
+           * `cache_read_input_tokens` counts the same resident context once per
+           * tool call; a ten-tool turn inside a 90k window reports ~900k here.
+           * Context occupancy is reported separately, by `Usage` events.
+           */
+          tokens: runTokens(msg.usage)
         }
       ]
     }
@@ -925,6 +996,23 @@ export const runClaude = (
             // this key would resume it.
             if (!spec.fresh && typeof sid === "string" && sid.length > 0) {
               resume.set(sessionId, sid)
+            }
+            // The turn is ending: ask the harness how full the window actually
+            // is, and emit that BEFORE the `Done` it belongs to. Ordering is
+            // load-bearing — `Done` is what starts a compaction decision, and
+            // the decision reads the latest `Usage`, so a probe emitted after it
+            // would be one turn late every time.
+            if ((msg as { type?: unknown }).type === "result") {
+              const probe = await probeContextUsage(iterator)
+              if (probe !== null) {
+                await runP(
+                  ctx.emit({
+                    _tag: "Usage",
+                    tokens: probe.tokens,
+                    ...(probe.window > 0 ? { window: probe.window } : {})
+                  })
+                )
+              }
             }
             for (const event of streamEventsFor(msg, tools, bgState)) {
               // A command has finished: its ToolEnd carries the authoritative
