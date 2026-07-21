@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Session } from "@starbase/core"
 import { BrowserPreview, type DockSide } from "@starbase/ui"
+import { isPaintableRect } from "./browser-preview-bounds.js"
 import { rpc } from "./rpc-client.js"
 
 // Default target until run-scripts (#1) can seed the session's real dev-server
@@ -26,12 +27,6 @@ export interface BrowserPreviewViewProps {
   side: DockSide
   onSideChange: (side: DockSide) => void
 }
-
-/**
- * The smallest rect worth handing to the native view. Below this the placeholder
- * is collapsed or mid-transition rather than genuinely tiny — see the tick loop.
- */
-const MIN_NATIVE_BOUNDS = { width: 200, height: 150 } as const
 
 export function BrowserPreviewView({ session, visible, onToggle, side, onSideChange }: BrowserPreviewViewProps) {
   const boundsRef = useRef<HTMLDivElement>(null)
@@ -91,12 +86,15 @@ export function BrowserPreviewView({ session, visible, onToggle, side, onSideCha
     const tick = () => {
       const r = rect()
       // A degenerate rect is NOT a small view — it's a placeholder that is
-      // mid-transition, hidden, or collapsed by a dock switch. Pushing it to the
-      // native `WebContentsView` parks a zero-size (or worse, negative) overlay
-      // on top of the placeholder, and Chromium reflows the page to that size on
-      // the way through. Skipping keeps the last good bounds until the layout
-      // settles, which is one frame later in every case that produces this.
-      if (r && r.width >= MIN_NATIVE_BOUNDS.width && r.height >= MIN_NATIVE_BOUNDS.height) {
+      // hidden, unmounted, or mid-transition through a dock switch. Pushing one
+      // parks a zero-size (or negative) overlay over the placeholder, and
+      // Chromium reflows the page to that size on the way through. Skipping
+      // holds the last good bounds until the layout settles, one frame later.
+      //
+      // A SMALL rect is a different thing entirely and must still be pushed —
+      // see `isPaintableRect` for what happened when this guard couldn't tell
+      // the two apart.
+      if (r && isPaintableRect(r)) {
         const key = `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`
         if (key !== last) {
           last = key

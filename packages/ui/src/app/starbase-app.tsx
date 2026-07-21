@@ -398,7 +398,9 @@ export function StarbaseApp({
   // and the ⌃⇧1..4 shortcuts below address exactly the same set.
   const paneBySession = useMemo(() => {
     const map = new Map<string, number>()
-    group?.panes.forEach((p, i) => map.set(p.sessionId, i))
+    group?.panes.forEach((p, i) => {
+      map.set(p.sessionId, i)
+    })
     return map
   }, [group])
 

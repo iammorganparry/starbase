@@ -590,6 +590,9 @@ exit 0
 }
 
 export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promise<LaunchedApp> }>({
+  // The first argument is Playwright's fixture bag, which this fixture uses none
+  // of — but it has to be there for `use` to be the second parameter.
+  // biome-ignore lint/correctness/noEmptyPattern: required by Playwright's signature
   launchApp: async ({}, use) => {
     const cleanups: Array<() => void> = []
     const apps: ElectronApplication[] = []

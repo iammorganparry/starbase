@@ -864,10 +864,18 @@ describe("ReviewService — reset is atomic", () => {
         set: () => Effect.void,
         clear: () => Effect.void,
         getTranscript: () => Effect.sync(() => stored),
-        setTranscript: (_id, events) => Effect.sync(() => void (stored = events)),
+        setTranscript: (_id, events) =>
+          Effect.sync(() => {
+            stored = events
+          }),
         // Parks INSIDE the reset — precisely the window under test.
         clearTranscript: () =>
-          Effect.promise(() => clearing).pipe(Effect.map(() => void (stored = [])))
+          Effect.promise(() => clearing).pipe(
+            // biome-ignore lint/suspicious/useIterableCallbackReturn: Effect.map, not Array#map
+            Effect.map(() => {
+              stored = []
+            })
+          )
       })
     )
 

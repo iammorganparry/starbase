@@ -56,8 +56,14 @@ export const requestCodexAppServer = (
     let buffer = ""
     child.stdout?.on("data", (chunk: Buffer) => {
       buffer += chunk.toString()
-      let newline: number
-      while ((newline = buffer.indexOf("\n")) >= 0) {
+      // `for (;;)` with an explicit break, not `while ((n = indexOf(...)) >= 0)`.
+      // An assignment buried in a loop condition reads as a comparison at a
+      // glance, which is the one place you cannot afford to misread a stream
+      // parser — and the re-scan cannot simply move to the end of the body,
+      // because the body `continue`s past it on a blank or unparseable line.
+      for (;;) {
+        const newline = buffer.indexOf("\n")
+        if (newline < 0) break
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
         if (!line.trim()) continue

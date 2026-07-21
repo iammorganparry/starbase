@@ -15,7 +15,7 @@ pnpm dev            # turbo run dev — starts all apps (electron-vite + server 
 pnpm build          # turbo run build
 pnpm typecheck      # tsc --noEmit across every package (what CI runs)
 pnpm test           # vitest run — every package's suite in one pass (what CI runs)
-pnpm lint           # turbo run lint (no lint tasks defined yet — currently a no-op)
+pnpm lint           # biome lint . — errors gate CI; a11y/style report as warnings
 ```
 
 Per-app / per-package (use `--filter`, or `pnpm -C <dir>`):
@@ -88,6 +88,14 @@ Desktop state is **JSON files under `~/starbase`** (no ORM) — see `apps/deskto
 
 - **Effect-TS is the backend idiom.** cli-adapters services are `Effect.Service` with `accessors: true`; errors are `Schema.TaggedError` so they encode across the RPC boundary. Prefer Effect over raw async in that layer.
 - **Git hooks auto-sync deps.** `prepare` sets `core.hooksPath .githooks`; `post-checkout`/`post-merge` run `pnpm install` when the lockfile changes — so switching branches may reinstall.
+- **Biome is the linter, and only the linter.** `biome.json` sets
+  `formatter.enabled: false` on purpose — the codebase's hand-tuned wrapping
+  carries a lot of comment structure, and adopting the formatter would rewrite
+  281 files. Errors are the correctness + suspicious rules (real bugs);
+  `a11y`/`style`/`complexity` report as warnings and do not gate.
+  `useHookAtTopLevel` is explicitly promoted to error — a conditional
+  `useWidthTier()` shipped once already. `noNonNullAssertion` is off:
+  `noUncheckedIndexedAccess` makes `arr[0]!` idiomatic here.
 - **Versioning is via Changesets.** `pnpm changeset` to add one; `pnpm version-packages` runs `changeset version` + `scripts/sync-app-version.mjs`. The app version lives only in `apps/desktop/package.json` and is inlined everywhere as `__APP_VERSION__`.
-- **CI (`.github/workflows/ci.yml`) runs only `pnpm typecheck` + `pnpm test`** on PRs (frozen-lockfile install). The Playwright `_electron` e2e suite is **not** in CI — run it locally. Keep both green before opening a PR.
+- **CI (`.github/workflows/ci.yml`) runs `pnpm lint` + `pnpm typecheck` + `pnpm test`** on PRs (frozen-lockfile install). The Playwright `_electron` e2e suite is **not** in CI — run it locally. Keep both green before opening a PR.
 - Coverage is report-only (a gap-finding lens), never a gate.

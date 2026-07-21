@@ -1,0 +1,49 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+
+      "correctness": {
+        "recommended": true,
+        "useHookAtTopLevel": "error",
+        "useExhaustiveDependencies": "warn"
+      },
+
+      "suspicious": {
+        "recommended": true,
+        "noNonNullAssertedOptionalChain": "warn",
+        "noArrayIndexKey": "warn"
+      },
+
+      "a11y": "warn",
+      "complexity": "warn",
+      "performance": "warn",
+      "security": "warn",
+
+      "style": {
+        "recommended": true,
+        "noNonNullAssertion": "off"
+      }
+    }
+  },
+
+  "files": {
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.mjs",
+      "!**/node_modules/**",
+      "!**/out/**",
+      "!**/dist/**",
+      "!**/.turbo/**",
+      "!**/storybook-static/**"
+    ]
+  }
+}

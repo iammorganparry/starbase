@@ -43,5 +43,7 @@ const Interactive = ({ initial = "default" }: { initial?: LoginState }) => {
 }
 
 export const Default: Story = { render: () => <Interactive /> }
-export const Error: Story = { render: () => <Interactive initial="error" /> }
+// Named `ErrorState` because a module-scope `Error` shadows the global; `name`
+// keeps the story reading as "Error" in the sidebar.
+export const ErrorState: Story = { name: "Error", render: () => <Interactive initial="error" /> }
 export const Sent: Story = { render: () => <Interactive initial="sent" /> }

@@ -268,7 +268,13 @@ export function Composer({
     // a round that cannot carry it.
     if (orchestrated) return
     const read = await Promise.all(
-      files.map((f) => readAttachment(f, `att_${(attachIdRef.current += 1)}`))
+      files.map((f) => {
+        // The counter is bumped as its own statement rather than inside the
+        // template literal: an assignment in an expression position reads as a
+        // comparison, and this one has a side effect per attachment.
+        attachIdRef.current += 1
+        return readAttachment(f, `att_${attachIdRef.current}`)
+      })
     )
     const next = read.filter((a): a is Attachment => a !== null)
     if (next.length > 0) setAttachments((prev) => [...prev, ...next].slice(0, MAX_ATTACHMENTS))

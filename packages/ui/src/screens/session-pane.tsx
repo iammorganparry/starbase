@@ -184,8 +184,17 @@ function SessionPaneBody(props: SessionPaneProps) {
   // 35px. Below `wide` the split is simply not offered — the Plan Review tab is
   // the same screen at full width, one click away, so nothing is lost but the
   // side-by-side reading the pane couldn't have delivered anyway.
-  const splitAvailable =
-    activeTab === "conversation" && tabs.includes("plan") && atLeast(useWidthTier(), "wide")
+  //
+  // The hook is HOISTED out of the `&&` chain. Inline as the third operand it
+  // was skipped whenever either of the first two was false, so it ran on some
+  // renders and not others — a Rules of Hooks violation that today's React
+  // happens to tolerate only because `useContext` doesn't occupy a slot in the
+  // hook list. Give `useWidthTier` any internal state (a `useSyncExternalStore`
+  // selector, say) and that becomes "rendered fewer hooks than expected". The
+  // same rule is spelled out in `issue-view.tsx` and `pull-request-view.tsx`;
+  // it applies here too — and `useHookAtTopLevel` now enforces it.
+  const roomy = atLeast(useWidthTier(), "wide")
+  const splitAvailable = activeTab === "conversation" && tabs.includes("plan") && roomy
   const splitOpen = split && splitAvailable
   const connectGithub = props.onOpenSettings ?? (() => {})
   // What this session's agent is doing — drives the tab bar's pill.

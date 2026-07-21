@@ -408,8 +408,12 @@ const FLOW_BLOCK = /```flow[ \t]*([^\n]*)\n([\s\S]*?)```/gi
  */
 export const parseFlow = (raw: string): PlanGraph | null => {
   FLOW_BLOCK.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = FLOW_BLOCK.exec(raw)) !== null) {
+  // `for (;;)` with an explicit break, not an assignment in the loop condition:
+  // the latter reads as a comparison at a glance, and the re-scan can't move to
+  // the end of the body because the body `continue`s past it.
+  for (;;) {
+    const m = FLOW_BLOCK.exec(raw)
+    if (m === null) break
     if (/\bstep\b/i.test(m[1] ?? "")) continue
     return graphFromBlock(m[2] ?? "")
   }
@@ -424,8 +428,9 @@ export const parseFlow = (raw: string): PlanGraph | null => {
 export const parseStepFlows = (raw: string): Map<string, PlanGraph> => {
   const out = new Map<string, PlanGraph>()
   FLOW_BLOCK.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = FLOW_BLOCK.exec(raw)) !== null) {
+  for (;;) {
+    const m = FLOW_BLOCK.exec(raw)
+    if (m === null) break
     const step = /\bstep\s*=?\s*(\d+[a-z]?)\b/i.exec(m[1] ?? "")
     if (!step) continue
     const num = normNum(step[1]!)
@@ -445,8 +450,9 @@ export const parseStepFlows = (raw: string): Map<string, PlanGraph> => {
 export const parseStepCode = (raw: string): Map<string, PlanStepCode> => {
   const out = new Map<string, PlanStepCode>()
   const re = /```([^\n]*)\n([\s\S]*?)```/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(raw)) !== null) {
+  for (;;) {
+    const m = re.exec(raw)
+    if (m === null) break
     const info = (m[1] ?? "").trim()
     // Per-step flow blocks (` ```flow step NN `) also carry a step tag — they're
     // graphs, not code, so never treat them as a code sample.

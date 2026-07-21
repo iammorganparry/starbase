@@ -15,10 +15,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "turbo run lint",
+    "lint": "biome lint .",
     "clean": "turbo run clean && rimraf node_modules",
     "changeset": "changeset",
-    "version-packages": "changeset version && node scripts/sync-app-version.mjs"
+    "version-packages": "changeset version && node scripts/sync-app-version.mjs",
+    "lint:fix": "biome lint --write ."
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.10",
