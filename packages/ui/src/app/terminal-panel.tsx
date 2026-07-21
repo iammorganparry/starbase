@@ -1,6 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { PanelBottom, PanelRight, Plus, X } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { usePaneWidth } from "../hooks/width-tier.js"
+import { clampDockWidth, effectiveDock } from "./dock-fit.js"
 import { useResizableWidth } from "../components/resizable.js"
 
 // ── TerminalDock ──────────────────────────────────────────────────────────────
@@ -47,7 +49,14 @@ const WIDTH = { key: "starbase.terminal.width", initial: 480, min: 300, max: 920
 /** The dockable terminal shell. Renders every tab's cell (only the active one is
  * shown) so switching tabs — or hiding the dock — never tears down xterm. */
 export function TerminalDock(props: TerminalDockProps) {
-  const { dock, tabs, activeId, visible } = props
+  const { dock: preferredDock, tabs, activeId, visible } = props
+  // The shell's width (from `app-shell.tsx`), not this dock's own — the question
+  // is how much room the ROW has to give away, which a dock measuring itself
+  // cannot answer.
+  const { width: shellWidth } = usePaneWidth()
+  // `props.dock` stays the operator's PREFERENCE; this is where it can fit right
+  // now. Widening the window restores the side they actually chose.
+  const dock = effectiveDock(preferredDock, shellWidth)
   const isBottom = dock === "bottom"
   // Both hooks always run (stable order); we drive the axis that's docked.
   const height = useResizableWidth({ storageKey: HEIGHT.key, initial: HEIGHT.initial, min: HEIGHT.min, max: HEIGHT.max })
@@ -66,7 +75,16 @@ export function TerminalDock(props: TerminalDockProps) {
         isBottom ? "border-t border-hairline" : "border-l border-hairline",
         !visible && "hidden"
       )}
-      style={visible ? (isBottom ? { height: height.width } : { width: width.width }) : undefined}
+      style={
+        visible
+          ? isBottom
+            ? { height: height.width }
+            : // Capped at a fraction of the row: the stored width is clamped to
+              // [300, 920] in absolute pixels, which says nothing about whether
+              // it leaves a readable pane beside it.
+              { width: clampDockWidth(width.width, shellWidth) }
+          : undefined
+      }
     >
       <DockResizeEdge orientation={isBottom ? "horizontal" : "vertical"} onResize={onResize} />
 

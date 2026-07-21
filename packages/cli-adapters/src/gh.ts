@@ -11,6 +11,7 @@ import type {
   PrReviewKind,
   PrReviewThread,
   PrState,
+  SessionPrStatus,
   PrThreadComment,
   PrSummary,
   PrTimelineItem,
@@ -125,6 +126,28 @@ const checkStatusOf = (c: Json): PrCheckStatus => {
   }
   if (state === "PENDING") return "running"
   return "pending"
+}
+
+/**
+ * The whole run reduced to one word, worst-first.
+ *
+ * Order matters and is not alphabetical: one failing check makes the run
+ * failing, however many passed alongside it, and a run with anything still
+ * moving is not yet a pass. Reporting "pass" while a job is queued would show a
+ * green glyph on a PR that is about to go red.
+ *
+ * Returns null for an EMPTY list, which is a different fact from "pending":
+ * null means the repo has no CI on this PR at all, and a glyph that showed
+ * amber for it would leave those sessions looking permanently mid-build.
+ */
+export const rollupChecks = (
+  checks: ReadonlyArray<{ readonly status: PrCheckStatus }>
+): PrCheckStatus | null => {
+  if (checks.length === 0) return null
+  if (checks.some((c) => c.status === "fail")) return "fail"
+  if (checks.some((c) => c.status === "running")) return "running"
+  if (checks.some((c) => c.status === "pending")) return "pending"
+  return "pass"
 }
 
 const durationOf = (c: Json): number | null => {
@@ -786,17 +809,41 @@ export class GhService extends Effect.Service<GhService>()(
         ),
 
       /**
-       * The lifecycle state of PR `number` — cheap check (`gh pr view --json
-       * state`) used by the archive sweep to spot merged/closed PRs. Never fails.
+       * PR `number` reduced to what a sidebar row shows: its lifecycle state and
+       * a CI rollup. Never fails.
+       *
+       * Three JSON fields, not the twenty `PR_VIEW_FIELDS` asks for. This is
+       * polled for every session with a PR, on a timer, for as long as the app
+       * is open — so it stays the cheapest call that can answer the question.
+       *
+       * `isDraft` is fetched because `state` reports a draft as OPEN; a draft is
+       * a genuinely different thing to look at, and the glyph says so.
        */
       prState: (
         cwd: string,
         number: number
-      ): Effect.Effect<PrState | null, never, CommandExecutor.CommandExecutor> =>
-        ghJson(cwd, ["pr", "view", String(number), "--json", "state"]).pipe(
+      ): Effect.Effect<SessionPrStatus | null, never, CommandExecutor.CommandExecutor> =>
+        ghJson(cwd, ["pr", "view", String(number), "--json", "state,isDraft,statusCheckRollup"]).pipe(
           Effect.map((raw) => {
-            const s = str(rec(raw).state)?.toUpperCase()
-            return s === "MERGED" ? "merged" : s === "CLOSED" ? "closed" : s === "OPEN" ? "open" : null
+            const j = rec(raw)
+            const s = str(j.state)?.toUpperCase()
+            const state: PrState | null =
+              s === "MERGED"
+                ? "merged"
+                : s === "CLOSED"
+                  ? "closed"
+                  : s === "OPEN"
+                    ? j.isDraft === true
+                      ? "draft"
+                      : "open"
+                    : null
+            if (state === null) return null
+            // A merged or closed PR's checks are history. Reporting them would
+            // paint a long-merged session red because one flaky job failed on
+            // the way in, which says nothing about anything you can still act on.
+            if (state === "merged" || state === "closed") return { state, checks: null }
+            const checks = arr(j.statusCheckRollup).map((c) => ({ status: checkStatusOf(c) }))
+            return { state, checks: rollupChecks(checks) }
           })
         ),
 

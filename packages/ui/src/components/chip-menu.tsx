@@ -145,15 +145,23 @@ export function ChipMenu<T extends string>({
     trigger({ current, open })
   ) : (
     <span
+      // `title` so the full value survives truncation — model ids run to
+      // "claude-sonnet-4-5-20250929", which is 26 characters of chip in a
+      // composer row that may only have 320px for everything.
+      title={typeof (current?.label ?? value) === "string" ? String(current?.label ?? value) : undefined}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-2 py-[3px] font-mono text-[11px] text-text-bright",
+        "inline-flex min-w-0 items-center gap-1.5 rounded-md border border-line bg-surface px-2 py-[3px] font-mono text-[11px] text-text-bright",
         !disabled && "cursor-pointer hover:border-line-strong",
         className
       )}
     >
       {icon}
-      {current?.label ?? value}
-      {!disabled && <ChevronDown size={11} className="text-dim" />}
+      {/* `min-w-0 truncate` on the LABEL, not the chip: the chevron and icon
+          must keep their size, and only the text has anything to give. Without
+          it a flex item's floor is its min-content width, so the chip refused
+          to shrink and pushed the whole toolbar past the composer's border. */}
+      <span className="min-w-0 truncate">{current?.label ?? value}</span>
+      {!disabled && <ChevronDown size={11} className="flex-none text-dim" />}
     </span>
   )
 
@@ -172,7 +180,7 @@ export function ChipMenu<T extends string>({
         <button
           type="button"
           className={cn(
-            "outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring",
+            "min-w-0 outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring",
             // A custom trigger is usually a full-width field; the default chip
             // must stay intrinsically sized.
             trigger && "w-full text-left"
@@ -186,6 +194,11 @@ export function ChipMenu<T extends string>({
           side={side}
           align="start"
           sideOffset={6}
+          // Radix portals to the body, so the menu can't be clipped — but it CAN
+          // spill across a neighbouring pane. `collisionPadding` keeps it inside
+          // the window, and `--radix-dropdown-menu-content-available-width` is
+          // the measured room it actually has, which the `max-w` below honours.
+          collisionPadding={8}
           style={
             matchTriggerWidth
               ? // Radix exposes the trigger's measured width as a CSS var on the
@@ -195,7 +208,7 @@ export function ChipMenu<T extends string>({
               : undefined
           }
           className={cn(
-            "z-50 flex max-h-[300px] flex-col gap-0.5 rounded-lg border border-line bg-sunken p-1.5 shadow-2xl",
+            "z-50 flex max-h-[300px] max-w-[var(--radix-dropdown-menu-content-available-width)] flex-col gap-0.5 rounded-lg border border-line bg-sunken p-1.5 shadow-2xl",
             !matchTriggerWidth && (searchable ? "min-w-[210px]" : "min-w-[160px]"),
             // When searching, the filter box stays put and only the list scrolls.
             !searchable && "overflow-auto"

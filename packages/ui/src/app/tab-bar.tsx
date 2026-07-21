@@ -1,3 +1,4 @@
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu"
 import {
   ChevronLeft,
   ChevronRight,
@@ -8,14 +9,99 @@ import {
   Globe,
   type LucideIcon,
   MessagesSquare,
+  MoreHorizontal,
   PanelRight,
   Waypoints,
   Workflow,
   X
 } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { Pill } from "../components/pill.js"
 import { Badge } from "../components/badge.js"
+
+/** The icon-button styling every control in the right-hand cluster shares. */
+const ACTION_CLASS = "flex size-6 flex-none items-center justify-center rounded transition-colors hover:bg-hairline"
+
+/**
+ * The pane's own actions, folded into one button.
+ *
+ * Only reached below the `mid` tier. The labels are IDENTICAL to the inline
+ * buttons' `aria-label`s on purpose: a by-name lookup (the e2e suite, a screen
+ * reader user, anyone's muscle memory for the command palette) should find the
+ * same control by the same name whether it's inline or behind the menu. What
+ * changes at narrow widths is where a control sits, never what it's called.
+ */
+function PaneActionsMenu({
+  onToggleSplit,
+  splitActive,
+  onToggleBrowser,
+  browserActive,
+  onMovePaneLeft,
+  onMovePaneRight
+}: {
+  onToggleSplit?: () => void
+  splitActive: boolean
+  onToggleBrowser?: () => void
+  browserActive: boolean
+  onMovePaneLeft?: () => void
+  onMovePaneRight?: () => void
+}) {
+  const items: Array<{ label: string; icon: LucideIcon; active?: boolean; onSelect: () => void }> = []
+  if (onToggleSplit)
+    items.push({ label: "Split plan beside conversation", icon: PanelRight, active: splitActive, onSelect: onToggleSplit })
+  if (onToggleBrowser)
+    items.push({ label: "Browser preview", icon: Globe, active: browserActive, onSelect: onToggleBrowser })
+  if (onMovePaneLeft) items.push({ label: "Move pane left", icon: ChevronLeft, onSelect: onMovePaneLeft })
+  if (onMovePaneRight) items.push({ label: "Move pane right", icon: ChevronRight, onSelect: onMovePaneRight })
+
+  // Nothing to collapse — render nothing rather than a button that opens onto an
+  // empty menu. A single-pane group with no plan and no browser hits this.
+  if (items.length === 0) return null
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label="More pane actions"
+          data-testid="pane-actions-menu"
+          title="More pane actions"
+          className={cn(ACTION_CLASS, "text-dim hover:text-text-bright")}
+        >
+          <MoreHorizontal className="size-4" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          // `collisionPadding` keeps the menu off the window edge, which matters
+          // far more here than usual: this only renders when the pane is narrow,
+          // which is exactly when the window tends to be narrow too.
+          collisionPadding={8}
+          className="z-50 flex min-w-[200px] max-w-[calc(100vw-1rem)] flex-col gap-0.5 rounded-lg border border-line bg-sunken p-1.5 shadow-2xl"
+        >
+          {items.map((item) => (
+            <DropdownMenu.Item
+              key={item.label}
+              aria-label={item.label}
+              onSelect={item.onSelect}
+              className={cn(
+                "flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-[7px] text-[12.5px] outline-none",
+                "data-[highlighted]:bg-surface data-[highlighted]:text-text-bright",
+                item.active ? "text-blue" : "text-text-body"
+              )}
+            >
+              <item.icon size={13} className="flex-none" />
+              <span className="flex-1 truncate">{item.label}</span>
+            </DropdownMenu.Item>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
 
 export type TabKey = "conversation" | "issue" | "changes" | "pr" | "review" | "plan" | "workflow"
 
@@ -115,9 +201,23 @@ export function TabBar({
   /** Swap this pane with the one on its right (Move Right, ⌃⇧⌥→). */
   onMovePaneRight?: () => void
 }) {
+  // The PANE's width, not the window's. A four-way split on a 4K display gives
+  // every pane a `narrow` tier; a maximised single pane on a laptop gives
+  // `wide`. Keying off the window would get both backwards.
+  const tier = useWidthTier()
+  // Below `wide`, inactive tabs shed their labels. The active one keeps its —
+  // stripping every label leaves a row of seven near-identical glyphs with no
+  // answer to "what am I looking at", which is the one question the tab bar
+  // exists to answer.
+  const iconOnly = !atLeast(tier, "wide")
+  // Below `mid`, the pane's own actions fold into one button. Close is exempt
+  // (see below): burying the only way out of a pane you can't read is a trap.
+  const collapseActions = !atLeast(tier, "mid")
+
   return (
     <div
       data-testid="session-tab-bar"
+      data-tier={tier}
       className="flex h-9 flex-none items-stretch border-b border-hairline bg-sunken"
     >
       {pane && (
@@ -135,21 +235,48 @@ export function TabBar({
           <Badge tone={pane.focused ? "blue" : "count"} size="xs">
             {pane.index + 1}
           </Badge>
-          <span className="max-w-[170px] truncate text-[12px]">{pane.title}</span>
+          <span
+            className={cn(
+              "truncate text-[12px]",
+              atLeast(tier, "mid") ? "max-w-[170px]" : "max-w-[86px]"
+            )}
+          >
+            {pane.title}
+          </span>
         </div>
       )}
-      <div className="flex items-stretch">
+      {/*
+        `min-w-0 flex-1 overflow-x-auto` is the whole fix for this row.
+
+        Without `min-w-0` a flex child's floor is its MIN-CONTENT width, and
+        every label here is `whitespace-nowrap`, so the strip's floor was roughly
+        970px — in a pane that the split model will happily make 350px. The
+        surplus didn't wrap or scroll, it was simply clipped by the pane's
+        `overflow-hidden`, taking the right-hand cluster with it. The scrollbar
+        is hidden (`sb-no-scrollbar`) because it would eat a third of a 36px row.
+      */}
+      <div className="sb-no-scrollbar flex min-w-0 flex-1 items-stretch overflow-x-auto">
         {tabs.map((key) => {
           const Icon = ICON[key]
           const isActive = key === active
+          const showLabel = !iconOnly || isActive
           return (
             <button
               key={key}
               type="button"
               onClick={() => onChange(key)}
               aria-current={isActive ? "page" : undefined}
+              // The name has to survive the label being hidden — this is what a
+              // screen reader and `getByRole("tab", { name })` read once the
+              // text is gone, and it doubles as the hover tooltip.
+              aria-label={LABEL[key]}
+              title={LABEL[key]}
               className={cn(
-                "group relative flex items-center gap-2 border-r border-hairline px-3.5 text-[12.5px] outline-none transition-colors",
+                "group relative flex flex-none items-center gap-2 border-r border-hairline text-[12.5px] outline-none transition-colors",
+                // Icon-only cells lose the label's optical weight, so the
+                // horizontal padding tightens with it rather than leaving each
+                // glyph marooned in a 60px cell.
+                showLabel ? "px-3.5" : "px-2.5",
                 isActive
                   ? "bg-editor text-text"
                   : "text-muted-foreground hover:bg-panel hover:text-text"
@@ -163,7 +290,7 @@ export function TabBar({
                   isActive ? "text-blue" : "text-dim group-hover:text-muted-foreground"
                 )}
               />
-              <span className="whitespace-nowrap">{LABEL[key]}</span>
+              {showLabel && <span className="whitespace-nowrap">{LABEL[key]}</span>}
               {key === "pr" && prNumber !== null && (
                 <Badge tone="count" size="xs">
                   #{prNumber}
@@ -179,13 +306,34 @@ export function TabBar({
           )
         })}
       </div>
-      <div className="flex flex-1 items-center justify-end gap-2.5 px-3.5">
+      {/*
+        `flex-none`, not `flex-1`. As `flex-1` with no `min-w-0` this cluster was
+        the FIRST thing the browser squeezed when the row overflowed, so close-
+        pane and move-pane vanished before a single tab label did — the controls
+        you reach for precisely because the pane is too narrow.
+      */}
+      <div className="flex flex-none items-center justify-end gap-2.5 px-3.5">
         {status && (
-          <Pill tone={status.tone} pulse title={status.detail}>
-            {status.label}
-          </Pill>
+          // The status word is the first thing to go: it's a duplicate of the
+          // sidebar row's own indicator, so nothing is lost that isn't on screen
+          // a few hundred pixels to the left.
+          <span className={cn("flex-none", !atLeast(tier, "mid") && "hidden")}>
+            <Pill tone={status.tone} pulse title={status.detail}>
+              {status.label}
+            </Pill>
+          </span>
         )}
-        {onToggleSplit && (
+        {collapseActions && (
+          <PaneActionsMenu
+            onToggleSplit={onToggleSplit}
+            splitActive={splitActive}
+            onToggleBrowser={onToggleBrowser}
+            browserActive={browserActive}
+            onMovePaneLeft={onMovePaneLeft}
+            onMovePaneRight={onMovePaneRight}
+          />
+        )}
+        {!collapseActions && onToggleSplit && (
           <button
             type="button"
             onClick={onToggleSplit}
@@ -200,7 +348,7 @@ export function TabBar({
             <PanelRight className="size-4" />
           </button>
         )}
-        {onToggleBrowser && (
+        {!collapseActions && onToggleBrowser && (
           <button
             type="button"
             onClick={onToggleBrowser}
@@ -216,10 +364,10 @@ export function TabBar({
             <Globe className="size-4" />
           </button>
         )}
-        {(onMovePaneLeft || onMovePaneRight) && (
+        {!collapseActions && (onMovePaneLeft || onMovePaneRight) && (
           // Grouped with the close × rather than beside the tabs: these are all
           // operations on the PANE, not on what's inside it.
-          <div className="flex items-center">
+          <div className="flex flex-none items-center">
             {onMovePaneLeft && (
               <button
                 type="button"
@@ -246,6 +394,10 @@ export function TabBar({
             )}
           </div>
         )}
+        {/* Never collapsed, at any tier. Every other control here has an
+            alternative route (a chord, the sidebar, the menu above); closing an
+            unreadable pane is the one thing you'd reach for BECAUSE the pane is
+            unreadable, so it stays a one-click target all the way down. */}
         {onClosePane && (
           <button
             type="button"
@@ -253,7 +405,7 @@ export function TabBar({
             aria-label="Close pane"
             data-testid="close-pane"
             title="Close pane (the session keeps running)"
-            className="flex size-6 items-center justify-center rounded text-dim transition-colors hover:bg-hairline hover:text-text-bright"
+            className={cn(ACTION_CLASS, "text-dim hover:text-text-bright")}
           >
             <X className="size-4" />
           </button>

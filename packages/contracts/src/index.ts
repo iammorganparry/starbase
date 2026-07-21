@@ -36,6 +36,7 @@ import {
   PrMergeMethod,
   BackgroundTask,
   PrState,
+  SessionPrStatus,
   PrSummary,
   ProviderConfig,
   ProviderModels,
@@ -768,9 +769,13 @@ export class StarbaseRpcs extends RpcGroup.make(
     payload: { sessionId: Schema.String }
   }),
 
-  /** The lifecycle state of a session's linked PR (for the archive sweep). */
+  /**
+   * A session's linked PR reduced to what the sidebar row shows — its lifecycle
+   * state plus a CI rollup. Polled per session on a timer, so it is deliberately
+   * the cheapest PR read in the contract; `Github.pullRequest` is the rich one.
+   */
   Rpc.make("Github.prState", {
-    success: Schema.NullOr(PrState),
+    success: Schema.NullOr(SessionPrStatus),
     payload: { sessionId: Schema.String }
   }),
 

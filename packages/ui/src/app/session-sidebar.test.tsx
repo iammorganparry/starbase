@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
+import { DEFAULT_FILTERS } from "./session-filters.js"
 import { SessionSidebar } from "./session-sidebar.js"
 import type { SplitGroup } from "./split-layout.js"
 import { testSession as session } from "../test-support.js"
@@ -11,7 +12,7 @@ const rowOrder = () =>
     el.getAttribute("data-testid")!.replace("session-row-", "")
   )
 
-describe("SessionSidebar archived group", () => {
+describe("SessionSidebar archived sessions", () => {
   it("orders archived sessions by when they were ARCHIVED, not last updated", () => {
     // The regression: `sessions` arrives ordered by `updatedAt`. A session whose
     // last turn was days ago but which was archived just now must still surface at
@@ -21,6 +22,9 @@ describe("SessionSidebar archived group", () => {
       <SessionSidebar
         activeSessionId={null}
         onSelect={() => {}}
+        // Archived is a FILTER now, not a group pinned to the bottom, so the
+        // view has to be asked for. The ordering rule it pins is unchanged.
+        defaultFilters={{ ...DEFAULT_FILTERS, status: "archived" }}
         sessions={[
           session({
             id: "recently-updated",
@@ -51,12 +55,14 @@ describe("SessionSidebar archived group", () => {
         activeSessionId={null}
         onSelect={() => {}}
         sessions={[session({ id: "multi-pr", prNumber: 204 })]}
-        prStates={{ "multi-pr": "merged" }}
+        prStates={{ "multi-pr": { state: "merged", checks: null } }}
       />
     )
 
     expect(rowOrder()).toStrictEqual(["multi-pr"])
-    expect(screen.getByText(/#204 Merged/)).toBeDefined()
+    // The state words moved to the leading glyph; the badge keeps the number.
+    expect(screen.getByText(/#204/)).toBeDefined()
+    expect(screen.getByTitle("Pull request merged")).toBeDefined()
   })
 })
 
@@ -77,7 +83,10 @@ describe("SessionSidebar split pill ownership", () => {
     focused: 0
   }
 
-  const renderSidebar = (sessions: ReadonlyArray<ReturnType<typeof session>>) =>
+  const renderSidebar = (
+    sessions: ReadonlyArray<ReturnType<typeof session>>,
+    filters = DEFAULT_FILTERS
+  ) =>
     render(
       <SessionSidebar
         activeSessionId="first"
@@ -85,6 +94,7 @@ describe("SessionSidebar split pill ownership", () => {
         sessions={sessions}
         splitGroups={[SPLIT]}
         activeGroupId="g:first"
+        defaultFilters={filters}
       />
     )
 
@@ -124,15 +134,19 @@ describe("SessionSidebar split pill ownership", () => {
     // police where it came from: a stale persisted workspace arriving one render
     // before the prune runs looks exactly like this. Ownership must not depend
     // on `panes[0]` being present, and that is what this pins.
+    // Default filters — Status: Active — so the archived first pane is genuinely
+    // ABSENT from the list, which is the condition being pinned.
     renderSidebar([
       session({ id: "first", title: "Refactor auth flow", archived: true, archivedAt: "2026-07-18T08:00:00.000Z" }),
       session({ id: "second", title: "Bump the toolchain" })
     ])
 
     expect(screen.getAllByTestId("split-row-g:first")).toHaveLength(1)
-    // The archived member still appears in the Archived group as its own row —
-    // it IS archived, and it IS on screen; both are true and both are shown.
-    expect(rowOrder()).toStrictEqual(["first"])
+    expect(screen.getByTestId("split-segment-second")).toBeDefined()
+    // No plain rows: `second` is drawn as a segment of the pill, and `first` is
+    // filtered out entirely. Previously `first` ALSO appeared as its own row in
+    // the Archived group, so one session occupied two places in the sidebar.
+    expect(rowOrder()).toStrictEqual([])
   })
 
   it("draws no pill when the filter excludes every pane", () => {

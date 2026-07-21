@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import type { Attachment, CliKind, PermissionMode, ProviderModels, Skill } from "@starbase/core"
 import { ImagePlus, Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { modeAccent } from "../tokens.js"
 import { AttachmentThumb } from "../components/attachment-thumb.js"
 import { Button } from "../components/button.js"
@@ -184,6 +185,12 @@ export function Composer({
     ...(adversarialPlanning?.ready === true ? [GIGAPLAN_OPTION] : [])
   ]
   const accent = modeAccent[mode]
+
+  // The pane's tier (see `session-pane.tsx`). The composer sits in a 760px
+  // reading column, so above `wide` it always has its full width; below it, the
+  // column is the pane and every pixel is contested.
+  const tier = useWidthTier()
+  const roomy = atLeast(tier, "wide")
 
   // Menu values are `<cli>:<modelId>`, not a bare model id: ids aren't unique
   // across harnesses (`gpt-5` is offered by both codex and cursor), and the
@@ -504,7 +511,19 @@ export function Composer({
             e.target.value = ""
           }}
         />
-        <div className="flex items-center gap-2">
+        {/*
+          `flex-wrap` + `min-w-0`, and both are load-bearing.
+
+          This row held eight controls with no wrap and no `min-w-0` anywhere in
+          the file. Two of them (the model chip, the MCP status) carry
+          variable-length text, and `Button` is `whitespace-nowrap`, so the row's
+          min-content floor sat well past the composer's own border — the
+          controls didn't degrade, they overflowed the rounded box and got
+          clipped. Wrapping is the right failure mode here rather than scrolling:
+          a composer toolbar is a set of unrelated controls, not a sequence, so a
+          second line costs nothing but 26px of height.
+        */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
 {/* Disabled in Gigaplan, not silently ignored. `Plan.adversarial` takes
               only a brief — its payload has no images — so an attachment made
               here would be dropped on the way to the round while still
@@ -526,7 +545,7 @@ export function Composer({
                 ? "Planning rounds work from the written brief — images aren't sent"
                 : "Attach an image"
             }
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex flex-none items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ImagePlus size={14} />
           </button>
@@ -552,6 +571,10 @@ export function Composer({
               onSetHarness?.(value.slice(0, separator) as CliKind, value.slice(separator + 1))
             }}
             disabled={modelGroups.length === 0}
+            // Capped rather than fixed: model ids are the longest string in this
+            // row by a wide margin, and left uncapped one of them decides how
+            // much room every other control gets.
+            className={roomy ? "max-w-[220px]" : "max-w-[128px]"}
           />
           )}
           {/* Gigaplan is selected on a host that cannot orchestrate. Saying so
@@ -561,23 +584,33 @@ export function Composer({
           {orchestrated && adversarialPlanning?.ready === false && (
             <span
               title={adversarialPlanning.reason ?? undefined}
-              className="rounded-full border border-yellow/40 px-2 py-0.5 font-mono text-[10px] tracking-[0.3px] text-yellow"
+              className="flex-none rounded-full border border-yellow/40 px-2 py-0.5 font-mono text-[10px] tracking-[0.3px] text-yellow"
             >
-              needs a second provider
+              {/* The long form explains; the short form still points at the
+                  problem, and the `title` above carries the full reason either
+                  way. Wrapping this five-word pill onto its own line would push
+                  Send off screen for a message that is advisory, not blocking. */}
+              {roomy ? "needs a second provider" : "needs 2nd provider"}
             </span>
           )}
           <ChipMenu
             value={mode}
             options={modeOptions}
             onSelect={onSetMode}
-            className={cn("w-[112px] justify-between", accent.chip)}
+            // `max-w`, not `w`: the fixed 112px both wasted room when the pane
+            // was wide and refused to yield any when it wasn't.
+            className={cn("max-w-[112px] justify-between", accent.chip)}
           />
           {mcp !== undefined && mcp.total > 0 && (
             <button
               type="button"
               onClick={onOpenMcp}
+              // The NAME stays constant while the label shortens — same rule the
+              // attach button above states: what a control IS shouldn't change
+              // with what it's currently reporting. Keeping it fixed is also
+              // what lets a by-name lookup find this chip at any width.
               title="MCP server status"
-              className="inline-flex items-center gap-1.5 rounded-md border border-line bg-sunken px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-text"
+              className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-md border border-line bg-sunken px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-text"
             >
               {/* Neutral until a probe has actually run — a green dot before we've
                   checked anything would claim a health we don't know. */}
@@ -586,14 +619,38 @@ export function Composer({
                 size={6}
                 glow={false}
               />
-              {mcp.probed && mcp.failed > 0 ? `${mcp.failed} of ${mcp.total} MCP down` : `${mcp.total} MCP`}
+              {/* Narrow drops the prose, not the information: "1/3 MCP" still
+                  says how many are down, and the yellow dot beside it still says
+                  that some are. Only the eight characters of " of " and " down"
+                  go, which is the difference between fitting and wrapping. */}
+              {mcp.probed && mcp.failed > 0
+                ? roomy
+                  ? `${mcp.failed} of ${mcp.total} MCP down`
+                  : `${mcp.failed}/${mcp.total} MCP`
+                : `${mcp.total} MCP`}
             </button>
           )}
-          <span className="font-mono text-[11px] text-line-strong">/ · @ · paste image</span>
-          <div className="flex-1" />
+          {/* Pure decoration, and the first thing to go: it costs ~120px, has no
+              affordance, and both hints it names are already discoverable by
+              typing the character it's telling you to type. Below `wide` it
+              would wrap to "paste" on its own line and shove the chips around. */}
+          {roomy && (
+            <span className="flex-none font-mono text-[11px] text-line-strong">
+              / · @ · paste image
+            </span>
+          )}
+          {/* `min-w-[8px]` so the spacer still exists after a wrap — a bare
+              `flex-1` on a wrapped line collapses to nothing and the send button
+              ends up butted against the last chip. */}
+          <div className="min-w-[8px] flex-1" />
+          {/* The send/stop control is `flex-none` and LAST in DOM order, which
+              together decide what a squeeze does: the row wraps the chips above
+              it and the primary action keeps its full size on the trailing line,
+              rather than being the thing pushed past the border. */}
+          <span className="flex-none">
           {paused ? (
             <Pill tone="yellow" dot>
-              paused for approval
+              {roomy ? "paused for approval" : "paused"}
             </Pill>
           ) : busy && onStop ? (
             /* While the agent works, the button halts it. Queueing doesn't go
@@ -609,6 +666,7 @@ export function Composer({
               {busy ? "Queue ↵" : "Send ↵"}
             </Button>
           )}
+          </span>
         </div>
       </div>
     </div>

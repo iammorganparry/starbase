@@ -27,6 +27,12 @@ export interface BrowserPreviewViewProps {
   onSideChange: (side: DockSide) => void
 }
 
+/**
+ * The smallest rect worth handing to the native view. Below this the placeholder
+ * is collapsed or mid-transition rather than genuinely tiny — see the tick loop.
+ */
+const MIN_NATIVE_BOUNDS = { width: 200, height: 150 } as const
+
 export function BrowserPreviewView({ session, visible, onToggle, side, onSideChange }: BrowserPreviewViewProps) {
   const boundsRef = useRef<HTMLDivElement>(null)
   const [url, setUrl] = useState(DEFAULT_URL)
@@ -84,7 +90,13 @@ export function BrowserPreviewView({ session, visible, onToggle, side, onSideCha
     let last = ""
     const tick = () => {
       const r = rect()
-      if (r) {
+      // A degenerate rect is NOT a small view — it's a placeholder that is
+      // mid-transition, hidden, or collapsed by a dock switch. Pushing it to the
+      // native `WebContentsView` parks a zero-size (or worse, negative) overlay
+      // on top of the placeholder, and Chromium reflows the page to that size on
+      // the way through. Skipping keeps the last good bounds until the layout
+      // settles, which is one frame later in every case that produces this.
+      if (r && r.width >= MIN_NATIVE_BOUNDS.width && r.height >= MIN_NATIVE_BOUNDS.height) {
         const key = `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`
         if (key !== last) {
           last = key

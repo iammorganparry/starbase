@@ -622,6 +622,31 @@ export type PrState = Schema.Schema.Type<typeof PrState>
 export const PrCheckStatus = Schema.Literal("pass", "fail", "running", "pending")
 export type PrCheckStatus = Schema.Schema.Type<typeof PrCheckStatus>
 
+/**
+ * A session's linked PR, reduced to the two facts a sidebar row can show in one
+ * glyph: where the PR is in its life, and whether CI is happy.
+ *
+ * Deliberately NOT the full `PullRequest`. This is polled for every session with
+ * a PR, on a timer, forever — so it carries only what the row renders, and its
+ * `gh` call asks for three JSON fields rather than the twenty `PR_VIEW_FIELDS`
+ * asks for. Anything richer belongs in the Pull Request tab, which is fetched
+ * once, on demand, for one session.
+ */
+export const SessionPrStatus = Schema.Struct({
+  state: PrState,
+  /**
+   * The rollup across every check on the head commit, or null when the PR has
+   * no checks at all.
+   *
+   * Null and "pending" are different answers and the glyph treats them
+   * differently: null means nothing is configured to run, "pending" means
+   * something is queued and hasn't started. Collapsing them would make a repo
+   * with no CI look permanently mid-build.
+   */
+  checks: Schema.NullOr(PrCheckStatus)
+})
+export type SessionPrStatus = Schema.Schema.Type<typeof SessionPrStatus>
+
 /** How a reviewer/timeline review resolved. "pending" = requested, not yet done. */
 export const PrReviewKind = Schema.Literal(
   "commented",

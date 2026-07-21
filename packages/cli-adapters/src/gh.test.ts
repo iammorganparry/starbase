@@ -324,16 +324,64 @@ describe("GhService pull-request reads", () => {
   })
 
   it("prState maps MERGED / CLOSED / OPEN and folds anything else to null", async () => {
-    const view = (state: string): FakeCommandHandler => (cmd, args) =>
-      cmd === "gh" && args[1] === "view" ? { stdout: JSON.stringify({ state }) } : undefined
-    const merged = await providePr(GhService.prState("/wt", 1), view("MERGED"))
-    expect(merged._tag === "Success" && merged.value).toBe("merged")
-    const closed = await providePr(GhService.prState("/wt", 1), view("CLOSED"))
-    expect(closed._tag === "Success" && closed.value).toBe("closed")
-    const open = await providePr(GhService.prState("/wt", 1), view("OPEN"))
-    expect(open._tag === "Success" && open.value).toBe("open")
+    const view = (json: Record<string, unknown>): FakeCommandHandler => (cmd, args) =>
+      cmd === "gh" && args[1] === "view" ? { stdout: JSON.stringify(json) } : undefined
+    const at = async (json: Record<string, unknown>) => {
+      const r = await providePr(GhService.prState("/wt", 1), view(json))
+      return r._tag === "Success" ? r.value : undefined
+    }
+
+    expect(await at({ state: "MERGED" })).toStrictEqual({ state: "merged", checks: null })
+    expect(await at({ state: "CLOSED" })).toStrictEqual({ state: "closed", checks: null })
+    expect(await at({ state: "OPEN" })).toStrictEqual({ state: "open", checks: null })
+
+    // `state` reports a draft as OPEN, so `isDraft` is the only thing that can
+    // tell them apart — and the sidebar glyph draws them differently.
+    expect(await at({ state: "OPEN", isDraft: true })).toStrictEqual({ state: "draft", checks: null })
+
     const bad = await providePr(GhService.prState("/wt", 1), () => ({ stdout: "not json" }))
     expect(bad._tag === "Success" && bad.value).toBe(null)
+  })
+
+  it("prState rolls the check run up worst-first", async () => {
+    const view = (rollup: ReadonlyArray<Record<string, unknown>>): FakeCommandHandler => (cmd, args) =>
+      cmd === "gh" && args[1] === "view"
+        ? { stdout: JSON.stringify({ state: "OPEN", statusCheckRollup: rollup }) }
+        : undefined
+    const checksOf = async (rollup: ReadonlyArray<Record<string, unknown>>) => {
+      const r = await providePr(GhService.prState("/wt", 1), view(rollup))
+      return r._tag === "Success" && r.value ? r.value.checks : undefined
+    }
+
+    const pass = { status: "COMPLETED", conclusion: "SUCCESS" }
+    const fail = { status: "COMPLETED", conclusion: "FAILURE" }
+    const running = { status: "IN_PROGRESS" }
+
+    expect(await checksOf([pass, pass])).toBe("pass")
+    // One failure outranks any number of passes — a green glyph beside a broken
+    // build is the one reading that would actively mislead.
+    expect(await checksOf([pass, fail, pass])).toBe("fail")
+    // Still moving is not yet a pass.
+    expect(await checksOf([pass, running])).toBe("running")
+    // No CI on this PR at all is a different fact from "queued", and stays null
+    // so the glyph doesn't sit amber forever on a repo with no workflows.
+    expect(await checksOf([])).toBe(null)
+  })
+
+  it("prState reports no checks for a resolved PR", async () => {
+    // A merged PR's checks are history: painting a long-merged session red
+    // because one flaky job failed on the way in says nothing actionable.
+    const handler: FakeCommandHandler = (cmd, args) =>
+      cmd === "gh" && args[1] === "view"
+        ? {
+            stdout: JSON.stringify({
+              state: "MERGED",
+              statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }]
+            })
+          }
+        : undefined
+    const r = await providePr(GhService.prState("/wt", 1), handler)
+    expect(r._tag === "Success" && r.value).toStrictEqual({ state: "merged", checks: null })
   })
 
   // The head SHA is the adversarial review's de-dupe key: a wrong-but-stable

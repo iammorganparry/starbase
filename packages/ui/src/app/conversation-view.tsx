@@ -18,6 +18,7 @@ import { useHotkeys } from "react-hotkeys-hook"
 import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason, ContextPhase } from "@starbase/core"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { Button } from "../components/button.js"
 import { Composer } from "../composites/composer.js"
 import { QuestionCard } from "../composites/question-card.js"
@@ -211,6 +212,11 @@ export function ConversationView({
   archived,
   initialDraft
 }: ConversationViewProps) {
+  // 30px each side is a comfortable reading gutter at 760px and a tenth of the
+  // pane at 350px. The transcript and the composer share the value so their
+  // left edges stay aligned — that alignment is what makes the composer read as
+  // the bottom of the same column rather than a separate strip.
+  const gutter = atLeast(useWidthTier(), "mid") ? "px-[30px]" : "px-3"
   const scrollRef = useRef<HTMLDivElement>(null)
   // Sticky-bottom: follow the newest content while the operator is parked at the
   // bottom, but never yank them down once they've scrolled up to read.
@@ -276,7 +282,7 @@ export function ConversationView({
   }, [])
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {archived && (
           <ArchivedBanner
@@ -294,7 +300,8 @@ export function ConversationView({
             // `both-edges` reserves the scrollbar gutter symmetrically so the
             // centered content stays on the window's centre axis — matching the
             // composer below (which has no scrollbar) exactly.
-            "flex-1 overflow-auto px-[30px] py-[26px] [scrollbar-gutter:stable_both-edges]",
+            "flex-1 overflow-auto py-[26px] [scrollbar-gutter:stable_both-edges]",
+            gutter,
             archived && "opacity-60"
           )}
         >
@@ -327,12 +334,12 @@ export function ConversationView({
         </div>
 
         {/* Same gutter + centered max-width as the transcript column above. */}
-        <div className="flex-none px-[30px] pb-[18px] pt-[11px]">
+        <div className={cn("flex-none pb-[18px] pt-[11px]", gutter)}>
           <div className="mx-auto w-full max-w-[760px]">
           {/* Live session analytics — elapsed time + current context size, right
               above the composer so it stays visible while the user works. */}
           {!archived && (busy || runStartedAt !== null || tokens > 0) && (
-            <div className="mb-1.5 flex items-center justify-end gap-2.5">
+            <div className="mb-1.5 flex min-w-0 flex-wrap items-center justify-end gap-x-2.5 gap-y-1">
               <ContextMeter
                 tokens={tokens}
                 triggerAt={contextTriggerAt}

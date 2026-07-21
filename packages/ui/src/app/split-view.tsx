@@ -1,8 +1,9 @@
 import { type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { AnimatePresence, motion } from "motion/react"
 import { cn } from "../lib/cn.js"
+import { useContainerWidth } from "../hooks/use-container-width.js"
 import { FAST, INSTANT, paneVariants, SPRING } from "../lib/motion.js"
-import { MAX_PANES, type Pane, type SplitGroup, SESSION_DND_MIME } from "./split-layout.js"
+import { maxPanesForWidth, type Pane, type SplitGroup, SESSION_DND_MIME } from "./split-layout.js"
 
 /**
  * Where a dragged session would land relative to the pane it's hovering.
@@ -92,7 +93,9 @@ export function SplitView({
   // a spring chasing the pointer lags behind it, which feels like the divider
   // is stuck to elastic rather than to the cursor.
   const [draggingDivider, setDraggingDivider] = useState<number | null>(null)
-  const rowRef = useRef<HTMLDivElement>(null)
+  // Doubles as the divider drag's reference box and as the source of the
+  // width-derived pane cap below — one measurement, two uses.
+  const [rowRef, rowWidth] = useContainerWidth<HTMLDivElement>()
 
   const paneIds = group?.panes.map((p) => p.sessionId) ?? []
   const presence = useRef<{ ids: ReadonlyArray<string>; token: number }>({ ids: paneIds, token: 0 })
@@ -189,7 +192,10 @@ export function SplitView({
   }
 
   const single = group.panes.length === 1
-  const full = group.panes.length >= MAX_PANES
+  // The cap is the row's, not the model's: four panes are legible at 1400px and
+  // illegible at 900px, and the operator gets told which by the indicator
+  // turning red rather than by dropping a session into a pane they can't read.
+  const full = group.panes.length >= maxPanesForWidth(rowWidth)
 
   const handleDrop = (index: number) => (e: DragEvent<HTMLDivElement>) => {
     if (!carriesSession(e)) return
@@ -198,8 +204,12 @@ export function SplitView({
     setDropAt(null)
     const sessionId = e.dataTransfer.getData(SESSION_DND_MIME)
     if (!sessionId) return
+    // A REPLACE is always allowed — it doesn't change the pane count, so it
+    // can't make the row narrower than it already is. Only an INSERT is refused,
+    // and it's refused here rather than in the reducer so the same drop still
+    // works the moment the window is widened.
     if (zone === "replace") onReplacePane?.(index, sessionId)
-    else onSplitWith?.(sessionId, zone === "before" ? index : index + 1)
+    else if (!full) onSplitWith?.(sessionId, zone === "before" ? index : index + 1)
   }
 
   return (

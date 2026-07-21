@@ -2,6 +2,8 @@ import type { ReactNode } from "react"
 import type { DiffStat, Session, SessionActivity } from "@starbase/core"
 import type { DockSide } from "./terminal-panel.js"
 import type { Pane, SplitGroup } from "./split-layout.js"
+import { usePaneWidth } from "../hooks/width-tier.js"
+import { effectiveDock } from "./dock-fit.js"
 import { SplitView } from "./split-view.js"
 import { SessionPane, type ConversationPaneCtx } from "../screens/session-pane.js"
 
@@ -123,8 +125,13 @@ export function SessionSplit(props: SessionSplitProps) {
   // Session-agnostic (it points at localhost), which is exactly why hoisting it
   // out of the panes costs nothing.
   const browserDock = props.renderBrowserDock ? props.renderBrowserDock(dockSession) : null
-  const termSide = props.terminalDockSide ?? "bottom"
-  const browserSide = props.browserDockSide ?? "right"
+  // Where each dock GOES. The same pure rule the docks apply to their own
+  // borders and size (`dock-fit.ts`), evaluated against the same shell width, so
+  // placement and appearance can't disagree — a right-docked panel rendered into
+  // the bottom row would draw a left border across the middle of the window.
+  const { width: shellWidth } = usePaneWidth()
+  const termSide = effectiveDock(props.terminalDockSide ?? "bottom", shellWidth)
+  const browserSide = effectiveDock(props.browserDockSide ?? "right", shellWidth)
 
   // RIGHT-docked panes sit beside the whole split; BOTTOM-docked ones stack under
   // that row. Each dock CSS-hides itself when closed, so this holds for 0, 1 or 2

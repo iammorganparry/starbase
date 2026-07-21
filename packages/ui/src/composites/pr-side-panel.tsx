@@ -96,6 +96,13 @@ export interface PrSidePanelProps {
    * merged/closed PR by accident.
    */
   review?: Omit<ReviewFindingsProps, "canRun">
+  /**
+   * The rail's width in px. Was a hard `w-[352px]` — which, in a 500px pane,
+   * left the PR body about 88px of reading column after its own 60px gutters.
+   */
+  width?: number
+  /** Extra classes — how the caller turns the rail into a floating sheet. */
+  className?: string
 }
 
 export function PrSidePanel({
@@ -110,7 +117,9 @@ export function PrSidePanel({
   onUpdateBranch,
   updatingBranch = false,
   updateBranchError,
-  review
+  review,
+  width = 352,
+  className
 }: PrSidePanelProps) {
   // Merge-commit default, matching `gh pr merge` and the previous hardcoded
   // behaviour — a picker that silently changed what the button did would be a
@@ -128,7 +137,13 @@ export function PrSidePanel({
     // do, so the merge action stays pinned to the bottom and reachable at any
     // scroll position — a long adversarial review used to push it off-screen,
     // which is exactly when you most want to merge.
-    <div className="flex w-[352px] flex-none flex-col overflow-hidden border-l border-hairline bg-panel">
+    <div
+      style={{ width }}
+      className={cn(
+        "flex flex-none flex-col overflow-hidden border-l border-hairline bg-panel",
+        className
+      )}
+    >
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       {/* Reviewers */}
       <div className="flex flex-none flex-col gap-[11px] border-b border-hairline p-4">

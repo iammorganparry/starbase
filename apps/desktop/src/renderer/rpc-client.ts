@@ -40,6 +40,7 @@ import type {
   PrFileChange,
   PrMergeMethod,
   PrState,
+  SessionPrStatus,
   PrSummary,
   ProviderConfig,
   PullRequest,
@@ -300,7 +301,7 @@ export const rpc = {
     run((c) => c.Config.setProvider({ cli, provider })),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
     run((c) => c.Github.pr({ sessionId })),
-  githubPrState: (sessionId: string): Promise<PrState | null> =>
+  githubPrState: (sessionId: string): Promise<SessionPrStatus | null> =>
     run((c) => c.Github.prState({ sessionId })),
   githubListPrs: (
     repoPath: string,
