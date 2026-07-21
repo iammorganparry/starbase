@@ -237,7 +237,18 @@ export function SessionRow({
     // back out) `motion` matches the two elements across the unmount and tweens
     // between their boxes, so the row visibly travels into the pill instead of
     // vanishing here and appearing there. The id must match `split-row.tsx`.
-    <motion.div layoutId={`session-${session.id}`} layout transition={SPRING}>
+    //
+    // An ARCHIVED row carries no id at all. Archiving evicts a session from its
+    // split (see the prune in `use-split-layout`), so an archived row has no
+    // segment left to morph with — and an id with no counterpart is pure risk:
+    // if a stale persisted workspace ever named an archived session, both
+    // elements would mount with the same id for a frame, which is undefined in
+    // motion and can snap either one to the other's box.
+    <motion.div
+      layoutId={session.archived ? undefined : `session-${session.id}`}
+      layout
+      transition={SPRING}
+    >
     <div
       data-testid={`session-row-${session.id}`}
       {...dragProps}

@@ -26,11 +26,14 @@ import {
  *
  * Thin on purpose — every rule lives in the pure reducers in `split-layout.ts`,
  * so this hook is only responsible for holding the state, persisting it, and
- * keeping it honest about which sessions still exist. Same shape and same
- * division of labour as the preset-slot grid hook it replaces.
+ * keeping it honest about which sessions are still eligible for a pane. Same
+ * shape and same division of labour as the preset-slot grid hook it replaces.
+ *
+ * Takes the smallest shape it actually reads rather than `Session`, so the tests
+ * can drive it with two-field literals.
  */
 export function useSplitLayout(
-  sessions: ReadonlyArray<{ id: string }>,
+  sessions: ReadonlyArray<{ readonly id: string; readonly archived?: boolean }>,
   initialSessionId?: string | null
 ) {
   const [workspace, setWorkspace] = useState<Workspace>(() => {
@@ -46,10 +49,28 @@ export function useSplitLayout(
     save(workspace)
   }, [workspace])
 
-  // A workspace restored from storage names sessions that may since have been
-  // deleted (in another window, or by wiping sessions.json). Drop those panes
-  // rather than rendering one pointed at nothing.
-  const knownIds = useMemo(() => new Set(sessions.map((s) => s.id)), [sessions])
+  // Which sessions may occupy a pane: the ones that still exist AND are still
+  // active.
+  //
+  // Deleted, because a workspace restored from storage names sessions that may
+  // since have gone (deleted in another window, or by wiping sessions.json), and
+  // a pane pointed at nothing is worse than no pane.
+  //
+  // Archived, because archiving is how you retire a session, and a retired
+  // session holding a pane open contradicts that. It also had a concrete cost:
+  // the sidebar would draw the session TWICE — once as a segment of its split's
+  // pill and once as a row under Archived — and both carry the same `motion`
+  // `layoutId`. Two mounted elements sharing a layoutId is undefined in motion;
+  // the shared-element tween can snap one to the other's box, so the archived
+  // row would fly across the sidebar and land on the pill.
+  //
+  // Restoring puts the session back in the list as its own row, not back into
+  // the split it was archived out of. That's the right way round: rejoining a
+  // split is a thing you ask for by dragging, not a side effect of un-retiring.
+  const knownIds = useMemo(
+    () => new Set(sessions.filter((s) => !s.archived).map((s) => s.id)),
+    [sessions]
+  )
   useEffect(() => {
     // Unconditional, including for an EMPTY list. `StarbaseApp` only mounts once
     // the app machine has left `loading`/`starting` (App.tsx renders LoadingScreen

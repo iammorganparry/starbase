@@ -115,11 +115,15 @@ describe("SessionSidebar split pill ownership", () => {
     expect(screen.getByTestId("split-segment-second")).toBeDefined()
   })
 
-  it("still draws the pill when the FIRST pane's session is archived", () => {
-    // The other half of the regression: archiving pane 1 dropped it out of the
-    // active list, so no entry satisfied the check and the entire pill vanished
-    // — stranding pane 2's session with no sidebar presence at all, while the
-    // split it belongs to was still on screen.
+  it("still draws the pill when the FIRST pane's session is missing from the list", () => {
+    // Defence in depth, using archiving as the way to make a member absent.
+    //
+    // The app no longer reaches this state — archiving evicts a session from its
+    // split (`use-split-layout`'s prune) precisely so it can't be in two sidebar
+    // places at once. But this component takes `splitGroups` as data and cannot
+    // police where it came from: a stale persisted workspace arriving one render
+    // before the prune runs looks exactly like this. Ownership must not depend
+    // on `panes[0]` being present, and that is what this pins.
     renderSidebar([
       session({ id: "first", title: "Refactor auth flow", archived: true, archivedAt: "2026-07-18T08:00:00.000Z" }),
       session({ id: "second", title: "Bump the toolchain" })

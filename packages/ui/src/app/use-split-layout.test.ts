@@ -115,6 +115,81 @@ describe("useSplitLayout", () => {
     expect(paneIds(result)).toEqual(["a"])
   })
 
+  /**
+   * Archiving is how a session is retired, so it gives up its pane.
+   *
+   * Beyond the model argument there was a concrete defect: an archived session
+   * that kept its pane was drawn twice in the sidebar — as a segment of its
+   * split's pill and as a row under Archived — and both carry the same `motion`
+   * `layoutId`. Two mounted elements sharing one is undefined behaviour; the
+   * shared-element tween can snap either to the other's box.
+   */
+  describe("archiving", () => {
+    const archiving = (archivedIds: ReadonlyArray<string>) =>
+      sessions.map((s) => ({ ...s, archived: archivedIds.includes(s.id) }))
+
+    it("drops an archived session's pane and closes the gap", () => {
+      const { result, rerender } = renderHook(({ list }) => useSplitLayout(list, "a"), {
+        initialProps: { list: sessions as ReadonlyArray<{ id: string; archived?: boolean }> }
+      })
+      act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+      act(() => result.current.splitInto(result.current.group!.id, "c", 2))
+      expect(paneIds(result)).toEqual(["a", "b", "c"])
+
+      rerender({ list: archiving(["b"]) })
+
+      expect(paneIds(result)).toEqual(["a", "c"])
+      expect(result.current.visibleSessionIds.has("b")).toBe(false)
+      // And nothing in the sidebar still thinks it belongs to that split.
+      expect(result.current.groupIdBySession.has("b")).toBe(false)
+    })
+
+    it("dissolves a group whose every session was archived", () => {
+      const { result, rerender } = renderHook(({ list }) => useSplitLayout(list, "a"), {
+        initialProps: { list: sessions as ReadonlyArray<{ id: string; archived?: boolean }> }
+      })
+      act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+
+      rerender({ list: archiving(["a", "b"]) })
+
+      expect(result.current.group).toBeNull()
+      expect(result.current.activeSessionId).toBeNull()
+    })
+
+    it("keeps focus on the pane the operator was looking at", () => {
+      // Archiving a pane to the LEFT of the focused one shifts every index down;
+      // focus must follow the session, not the number it used to sit at.
+      const { result, rerender } = renderHook(({ list }) => useSplitLayout(list, "a"), {
+        initialProps: { list: sessions as ReadonlyArray<{ id: string; archived?: boolean }> }
+      })
+      act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+      act(() => result.current.splitInto(result.current.group!.id, "c", 2))
+      act(() => result.current.focusPane(result.current.group!.id, 2))
+      expect(result.current.activeSessionId).toBe("c")
+
+      rerender({ list: archiving(["a"]) })
+
+      expect(paneIds(result)).toEqual(["b", "c"])
+      expect(result.current.activeSessionId).toBe("c")
+    })
+
+    it("does not put a restored session back into the split it left", () => {
+      // Rejoining a split is something you ask for by dragging — not a side
+      // effect of un-retiring a session.
+      const { result, rerender } = renderHook(({ list }) => useSplitLayout(list, "a"), {
+        initialProps: { list: sessions as ReadonlyArray<{ id: string; archived?: boolean }> }
+      })
+      act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+      rerender({ list: archiving(["b"]) })
+      expect(paneIds(result)).toEqual(["a"])
+
+      rerender({ list: archiving([]) })
+
+      expect(paneIds(result)).toEqual(["a"])
+      expect(result.current.groupIdBySession.has("b")).toBe(false)
+    })
+  })
+
   it("maps each session to the group holding it, for the sidebar", () => {
     const { result } = renderHook(() => useSplitLayout(sessions, "a"))
     act(() => result.current.splitInto(result.current.group!.id, "b", 1))
