@@ -10,6 +10,7 @@ import {
   load,
   movePane,
   prune,
+  replacePane,
   resize,
   save,
   separateAll,
@@ -67,6 +68,11 @@ export function useSplitLayout(
   /** Put a session beside an existing pane — what a DROP means. */
   const splitInto = useCallback((groupId: string, sessionId: string, at: number) => {
     setWorkspace((current) => splitWith(current, groupId, sessionId, at))
+  }, [])
+
+  /** Swap a pane's session — what a drop onto a pane's MIDDLE means. */
+  const replace = useCallback((groupId: string, index: number, sessionId: string) => {
+    setWorkspace((current) => replacePane(current, groupId, index, sessionId))
   }, [])
 
   const close = useCallback((groupId: string, index: number) => {
@@ -144,6 +150,7 @@ export function useSplitLayout(
     groupOfSession: useCallback((sessionId: string) => groupOf(workspace, sessionId), [workspace]),
     selectSession,
     splitInto,
+    replacePane: replace,
     closePane: close,
     closeFocused,
     movePane: move,

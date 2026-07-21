@@ -44,6 +44,14 @@ describe("useSplitLayout", () => {
     expect(result.current.activeSessionId).toBe("a")
   })
 
+  it("replaces the LEFTMOST pane in one update — the id shifts under a two-step swap", () => {
+    const { result } = renderHook(() => useSplitLayout(sessions, "a"))
+    act(() => result.current.splitInto(result.current.group!.id, "b", 1))
+    act(() => result.current.replacePane(result.current.group!.id, 0, "c"))
+    expect(paneIds(result)).toEqual(["c", "b"])
+    expect(result.current.activeSessionId).toBe("c")
+  })
+
   it("reports every pane of the split as visible, not just the focused one", () => {
     const { result } = renderHook(() => useSplitLayout(sessions, "a"))
     act(() => result.current.splitInto(result.current.group!.id, "b", 1))

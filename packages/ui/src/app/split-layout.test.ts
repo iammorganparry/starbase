@@ -14,6 +14,7 @@ import {
   MIN_RATIO,
   movePane,
   prune,
+  replacePane,
   resize,
   save,
   separateAll,
@@ -98,6 +99,53 @@ describe("splitWith", () => {
   it("gives every pane an equal share", () => {
     const ws = workspaceOf(["a", "b", "c"])
     expect(ws.groups[0]!.panes.every((p) => Math.abs(p.ratio - 1 / 3) < 1e-6)).toBe(true)
+  })
+})
+
+describe("replacePane", () => {
+  // The regression this reducer exists for: group ids derive from the LEFTMOST
+  // pane, so a close-then-insert pair loses the session when index is 0.
+  it("swaps the leftmost pane, the case a close-then-insert pair silently dropped", () => {
+    const ws = workspaceOf(["a", "b", "c"])
+    const next = replacePane(ws, ws.groups[0]!.id, 0, "z")
+    expect(paneIds(next)).toEqual(["z", "b", "c"])
+    expect(next.activeGroupId).toBe(next.groups[0]!.id)
+    expect(focusedSessionId(next)).toBe("z")
+    expect(ratiosSumToOne(next)).toBe(true)
+  })
+
+  it("swaps a middle pane without disturbing its neighbours", () => {
+    const ws = workspaceOf(["a", "b", "c"])
+    const next = replacePane(ws, ws.groups[0]!.id, 1, "z")
+    expect(paneIds(next)).toEqual(["a", "z", "c"])
+    expect(focusedSessionId(next)).toBe("z")
+  })
+
+  it("moves the dropped session out of the group it came from", () => {
+    const ws = workspaceOf(["a", "b"], ["c", "d"])
+    const next = replacePane(ws, ws.groups[0]!.id, 0, "c")
+    expect(paneIds(next, next.groups[0]!.id)).toEqual(["c", "b"])
+    expect(paneIds(next, next.groups[1]!.id)).toEqual(["d"])
+    expect(ratiosSumToOne(next)).toBe(true)
+  })
+
+  it("shrinks the group rather than duplicating when the session is already in it", () => {
+    const ws = workspaceOf(["a", "b", "c"])
+    const next = replacePane(ws, ws.groups[0]!.id, 2, "a")
+    expect(paneIds(next)).toEqual(["b", "a"])
+    expect(focusedSessionId(next)).toBe("a")
+    expect(ratiosSumToOne(next)).toBe(true)
+  })
+
+  it("is a no-op on the pane already showing that session", () => {
+    const ws = workspaceOf(["a", "b"])
+    expect(replacePane(ws, ws.groups[0]!.id, 1, "b")).toEqual(ws)
+  })
+
+  it("ignores an unknown group or an out-of-range pane", () => {
+    const ws = workspaceOf(["a", "b"])
+    expect(replacePane(ws, "g:nope", 0, "z")).toBe(ws)
+    expect(replacePane(ws, ws.groups[0]!.id, 5, "z")).toBe(ws)
   })
 })
 

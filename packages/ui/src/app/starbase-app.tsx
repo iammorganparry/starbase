@@ -521,14 +521,12 @@ export function StarbaseApp({
         onSplitWith={splitActiveWith}
         onSplitGroupWith={split.splitInto}
         onReplacePane={(index, sessionId) => {
-          // Replace = close what's there, then put the dropped session in its
-          // place. Two reducer steps rather than one primitive, because "swap
-          // this pane's session" is exactly those two things and the model is
-          // smaller without a third way to mutate a pane.
+          // One reducer, not close-then-insert: group ids derive from the
+          // leftmost pane, so closing pane 0 re-ids the group and the second
+          // call would look up an id that no longer exists.
           if (!group) return
           if (group.panes.length === 1) return setSelected(sessionId)
-          split.closePane(group.id, index)
-          split.splitInto(group.id, sessionId, index)
+          split.replacePane(group.id, index, sessionId)
         }}
         onClosePane={(index) => group && split.closePane(group.id, index)}
         onCloseGroupPane={split.closePane}

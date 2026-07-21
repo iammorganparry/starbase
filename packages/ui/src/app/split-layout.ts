@@ -270,6 +270,48 @@ export const splitWith = (
 }
 
 /**
+ * Swap the session shown in one pane for another — what a drop onto a pane's
+ * MIDDLE means.
+ *
+ * One reducer rather than `closePane` + `splitWith` from the caller, because a
+ * group's id is derived from its leftmost pane (`idFor`): closing pane 0 re-ids
+ * the group, so a follow-up call holding the id from before the close finds
+ * nothing and silently drops the session. Atomic here, and the id can only
+ * change once.
+ *
+ * Like `splitWith`, the incoming session is MOVED, never duplicated — including
+ * when it is already a pane of THIS group, in which case the group shrinks by
+ * one (its old pane goes away, the replaced pane becomes it).
+ */
+export const replacePane = (
+  ws: Workspace,
+  groupId: string,
+  index: number,
+  sessionId: string
+): Workspace => {
+  const group = groupById(ws, groupId)
+  if (!group || index < 0 || index >= group.panes.length) return ws
+  if (group.panes[index]!.sessionId === sessionId) return activate(ws, groupId)
+  // Pull the session out of any OTHER group first. That can dissolve the group
+  // it came from but never touches this one, so `groupId` is still valid after.
+  const elsewhere = groupOf(ws, sessionId)
+  const base = elsewhere && elsewhere.id !== groupId ? detach(ws, sessionId) : ws
+  const target = groupById(base, groupId)
+  if (!target) return ws
+  // A duplicate inside this same group is dropped rather than detached, so the
+  // widths of the panes that survive are preserved rather than reset to even.
+  const duplicate = target.panes.findIndex((p) => p.sessionId === sessionId)
+  const kept = target.panes.filter((_, i) => i === index || i !== duplicate)
+  const at = duplicate !== -1 && duplicate < index ? index - 1 : index
+  const panes = renormalise(kept.map((p, i) => (i === at ? { ...p, sessionId } : p)))
+  return {
+    ...replaceGroup(base, groupId, withPanes(target, panes, at)),
+    // The pane you just dropped onto is the one you're looking at.
+    activeGroupId: idFor(panes)
+  }
+}
+
+/**
  * Remove a pane. The session keeps running — this only stops SHOWING it.
  *
  * A group that drops to zero panes is removed entirely; a group that drops to

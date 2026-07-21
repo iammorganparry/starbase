@@ -16,6 +16,7 @@ import {
   focusPane,
   groupOf,
   MAX_PANES,
+  replacePane,
   resize,
   separateAll,
   show,
@@ -156,13 +157,7 @@ function SplitPlayground({ initial }: { initial: Workspace }) {
         onFocusPane={(i) => group && setWs((w) => focusPane(w, group.id, i))}
         onSplitWith={(sessionId, at) => group && setWs((w) => splitWith(w, group.id, sessionId, at))}
         onReplacePane={(index, sessionId) =>
-          group &&
-          setWs((w) => {
-            // Replace = close what's there, then put the dropped one in its place.
-            const closed = closePane(w, group.id, index)
-            const survivor = activeGroup(closed)
-            return survivor ? splitWith(closed, survivor.id, sessionId, index) : show(closed, sessionId)
-          })
+          group && setWs((w) => replacePane(w, group.id, index, sessionId))
         }
         onResize={(index, delta) => group && setWs((w) => resize(w, group.id, index, delta))}
         onAddSplit={() => {
