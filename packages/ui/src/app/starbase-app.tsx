@@ -38,6 +38,7 @@ import { type ConversationPaneCtx, SessionConversation } from "../screens/sessio
 import { ARCHIVED_GROUP_KEY } from "./session-sidebar.js"
 import { useSplitLayout } from "./use-split-layout.js"
 import { MAX_PANES } from "./split-layout.js"
+import { matchSplitShortcut } from "./split-shortcuts.js"
 import { SEED_PATCH } from "../seed.js"
 
 const GH_UNAVAILABLE: GhStatus = {
@@ -401,71 +402,64 @@ export function StarbaseApp({
     [group, split]
   )
 
-  // ⌘N opens New Session; the rest is Arc's split map. All registered in ONE
-  // listener so the ordering between them is explicit rather than dependent on
-  // effect order, and all of them check `metaKey || ctrlKey` so the same physical
-  // chord works on both platforms.
+  // ⌘N opens New Session; the rest is Arc's split map. Which chord means what is
+  // `matchSplitShortcut`'s job — a pure function, and its own unit test, because
+  // the first version of this map compared `e.key` against unshifted characters
+  // and so could never fire for ⌃⇧1..4 or ⌃⇧[ / ⌃⇧] (Shift makes those "!" and
+  // "{"). What is left here is only the part that needs the app's state: whether
+  // the thing the chord asked for is possible right now.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-      if (onCreateSession && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
-        e.preventDefault()
-        setNewOpen(true)
-        return
-      }
-      if (!e.shiftKey) return
+      const shortcut = matchSplitShortcut(e)
+      if (shortcut === null) return
 
-      // ⌃⇧= — add a pane holding the first session not already on screen. Arc
-      // splits with a new tab; the nearest thing here is a session you have but
-      // aren't looking at, which beats opening a pane onto nothing.
-      if ((e.key === "=" || e.key === "+") && group && group.panes.length < MAX_PANES) {
-        const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
-        if (next) {
+      switch (shortcut.type) {
+        case "new-session": {
+          if (!onCreateSession) return
+          e.preventDefault()
+          setNewOpen(true)
+          return
+        }
+        // Add a pane holding the first session not already on screen. Arc splits
+        // with a new tab; the nearest thing here is a session you have but
+        // aren't looking at, which beats opening a pane onto nothing.
+        case "add-pane": {
+          if (!group || group.panes.length >= MAX_PANES) return
+          const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
+          if (!next) return
           e.preventDefault()
           splitActiveWith(next.id, group.panes.length)
+          return
         }
-        return
-      }
-
-      // ⌃⇧1..4 — focus pane N. Out-of-range is a no-op rather than a clamp: ⌃⇧4
-      // in a two-pane split means "the fourth pane", and there isn't one.
-      const digit = Number.parseInt(e.key, 10)
-      if (group && Number.isInteger(digit) && digit >= 1 && digit <= MAX_PANES) {
-        if (digit <= group.panes.length) {
+        // Out-of-range is a no-op rather than a clamp: ⌃⇧4 in a two-pane split
+        // means "the fourth pane", and there isn't one.
+        case "focus-pane": {
+          if (!group || shortcut.index >= group.panes.length) return
           e.preventDefault()
-          split.focusPane(group.id, digit - 1)
+          split.focusPane(group.id, shortcut.index)
+          return
         }
-        return
-      }
-
-      // ⌃⇧[ / ⌃⇧] — the pane to the left / right. Stops at the ends (the reducer
-      // refuses to wrap): wrapping from the last pane to the first reads as a
-      // jump, and in a two-pane split it makes the two keys indistinguishable.
-      if (e.key === "[") {
-        e.preventDefault()
-        split.focusNeighbour(-1)
-        return
-      }
-      if (e.key === "]") {
-        e.preventDefault()
-        split.focusNeighbour(1)
-        return
-      }
-
-      // ⌃⇧⌥← / → — move the FOCUSED pane, rather than the focus.
-      if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        e.preventDefault()
-        split.moveFocused(e.key === "ArrowLeft" ? -1 : 1)
-        return
-      }
-
-      // ⌃⇧W — close the focused pane. The session keeps running; this closes the
-      // VIEW of it, which is why it isn't bound to a bare ⌘W (that reads as
-      // "close the window" and would be a much more destructive miss).
-      if (e.key.toLowerCase() === "w" && group && group.panes.length > 1) {
-        e.preventDefault()
-        split.closeFocused()
+        // Stops at the ends (the reducer refuses to wrap): wrapping from the
+        // last pane to the first reads as a jump, and in a two-pane split it
+        // makes the two keys indistinguishable.
+        case "focus-neighbour": {
+          if (!group) return
+          e.preventDefault()
+          split.focusNeighbour(shortcut.direction)
+          return
+        }
+        case "move-pane": {
+          if (!group) return
+          e.preventDefault()
+          split.moveFocused(shortcut.direction)
+          return
+        }
+        // The session keeps running; this closes the VIEW of it.
+        case "close-pane": {
+          if (!group || group.panes.length <= 1) return
+          e.preventDefault()
+          split.closeFocused()
+        }
       }
     }
     window.addEventListener("keydown", onKey)

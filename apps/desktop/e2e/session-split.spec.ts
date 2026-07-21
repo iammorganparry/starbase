@@ -296,6 +296,50 @@ test("clicking a session already on screen focuses its pane instead of rearrangi
   await expect(window.getByTestId("split-pane-0")).toHaveAttribute("data-focused", "true")
 })
 
+/**
+ * The keyboard map, in a real browser.
+ *
+ * The unit test in `split-shortcuts.test.ts` pins the matcher against chords
+ * whose `key`/`code` pairing it asserts up front. This one takes the belief out
+ * of the loop entirely: Playwright presses the physical chord and Chromium
+ * decides what `key` and `code` are. That distinction is the whole reason these
+ * shortcuts were broken — the first version matched `e.key` against "1" and "[",
+ * which Shift turns into "!" and "{" — so it is worth one real press.
+ */
+test("the Arc keyboard map drives focus in a real browser", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  await window.getByTestId("add-right-split").click()
+  await window.getByTestId("add-right-split").click()
+  await expect.poll(() => paneSessions(window)).toHaveLength(3)
+  await settle(window)
+
+  // ⌃⇧1 — jump to the first pane.
+  await window.keyboard.press("Control+Shift+Digit1")
+  await expect(window.getByTestId("split-pane-0")).toHaveAttribute("data-focused", "true")
+
+  // ⌃⇧3 — and to the third.
+  await window.keyboard.press("Control+Shift+Digit3")
+  await expect(window.getByTestId("split-pane-2")).toHaveAttribute("data-focused", "true")
+
+  // ⌃⇧[ — one to the left.
+  await window.keyboard.press("Control+Shift+BracketLeft")
+  await expect(window.getByTestId("split-pane-1")).toHaveAttribute("data-focused", "true")
+
+  // ⌃⇧] — one to the right, and then a second press that must STOP at the end
+  // rather than wrapping round to the first pane.
+  await window.keyboard.press("Control+Shift+BracketRight")
+  await expect(window.getByTestId("split-pane-2")).toHaveAttribute("data-focused", "true")
+  await window.keyboard.press("Control+Shift+BracketRight")
+  await expect(window.getByTestId("split-pane-2")).toHaveAttribute("data-focused", "true")
+
+  // ⌃⇧W — close the focused pane; the session keeps running, so it returns to
+  // the sidebar as its own row.
+  await window.keyboard.press("Control+Shift+KeyW")
+  await expect.poll(() => paneSessions(window)).toEqual(["s_alpha", "s_beta"])
+})
+
 test("the add-right-split placeholder adds a pane, and stops when nothing is left", async ({
   launchApp
 }) => {
