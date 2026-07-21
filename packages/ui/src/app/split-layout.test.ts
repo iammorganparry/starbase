@@ -171,10 +171,47 @@ describe("closePane", () => {
     expect(next.activeGroupId).toBeNull()
   })
 
-  it("moves focus to the left neighbour when the focused pane closes", () => {
-    const ws = focusPane(workspaceOf(["a", "b", "c"]), workspaceOf(["a", "b", "c"]).groups[0]!.id, 2)
-    const next = closePane(ws, ws.groups[0]!.id, 2)
-    expect(focusedSessionId(next)).toBe("b")
+  /**
+   * Where focus lands after a close, at EVERY position.
+   *
+   * Previously only the last-pane case was covered, which is the one position
+   * where focus happens to fall left — so the comment in `closePane` claiming
+   * "the left neighbour" read as verified behaviour when three of the four
+   * positions did the opposite. Pinning all four is what stops a description and
+   * an implementation drifting apart again.
+   */
+  describe("focus after closing the FOCUSED pane", () => {
+    const closeFocusedAt = (index: number) => {
+      const base = workspaceOf(["a", "b", "c", "d"])
+      const groupId = base.groups[0]!.id
+      return closePane(focusPane(base, groupId, index), groupId, index)
+    }
+
+    it.each([
+      [0, "b"],
+      [1, "c"],
+      [2, "d"]
+    ])("keeps the slot when pane %i closes, landing on its right neighbour", (index, expected) => {
+      // The pane to the right slides into the vacated slot, so focus stays put
+      // on screen rather than being thrown somewhere by the close.
+      expect(focusedSessionId(closeFocusedAt(index as number))).toBe(expected)
+    })
+
+    it("falls to the LEFT only for the last pane, where the slot itself goes away", () => {
+      expect(focusedSessionId(closeFocusedAt(3))).toBe("c")
+    })
+  })
+
+  it("keeps the same session focused when some OTHER pane closes", () => {
+    const base = workspaceOf(["a", "b", "c"])
+    const groupId = base.groups[0]!.id
+    const focusedOnC = focusPane(base, groupId, 2)
+    // Closing to its left shifts every index down; focus must follow the
+    // session, not the number it used to sit at.
+    expect(focusedSessionId(closePane(focusedOnC, groupId, 0))).toBe("c")
+
+    const focusedOnA = focusPane(base, groupId, 0)
+    expect(focusedSessionId(closePane(focusedOnA, groupId, 2))).toBe("a")
   })
 
   it("activates a surviving group when the active one is closed away", () => {

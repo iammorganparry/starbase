@@ -322,8 +322,22 @@ export const closePane = (ws: Workspace, groupId: string, index: number): Worksp
   if (!group || index < 0 || index >= group.panes.length) return ws
   const panes = renormalise(group.panes.filter((_, i) => i !== index))
   if (panes.length === 0) return replaceGroup(ws, groupId, null)
-  // Focus falls to the LEFT neighbour, matching how closing a tab anywhere else
-  // behaves — the eye is already left of the thing that vanished.
+  // Focus holds its PLACE IN THE ROW, not its pane.
+  //
+  // Closing the focused pane leaves focus on whichever pane slides into the slot
+  // it vacated — its RIGHT neighbour — and only falls to the left when the
+  // closed pane was the last one, where nothing slides in and the slot itself
+  // ceases to exist. So the eye stays where it already was rather than being
+  // sent somewhere by the close.
+  //
+  // (An earlier comment here claimed the left neighbour throughout, "matching
+  // how closing a tab anywhere else behaves". Both halves were wrong: the code
+  // has always done the above, and Chrome, Safari and Firefox all activate the
+  // tab to the RIGHT when you close the active one. Every position is pinned in
+  // the tests now, so the claim and the behaviour can't drift apart again.)
+  //
+  // Closing an UNFOCUSED pane keeps the same session focused either way, which
+  // is the `> index` branch shifting the index down to follow it.
   const focused = group.focused > index ? group.focused - 1 : Math.min(group.focused, panes.length - 1)
   return replaceGroup(ws, groupId, withPanes(group, panes, focused))
 }
