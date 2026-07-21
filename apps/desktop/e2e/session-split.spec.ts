@@ -243,6 +243,26 @@ test("a session in ANOTHER group moves into this split rather than duplicating",
   await expect(window.getByTestId("session-row-s_gamma")).toHaveCount(0)
 })
 
+test("a segment can be dragged out of its split into another group", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  await dragTo(window, "session-row-s_beta", "split-pane-0", "after")
+  // Gamma alone becomes the active group; Alpha+Beta stay behind as a pill.
+  await window.getByTestId("session-row-s_gamma").click()
+  await expect.poll(() => paneSessions(window)).toEqual(["s_gamma"])
+
+  // The pill segment is the handle for a session you can SEE. Without it the
+  // only draggable things were the sessions that were off screen, so a split
+  // was a one-way door: you could put a session in, never take it out.
+  await dragTo(window, "split-segment-s_beta", "split-pane-0", "after")
+
+  await expect.poll(() => paneSessions(window)).toEqual(["s_gamma", "s_beta"])
+  // Beta left the old split rather than living in both — Alpha is a plain row now.
+  await expect(window.getByTestId("session-row-s_alpha")).toBeVisible()
+  await expect(window.getByTestId("split-segment-s_alpha")).toHaveCount(0)
+})
+
 test("closing a pane leaves the other one running and the app on screen", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()

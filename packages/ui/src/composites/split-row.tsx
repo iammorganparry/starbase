@@ -185,6 +185,18 @@ export function SplitRow({
                   <button
                     type="button"
                     onClick={() => onFocusPane?.(group.id, index)}
+                    // A segment is a drag SOURCE as well as a target, writing the
+                    // same payload a standalone `SessionRow` does. Without this
+                    // there is no gesture for taking a session back out of a
+                    // split, or moving one from one split to another — the only
+                    // sessions you could drag were the ones not on screen, which
+                    // is exactly backwards from Arc, where the sidebar pill is
+                    // the handle for the thing you are looking at.
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(SESSION_DND_MIME, pane.sessionId)
+                      e.dataTransfer.effectAllowed = "copyMove"
+                    }}
                     data-testid={`split-segment-${pane.sessionId}`}
                     title={`${session.title} — ${displayStatusLabel[display]}`}
                     className={cn(

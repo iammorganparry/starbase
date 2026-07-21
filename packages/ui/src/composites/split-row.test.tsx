@@ -92,6 +92,18 @@ describe("SplitRow", () => {
     expect(onSplitWith).toHaveBeenCalledWith(group.id, "c", 2)
   })
 
+  it("writes the session payload when a segment starts a drag", () => {
+    // A segment is a drag SOURCE, not only a target: it is the only handle for
+    // taking a session back OUT of a split, or moving it to another one. Without
+    // this the split was a one-way door — and, worse, an e2e that dragged a
+    // segment passed vacuously, because an empty `DataTransfer` is rejected by
+    // the same guard that rejects a dragged file.
+    const dataTransfer = sessionDrag("")
+    render(<SplitRow group={twoPane()} sessions={SESSIONS} />)
+    fireEvent.dragStart(screen.getByTestId("split-segment-b"), { dataTransfer })
+    expect(dataTransfer.setData).toHaveBeenCalledWith(SESSION_DND_MIME, "b")
+  })
+
   it("shows a peek card listing every session in the split, after a hover delay", async () => {
     const group = twoPane()
     render(<SplitRow group={group} sessions={SESSIONS} />)
