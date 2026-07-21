@@ -386,6 +386,13 @@ export const resize = (
   const right = group.panes[index + 1]
   if (!left || !right || !Number.isFinite(delta)) return ws
   const pair = left.ratio + right.ratio
+  // Below this there is no split of the pair that leaves BOTH panes at least
+  // `MIN_RATIO`, and the clamp bounds below cross — the upper drops under the
+  // lower, and the result comes out negative, which is not a width any browser
+  // will honour. Only a corrupt store can get a pair this small (`load` rejects
+  // such ratios, and every reducer here preserves the minimum), so refusing is
+  // the honest answer: there is no legal position to move the divider to.
+  if (pair < MIN_RATIO * 2) return ws
   // Clamp against the PAIR's budget, not against 1: the two panes can only ever
   // trade with each other, so `left` may not grow past `pair - MIN_RATIO`.
   const nextLeft = Math.min(Math.max(left.ratio + delta, MIN_RATIO), pair - MIN_RATIO)
@@ -522,6 +529,35 @@ export const migrateLegacyLayout = (raw: unknown): Workspace | null => {
   return { groups: [{ id: idFor(panes), panes, focused }], activeGroupId: idFor(panes) }
 }
 
+/**
+ * Slack for float drift, so a legitimately-saved `MIN_RATIO` that came back as
+ * 0.1499999 isn't mistaken for a corrupt one and thrown away.
+ */
+const RATIO_EPSILON = 1e-6
+
+/**
+ * Stored ratios, or equal shares when the stored ones cannot be honoured.
+ *
+ * `renormalise` only makes the ratios SUM to one; it says nothing about any
+ * individual pane, so a hand-edited store can name a group whose two adjacent
+ * panes share less than `MIN_RATIO` between them. `resize` clamps the dragged
+ * pair to `[MIN_RATIO, pair - MIN_RATIO]`, and those bounds CROSS once the pair
+ * is small enough — the upper falls below the lower and the result comes out
+ * negative, which is not a width any browser will honour.
+ *
+ * Rejecting the whole group's proportions rather than clamping pane by pane is
+ * deliberate: clamping one pane up forces the renormalise that follows to push
+ * another back down, so the rule would need to iterate to a fixed point to be
+ * correct. Equal shares always satisfy the minimum (`MAX_PANES * MIN_RATIO` is
+ * under 1 by construction) and are what a fresh split would have used anyway.
+ */
+const restoreRatios = (panes: ReadonlyArray<Pane>): ReadonlyArray<Pane> => {
+  const normalised = renormalise(panes)
+  return normalised.every((p) => p.ratio >= MIN_RATIO - RATIO_EPSILON)
+    ? normalised
+    : evenly(normalised.map((p) => p.sessionId))
+}
+
 const isPane = (value: unknown): value is Pane =>
   typeof value === "object" &&
   value !== null &&
@@ -557,15 +593,21 @@ export const load = (): Workspace => {
     const groups: Array<SplitGroup> = []
     for (const g of parsed.groups) {
       if (typeof g !== "object" || g === null || !Array.isArray(g.panes)) continue
-      const panes = (g.panes as ReadonlyArray<unknown>).filter((p): p is Pane => {
-        if (!isPane(p) || seen.has(p.sessionId)) return false
+      // Cap and record in LOCKSTEP. Filtering first and slicing after left the
+      // dropped overflow in `seen`, so a stale store with a five-pane group
+      // burned its fifth session's id: a LATER group naming that session skipped
+      // it too, and it vanished from the workspace entirely rather than being
+      // kept by the group that still had room for it.
+      const panes: Array<Pane> = []
+      for (const p of g.panes as ReadonlyArray<unknown>) {
+        if (panes.length >= MAX_PANES) break
+        if (!isPane(p) || seen.has(p.sessionId)) continue
         seen.add(p.sessionId)
-        return true
-      })
+        panes.push(p)
+      }
       if (panes.length === 0) continue
-      const capped = panes.slice(0, MAX_PANES)
       const focused = typeof g.focused === "number" && Number.isInteger(g.focused) ? g.focused : 0
-      groups.push(withPanes({ id: "", panes: capped, focused: 0 }, renormalise(capped), focused))
+      groups.push(withPanes({ id: "", panes, focused: 0 }, restoreRatios(panes), focused))
     }
     if (groups.length === 0) return EMPTY_WORKSPACE
     const activeGroupId =

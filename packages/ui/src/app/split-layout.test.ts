@@ -251,6 +251,27 @@ describe("resize", () => {
     const ws = workspaceOf(["a", "b"])
     expect(resize(ws, ws.groups[0]!.id, 1, 0.1)).toBe(ws)
   })
+
+  it("refuses a pair too small to leave both panes at MIN_RATIO", () => {
+    // Unreachable through the reducers, and `load` now rejects such a store —
+    // but the guard belongs HERE, because it is this function's clamp bounds
+    // that cross when the pair is small enough, producing a negative ratio.
+    const ws = workspaceOf(["a", "b", "c"])
+    const starved: Workspace = {
+      ...ws,
+      groups: [
+        {
+          ...ws.groups[0]!,
+          panes: [
+            { sessionId: "a", ratio: 0.01 },
+            { sessionId: "b", ratio: 0.01 },
+            { sessionId: "c", ratio: 0.98 }
+          ]
+        }
+      ]
+    }
+    expect(resize(starved, starved.groups[0]!.id, 0, 0.1)).toBe(starved)
+  })
 })
 
 describe("focus", () => {
@@ -336,6 +357,99 @@ describe("persistence", () => {
     const all = ws.groups.flatMap((g) => g.panes.map((p) => p.sessionId))
     expect(all).toEqual(["a", "b"])
     expect(ws.groups).toHaveLength(1)
+  })
+
+  /**
+   * Nothing here is reachable through the reducers — they cap at `MAX_PANES` and
+   * hold every ratio at or above `MIN_RATIO`. It is reachable through the DISK,
+   * which is the only input this module doesn't control, and the whole reason
+   * `load` re-derives rather than trusts.
+   */
+  describe("a store that has been hand-edited or left behind by an older build", () => {
+    const store = (groups: unknown, activeGroupId = "g:a") =>
+      localStorage.setItem("sb.split.v2", JSON.stringify({ groups, activeGroupId }))
+
+    const pane = (sessionId: string, ratio: number) => ({ sessionId, ratio })
+
+    it("gives an over-cap group's overflow to a LATER group that has room", () => {
+      // The bug: panes were recorded as seen while filtering and capped after,
+      // so the fifth session's id was burned by a group that never showed it —
+      // and the group below, which had room, skipped it too. The session
+      // disappeared from the workspace entirely.
+      store([
+        {
+          id: "g:a",
+          panes: [
+            pane("a", 0.2),
+            pane("b", 0.2),
+            pane("c", 0.2),
+            pane("d", 0.2),
+            pane("overflow", 0.2)
+          ],
+          focused: 0
+        },
+        { id: "g:overflow", panes: [pane("overflow", 1)], focused: 0 }
+      ])
+
+      const ws = load()
+      expect(ws.groups[0]!.panes.map((p) => p.sessionId)).toEqual(["a", "b", "c", "d"])
+      // The one that didn't fit is still somewhere, rather than nowhere.
+      expect(ws.groups[1]!.panes.map((p) => p.sessionId)).toEqual(["overflow"])
+    })
+
+    it("still caps a lone over-cap group at MAX_PANES", () => {
+      store([
+        {
+          id: "g:a",
+          panes: Array.from({ length: MAX_PANES + 3 }, (_, i) => pane(`s${i}`, 1 / (MAX_PANES + 3))),
+          focused: 0
+        }
+      ])
+      expect(load().groups[0]!.panes).toHaveLength(MAX_PANES)
+    })
+
+    it("falls back to equal shares when a stored ratio is below MIN_RATIO", () => {
+      // `renormalise` only makes them sum to one — it says nothing about any
+      // single pane, and a pair sharing less than MIN_RATIO between them makes
+      // `resize`'s clamp bounds cross and go negative.
+      store([
+        {
+          id: "g:a",
+          panes: [pane("a", 0.001), pane("b", 0.001), pane("c", 0.998)],
+          focused: 0
+        }
+      ])
+
+      const ws = load()
+      expect(ws.groups[0]!.panes.every((p) => Math.abs(p.ratio - 1 / 3) < 1e-9)).toBe(true)
+      expect(ratiosSumToOne(ws)).toBe(true)
+    })
+
+    it("KEEPS ratios that merely drifted, rather than resetting a real arrangement", () => {
+      // A pane parked exactly on MIN_RATIO comes back a hair under it after a
+      // float round-trip. Treating that as corrupt would throw away divider
+      // positions the operator actually set.
+      store([
+        {
+          id: "g:a",
+          panes: [pane("a", MIN_RATIO - 1e-9), pane("b", 1 - MIN_RATIO + 1e-9)],
+          focused: 0
+        }
+      ])
+
+      const ws = load()
+      expect(ws.groups[0]!.panes[0]!.ratio).toBeCloseTo(MIN_RATIO, 6)
+      expect(ws.groups[0]!.panes[0]!.ratio).not.toBeCloseTo(0.5, 3)
+    })
+
+    it("never yields a negative ratio, whatever the divider is dragged by", () => {
+      store([{ id: "g:a", panes: [pane("a", 0.001), pane("b", 0.999)], focused: 0 }])
+      const ws = load()
+      for (const delta of [-5, -0.4, -0.001, 0.001, 0.4, 5]) {
+        const next = resize(ws, ws.groups[0]!.id, 0, delta)
+        expect(next.groups[0]!.panes.every((p) => p.ratio > 0)).toBe(true)
+      }
+    })
   })
 })
 
