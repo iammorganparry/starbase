@@ -199,10 +199,24 @@ const awaitRuns = (rec: Recorder, n: number) =>
  */
 const settle = () => Effect.sleep("300 millis")
 
+/**
+ * One finished turn, in the order a harness actually reports it: the occupancy
+ * reading first (`Usage`), then the end-of-turn decision (`Done`).
+ *
+ * `settle` takes no reading of its own by design — the number that used to be
+ * passed here was the run's cumulative spend, which counts resident context
+ * once per tool call and so fired a compaction on every turn.
+ */
+const turnEnd = (tokens: number, window?: number) =>
+  Effect.zipRight(
+    ContextManager.observe(SESSION, tokens, window ?? null),
+    ContextManager.settle(SESSION)
+  )
+
 /** Observe, wait, and report both the run count's input and the decided phase. */
 const observeAndPhase = (tokens: number) =>
   Effect.gen(function* () {
-    yield* ContextManager.settle(SESSION, tokens)
+    yield* turnEnd(tokens)
     const snap = yield* ContextManager.snapshot(SESSION)
     yield* settle()
     return snap.phase
@@ -229,7 +243,7 @@ const awaitDigest = () =>
 /** Drive `observe`, then wait for the digest fiber to reach the adapter. */
 const observeAndSettle = (tokens: number, rec?: Recorder, runs = 1) =>
   Effect.gen(function* () {
-    yield* ContextManager.settle(SESSION, tokens)
+    yield* turnEnd(tokens)
     if (rec === undefined) return yield* settle()
     yield* awaitRuns(rec, runs)
     // The adapter has been entered; give the fiber a moment to finish parsing.
@@ -256,7 +270,7 @@ describe("ContextManager.observe", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 180_000)
+        yield* turnEnd(180_000)
         yield* awaitDigest()
         return yield* ContextManager.applyIfReady(SESSION)
       }),
@@ -286,7 +300,7 @@ describe("ContextManager.observe", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 180_000)
+        yield* turnEnd(180_000)
         yield* awaitDigest()
         return yield* ContextManager.applyIfReady(SESSION)
       }),
@@ -361,9 +375,9 @@ describe("ContextManager.observe", () => {
     await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 180_000)
-        yield* ContextManager.settle(SESSION, 185_000)
-        yield* ContextManager.settle(SESSION, 190_000)
+        yield* turnEnd(180_000)
+        yield* turnEnd(185_000)
+        yield* turnEnd(190_000)
         yield* awaitRuns(rec, 1)
         yield* settle()
       }),
@@ -547,7 +561,7 @@ describe("mid-turn readings", () => {
         yield* ContextManager.observe(SESSION, 175_000)
         yield* ContextManager.observe(SESSION, 178_000)
         expect(rec.runs.count).toBe(0)
-        yield* ContextManager.settle(SESSION, 180_000)
+        yield* turnEnd(180_000)
         yield* awaitRuns(rec, 1)
       }),
       recordingAdapter(GOOD_REPLY, rec)
@@ -576,7 +590,7 @@ describe("ContextManager.applyIfReady", () => {
     const [first, second] = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 180_000)
+        yield* turnEnd(180_000)
         yield* awaitDigest()
         const a = yield* ContextManager.applyIfReady(SESSION)
         const b = yield* ContextManager.applyIfReady(SESSION)
@@ -656,7 +670,7 @@ describe("ContextManager.cancel", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 180_000)
+        yield* turnEnd(180_000)
         yield* ContextManager.cancel(SESSION)
         yield* settle()
         return yield* ContextManager.applyIfReady(SESSION)
@@ -673,7 +687,7 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 100_000)
+        yield* turnEnd(100_000)
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
@@ -691,13 +705,55 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed({ model: "claude-fable-5" })
-        yield* ContextManager.settle(SESSION, 100_000)
+        yield* turnEnd(100_000)
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(1_000_000)
     expect(snap.triggerAt).toBe(300_000)
+  })
+
+  // The regression this whole change exists for: a model whose real ceiling the
+  // prefix table under-reports must be measured against what the HARNESS says,
+  // not against the guess. `claude-opus-4-8` matches the `opus → 200k` row, so
+  // the guess alone would trigger at 170k and compact a session that is barely
+  // half full.
+  it("prefers the window the harness reported over the guessed table", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed({ model: "claude-opus-4-8" })
+        yield* turnEnd(250_000, 1_000_000)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.window).toBe(1_000_000)
+    expect(snap.triggerAt).toBe(300_000)
+    expect(snap.phase).toBe("idle")
+    expect(rec.runs.count).toBe(0)
+  })
+
+  // The user's explicit Settings value is also the escape hatch for a harness
+  // whose self-report we have reason to distrust, so it still wins.
+  it("lets the user's configured window override the harness report", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed({ model: "claude-opus-4-8" })
+        yield* ConfigService.setProvider("claude", {
+          enabled: true,
+          defaultMode: "accept-edits",
+          contextWindow: 200_000
+        })
+        yield* turnEnd(100_000, 1_000_000)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.window).toBe(200_000)
+    expect(snap.triggerAt).toBe(170_000)
   })
 
   it("reports unknown for a harness it cannot measure", async () => {
@@ -733,7 +789,7 @@ describe("ContextManager.snapshot", () => {
     const snap = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.settle(SESSION, 180_000)
+        yield* turnEnd(180_000)
         yield* awaitDigest()
         yield* ContextManager.applyIfReady(SESSION)
         return yield* ContextManager.snapshot(SESSION)

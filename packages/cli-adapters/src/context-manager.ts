@@ -52,7 +52,17 @@ const MAX_FAILURES = 2
 interface SessionContext {
   readonly status: "idle" | "preparing" | "ready"
   readonly digest: ContextDigest | null
+  /** Latest OCCUPANCY reading, from a `Usage` event. Never a cumulative total. */
   readonly tokens: number
+  /**
+   * The ceiling the harness itself reported, when it reports one.
+   *
+   * Measured beats inferred: this retires the model-id prefix table for any
+   * harness that answers, which is the difference between compacting a 1M-window
+   * model at 300k as designed and compacting it at 170k because the table only
+   * knew the family name.
+   */
+  readonly window: number | null
   readonly failures: number
   readonly compactions: number
   readonly lastCompactedAt: string | null
@@ -62,6 +72,7 @@ const EMPTY: SessionContext = {
   status: "idle",
   digest: null,
   tokens: 0,
+  window: null,
   failures: 0,
   compactions: 0,
   lastCompactedAt: null
@@ -146,6 +157,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
         Effect.gen(function* () {
           const session = yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
           if (session === null) return null
+          const reported = (yield* stateOf(sessionId)).window
 
           const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
           const ctx = config?.context ?? DEFAULT_CONTEXT_CONFIG
@@ -164,7 +176,14 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             session,
             auto,
             budget: ctx.budgetTokens,
-            window: contextWindowFor(session.cli, session.model ?? null, provider?.contextWindow),
+            // Precedence: the user's explicit Settings value, then whatever the
+            // harness measured for this very run, then the guessed table. The
+            // override stays on top because it is also the escape hatch for a
+            // harness that reports a ceiling we have reason to distrust.
+            window:
+              provider?.contextWindow !== undefined && provider.contextWindow !== null
+                ? contextWindowFor(session.cli, session.model ?? null, provider.contextWindow)
+                : reported ?? contextWindowFor(session.cli, session.model ?? null),
             binPath: cli?.binPath ?? null,
             digestModel: digestModelFor(session.cli, provider?.backgroundModel)
           }
@@ -321,9 +340,13 @@ export class ContextManager extends Effect.Service<ContextManager>()(
        */
       const observe = (
         sessionId: string,
-        tokens: number
+        tokens: number,
+        window: number | null = null
       ): Effect.Effect<void, never, SessionStore | FileSystem.FileSystem | AppPaths> =>
         Effect.gen(function* () {
+          const measured = window !== null && Number.isFinite(window) && window > 0 ? window : null
+          // A reading that only carries a ceiling still teaches us the ceiling.
+          if (measured !== null) yield* setState(sessionId, (s) => ({ ...s, window: measured }))
           if (!Number.isFinite(tokens) || tokens <= 0) return
           yield* setState(sessionId, (s) => ({ ...s, tokens }))
           // Persist so the reading survives a restart — otherwise a session
@@ -332,7 +355,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
         })
 
       /**
-       * Record a reading AND decide whether to start preparing a digest.
+       * Decide whether to start preparing a digest, from the latest reading.
        *
        * Called only when a turn has SETTLED, and that distinction is
        * load-bearing. Claude and opencode report usage per assistant message, so
@@ -348,18 +371,21 @@ export class ContextManager extends Effect.Service<ContextManager>()(
        * Readings still arrive continuously through `observe`; only the decision
        * to summarise waits for a coherent transcript.
        */
-      const settle = (
-        sessionId: string,
-        tokens: number
-      ): Effect.Effect<void, never, DigestEnv> =>
+      const settle = (sessionId: string): Effect.Effect<void, never, DigestEnv> =>
         Effect.gen(function* () {
-          yield* observe(sessionId, tokens)
-          if (!Number.isFinite(tokens) || tokens <= 0) return
-
           const settings = yield* settingsFor(sessionId)
           if (settings === null) return
 
           const state = yield* stateOf(sessionId)
+          // The decision reads the OCCUPANCY the harness reported, which arrives
+          // through `observe`. It deliberately takes no reading of its own: the
+          // caller's end-of-turn number is cumulative spend on at least one
+          // harness, and passing it here is what made compaction fire every turn.
+          // Falling back to the persisted value keeps a session that was reopened
+          // near its ceiling from reading as empty on its first turn.
+          const tokens = state.tokens > 0 ? state.tokens : settings.session.contextTokens ?? 0
+          if (!Number.isFinite(tokens) || tokens <= 0) return
+
           // A session that has failed repeatedly stops trying, rather than
           // forking a doomed fiber on every turn forever.
           if (state.failures >= MAX_FAILURES) return

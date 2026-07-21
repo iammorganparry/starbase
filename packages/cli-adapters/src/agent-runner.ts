@@ -856,10 +856,19 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               //
               // `Done` is the only point at which the transcript is coherent.
               if (event._tag === "Usage") {
-                yield* ContextManager.observe(sessionId, event.tokens).pipe(Effect.ignore)
+                yield* ContextManager.observe(sessionId, event.tokens, event.window ?? null).pipe(
+                  Effect.ignore
+                )
               }
-              if (event._tag === "Done" && event.tokens > 0) {
-                yield* ContextManager.settle(sessionId, event.tokens).pipe(Effect.ignore)
+              // `Done` says WHEN to decide, never WHAT the context is. Its
+              // `tokens` is the run's cumulative spend (see the Claude adapter),
+              // which counts resident context once per tool call — reading it as
+              // occupancy meant a long tool-using turn reported several times the
+              // window size and compacted on every single turn, at a threshold
+              // that moved with the tool count rather than the context. The
+              // manager uses the latest `Usage` reading instead.
+              if (event._tag === "Done") {
+                yield* ContextManager.settle(sessionId).pipe(Effect.ignore)
               }
             }).pipe(Effect.provide(env), Effect.asVoid)
 
