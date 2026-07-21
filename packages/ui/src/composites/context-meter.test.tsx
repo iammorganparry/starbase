@@ -104,6 +104,38 @@ describe("ContextMeter", () => {
   })
 
   /**
+   * A held swap is still holding a ready digest, so the two states arrive
+   * together. Labelling off `digestReady` alone would promise "compacts next
+   * turn" for several turns running and never deliver — which is the same
+   * "reads as stuck" failure that "compacting…" was added to fix.
+   */
+  it("says a compaction is held when the session is mid-task", () => {
+    render(<ContextMeter tokens={310_000} triggerAt={300_000} digestReady held />)
+    expect(screen.getByText("compaction held")).toBeDefined()
+    expect(screen.queryByText("compacts next turn")).toBeNull()
+  })
+
+  it("names what is in flight on hover, so the hold is not a mystery", () => {
+    render(
+      <ContextMeter
+        tokens={310_000}
+        triggerAt={300_000}
+        digestReady
+        held
+        heldReason="a plan is still executing"
+      />
+    )
+    expect(screen.getByTitle(/a plan is still executing/)).toBeDefined()
+  })
+
+  // A summary genuinely in flight outranks a hold: the hold applies to the
+  // PREVIOUS digest, and "compacting…" is the state the user cannot cause.
+  it("prefers an in-flight summary over a hold", () => {
+    render(<ContextMeter tokens={310_000} triggerAt={300_000} preparing held />)
+    expect(screen.getByText("compacting…")).toBeDefined()
+  })
+
+  /**
    * The state that was missing, and the one the user cannot cause themselves.
    * An automatic compaction takes as long as a summary takes; with no word for
    * it the meter sat on "compacting soon" throughout, which reads as stuck.

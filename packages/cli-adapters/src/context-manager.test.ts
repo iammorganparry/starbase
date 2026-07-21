@@ -5,6 +5,7 @@ import { Effect, Layer, Ref } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter } from "./adapter.js"
 import type { CliAdapterShape, SessionSpec } from "./adapter.js"
+import { BackgroundTaskStore } from "./background-tasks.js"
 import { ConfigService } from "./config.js"
 import { ContextManager } from "./context-manager.js"
 import { DiscoveryService } from "./discovery.js"
@@ -106,6 +107,9 @@ const layersFor = (adapter: Layer.Layer<CliAdapter>) =>
     ContextManager.Default,
     SessionStore.Default,
     TranscriptStore.Default,
+    // The swap gate reads background-task state: a task still running is the
+    // clearest possible "this session is mid-flow".
+    BackgroundTaskStore.Default,
     ConfigService.Default,
     DiscoveryService.Default,
     adapter,
@@ -278,9 +282,9 @@ describe("ContextManager.observe", () => {
     )
     expect(rec.runs.count).toBe(1)
     expect(digest).not.toBeNull()
-    expect(digest!.goal).toContain("rate limiting")
+    expect(digest!.digest.goal).toContain("rate limiting")
     // The digest covers the transcript as it stood when it was built.
-    expect(digest!.throughMessageId).toBe("m2")
+    expect(digest!.digest.throughMessageId).toBe("m2")
   })
 
   /**
@@ -307,7 +311,7 @@ describe("ContextManager.observe", () => {
       streamingAdapter(parts)
     )
     expect(digest).not.toBeNull()
-    expect(digest!.goal).toBe("Add rate limiting to the refund route")
+    expect(digest!.digest.goal).toBe("Add rate limiting to the refund route")
   })
 
   /**
@@ -618,6 +622,302 @@ describe("ContextManager.applyIfReady", () => {
   })
 })
 
+/**
+ * What the manager BELIEVES about a session once a swap has happened.
+ *
+ * Every other `applyIfReady` test stops at the handover, and that gap is where
+ * the eager-compaction bug lived: the reseed starts a brand-new harness
+ * conversation, but the manager kept the reading that described the OLD one. A
+ * session compacted at 290k therefore still measured as 290k, so the meter read
+ * "compacting soon" over a 40k conversation and the very next `settle` forked a
+ * second digest against a conversation that no longer existed.
+ */
+describe("life after a compaction", () => {
+  /** Drive a session over the trigger, build a digest, and apply it. */
+  const compactOnce = () =>
+    Effect.gen(function* () {
+      yield* seed()
+      yield* turnEnd(180_000)
+      yield* awaitDigest()
+      return yield* ContextManager.applyIfReady(SESSION)
+    })
+
+  it("forgets the pre-compaction reading, so the next turn is not measured against it", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* compactOnce()
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.tokens).toBe(0)
+    // Was "prepare" — the state behind "40k · compacting soon".
+    expect(snap.phase).toBe("idle")
+  })
+
+  // The reading `settle` falls back to lives on disk, so clearing only the
+  // in-memory copy would let the stale number come straight back.
+  it("clears the persisted reading too, so a restart cannot resurrect it", async () => {
+    const rec = recorder()
+    const persisted = await run(
+      Effect.gen(function* () {
+        yield* compactOnce()
+        return yield* SessionStore.get(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(persisted.contextTokens ?? 0).toBe(0)
+  })
+
+  // The turn after a swap has not reported usage yet. Measuring it against the
+  // pre-swap number compacts a conversation that is one primer long.
+  it("does not immediately fork a second digest", async () => {
+    const rec = recorder()
+    const runs = await run(
+      Effect.gen(function* () {
+        yield* compactOnce()
+        const before = rec.runs.count
+        // A turn that ends with no new reading at all.
+        yield* ContextManager.settle(SESSION)
+        yield* settle()
+        return { before, after: rec.runs.count }
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(runs.after).toBe(runs.before)
+  })
+})
+
+/**
+ * The window the manager BELIEVES a session has, versus what it has been seen
+ * holding.
+ *
+ * The model-id table is a guess, and a wrong guess in the low direction is not
+ * the harmless conservatism it was written to be: a 1M Opus read as 200k puts
+ * `triggerAt` at 170k, so the meter reads "compacting soon" at 213k and the
+ * session reseeds itself every turn while the harness is entirely comfortable.
+ */
+describe("window correction", () => {
+  it("stops trusting a table guess the session has already exceeded", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        // `opus` alone still reads as 200k from the table…
+        yield* seed({ model: "opus" })
+        // …but a session cannot hold 598k inside a 200k window.
+        yield* ContextManager.observe(SESSION, 598_000, null)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.window).toBe(598_000)
+    // 170k before, which is why a comfortable session compacted every turn.
+    expect(snap.triggerAt).toBe(400_000)
+  })
+
+  it("keeps the corrected window after the reading falls back", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed({ model: "opus" })
+        yield* ContextManager.observe(SESSION, 598_000, null)
+        // A compaction (or simply a smaller turn) shrinks the working set. The
+        // CEILING did not move.
+        yield* ContextManager.observe(SESSION, 40_000, null)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.window).toBe(598_000)
+    expect(snap.phase).toBe("idle")
+  })
+
+  // Modern Opus needs no correction at all — the table now knows it.
+  it("reads a 1M window for opus 4.5+ straight from the table", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed({ model: "claude-opus-4-8" })
+        yield* ContextManager.observe(SESSION, 213_600, null)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.window).toBe(1_000_000)
+    // The screenshot that started this: 213.6k must read as idle, not as
+    // "compacting soon".
+    expect(snap.phase).toBe("idle")
+  })
+
+  // An unmeasurable harness must not have a ceiling invented from one reading.
+  it("still reports unknown for a harness with no window", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed({ cli: "opencode", model: "opencode/big-pickle" })
+        yield* ContextManager.observe(SESSION, 598_000, null)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(snap.window).toBeNull()
+    expect(snap.phase).toBe("unknown")
+  })
+})
+
+/**
+ * Whether a READY swap should actually be taken this turn.
+ *
+ * Crossing the budget says a compaction is worth doing; it says nothing about
+ * whether now is the moment. Dropping a reseed into the middle of a plan or an
+ * unanswered question discards exactly the working state the next turn needs —
+ * so the swap waits for a boundary, bounded by the ceiling and a deferral cap.
+ */
+describe("the mid-flow hold", () => {
+  const MID_FLOW_REPLY = `\`\`\`json
+{
+  "goal": "Chase down the failing 429 test",
+  "decisions": [],
+  "filesTouched": [],
+  "openThreads": ["the 429 test"],
+  "preferences": [],
+  "midFlow": true,
+  "midFlowReason": "mid-way through debugging the 429"
+}
+\`\`\``
+
+  /** A turn ending with a question the user has not answered yet. */
+  const seedUnansweredQuestion = () =>
+    TranscriptStore.append(SESSION, {
+      id: "m3",
+      role: "assistant",
+      parts: [
+        {
+          _tag: "Question",
+          request: {
+            id: "q1",
+            questions: [
+              { question: "Which approach?", header: "Approach", multiSelect: false, options: [] }
+            ]
+          },
+          answers: null
+        }
+      ],
+      streaming: false,
+      createdAt: new Date().toISOString()
+    })
+
+  // 175k is over the 170k trigger (so a digest exists) but under the 190k hold
+  // ceiling for a 200k window — the band the gate actually operates in.
+  const IN_BAND = 175_000
+
+  it("declines the swap while the summary says the session is mid-task", async () => {
+    const rec = recorder()
+    const applied = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(IN_BAND)
+        yield* awaitDigest()
+        return yield* ContextManager.applyIfReady(SESSION)
+      }),
+      recordingAdapter(MID_FLOW_REPLY, rec)
+    )
+    expect(applied).toBeNull()
+  })
+
+  // Holding must never DISCARD the digest — that would spend a summary for
+  // nothing and force the whole thing to be rebuilt next turn.
+  it("keeps the digest ready so the next turn can still take it", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(IN_BAND)
+        yield* awaitDigest()
+        yield* ContextManager.applyIfReady(SESSION)
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(MID_FLOW_REPLY, rec)
+    )
+    expect(snap.digestReady).toBe(true)
+    expect(snap.held).toBe(true)
+    expect(snap.heldReason).toContain("429")
+    // One summary, not one per turn spent holding.
+    expect(rec.runs.count).toBe(1)
+  })
+
+  // A session that always looks busy would otherwise never compact at all.
+  it("takes the swap once the deferral cap is reached", async () => {
+    const rec = recorder()
+    const attempts = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(IN_BAND)
+        yield* awaitDigest()
+        const results: Array<boolean> = []
+        for (let i = 0; i < 4; i++) {
+          results.push((yield* ContextManager.applyIfReady(SESSION)) !== null)
+        }
+        return results
+      }),
+      recordingAdapter(MID_FLOW_REPLY, rec)
+    )
+    expect(attempts).toStrictEqual([false, false, false, true])
+  })
+
+  // Deferral is a quality preference; the ceiling is physics. Past it the
+  // alternative to compacting is a hard context error mid-turn.
+  it("swaps anyway once the session is against its ceiling", async () => {
+    const rec = recorder()
+    const applied = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(195_000)
+        yield* awaitDigest()
+        return yield* ContextManager.applyIfReady(SESSION)
+      }),
+      recordingAdapter(MID_FLOW_REPLY, rec)
+    )
+    expect(applied).not.toBeNull()
+  })
+
+  /**
+   * The structural half, which no summary can see: the digest here reports a
+   * clean boundary, and the hold comes entirely from the transcript.
+   */
+  it("holds on an unanswered question even when the summary saw a boundary", async () => {
+    const rec = recorder()
+    const applied = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(IN_BAND)
+        yield* awaitDigest()
+        yield* seedUnansweredQuestion()
+        return yield* ContextManager.applyIfReady(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(applied).toBeNull()
+  })
+
+  // The common case must be untouched: a session at a natural boundary compacts
+  // the moment its digest is ready, exactly as before.
+  it("does not hold a session that is at a boundary", async () => {
+    const rec = recorder()
+    const applied = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(IN_BAND)
+        yield* awaitDigest()
+        return yield* ContextManager.applyIfReady(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(applied).not.toBeNull()
+  })
+})
+
 describe("ContextManager.compactNow", () => {
   it("prepares a digest well below the trigger", async () => {
     const rec = recorder()
@@ -699,7 +999,7 @@ describe("ContextManager.snapshot", () => {
   })
 
   // The headline property, visible in the UI: a 1M model fills its meter against
-  // the 300k budget, not against 1M.
+  // the quality budget, not against 1M.
   it("measures a 1M-window model against the budget", async () => {
     const rec = recorder()
     const snap = await run(
@@ -711,7 +1011,7 @@ describe("ContextManager.snapshot", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(1_000_000)
-    expect(snap.triggerAt).toBe(300_000)
+    expect(snap.triggerAt).toBe(400_000)
   })
 
   // The regression this whole change exists for: a model whose real ceiling the
@@ -730,7 +1030,7 @@ describe("ContextManager.snapshot", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(1_000_000)
-    expect(snap.triggerAt).toBe(300_000)
+    expect(snap.triggerAt).toBe(400_000)
     expect(snap.phase).toBe("idle")
     expect(rec.runs.count).toBe(0)
   })

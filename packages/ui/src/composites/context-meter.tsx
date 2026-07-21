@@ -28,6 +28,17 @@ export interface ContextMeterProps {
   /** Consecutive digest failures hit the ceiling; nothing more will be tried. */
   stalled?: boolean
   /**
+   * A digest is ready but is being deliberately HELD because the session is
+   * mid-task — an unanswered question, a plan still running, a live thread.
+   *
+   * Distinct from `digestReady` and it must outrank it: a held session is
+   * holding a ready digest, so labelling off `digestReady` alone would promise
+   * "compacts next turn" for several turns running and never deliver.
+   */
+  held?: boolean
+  /** One line naming what is in flight, shown in the tooltip. */
+  heldReason?: string | null
+  /**
    * Compact this session now, ahead of the budget.
    *
    * Attached to the meter rather than hidden in a menu because the meter is
@@ -43,7 +54,7 @@ export interface ContextMeterProps {
  * Starbase will compact it — NOT against the model's hard ceiling.
  *
  * That distinction is the entire feature made visible. A 1M-window model shows
- * this meter near full at ~300k, because 300k is where quality starts to go, and
+ * this meter near full at the budget, because that is where quality starts to go, and
  * a bar that sat at 30% there would be telling the user the opposite of what
  * matters. The hard window is deliberately not drawn: it is a backstop, not a
  * target, and showing 700k of "available" space would invite exactly the usage
@@ -59,6 +70,8 @@ export function ContextMeter({
   preparing = false,
   digestReady = false,
   stalled = false,
+  held = false,
+  heldReason = null,
   onCompactNow,
   className
 }: ContextMeterProps) {
@@ -97,19 +110,23 @@ export function ContextMeter({
    */
   const label = preparing
     ? "compacting…"
-    : digestReady
-      ? "compacts next turn"
-      : stalled
-        ? "compaction failed"
-        : willCompact
-          ? "compacting soon"
-          : "context"
+    : held
+      ? "compaction held"
+      : digestReady
+        ? "compacts next turn"
+        : stalled
+          ? "compaction failed"
+          : willCompact
+            ? "compacting soon"
+            : "context"
 
   const title = `${tokens.toLocaleString()} of ~${triggerAt.toLocaleString()} tokens before Starbase compacts this session${
     preparing
       ? " · summarising in the background"
-      : digestReady
-        ? " · the next turn starts from a summary"
+      : held
+        ? ` · a summary is ready but held: ${heldReason ?? "the session is mid-task"}`
+        : digestReady
+          ? " · the next turn starts from a summary"
         : stalled
           ? " · automatic compaction gave up after repeated failures; click to try again"
           : phase === "unknown"

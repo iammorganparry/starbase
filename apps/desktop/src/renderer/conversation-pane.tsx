@@ -278,6 +278,8 @@ export function ConversationPane({
           contextPreparing={preparing || requested}
           contextDigestReady={digestReady}
           contextStalled={contextQuery.data?.stalled ?? false}
+          contextHeld={contextQuery.data?.held ?? false}
+          contextHeldReason={contextQuery.data?.heldReason ?? null}
           onCompactNow={() => {
             setRequested(true)
             void rpc.contextCompactNow(session.id).catch(() => setRequested(false))

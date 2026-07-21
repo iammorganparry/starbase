@@ -90,6 +90,10 @@ export interface ConversationViewProps {
   contextDigestReady?: boolean
   /** Automatic compaction has given up on this session after repeated failures. */
   contextStalled?: boolean
+  /** A ready digest is being held back because the session is mid-task. */
+  contextHeld?: boolean
+  /** One line naming what is in flight, for the meter's tooltip. */
+  contextHeldReason?: string | null
   /** Compact this session now, ahead of the budget. */
   onCompactNow?: () => void
   /** Epoch ms the current run started, or null when idle — drives the elapsed timer. */
@@ -177,6 +181,8 @@ export function ConversationView({
   contextPreparing = false,
   contextDigestReady = false,
   contextStalled = false,
+  contextHeld = false,
+  contextHeldReason = null,
   onCompactNow,
   runStartedAt = null,
   queued = [],
@@ -328,6 +334,8 @@ export function ConversationView({
                 preparing={contextPreparing}
                 digestReady={contextDigestReady}
                 stalled={contextStalled}
+                held={contextHeld}
+                heldReason={contextHeldReason}
                 onCompactNow={onCompactNow}
               />
               <RunStats startedAt={runStartedAt} busy={busy} />

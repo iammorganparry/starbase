@@ -60,8 +60,8 @@ const open = (
 describe("Settings → Context", () => {
   it("ships with auto-compaction on and a mid-band budget", () => {
     open()
-    expect(screen.getByLabelText("Working-set budget")).toHaveProperty("value", "300000")
-    expect(screen.getByText("300k tokens")).toBeDefined()
+    expect(screen.getByLabelText("Working-set budget")).toHaveProperty("value", "400000")
+    expect(screen.getByText("400k tokens")).toBeDefined()
   })
 
   it("saves a new budget as the slider moves", () => {
@@ -75,19 +75,19 @@ describe("Settings → Context", () => {
     const onSaveContext = vi.fn()
     open({ onSaveContext })
     fireEvent.click(screen.getByRole("switch"))
-    expect(onSaveContext).toHaveBeenCalledWith({ auto: false, budgetTokens: 300_000 })
+    expect(onSaveContext).toHaveBeenCalledWith({ auto: false, budgetTokens: 400_000 })
   })
 
   it("constrains the budget to the usable quality band", () => {
     open()
     const slider = screen.getByLabelText("Working-set budget")
     expect(slider).toHaveProperty("min", "256000")
-    expect(slider).toHaveProperty("max", "400000")
+    expect(slider).toHaveProperty("max", "500000")
   })
 
   /**
    * The lever only makes sense alongside its consequence. A 200k Claude compacts
-   * at its safety margin (170k) rather than the 300k budget, and showing that
+   * at its safety margin (170k) rather than the full budget, and showing that
    * per harness is what stops the budget reading as an arbitrary number.
    */
   it("translates the budget into a per-harness trigger point", () => {

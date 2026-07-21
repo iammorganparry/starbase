@@ -560,8 +560,22 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
            * reach this code: they run inside the harness process, and this is the
            * top-level turn path.
            */
-          const digest = yield* ContextManager.applyIfReady(sessionId)
-          const compactedFrom = digest === null ? 0 : session?.tokens ?? 0
+          const applied = yield* ContextManager.applyIfReady(sessionId)
+          const digest = applied?.digest ?? null
+          // The WORKING SET at the moment of the swap, straight from the manager.
+          //
+          // Deliberately NOT `session.tokens`: that is the session's lifetime
+          // total (see `Session.contextTokens` in domain.ts) and only ever grows,
+          // which is how the marker came to read "Context compacted from
+          // 49894.2k" — ~49.9M lifetime tokens rendered as a working set. The
+          // persisted `contextTokens` is the fallback for a session whose live
+          // reading has not arrived yet; 0 hides the clause entirely.
+          const compactedFrom =
+            applied === null
+              ? 0
+              : applied.tokensBefore > 0
+                ? applied.tokensBefore
+                : session?.contextTokens ?? 0
           // Everything that landed after the digest was built is replayed
           // verbatim, so preparing in the background never races the user.
           const tail =

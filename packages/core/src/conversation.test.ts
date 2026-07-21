@@ -1304,6 +1304,46 @@ describe("ToolCall.output — added without erasing history", () => {
     expect(Either.isRight(result)).toBe(true)
   })
 
+  /**
+   * Same hazard, for the compaction marker: `ContextDigest` is persisted inside
+   * the transcript, so making the mid-flow verdict required would fail the decode
+   * of every session that has ever been compacted — and `readAll` turns that into
+   * an empty transcript, i.e. the user's whole history disappearing.
+   */
+  it("still decodes a compaction marker written before the mid-flow verdict existed", () => {
+    const legacy = [
+      {
+        id: "m1",
+        role: "assistant",
+        streaming: false,
+        createdAt: "2026-07-11T10:00:00.000Z",
+        parts: [
+          {
+            _tag: "Context",
+            tokensBefore: 290_000,
+            digest: {
+              goal: "Add rate limiting",
+              decisions: [],
+              filesTouched: [],
+              openThreads: [],
+              preferences: [],
+              throughMessageId: "m0",
+              builtAt: "2026-07-11T09:00:00.000Z"
+            }
+          }
+        ]
+      }
+    ]
+    const result = decode(Schema.Array(Message), legacy)
+    expect(Either.isRight(result)).toBe(true)
+    if (Either.isRight(result)) {
+      const part = result.right[0]!.parts[0]!
+      expect(part._tag).toBe("Context")
+      // Absent must read as "we don't know", which the gate treats as don't-hold.
+      if (part._tag === "Context") expect(part.digest.midFlow ?? false).toBe(false)
+    }
+  })
+
   it("carries output from ToolEnd onto the card", () => {
     const msg = [
       { _tag: "ToolStart", id: "t1", name: "Bash", target: "pnpm test" } as StreamEvent,

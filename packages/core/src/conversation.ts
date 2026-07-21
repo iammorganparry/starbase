@@ -475,7 +475,23 @@ export const ContextDigest = Schema.Struct({
    * without being rebuilt.
    */
   throughMessageId: Schema.String,
-  builtAt: Schema.String
+  builtAt: Schema.String,
+  /**
+   * The summariser's own read of whether the session is mid-task.
+   *
+   * A compaction is safe at a boundary and expensive in the middle of one: an
+   * unfinished edit sequence, a live debugging thread, a plan being executed.
+   * The digest run has already read the entire transcript on the cheap tier, so
+   * asking it this costs one JSON field rather than a second harness run.
+   *
+   * OPTIONAL rather than defaulted, because `ContextDigest` is persisted inside
+   * transcripts AND constructed in a dozen places: every compaction marker
+   * written before this existed must still decode, and absent has to read as
+   * "we don't know", which the gate treats as "don't hold" — today's behaviour.
+   */
+  midFlow: Schema.optional(Schema.Boolean),
+  /** One line saying WHY it is mid-flow, shown in the meter's tooltip. */
+  midFlowReason: Schema.optional(Schema.String)
 })
 export type ContextDigest = Schema.Schema.Type<typeof ContextDigest>
 

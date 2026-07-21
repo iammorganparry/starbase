@@ -101,7 +101,15 @@ const seed = (over: Partial<Session> = {}) =>
       diff: { added: 0, removed: 0 },
       prNumber: null,
       costUsd: 0,
-      tokens: 290_000,
+      // The two numbers deliberately differ, and by orders of magnitude.
+      //
+      // This fixture used to set `tokens: 290_000` and no `contextTokens`, so the
+      // "what was the working set" assertion below passed while the runner was
+      // reading the LIFETIME total — which is exactly how the marker shipped
+      // saying "Context compacted from 49894.2k". A fixture that cannot tell the
+      // two apart cannot catch the bug.
+      tokens: 49_894_200,
+      contextTokens: 290_000,
       updatedAt: now,
       worktreePath: temp.root,
       model: "sonnet",
@@ -238,11 +246,36 @@ describe("compaction swap", () => {
     expect(parts).toContain("Context")
   })
 
+  /**
+   * The marker must quote the WORKING SET, never the session's lifetime spend.
+   *
+   * `Session.tokens` accrues forever and reached ~49.9M on a real session, which
+   * the divider rendered as "Context compacted from 49894.2k" — a number larger
+   * than any context window in existence. The working set is `contextTokens`,
+   * the field the domain type separates out precisely so a compaction can make
+   * a number fall.
+   */
   it("reports what the working set was before the reseed", async () => {
     const { events } = await compactThenPrompt()
     const marker = events.find((e) => e._tag === "ContextCompacted")
     expect(marker).toBeDefined()
     expect((marker as { tokensBefore: number }).tokensBefore).toBe(290_000)
+  })
+
+  it("never quotes the session's lifetime token total", async () => {
+    const { events } = await compactThenPrompt()
+    const marker = events.find((e) => e._tag === "ContextCompacted") as { tokensBefore: number }
+    expect(marker.tokensBefore).not.toBe(49_894_200)
+    // Belt and braces: no working set can exceed the model's own window.
+    expect(marker.tokensBefore).toBeLessThan(1_000_000)
+  })
+
+  // A session that has never reported occupancy has nothing honest to quote, and
+  // 0 is how the divider is told to hide the clause entirely.
+  it("reports 0 rather than a lifetime total when the working set is unknown", async () => {
+    const { events } = await compactThenPrompt({ contextTokens: undefined })
+    const marker = events.find((e) => e._tag === "ContextCompacted") as { tokensBefore: number }
+    expect(marker.tokensBefore).toBe(0)
   })
 
   /**

@@ -299,6 +299,59 @@ describe("parseDigest", () => {
     const thin = JSON.stringify({ goal: "Explore the codebase", decisions: [], filesTouched: [], openThreads: [], preferences: [] })
     expect(parseDigest(thin, "m9", at)).not.toBeNull()
   })
+
+  /**
+   * The mid-flow verdict decides whether the swap is HELD, so both failure
+   * directions are expensive: read as always-true and a session never compacts;
+   * read as always-false and it compacts in the middle of a debugging thread.
+   *
+   * It is read leniently and OUTSIDE the schema on purpose — the cheapest tier
+   * is running this, and rejecting a good summary over a formatting slip would
+   * trade the whole digest for a boolean.
+   */
+  describe("the mid-flow verdict", () => {
+    const withVerdict = (extra: Record<string, unknown>) =>
+      JSON.stringify({
+        goal: "Add rate limiting",
+        decisions: [],
+        filesTouched: [],
+        openThreads: [],
+        preferences: [],
+        ...extra
+      })
+
+    it("carries the verdict and its reason", () => {
+      const digest = parseDigest(withVerdict({ midFlow: true, midFlowReason: "chasing a 429" }), "m9", at)
+      expect(digest!.midFlow).toBe(true)
+      expect(digest!.midFlowReason).toBe("chasing a 429")
+    })
+
+    // Every digest built before this field existed, and every reply from a model
+    // that ignored the instruction. Not knowing must mean "don't hold".
+    it("defaults to false when the reply omits it", () => {
+      expect(parseDigest(good, "m9", at)!.midFlow ?? false).toBe(false)
+    })
+
+    it("keeps the digest when the verdict is the wrong type", () => {
+      const digest = parseDigest(withVerdict({ midFlow: "yes" }), "m9", at)
+      expect(digest).not.toBeNull()
+      expect(digest!.midFlow ?? false).toBe(false)
+    })
+
+    // A held session shows the reason in the meter's tooltip, so an empty string
+    // would render as a dangling "held: ".
+    it("drops an empty reason rather than carrying a blank one", () => {
+      const digest = parseDigest(withVerdict({ midFlow: true, midFlowReason: "   " }), "m9", at)
+      expect(digest!.midFlow).toBe(true)
+      expect(digest!.midFlowReason).toBeUndefined()
+    })
+
+    it("ignores a reason when the verdict says the session is at a boundary", () => {
+      const digest = parseDigest(withVerdict({ midFlow: false, midFlowReason: "nothing in flight" }), "m9", at)
+      expect(digest!.midFlow).toBe(false)
+      expect(digest!.midFlowReason).toBeUndefined()
+    })
+  })
 })
 
 describe("tailAfter", () => {

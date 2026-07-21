@@ -186,6 +186,8 @@ Extract, faithfully and specifically:
 - filesTouched: repo-relative paths that were created or modified.
 - openThreads: work explicitly left unfinished, known bugs, or agreed next steps.
 - preferences: standing instructions from the user that must keep applying (style, tools, constraints, tone).
+- midFlow: true if the session is in the MIDDLE of something whose working state a summary would destroy — a half-finished edit sequence, a live debugging thread chasing a specific failure, a plan being executed step by step, a question the user has not answered yet. False if the last exchange reached a natural boundary: work landed, a question answered, a topic closed.
+- midFlowReason: one short line naming what is in flight. Empty string when midFlow is false.
 
 Rules:
 - Be specific. "Refactored the auth code" is useless; "moved token handling from MemoryStore into TokenStore in src/auth/token-store.ts" is not.
@@ -200,7 +202,9 @@ Reply with ONLY a fenced json code block, no prose before or after:
   "decisions": ["…"],
   "filesTouched": ["…"],
   "openThreads": ["…"],
-  "preferences": ["…"]
+  "preferences": ["…"],
+  "midFlow": false,
+  "midFlowReason": ""
 }
 \`\`\`
 
@@ -218,6 +222,22 @@ const DigestReply = Schema.Struct({
   openThreads: Schema.Array(Schema.String),
   preferences: Schema.Array(Schema.String)
 })
+
+/**
+ * The mid-flow verdict, read LENIENTLY and deliberately outside `DigestReply`.
+ *
+ * Putting it in the schema would make a small model's stray `"midFlow": "yes"`
+ * reject the entire digest — trading a good summary for a formatting slip, on
+ * the cheapest tier, where formatting slips are the norm. A verdict we cannot
+ * read means "we don't know", and not knowing must never hold a session open:
+ * it falls back to false, i.e. today's behaviour.
+ */
+const readMidFlow = (parsed: unknown): { midFlow: boolean; midFlowReason?: string } => {
+  const record = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {}
+  const midFlow = record.midFlow === true
+  const reason = typeof record.midFlowReason === "string" ? record.midFlowReason.trim() : ""
+  return midFlow && reason.length > 0 ? { midFlow, midFlowReason: reason } : { midFlow }
+}
 
 /**
  * Pull the JSON object out of a model reply.
@@ -260,7 +280,7 @@ export const parseDigest = (
     // empty (a short session has made no decisions yet), but a summary that
     // cannot say what the session is FOR has failed at the only job it has.
     if (reply.goal.trim().length === 0) return null
-    return { ...reply, throughMessageId, builtAt }
+    return { ...reply, ...readMidFlow(parsed), throughMessageId, builtAt }
   } catch {
     return null
   }

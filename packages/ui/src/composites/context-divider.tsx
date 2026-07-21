@@ -6,6 +6,20 @@ import { cn } from "../lib/cn.js"
 const fmtTokens = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n)
 
+/**
+ * The largest working set worth quoting. No shipping model's context window is
+ * anywhere near this, so anything above it is not a measurement.
+ *
+ * It exists because markers already written to transcripts carry a number taken
+ * from the session's LIFETIME token total — one real session rendered "Context
+ * compacted from 49894.2k". The runner no longer produces those, but no
+ * migration rewrites history, so the guard lives here where it can silence them.
+ */
+const PLAUSIBLE_MAX_TOKENS = 2_000_000
+
+const quotable = (n: number): boolean =>
+  Number.isFinite(n) && n > 0 && n <= PLAUSIBLE_MAX_TOKENS
+
 const Section = ({
   title,
   items
@@ -65,7 +79,9 @@ export function ContextDivider({
         <span className="flex items-center gap-1.5 rounded-full border border-border bg-bg px-2 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors group-hover:text-fg">
           <Layers className="size-3 text-dim" />
           Context compacted
-          {tokensBefore > 0 && <span className="text-dim">from {fmtTokens(tokensBefore)}</span>}
+          {quotable(tokensBefore) && (
+            <span className="text-dim">from {fmtTokens(tokensBefore)}</span>
+          )}
           <ChevronRight
             className={cn("size-3 text-dim transition-transform", open && "rotate-90")}
           />

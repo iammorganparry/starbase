@@ -1,16 +1,26 @@
-import type { CliInfo, ContextDigest, ContextSnapshot, Message, StreamEvent } from "@starbase/core"
+import type {
+  BackgroundTask,
+  CliInfo,
+  ContextDigest,
+  ContextSnapshot,
+  Message,
+  StreamEvent
+} from "@starbase/core"
 import {
   DEFAULT_CONTEXT_CONFIG,
   contextPhase,
   contextWindowFor,
   defaultModel,
   digestModelFor,
+  reconcileWindow,
+  shouldHoldSwap,
   triggerAt
 } from "@starbase/core"
 import { CommandExecutor, FileSystem, Path } from "@effect/platform"
 import { Effect, Fiber, Ref } from "effect"
 import { AppPaths } from "./app-paths.js"
 import type { AgentContext, SessionSpec } from "./adapter.js"
+import { BackgroundTaskStore } from "./background-tasks.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
 import { ConfigService } from "./config.js"
 import { digestPrompt, lastMessageId, parseDigest, renderTranscript } from "./context-digest.js"
@@ -55,27 +65,47 @@ interface SessionContext {
   /** Latest OCCUPANCY reading, from a `Usage` event. Never a cumulative total. */
   readonly tokens: number
   /**
+   * The largest occupancy this session has ever reported.
+   *
+   * Kept because it DISPROVES a wrong window: a harness that held 598k cannot
+   * have a 200k ceiling, whatever the model-id table guessed. Survives a
+   * compaction (unlike `tokens`) — the ceiling did not change just because the
+   * conversation was reseeded.
+   */
+  readonly peakTokens: number
+  /**
    * The ceiling the harness itself reported, when it reports one.
    *
    * Measured beats inferred: this retires the model-id prefix table for any
    * harness that answers, which is the difference between compacting a 1M-window
-   * model at 300k as designed and compacting it at 170k because the table only
+   * model at the budget as designed and compacting it at 170k because the table only
    * knew the family name.
    */
   readonly window: number | null
   readonly failures: number
   readonly compactions: number
   readonly lastCompactedAt: string | null
+  /**
+   * How many turns in a row this session has declined a ready swap because it
+   * was mid-flow. Reset on a real swap, and capped by `MAX_SWAP_DEFERRALS` so a
+   * session that always looks busy still compacts eventually.
+   */
+  readonly deferrals: number
+  /** Why the last swap was held, for the meter's tooltip. Null when not holding. */
+  readonly heldReason: string | null
 }
 
 const EMPTY: SessionContext = {
   status: "idle",
   digest: null,
   tokens: 0,
+  peakTokens: 0,
   window: null,
   failures: 0,
   compactions: 0,
-  lastCompactedAt: null
+  lastCompactedAt: null,
+  deferrals: 0,
+  heldReason: null
 }
 
 export type DigestEnv =
@@ -157,7 +187,11 @@ export class ContextManager extends Effect.Service<ContextManager>()(
         Effect.gen(function* () {
           const session = yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
           if (session === null) return null
-          const reported = (yield* stateOf(sessionId)).window
+          const state = yield* stateOf(sessionId)
+          const reported = state.window
+          // What this session has demonstrably held. A guess below it is not a
+          // conservative guess, it is a disproven one.
+          const peak = Math.max(state.peakTokens, session.contextTokens ?? 0)
 
           const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
           const ctx = config?.context ?? DEFAULT_CONTEXT_CONFIG
@@ -180,10 +214,18 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             // harness measured for this very run, then the guessed table. The
             // override stays on top because it is also the escape hatch for a
             // harness that reports a ceiling we have reason to distrust.
-            window:
+            //
+            // Whatever that resolves to is then reconciled against the largest
+            // occupancy this session has actually reported. A model-id table is a
+            // guess, and an observation of 598k in a "200k" window disproves it —
+            // left uncorrected, `triggerAt` sits at 170k and the session compacts
+            // every single turn while the harness is perfectly comfortable.
+            window: reconcileWindow(
               provider?.contextWindow !== undefined && provider.contextWindow !== null
                 ? contextWindowFor(session.cli, session.model ?? null, provider.contextWindow)
                 : reported ?? contextWindowFor(session.cli, session.model ?? null),
+              peak
+            ),
             binPath: cli?.binPath ?? null,
             digestModel: digestModelFor(session.cli, provider?.backgroundModel)
           }
@@ -348,7 +390,14 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           // A reading that only carries a ceiling still teaches us the ceiling.
           if (measured !== null) yield* setState(sessionId, (s) => ({ ...s, window: measured }))
           if (!Number.isFinite(tokens) || tokens <= 0) return
-          yield* setState(sessionId, (s) => ({ ...s, tokens }))
+          yield* setState(sessionId, (s) => ({
+            ...s,
+            tokens,
+            // The high-water mark only ever rises: it is evidence about the
+            // CEILING, and a compaction shrinking the working set says nothing
+            // about how large that ceiling is.
+            peakTokens: Math.max(s.peakTokens, tokens)
+          }))
           // Persist so the reading survives a restart — otherwise a session
           // reopened at 290k reads as 0 and runs to the ceiling.
           yield* SessionStore.setContextTokens(sessionId, tokens).pipe(Effect.ignore)
@@ -423,26 +472,125 @@ export class ContextManager extends Effect.Service<ContextManager>()(
         })
 
       /**
+       * The structural half of the mid-flow question, which no summary can see.
+       *
+       * These are facts about the session's CURRENT state rather than its
+       * narrative: a plan the agent is still executing, a question the user never
+       * answered, a gate waiting on approval, a background task still running.
+       * Each one means the next turn is a continuation, and a continuation that
+       * starts from a summary has lost the thing it was continuing.
+       *
+       * Best-effort in every branch — a transcript read that fails must not take
+       * the turn down with it, it just means we don't hold.
+       */
+      const midFlowLocally = (
+        sessionId: string
+      ): Effect.Effect<
+        boolean,
+        never,
+        TranscriptStore | BackgroundTaskStore | FileSystem.FileSystem | Path.Path | AppPaths
+      > =>
+        Effect.gen(function* () {
+          const tasks = yield* BackgroundTaskStore.list(sessionId).pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<BackgroundTask>)
+          )
+          if (tasks.some((t) => t.status === "running" || t.status === "stopping")) return true
+
+          const messages = yield* TranscriptStore.list(sessionId).pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
+          )
+          const last = messages.at(-1)
+          if (last === undefined) return false
+          return last.parts.some(
+            (p) =>
+              // A plan awaiting the operator, or an approved one still working
+              // through its steps — both mean the next turn is a continuation.
+              (p._tag === "Plan" &&
+                (p.plan.status === "proposed" ||
+                  p.plan.status === "revising" ||
+                  (p.plan.status === "approved" &&
+                    p.plan.steps.some((s) => s.status !== "done")))) ||
+              (p._tag === "Question" && p.answers === null) ||
+              (p._tag === "Gate" && p.gate.status === "pending")
+          )
+        })
+
+      /**
        * Consume a ready digest, if there is one. Called at the top of a turn.
        *
        * Returns the digest exactly once — the state flips to idle in the same
        * update — so a swap can never be applied twice, which would reseed a fresh
        * conversation with a summary of the conversation it just replaced.
+       *
+       * `tokensBefore` is the occupancy the swap happened AT, reported so the
+       * transcript marker can say "compacted from 290k". It is read here, from
+       * this service's own `Usage`-fed reading, precisely because the caller's
+       * obvious alternative — `Session.tokens` — is the session's LIFETIME total
+       * and rendered as "compacted from 49894.2k" on a long-running session.
        */
-      const applyIfReady = (sessionId: string): Effect.Effect<ContextDigest | null> =>
+      const applyIfReady = (
+        sessionId: string
+      ): Effect.Effect<
+        { digest: ContextDigest; tokensBefore: number } | null,
+        never,
+        | SessionStore
+        | TranscriptStore
+        | BackgroundTaskStore
+        | FileSystem.FileSystem
+        | Path.Path
+        | AppPaths
+      > =>
         Effect.gen(function* () {
           const state = yield* stateOf(sessionId)
           if (state.status !== "ready" || state.digest === null) return null
           const at = yield* Effect.sync(() => new Date().toISOString())
+          const session = yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+          const tokensBefore = state.tokens > 0 ? state.tokens : session?.contextTokens ?? 0
+
+          // Would swapping RIGHT NOW cost more than it saves? The digest is not
+          // discarded when it would — it stays ready and is re-offered next turn,
+          // so a hold costs one turn of extra context and nothing else.
+          const hold = shouldHoldSwap({
+            // Absent means the digest predates the verdict (or the model omitted
+            // it): "we don't know" must never hold a session open.
+            midFlow: state.digest.midFlow ?? false,
+            localHold: yield* midFlowLocally(sessionId),
+            tokens: tokensBefore,
+            window: state.window ?? contextWindowFor(session?.cli ?? "claude", session?.model ?? null),
+            deferrals: state.deferrals
+          })
+          if (hold) {
+            const reason =
+              state.digest.midFlowReason ?? "the session is in the middle of something"
+            yield* setState(sessionId, (s) => ({
+              ...s,
+              deferrals: s.deferrals + 1,
+              heldReason: reason
+            }))
+            return null
+          }
+
           yield* setState(sessionId, (s) => ({
             ...s,
             status: "idle",
             digest: null,
+            // The reseed starts a NEW harness conversation, so the reading that
+            // described the old one is not merely stale — it is about a
+            // conversation that no longer exists. Leaving it in place made the
+            // meter read "compacting soon" over a 40k session and made the very
+            // next `settle` fork a second digest against the pre-swap number.
+            tokens: 0,
             failures: 0,
             compactions: s.compactions + 1,
-            lastCompactedAt: at
+            lastCompactedAt: at,
+            deferrals: 0,
+            heldReason: null
           }))
-          return state.digest
+          // The persisted copy is what `settle` and `snapshot` fall back to when
+          // no live reading has arrived yet, so clearing only the in-memory one
+          // would let the stale number come straight back on the next turn.
+          yield* SessionStore.setContextTokens(sessionId, 0).pipe(Effect.ignore)
+          return { digest: state.digest, tokensBefore }
         })
 
       /** Cancel a session's in-flight digest and forget it (stop / delete). */
@@ -489,7 +637,11 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             compactions: state.compactions,
             // Mirrors the guard in `settle` exactly — this is the same ceiling
             // that stops the fork, reported so the meter can say so.
-            stalled: state.failures >= MAX_FAILURES
+            stalled: state.failures >= MAX_FAILURES,
+            // A held swap still has its digest, so `digestReady` stays true; this
+            // is what stops the meter promising "compacts next turn" every turn.
+            held: state.digest !== null && state.deferrals > 0,
+            heldReason: state.deferrals > 0 ? state.heldReason : null
           }
         })
 

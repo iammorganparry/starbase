@@ -72,6 +72,23 @@ describe("ContextDivider", () => {
     expect(screen.getByText("Context compacted")).toBeDefined()
   })
 
+  /**
+   * Markers written before the runner was fixed carry the session's LIFETIME
+   * token total, not its working set — one real session read "from 49894.2k",
+   * a number larger than any context window in existence. Nothing migrates old
+   * transcripts, so the divider has to refuse to quote a number it cannot mean.
+   */
+  it("refuses to quote an impossible reading from an old marker", () => {
+    render(<ContextDivider digest={digest} tokensBefore={49_894_200} />)
+    expect(screen.queryByText(/^from /)).toBeNull()
+    expect(screen.getByText("Context compacted")).toBeDefined()
+  })
+
+  it("still quotes a plausible reading", () => {
+    render(<ContextDivider digest={digest} tokensBefore={290_000} />)
+    expect(screen.getByText("from 290k")).toBeDefined()
+  })
+
   it("toggles shut again", () => {
     render(<ContextDivider digest={digest} tokensBefore={290_000} />)
     const toggle = screen.getByRole("button")

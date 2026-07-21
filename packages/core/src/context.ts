@@ -14,19 +14,28 @@ import type { CliKind } from "./domain.js"
  * ── The quality band ────────────────────────────────────────────────────────
  *
  * Attention degrades long before a model hits its hard ceiling. The usable band
- * is roughly 256k–400k tokens; past that, recall and instruction-following fall
- * off regardless of how much window is nominally left.
+ * is roughly 256k–500k tokens on the current generation; past that, recall and
+ * instruction-following fall off regardless of how much window is nominally left.
  *
  * So compaction fires on an ABSOLUTE budget, not a percentage of the window. On
- * a 1M-window model we compact at 300k and simply decline to use the remaining
- * 700k, because that 700k is where the rot lives. A percentage rule would do the
+ * a 1M-window model we compact at the budget and simply decline to use the rest,
+ * because that remainder is where the rot lives. A percentage rule would do the
  * opposite — it would let a 1M model run to 650k before acting, which is exactly
  * the failure this exists to prevent.
  */
-export const DEFAULT_BUDGET_TOKENS = 300_000
+export const DEFAULT_BUDGET_TOKENS = 400_000
 
-/** The band the budget may be tuned within, enforced by schema and by clamp. */
-export const BUDGET_RANGE = { min: 256_000, max: 400_000 } as const
+/**
+ * The band the budget may be tuned within, enforced by schema and by clamp.
+ *
+ * Raised from 400k after watching real sessions: on a 1M-window Opus the app was
+ * compacting a session that was working perfectly well at 213k, and sessions
+ * routinely ran to 450–600k of occupancy with no sign of the rot this band was
+ * drawn to avoid. The quality argument above still holds — it is why the ceiling
+ * is 500k and not "the window" — but the floor of the degradation band sits
+ * higher on the current generation of models than it did when this was written.
+ */
+export const BUDGET_RANGE = { min: 256_000, max: 500_000 } as const
 
 /**
  * The window is a BACKSTOP, not the trigger. A model whose ceiling sits below
@@ -56,6 +65,16 @@ const WINDOW_PREFIXES: Partial<Record<CliKind, ReadonlyArray<readonly [string, n
     // 85% of 1M is 850k, deep into the rot. The budget wins here, by design.
     ["claude-fable", 1_000_000],
     ["fable", 1_000_000],
+    // Opus from 4.5 onward carries a 1M window, and reading it as 200k is not a
+    // harmless under-estimate: it puts `triggerAt` at 170k, so a session that the
+    // harness is perfectly happy to run at 500k sat permanently on "compacting
+    // soon" and compacted every turn. Longest-prefix-wins keeps the bare `opus`
+    // entry below as the conservative floor for older ids (4.0, 4.1).
+    ["opus-4-5", 1_000_000],
+    ["opus-4.5", 1_000_000],
+    ["opus-4-8", 1_000_000],
+    ["opus-4.8", 1_000_000],
+    ["opus-5", 1_000_000],
     ["opus", 200_000],
     ["sonnet", 200_000],
     ["haiku", 200_000]
@@ -109,6 +128,30 @@ export const contextWindowFor = (
   return match?.[1] ?? DEFAULT_WINDOW[cli]
 }
 
+/**
+ * Correct an inferred window against what the session has actually been observed
+ * holding.
+ *
+ * The table is a guess keyed on an unstable model id, and a guess can be
+ * DISPROVEN: a session reporting 598k of occupancy is proof its window is not
+ * 200k, whatever the prefix table believes. Ignoring that produced the exact
+ * failure this exists to prevent, in reverse — `triggerAt` sat at 170k, every
+ * turn read as "over budget", and the session compacted continuously while the
+ * harness was happy.
+ *
+ * Only ever raises, never lowers: a low reading proves nothing about the
+ * ceiling. The measured peak is treated as a FLOOR (the window is at least this
+ * big), which is the strongest honest claim available without a probe.
+ */
+export const reconcileWindow = (
+  inferred: number | null,
+  observedPeak: number
+): number | null => {
+  if (!Number.isFinite(observedPeak) || observedPeak <= 0) return inferred
+  if (inferred === null || inferred <= 0) return null
+  return Math.max(inferred, observedPeak)
+}
+
 /** Clamp a configured budget into the usable band. */
 export const clampBudget = (tokens: number): number =>
   Math.min(BUDGET_RANGE.max, Math.max(BUDGET_RANGE.min, Math.floor(tokens)))
@@ -117,8 +160,8 @@ export const clampBudget = (tokens: number): number =>
  * The working-set size at which compaction should fire: the quality budget, or
  * the window's safety margin, whichever comes first.
  *
- * A 1M model triggers at 300k because it *should*; a 200k model triggers at 170k
- * because it *must*.
+ * A 1M model triggers at the budget because it *should*; a 200k model triggers at
+ * 170k because it *must*.
  */
 export const triggerAt = (window: number, budget: number): number =>
   Math.min(clampBudget(budget), Math.floor(window * SAFETY_RATIO))
@@ -159,6 +202,75 @@ export const contextPhase = (input: ContextPhaseInput): ContextPhase => {
   if (!Number.isFinite(input.tokens) || input.tokens < 0) return "unknown"
   if (input.tokens < triggerAt(input.window, input.budget)) return "idle"
   return input.digestReady ? "swap" : "prepare"
+}
+
+/**
+ * ── The swap gate ──────────────────────────────────────────────────────────
+ *
+ * `contextPhase` answers "is there enough context to be worth compacting". This
+ * answers the question after it: "would compacting RIGHT NOW cost more than it
+ * saves". Crossing a budget is a threshold; being mid-task is not, and a swap
+ * dropped into the middle of a debugging thread throws away exactly the working
+ * state the next turn needs.
+ */
+
+/** How many turns in a row a session may defer its swap before it must take it. */
+export const MAX_SWAP_DEFERRALS = 3
+
+/**
+ * The occupancy fraction past which deferral stops being offered.
+ *
+ * Deliberately HIGHER than `SAFETY_RATIO`, and that gap is the whole hold band.
+ * On a 200k model `triggerAt` is already 0.85 × window, so a hold ceiling at
+ * 0.85 would leave no room at all: every digest would be built at the exact
+ * point holding became forbidden, and the gate would be dead code on the most
+ * common harness in the app.
+ *
+ * 0.95 spends part of the reserve `SAFETY_RATIO` sets aside — which is what that
+ * reserve is FOR, since it is sized for one more full turn and a hold is exactly
+ * one more turn. Past it there is no longer room to be polite, and the deferral
+ * cap bounds how many turns can be spent in the band regardless.
+ */
+const HOLD_CEILING_RATIO = 0.95
+
+export interface SwapGateInput {
+  /** The digest's own read of whether the session is mid-task. */
+  readonly midFlow: boolean
+  /**
+   * Structural evidence a summary cannot see: a plan still executing, a question
+   * the user never answered, a gate awaiting approval, a background task running.
+   */
+  readonly localHold: boolean
+  /** The latest working-set reading, in tokens. */
+  readonly tokens: number
+  /** The model's hard ceiling, or null when unknown. */
+  readonly window: number | null
+  /** How many times in a row this session has already deferred. */
+  readonly deferrals: number
+}
+
+/**
+ * Should the swap be HELD for another turn? Pure and total.
+ *
+ * Holding never discards the digest — it stays ready and is re-offered on the
+ * next turn — so the worst case of a wrong "hold" is one turn of extra context,
+ * bounded by both the ceiling and the deferral cap. The worst case of a wrong
+ * "swap" is a session that forgets what it was doing halfway through doing it.
+ */
+export const shouldHoldSwap = (input: SwapGateInput): boolean => {
+  // Physics beats preference: past the safety line, compact regardless.
+  if (
+    input.window !== null &&
+    Number.isFinite(input.window) &&
+    input.window > 0 &&
+    Number.isFinite(input.tokens) &&
+    input.tokens >= input.window * HOLD_CEILING_RATIO
+  ) {
+    return false
+  }
+  // A session that always looks busy would otherwise never compact at all.
+  if (!Number.isFinite(input.deferrals) || input.deferrals >= MAX_SWAP_DEFERRALS) return false
+  return input.midFlow || input.localHold
 }
 
 /**
@@ -246,6 +358,18 @@ export const ContextSnapshot = Schema.Struct({
    *
    * Cleared by a manual "Compact now", which resets the failure count.
    */
-  stalled: Schema.Boolean
+  stalled: Schema.Boolean,
+  /**
+   * A digest is ready but is being HELD because the session is mid-task.
+   *
+   * Visible for the same reason `preparing` is: a deferral nobody can see reads
+   * as the feature being broken. Without it the meter would promise "compacts
+   * next turn" for several turns running and never deliver.
+   *
+   * Optional so a snapshot encoded before this existed still decodes.
+   */
+  held: Schema.optional(Schema.Boolean),
+  /** One line naming what is in flight, for the meter's tooltip. */
+  heldReason: Schema.optional(Schema.NullOr(Schema.String))
 })
 export type ContextSnapshot = Schema.Schema.Type<typeof ContextSnapshot>
