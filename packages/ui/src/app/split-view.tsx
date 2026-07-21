@@ -2,7 +2,7 @@ import { type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
 import { AnimatePresence, motion } from "motion/react"
 import { Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
-import { paneVariants, SPRING } from "../lib/motion.js"
+import { INSTANT, paneVariants, SPRING } from "../lib/motion.js"
 import { MAX_PANES, type Pane, type SplitGroup, SESSION_DND_MIME } from "./split-layout.js"
 
 /**
@@ -195,7 +195,14 @@ export function SplitView({
               initial="hidden"
               animate="visible"
               exit="exit"
-              transition={SPRING}
+              // The other half of suspending `layout` below. `visible` is a
+              // function of the ratio, so a divider drag re-resolves it on every
+              // pointer-move — with a spring, each of those starts a new ~260ms
+              // animation toward the new width, and the pane trails the cursor
+              // exactly as if `layout` had never been suspended. Mid-drag the
+              // pointer IS the animation, so the width is written on the frame
+              // it changes.
+              transition={draggingDivider === null ? SPRING : INSTANT}
               // `order` interleaves the panes with the dividers, which are
               // rendered as a separate run below (see the note there).
               style={{ flexGrow: pane.ratio, flexBasis: 0, order: index * 2 }}

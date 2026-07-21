@@ -547,6 +547,37 @@ test("both panes of a two-way split fill their height and share the width", asyn
   expect(bottomOf(second) - bottomOf(composer)).toBeLessThanOrEqual(30)
 })
 
+test("the divider tracks the pointer during the drag, not after it", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  await dragTo(window, "session-row-s_beta", "split-pane-0", "after")
+  await settle(window)
+  const before = await boxOf(window, '[data-testid="split-pane-0"]')
+
+  // Every other assertion in this file waits for the animation to finish, which
+  // is exactly why none of them could see this: a pane that springs to the right
+  // width 260ms late still ENDS at the right width. So this one measures with
+  // the button still down, two frames after the move — long enough for React to
+  // commit, far too soon for a spring to have arrived.
+  const divider = await boxOf(window, '[data-testid="split-divider-0"]')
+  const y = divider.y + divider.height / 2
+  const DRAG_PX = 200
+  await window.mouse.move(divider.x + divider.width / 2, y)
+  await window.mouse.down()
+  await window.mouse.move(divider.x + divider.width / 2 + DRAG_PX, y)
+  await window.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+  )
+  const midDrag = await boxOf(window, '[data-testid="split-pane-0"]')
+  await window.mouse.up()
+
+  // Within a few pixels of the pointer, NOT a fraction of the way there. With
+  // the spring still on `flexGrow` this came up 173px short of a 200px drag —
+  // the pane had travelled about an eighth of the distance the cursor had.
+  expect(Math.abs(midDrag.width - (before.width + DRAG_PX))).toBeLessThanOrEqual(8)
+})
+
 test("dragging the divider trades width between the two panes", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()
