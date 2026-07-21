@@ -273,6 +273,9 @@ export const rpc = {
   /** Turn plan mode's unattended (read-only) command execution on or off. */
   configSetPlanAutoRun: (planAutoRun: boolean): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setPlanAutoRun({ planAutoRun })),
+  /** Persist ADHD mode; resolves with the whole updated config. */
+  configSetAdhdMode: (adhdMode: boolean): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setAdhdMode({ adhdMode })),
   /**
    * Ask main to raise an OS notification. Main decides whether it actually
    * surfaces — it owns window focus and the stored prefs.

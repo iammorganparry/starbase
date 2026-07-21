@@ -506,6 +506,17 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Persist ADHD mode — whether every agent turn is asked to shape its reply
+   * for an ADHD reader. Returns the whole config so the renderer can patch its
+   * cache without a refetch.
+   */
+  Rpc.make("Config.setAdhdMode", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: Schema.Struct({ adhdMode: Schema.Boolean })
+  }),
+
+  /**
    * Raise an OS notification for a session.
    *
    * Main owns the Electron `Notification` API, but only the RENDERER knows

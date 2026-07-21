@@ -13,6 +13,7 @@ import type {
   StreamEvent
 } from "@starbase/core"
 import {
+  ADHD_MODE_DEFAULT,
   applyStreamEvent,
   assistantMessage,
   CliExecError,
@@ -30,6 +31,7 @@ import {
 import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Cause, Deferred, Effect, Fiber, Mailbox, Option, Ref, Stream } from "effect"
+import { adhdNote } from "./adhd-prompt.js"
 import { AppPaths } from "./app-paths.js"
 import { ConfigService } from "./config.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
@@ -525,6 +527,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Read once per turn: plan mode's commands run unattended unless the
           // operator switched that off in Settings.
           const planAutoRun = workspaceConfig?.planAutoRun ?? PLAN_AUTO_RUN_DEFAULT
+          // Read per turn, not per session: flipping ADHD mode in Settings takes
+          // effect on the very next message of an already-running session.
+          const adhdMode = workspaceConfig?.adhdMode ?? ADHD_MODE_DEFAULT
           const cli = sessionCli === "starbase" ? orchestrator.cli : sessionCli
           // Cache the user's configured default exec mode so approving a plan can
           // restore it.
@@ -588,6 +593,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
 
           const planNote = savedPlans.length > 0 ? `${planPointerNote(worktreePath, savedPlans)}\n\n` : ""
           const primer = digest === null ? "" : `${renderPrimer(digest, tail)}\n\n`
+          // ADHD mode rides in the same per-turn prefix as the primer and the plan
+          // pointer. There is no system-prompt hook that every harness shares, and
+          // a setting the operator can flip mid-session has to apply to the NEXT
+          // turn — which a session-start injection could not do.
+          const adhd = adhdMode ? `${adhdNote(cli)}\n\n` : ""
 
           const spec: SessionSpec = {
             cli,
@@ -600,8 +610,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // with nothing to say — the empty "CLAUDE" block. When the operator
             // opens with a command, the context rides along AFTER it instead.
             prompt: isSlashCommand(text)
-              ? `${text}\n\n${primer}${planNote}`.trimEnd()
-              : `${primer}${planNote}${text}`,
+              ? `${text}\n\n${primer}${planNote}${adhd}`.trimEnd()
+              : `${primer}${planNote}${adhd}${text}`,
             images,
             binPath,
             mode,

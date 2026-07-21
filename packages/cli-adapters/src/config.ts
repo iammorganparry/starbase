@@ -63,6 +63,11 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...(existing?.providers ? { providers: existing.providers } : {}),
             ...(existing?.orchestrator ? { orchestrator: existing.orchestrator } : {}),
+            ...(existing?.notifications ? { notifications: existing.notifications } : {}),
+            // Booleans are checked against `undefined`, not truthiness — a saved
+            // `false` is a real setting and must survive an unrelated write.
+            ...(existing?.planAutoRun !== undefined ? { planAutoRun: existing.planAutoRun } : {}),
+            ...(existing?.adhdMode !== undefined ? { adhdMode: existing.adhdMode } : {}),
             // MANDATORY: omit a section here and every unrelated save silently
             // drops it, because `patch` is a whole-object read-modify-write.
             ...patch
@@ -80,6 +85,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
 
       /** Whether plan mode runs its (read-only) commands without asking. */
       const setPlanAutoRun = (planAutoRun: boolean) => patch({ planAutoRun })
+
+      /** Whether every agent turn is asked to shape its reply for an ADHD reader. */
+      const setAdhdMode = (adhdMode: boolean) => patch({ adhdMode })
 
       const setStarredRepos = (starredRepos: ReadonlyArray<string>) =>
         patch({ starredRepos })
@@ -129,6 +137,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setGit,
         setNotifications,
         setPlanAutoRun,
+        setAdhdMode,
         setStarredRepos,
         setCollapsedRepos,
         setLastRepoPath,

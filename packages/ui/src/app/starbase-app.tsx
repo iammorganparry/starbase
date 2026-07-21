@@ -107,6 +107,9 @@ export interface StarbaseAppProps {
   /** Whether plan mode runs its read-only commands unattended; absent means on. */
   planAutoRun?: boolean | null
   onSavePlanAutoRun?: (planAutoRun: boolean) => Promise<void> | void
+  /** Whether every agent turn is shaped for an ADHD reader; absent means off. */
+  adhdMode?: boolean | null
+  onSaveAdhdMode?: (adhdMode: boolean) => Promise<void> | void
   /** Re-run `gh auth status` (the settings "Recheck" button); may be async. */
   onRecheckGh?: () => Promise<void> | void
   /** Persisted per-CLI provider defaults (Settings · Providers view). */
@@ -248,6 +251,8 @@ export function StarbaseApp({
   onSaveNotificationsConfig,
   planAutoRun,
   onSavePlanAutoRun,
+  adhdMode,
+  onSaveAdhdMode,
   onRecheckGh,
   providersConfig,
   onSaveProvider,
@@ -593,6 +598,8 @@ export function StarbaseApp({
               onSaveNotifications={onSaveNotificationsConfig}
               planAutoRun={planAutoRun}
               onSavePlanAutoRun={onSavePlanAutoRun}
+              adhdMode={adhdMode}
+              onSaveAdhdMode={onSaveAdhdMode}
               onClose={() => setSettingsOpen(false)}
             />
           ) : undefined

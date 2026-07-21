@@ -119,6 +119,9 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const notificationsConfig = configQuery.data?.notifications ?? null
   // Absent means on — plan mode's commands are read-only.
   const planAutoRun = configQuery.data?.planAutoRun ?? true
+  // Absent means off — ADHD mode rewrites the voice of every session, so it is
+  // opt-in rather than a default the operator has to discover and undo.
+  const adhdMode = configQuery.data?.adhdMode ?? false
   const providersConfig = configQuery.data?.providers ?? null
   const contextConfig = configQuery.data?.context ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
@@ -144,6 +147,10 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     })
   const savePlanAutoRun = (value: boolean) =>
     rpc.configSetPlanAutoRun(value).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  const saveAdhdMode = (value: boolean) =>
+    rpc.configSetAdhdMode(value).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
   const saveProvider = (cli: CliKind, config: ProviderConfig) =>
@@ -533,6 +540,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveNotificationsConfig={saveNotificationsConfig}
       planAutoRun={planAutoRun}
       onSavePlanAutoRun={savePlanAutoRun}
+      adhdMode={adhdMode}
+      onSaveAdhdMode={saveAdhdMode}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
       contextConfig={contextConfig}
@@ -570,6 +579,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
           onRestore={restoreSession}
           onDelete={deleteSession}
           onInitialPromptConsumed={consumeInitialPrompt}
+          paneFocused={ctx.paneFocused ?? true}
         />
       )}
       renderPullRequest={(session, ctx) => (

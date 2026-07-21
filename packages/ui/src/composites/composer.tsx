@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { Attachment, CliKind, PermissionMode, ProviderModels, Skill } from "@starbase/core"
 import { ImagePlus, Plus } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -89,6 +89,8 @@ export function Composer({
   paused = false,
   busy = false,
   placeholder,
+  autoFocus = false,
+  focusKey,
   initialValue,
   value: controlledValue,
   onValueChange,
@@ -154,6 +156,17 @@ export function Composer({
   busy?: boolean
   /** Overrides the default "Message <harness>…" prompt. */
   placeholder?: string
+  /**
+   * Take the caret when this composer becomes the one on screen. The host passes
+   * the focused pane's flag, so a split never has two composers fighting for it.
+   */
+  autoFocus?: boolean
+  /**
+   * What "became the one on screen" means — the session id. Refocusing is keyed
+   * on this, so replacing a pane's session re-focuses even though the component
+   * never unmounted.
+   */
+  focusKey?: string
   className?: string
 }) {
   /**
@@ -255,6 +268,20 @@ export function Composer({
   }
 
   const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id))
+
+  // Opening a conversation puts the caret in its composer — the point of the app
+  // is to type at an agent, so arriving anywhere else is a wasted keystroke.
+  //
+  // Deferred a frame because the pane mounts alongside the virtualized transcript,
+  // which scrolls to the bottom on its first layout pass; focusing in the same
+  // pass loses the caret to that scroll. Keyed on the session so replacing a
+  // pane's session refocuses without an unmount, and gated on `autoFocus` so in a
+  // split only the pane the operator is looking at takes it.
+  useEffect(() => {
+    if (!autoFocus) return
+    const id = requestAnimationFrame(() => ref.current?.focus())
+    return () => cancelAnimationFrame(id)
+  }, [autoFocus, focusKey])
 
   // The textarea auto-grows in LAYOUT (`field-sizing: content`), not from a
   // measurement taken here — see the note on the element itself.

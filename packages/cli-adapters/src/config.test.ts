@@ -210,4 +210,36 @@ describe("ConfigService", () => {
       expect(exit.value?.orchestrator).toStrictEqual({ cli: "codex", model: "gpt-5" })
     }
   })
+
+  it("persists ADHD mode and reads it back", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setAdhdMode(true)
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") expect(exit.value?.adhdMode).toBe(true)
+  })
+
+  /**
+   * The booleans are the easiest sections to lose: a truthiness check in the
+   * preservation spread drops a saved `false` on every unrelated write, which
+   * reads as "the setting keeps turning itself back on".
+   */
+  it("keeps ADHD mode and planAutoRun (including false) across an unrelated save", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setAdhdMode(true)
+        yield* ConfigService.setPlanAutoRun(false)
+        yield* ConfigService.setLastRepoPath("/repos/widget")
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.adhdMode).toBe(true)
+      expect(exit.value?.planAutoRun).toBe(false)
+    }
+  })
 })

@@ -468,6 +468,9 @@ export interface SettingsViewProps {
   /** Whether plan mode runs commands unattended; absent means on. */
   planAutoRun?: boolean | null
   onSavePlanAutoRun?: (planAutoRun: boolean) => void | Promise<void>
+  /** Whether every agent turn is shaped for an ADHD reader; absent means off. */
+  adhdMode?: boolean | null
+  onSaveAdhdMode?: (adhdMode: boolean) => void | Promise<void>
   /** Close the view and return to the active session. */
   onClose?: () => void
 }
@@ -506,6 +509,8 @@ export function SettingsView({
   onSaveNotifications,
   planAutoRun,
   onSavePlanAutoRun,
+  adhdMode,
+  onSaveAdhdMode,
   onClose
 }: SettingsViewProps) {
   const [section, setSection] = React.useState<SectionKey>("providers")
@@ -564,6 +569,8 @@ export function SettingsView({
           onSaveNotifications={onSaveNotifications}
           planAutoRun={planAutoRun}
           onSavePlanAutoRun={onSavePlanAutoRun}
+          adhdMode={adhdMode}
+          onSaveAdhdMode={onSaveAdhdMode}
         />
       ) : section === "providers" ? (
         <ProvidersSection
@@ -1227,16 +1234,23 @@ function GeneralSection({
   notifications,
   onSaveNotifications,
   planAutoRun,
-  onSavePlanAutoRun
+  onSavePlanAutoRun,
+  adhdMode,
+  onSaveAdhdMode
 }: {
   notifications?: NotificationsConfig | null
   onSaveNotifications?: (config: NotificationsConfig) => void | Promise<void>
   planAutoRun?: boolean | null
   onSavePlanAutoRun?: (planAutoRun: boolean) => void | Promise<void>
+  adhdMode?: boolean | null
+  onSaveAdhdMode?: (adhdMode: boolean) => void | Promise<void>
 }) {
   // Absent means ON, matching `PLAN_AUTO_RUN_DEFAULT` in the domain.
   const [planDraft, setPlanDraft] = React.useState<boolean>(planAutoRun ?? true)
   React.useEffect(() => setPlanDraft(planAutoRun ?? true), [planAutoRun])
+  // Absent means OFF, matching `ADHD_MODE_DEFAULT` in the domain.
+  const [adhdDraft, setAdhdDraft] = React.useState<boolean>(adhdMode ?? false)
+  React.useEffect(() => setAdhdDraft(adhdMode ?? false), [adhdMode])
   // Absent config means the DEFAULTS, not silence — an operator who never opened
   // this pane should still be told when an agent needs them.
   const [draft, setDraft] = React.useState<NotificationsConfig>(
@@ -1266,6 +1280,21 @@ function GeneralSection({
             onChange={(next) => {
               setPlanDraft(next)
               void onSavePlanAutoRun?.(next)
+            }}
+          />
+        </div>
+
+        <div className="mb-1 mt-6 flex items-center gap-2 border-b border-hairline pb-2.5">
+          <span className="text-[13px] font-semibold text-text-bright">Responses</span>
+        </div>
+        <div className="divide-y divide-hairline">
+          <ToggleRow
+            label="ADHD mode"
+            description="Every reply leads with the action, numbers multi-step work, restates progress, and ends with one next step. No preamble, no recaps."
+            checked={adhdDraft}
+            onChange={(next) => {
+              setAdhdDraft(next)
+              void onSaveAdhdMode?.(next)
             }}
           />
         </div>

@@ -150,6 +150,10 @@ export interface ConversationViewProps {
   onDraftChange?: (value: string) => void
   draftAttachments?: ReadonlyArray<Attachment>
   onDraftAttachmentsChange?: (attachments: ReadonlyArray<Attachment>) => void
+  /** Put the caret in the composer when this view becomes the one on screen. */
+  autoFocusComposer?: boolean
+  /** Identity of "the one on screen" — the session id. */
+  focusKey?: string
 }
 
 /** Count added/removed lines in a unified diff, ignoring the file headers. */
@@ -202,6 +206,8 @@ export function ConversationView({
   onDraftChange,
   draftAttachments,
   onDraftAttachmentsChange,
+  autoFocusComposer,
+  focusKey,
   archived,
   initialDraft
 }: ConversationViewProps) {
@@ -463,6 +469,8 @@ export function ConversationView({
                 onValueChange={onDraftChange}
                 attachments={draftAttachments}
                 onAttachmentsChange={onDraftAttachmentsChange}
+                autoFocus={autoFocusComposer}
+                focusKey={focusKey}
               />
             </>
           )}

@@ -546,12 +546,26 @@ export const WorkspaceConfig = Schema.Struct({
    * that cannot change anything, which is how operators learn to click "allow"
    * without reading. Edits still gate exactly as before, in every mode.
    */
-  planAutoRun: Schema.optional(Schema.Boolean)
+  planAutoRun: Schema.optional(Schema.Boolean),
+  /**
+   * Whether every agent turn is asked to shape its reply for an ADHD reader —
+   * lead with the action, number the steps, restate progress, end with one next
+   * action. Absent means OFF (see `ADHD_MODE_DEFAULT`).
+   *
+   * Off by default because it changes the voice of every session, which is a
+   * preference and not a safety property. It is injected per turn as a prompt
+   * prefix (the same channel as the compaction primer), so it applies to every
+   * harness rather than only the one with a matching skill installed.
+   */
+  adhdMode: Schema.optional(Schema.Boolean)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 
 /** Plan mode runs its (read-only) commands unattended unless told otherwise. */
 export const PLAN_AUTO_RUN_DEFAULT = true
+
+/** ADHD response shaping is opt-in — it rewrites the voice of every session. */
+export const ADHD_MODE_DEFAULT = false
 
 /** A git repository discovered under the configured repos directory. */
 export const Repo = Schema.Struct({

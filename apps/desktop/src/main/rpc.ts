@@ -1227,6 +1227,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setGit": (git) => ConfigService.setGit(git),
   "Config.setNotifications": (notifications) => ConfigService.setNotifications(notifications),
   "Config.setPlanAutoRun": ({ planAutoRun }) => ConfigService.setPlanAutoRun(planAutoRun),
+  "Config.setAdhdMode": ({ adhdMode }) => ConfigService.setAdhdMode(adhdMode),
   /**
    * Deliver an OS notification. Main decides whether to actually show it: it
    * owns the window's focus state, which the renderer cannot observe reliably,

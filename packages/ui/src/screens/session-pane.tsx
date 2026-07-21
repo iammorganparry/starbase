@@ -35,6 +35,11 @@ export interface ConversationPaneCtx {
   planStepId?: string | null
   /** Plan Review's selection moved — retires a spent `planStepId`. */
   onPlanStepSelected?: () => void
+  /**
+   * Whether this pane is the one the operator is looking at. Drives composer
+   * autofocus, so in a split only the focused pane takes the caret.
+   */
+  paneFocused?: boolean
 }
 
 export interface SessionPaneProps {
@@ -221,7 +226,10 @@ export function SessionPane(props: SessionPaneProps) {
                   if (!splitOpen) setTab("plan")
                 },
                 planStepId: planStepTarget,
-                onPlanStepSelected: () => setTarget(null)
+                onPlanStepSelected: () => setTarget(null),
+                // "Is this the pane the operator is looking at?" — a group of one
+                // has no `pane` prop at all, and is always the one being looked at.
+                paneFocused: props.pane === undefined || props.pane.focused
               }
             )}
           </div>

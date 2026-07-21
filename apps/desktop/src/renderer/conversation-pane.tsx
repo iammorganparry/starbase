@@ -35,7 +35,8 @@ export function ConversationPane({
   onPlanStepSelected,
   onRestore,
   onDelete,
-  onInitialPromptConsumed
+  onInitialPromptConsumed,
+  paneFocused = true
 }: {
   session: Session
   /**
@@ -60,6 +61,11 @@ export function ConversationPane({
   onDelete?: (sessionId: string) => void
   /** Notify once the composer has consumed the one-shot initial prompt. */
   onInitialPromptConsumed?: (sessionId: string) => void
+  /**
+   * Whether this is the pane the operator is looking at. Only that pane's
+   * composer takes the caret when the conversation opens.
+   */
+  paneFocused?: boolean
 }) {
   const convo = useConversation(session)
   // `convo.cli` rather than `session.cli`: the harness can change mid-session, and
@@ -319,6 +325,10 @@ export function ConversationPane({
           onDraftAttachmentsChange={(attachments) =>
             setDraft(session.id, { ...getDraft(session.id), attachments })
           }
+          // The Plan face returns early above, so reaching here already means the
+          // transcript is on screen — only the focused pane still has to be checked.
+          autoFocusComposer={paneFocused}
+          focusKey={session.id}
           archived={
             session.archived
               ? {
