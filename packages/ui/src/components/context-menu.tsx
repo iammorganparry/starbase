@@ -4,8 +4,31 @@ import { ChevronRight, type LucideIcon } from "lucide-react"
 import { cn } from "../lib/cn.js"
 
 export interface ContextMenuItem {
-  /** Stable key + accessible label. */
+  /** The accessible label, and the React key when no `id` is given. */
   label: string
+  /**
+   * Stable identity, for rows whose LABEL can repeat.
+   *
+   * Static menus (Rename / Archive / Delete) can key on the label safely — those
+   * strings are written here and are unique by construction. Rows built from
+   * DATA cannot: "Split with ▸" is one row per session, labelled with the
+   * session's title, and titles are auto-generated and operator-editable, so two
+   * sessions called "Fix build" is an ordinary Tuesday. Keying those on the label
+   * hands React two children with the same key.
+   *
+   * What that costs today is a console error on every open, which is the whole
+   * of the *observed* damage — both rows do render and each still runs its own
+   * `onSelect` (`context-menu.test.tsx` pins both). The reason to fix it anyway
+   * is that React documents sibling keys as required-unique and its behaviour
+   * with duplicates as undefined, so "it happens to work" is a property of this
+   * version rather than a guarantee — and a menu that errors every time it opens
+   * trains you to ignore the console.
+   *
+   * Named `id` rather than `key` deliberately: `key` on a plain object looks
+   * like React's reserved prop, and would be silently swallowed by React the
+   * first time somebody spread an item onto a component.
+   */
+  id?: string
   icon?: LucideIcon
   /** Ignored when `submenu` is present — a parent row opens rather than acts. */
   onSelect: () => void
@@ -20,6 +43,9 @@ export interface ContextMenuItem {
    */
   submenu?: ReadonlyArray<ContextMenuItem>
 }
+
+/** Identity for React, preferring the explicit one. See `ContextMenuItem.id`. */
+const keyOf = (item: ContextMenuItem): string => item.id ?? item.label
 
 /** Shared by the flyout and the root content, so nesting can't drift in style. */
 const CONTENT_CLASS =
@@ -61,7 +87,7 @@ function Row({ item }: { item: ContextMenuItem }) {
         <ContextMenuPrimitive.Portal>
           <ContextMenuPrimitive.SubContent className={CONTENT_CLASS} sideOffset={2}>
             {item.submenu.map((child) => (
-              <Row key={child.label} item={child} />
+              <Row key={keyOf(child)} item={child} />
             ))}
           </ContextMenuPrimitive.SubContent>
         </ContextMenuPrimitive.Portal>
@@ -93,7 +119,7 @@ export function ContextMenu({
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Content className={CONTENT_CLASS}>
           {items.map((item, i) => (
-            <div key={item.label}>
+            <div key={keyOf(item)}>
               {item.separated && i > 0 && (
                 <ContextMenuPrimitive.Separator className="my-1 h-px bg-line" />
               )}

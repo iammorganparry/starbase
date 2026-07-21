@@ -97,6 +97,10 @@ export function SplitRow({
       submenu: full
         ? []
         : splitCandidates.map((s) => ({
+            // Keyed by session id, not by title: titles are auto-generated and
+            // operator-editable, so two rows reading "Fix build" is ordinary —
+            // and keying those on the label would hand React duplicate keys.
+            id: s.id,
             label: s.title,
             onSelect: () => onSplitWith?.(group.id, s.id, group.panes.length)
           }))
