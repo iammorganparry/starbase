@@ -433,15 +433,33 @@ export const focusAdjacent = (ws: Workspace, direction: -1 | 1): Workspace => {
 export const prune = (ws: Workspace, knownIds: ReadonlySet<string>): Workspace => {
   if (ws.groups.every((g) => g.panes.every((p) => knownIds.has(p.sessionId)))) return ws
   const groups: Array<SplitGroup> = []
+  // A group's id is derived from its first pane, so losing pane 0 re-ids the
+  // group. Track the active one by position rather than by id, or the operator
+  // watching [a|b] gets yanked to an unrelated group the moment `a` goes.
+  let activeId: string | null = null
+  let activeAt = -1
   for (const group of ws.groups) {
+    const wasActive = group.id === ws.activeGroupId
     const kept = group.panes.filter((p) => knownIds.has(p.sessionId))
-    if (kept.length === 0) continue
+    if (kept.length === 0) {
+      // Dissolved entirely: remember where it sat so the fallback can land next
+      // to it rather than at the top of the sidebar.
+      if (wasActive) activeAt = groups.length
+      continue
+    }
     const removedBefore = group.panes.filter((p, i) => i < group.focused && !knownIds.has(p.sessionId)).length
-    groups.push(withPanes(group, renormalise(kept), group.focused - removedBefore))
+    const next = withPanes(group, renormalise(kept), group.focused - removedBefore)
+    if (wasActive) {
+      activeId = next.id
+      activeAt = groups.length
+    }
+    groups.push(next)
   }
-  const activeGroupId = groups.some((g) => g.id === ws.activeGroupId)
-    ? ws.activeGroupId
-    : (groups[0]?.id ?? null)
+  const activeGroupId =
+    activeId ??
+    // Same landing order as `replaceGroup`: whatever took its place, then its
+    // neighbour above, then the top.
+    (activeAt === -1 ? (groups[0]?.id ?? null) : (groups[activeAt]?.id ?? groups[activeAt - 1]?.id ?? groups[0]?.id ?? null))
   return { groups, activeGroupId }
 }
 

@@ -286,6 +286,25 @@ describe("prune", () => {
     const ws = workspaceOf(["a", "b"])
     expect(prune(ws, new Set(["a", "b"]))).toBe(ws)
   })
+
+  // The group's id comes from its first pane, so losing pane 0 re-ids it. Match
+  // by position, or the active split silently becomes some other group.
+  it("stays on the active group when losing its first pane re-ids it", () => {
+    const built = workspaceOf(["x"], ["a", "b"])
+    const ws = activate(built, built.groups[1]!.id)
+    const next = prune(ws, new Set(["x", "b"]))
+    expect(next.groups).toHaveLength(2)
+    expect(next.activeGroupId).toBe(next.groups[1]!.id)
+    expect(paneIds(next)).toEqual(["b"])
+  })
+
+  it("lands on the group that took its place when the active group dissolves", () => {
+    const built = workspaceOf(["x"], ["a"], ["z"])
+    const ws = activate(built, built.groups[1]!.id)
+    const next = prune(ws, new Set(["x", "z"]))
+    expect(next.activeGroupId).toBe(next.groups[1]!.id)
+    expect(paneIds(next)).toEqual(["z"])
+  })
 })
 
 describe("persistence", () => {
