@@ -402,6 +402,29 @@ export function StarbaseApp({
     [group, split]
   )
 
+  /**
+   * Add a pane holding the first session not already on screen.
+   *
+   * Arc splits with a new tab; the nearest thing here is a session you have but
+   * aren't looking at, which beats opening a pane onto nothing.
+   *
+   * ONE definition for the two ways to ask — ⌃⇧= and the ghost panel on the
+   * right edge. They had a copy each, so a change of policy (most-recently-
+   * active rather than first, say) would have had to be made twice to be made
+   * at all, and the two controls would have quietly started doing different
+   * things.
+   *
+   * Reports whether it added, because the keyboard path needs to know: a chord
+   * that could not act should fall through rather than be swallowed.
+   */
+  const addNextSessionAsPane = useCallback((): boolean => {
+    if (!group || group.panes.length >= MAX_PANES) return false
+    const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
+    if (!next) return false
+    splitActiveWith(next.id, group.panes.length)
+    return true
+  }, [group, sessions, split, splitActiveWith])
+
   // ⌘N opens New Session; the rest is Arc's split map. Which chord means what is
   // `matchSplitShortcut`'s job — a pure function, and its own unit test, because
   // the first version of this map compared `e.key` against unshifted characters
@@ -420,15 +443,11 @@ export function StarbaseApp({
           setNewOpen(true)
           return
         }
-        // Add a pane holding the first session not already on screen. Arc splits
-        // with a new tab; the nearest thing here is a session you have but
-        // aren't looking at, which beats opening a pane onto nothing.
+        // Swallow the chord only if it actually added a pane — at the cap, or
+        // with every session already on screen, ⌃⇧= has nothing to do and
+        // shouldn't pretend otherwise.
         case "add-pane": {
-          if (!group || group.panes.length >= MAX_PANES) return
-          const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
-          if (!next) return
-          e.preventDefault()
-          splitActiveWith(next.id, group.panes.length)
+          if (addNextSessionAsPane()) e.preventDefault()
           return
         }
         // Out-of-range is a no-op rather than a clamp: ⌃⇧4 in a two-pane split
@@ -464,7 +483,7 @@ export function StarbaseApp({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [onCreateSession, group, sessions, split, splitActiveWith])
+  }, [onCreateSession, group, split, addNextSessionAsPane])
 
   const handleCreate = useCallback(
     async (input: CreateSessionInput) => {
@@ -528,9 +547,7 @@ export function StarbaseApp({
         onSeparateAll={split.separateAll}
         onResizePane={(index, delta) => group && split.resizePane(group.id, index, delta)}
         onAddSplit={() => {
-          if (!group || group.panes.length >= MAX_PANES) return
-          const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
-          if (next) splitActiveWith(next.id, group.panes.length)
+          addNextSessionAsPane()
         }}
         slotBySession={paneBySession}
         onRenameSession={onRenameSession}

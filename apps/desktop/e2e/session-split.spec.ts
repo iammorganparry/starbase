@@ -377,6 +377,34 @@ test("the add-right-split placeholder adds a pane, and stops when nothing is lef
   await expect(window.getByTestId("split-view")).toHaveAttribute("data-panes", "3")
 })
 
+/**
+ * ⌃⇧= and the ghost panel are two ways to ask for the same thing, so they must
+ * pick the same session.
+ *
+ * They had a copy each of "the first session not already on screen", which is
+ * the kind of duplication that goes wrong silently: change the policy once and
+ * the two controls start disagreeing, with nothing failing to say so. They share
+ * one definition now, and this is what would notice if they stopped.
+ */
+test("the keyboard and the ghost panel add the SAME next session", async ({ launchApp }) => {
+  const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
+  await expect(window.getByText("Alpha session")).toBeVisible()
+
+  await window.keyboard.press("Control+Shift+Equal")
+  await expect.poll(() => paneSessions(window)).toHaveLength(2)
+  const byKeyboard = (await paneSessions(window))[1]
+
+  // Put it back the way it was, then ask the other way.
+  await settle(window)
+  await window.getByTestId("split-pane-1").getByTestId("close-pane").click()
+  await expect.poll(() => paneSessions(window)).toHaveLength(1)
+  await settle(window)
+  await window.getByTestId("add-right-split").click()
+  await expect.poll(() => paneSessions(window)).toHaveLength(2)
+
+  expect((await paneSessions(window))[1]).toBe(byKeyboard)
+})
+
 test("Separate all tabs flies every pane out to its own row", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: SESSIONS })
   await expect(window.getByText("Alpha session")).toBeVisible()
