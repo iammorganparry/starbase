@@ -3,12 +3,12 @@ import type { DragEvent, ReactNode } from "react"
 import { motion } from "motion/react"
 import { SPRING } from "../lib/motion.js"
 import { SESSION_DND_MIME } from "../app/split-layout.js"
-import type { PrState, Session, SessionActivity } from "@starbase/core"
+import type { SessionPrStatus, Session, SessionActivity } from "@starbase/core"
 import { activityLabel, displayStatusOf } from "@starbase/core"
 import { Archive, ArchiveRestore, GitMerge, type LucideIcon, Trash2 } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { relativeTime } from "../lib/relative-time.js"
-import { StatusDot } from "../components/status-dot.js"
+import { PrStatusGlyph } from "./pr-glyph.js"
 import { Badge } from "../components/badge.js"
 import { DiffStat } from "../components/diff-stat.js"
 import { ProviderIcon } from "../components/provider-icon.js"
@@ -41,7 +41,11 @@ export function SessionRow({
    * one, merge it, open the next off the same worktree), so merging PR #204 says
    * nothing about whether the WORK is done. Archiving is the operator's call.
    */
-  prState?: PrState
+  /**
+   * The linked PR's state + CI rollup, driving the row's leading glyph. Absent
+   * (or null) for a session with no PR, which renders a hollow ring.
+   */
+  prState?: SessionPrStatus | null
   active?: boolean
   onSelect?: (id: string) => void
   /** Manual rename (double-click the title) — pins the auto-generated name. */
@@ -264,7 +268,18 @@ export function SessionRow({
     >
       {hoverActions}
       <div className="flex items-center gap-2">
-        <StatusDot status={status} />
+        {/*
+          The leading slot shows the PR, not the agent.
+          
+          Both were candidates and the PR won on scan value: what the agent is
+          doing changes every few seconds and is already spelled out as a WORD on
+          the line below ("Running", "Needs Input"), where it can't be mistaken
+          for anything else. Where a PR stands changes a few times a day and had
+          no at-a-glance representation at all — you had to open the row's third
+          line to find it. Two coloured dots would also have collided: a red
+          activity dot and a red CI glyph mean entirely different things.
+        */}
+        <PrStatusGlyph pr={prState} />
         {draft !== null ? (
           <input
             value={draft}
@@ -319,12 +334,16 @@ export function SessionRow({
             </Badge>
           )}
           {session.prNumber !== null && (
+            // The badge is now just the NUMBER — a thing you click and quote.
+            // Its state words moved to the leading glyph, which says the same
+            // thing higher up the row and without spending a line on it.
             <Badge
-              tone={prState === "merged" ? "purple" : prState === "closed" ? "red" : "neutral"}
+              tone={
+                prState?.state === "merged" ? "purple" : prState?.state === "closed" ? "red" : "neutral"
+              }
               size="sm"
             >
               ⑂ #{session.prNumber}
-              {prState === "merged" ? " Merged" : prState === "closed" ? " Closed" : ""}
             </Badge>
           )}
           <DiffStat added={session.diff.added} removed={session.diff.removed} />

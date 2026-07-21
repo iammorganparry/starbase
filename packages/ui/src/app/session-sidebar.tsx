@@ -1,48 +1,31 @@
 import * as React from "react"
-import type { PrState, Session, SessionActivity, SessionDisplayStatus, User } from "@starbase/core"
-import { displayStatusOf } from "@starbase/core"
-import { Archive, ChevronRight, GitBranch, Layers, Plus, Search, Star } from "lucide-react"
+import type { SessionPrStatus, Session, SessionActivity, SessionDisplayStatus, User } from "@starbase/core"
+import { displayStatusOf, UNTITLED_SESSION } from "@starbase/core"
+import { ChevronRight, GitBranch, Layers, PanelLeft, Plus, Search, SlidersHorizontal, Star } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { usePaneWidth } from "../hooks/width-tier.js"
+import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
 import { Kbd } from "../components/kbd.js"
 import { Badge } from "../components/badge.js"
 import { Button } from "../components/button.js"
 import { StatusDot } from "../components/status-dot.js"
 import { SearchInput } from "../components/search-input.js"
-import { SegmentedControl } from "../components/segmented-control.js"
+import { FilterMenu } from "../components/filter-menu.js"
 import { SessionRow } from "../composites/session-row.js"
 import { SplitRow } from "../composites/split-row.js"
 import { displayStatusLabel, displayStatusTone } from "../tokens.js"
 import { UserMenu } from "../composites/user-menu.js"
 import type { SplitGroup } from "./split-layout.js"
-
-type GroupBy = "repo" | "status"
-
-/**
- * Reserved key used to collapse the Archived group. It is stored alongside repo
- * paths in `collapsedRepos` (it is not a real repo path/name).
- */
-export const ARCHIVED_GROUP_KEY = "__archived__"
-
-/**
- * Status groups render in this order (most-active first), and are labelled from
- * the same `displayStatusLabel` the rows use — one vocabulary for one concept.
- *
- * "thinking" is absent, and that is NOT an oversight: `statusOf` folds it into
- * "running" so a session doesn't hop groups every time a tool starts and stops —
- * see there. A group is a place in a list, and a place that moves every few
- * seconds is worse than a coarser one that holds still.
- *
- * "monitoring" IS its own group, for the mirror-image reason: a watch runs for
- * minutes, so the group is stable, and "waiting on CI" is genuinely a different
- * thing to look at than "working". Empty groups don't render (see `groupByStatus`),
- * so it costs nothing when nothing is watching.
- */
-const STATUS_ORDER: ReadonlyArray<SessionDisplayStatus> = [
-  "needs-input",
-  "running",
-  "monitoring",
-  "idle"
-]
+import {
+  filterSessions,
+  groupSessions,
+  isNarrowed,
+  loadFilters,
+  reconcileRepo,
+  saveFilters,
+  sessionFilterAxes,
+  type SessionFilters
+} from "./session-filters.js"
 
 export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
@@ -82,7 +65,7 @@ export interface SessionSidebarProps {
   /** What each session's agent is doing right now, keyed by id (live). */
   liveActivity?: Record<string, SessionActivity>
   /** Live linked-PR state per session id, badged onto the row (never auto-archives). */
-  prStates?: Record<string, PrState>
+  prStates?: Record<string, SessionPrStatus>
   /** Open the New Session dialog (header "+" / ⌘N). */
   onNewSession?: () => void
   /** The signed-in user, shown in the footer account menu. */
@@ -100,18 +83,35 @@ export interface SessionSidebarProps {
   /** Toggle a repo group's starred state from its header star button. */
   onToggleStar?: (repoName: string) => void | Promise<void>
   /**
-   * Repo group keys (repo names, plus `ARCHIVED_GROUP_KEY`) that are collapsed —
-   * their session lists are hidden. Only applies to repo grouping + Archived.
+   * Repo names whose groups are collapsed — their session lists are hidden.
+   * Only applies while Group by is Repository.
    */
   collapsedRepoNames?: ReadonlySet<string>
-  /** Toggle a repo group's collapsed state from its header (repo grouping + Archived). */
+  /** Toggle a repo group's collapsed state from its header. */
   onToggleCollapsed?: (repoName: string) => void | Promise<void>
   /** App version (from `__APP_VERSION__`), shown in the footer. */
   version?: string
+  /**
+   * Open on these filters instead of the persisted ones.
+   *
+   * For stories and tests, which need a deterministic view and cannot reach the
+   * menu (Radix portals its flyouts and needs a real pointer to open one). Not
+   * used by the app — there, the persisted set IS the right starting point.
+   */
+  defaultFilters?: SessionFilters
 }
 
 /** Left rail: sessions grouped by repository, with a first-run empty hint. */
-export function SessionSidebar({
+/**
+ * The sidebar's full contents.
+ *
+ * Rendered by `SessionSidebar` below either docked in the layout or floating in
+ * the hover overlay — the same markup both times, so the expanded rail can't
+ * drift out of sync with the docked sidebar it is meant to be.
+ */
+function SidebarBody({
+  width,
+  onResize,
   sessions,
   activeSessionId,
   slotBySession,
@@ -138,11 +138,33 @@ export function SessionSidebar({
   onToggleStar,
   collapsedRepoNames,
   onToggleCollapsed,
-  version
-}: SessionSidebarProps) {
+  version,
+  defaultFilters
+}: SessionSidebarProps & {
+  /** Current docked width in px (the overlay passes its own fixed width). */
+  width: number
+  /** Drag deltas from the edge handle. Omitted in the overlay, which can't be resized. */
+  onResize?: (deltaX: number) => void
+}) {
   const [filter, setFilter] = React.useState("")
-  const [groupBy, setGroupBy] = React.useState<GroupBy>("repo")
+  const [filters, setFiltersState] = React.useState<SessionFilters>(
+    () => defaultFilters ?? loadFilters()
+  )
   const filterRef = React.useRef<HTMLInputElement>(null)
+
+  const setFilters = React.useCallback((next: SessionFilters) => {
+    setFiltersState(next)
+    saveFilters(next)
+  }, [])
+
+  // A persisted repo filter outlives the sessions that justified it. Left alone
+  // it would empty the sidebar with no visible cause — the filter naming the
+  // missing repo isn't in the menu either, because the menu is built from the
+  // repos that exist.
+  React.useEffect(() => {
+    const reconciled = reconcileRepo(filters, sessions)
+    if (reconciled !== filters) setFilters(reconciled)
+  }, [filters, sessions, setFilters])
 
   // ⌘K / Ctrl-K focuses the filter.
   React.useEffect(() => {
@@ -168,43 +190,30 @@ export function SessionSidebar({
     [liveActivity]
   )
 
-  const filtered = React.useMemo(() => {
-    const q = filter.trim().toLowerCase()
-    if (!q) return sessions
-    return sessions.filter(
-      (s) =>
-        s.title.toLowerCase().includes(q) ||
-        s.branch.toLowerCase().includes(q) ||
-        s.repo.toLowerCase().includes(q)
-    )
-  }, [sessions, filter])
-
-  // Archived sessions collapse into their own group at the bottom, regardless of
-  // the active grouping; everything else is grouped by repo / status.
-  const activeSessions = React.useMemo(() => filtered.filter((s) => !s.archived), [filtered])
-  // Newest-archived first. `sessions` arrives ordered by `updatedAt`, which is
-  // the WRONG axis here: a session you archive today whose last turn was a week
-  // ago would sort below sessions archived days earlier, so the one you just
-  // retired (or lost) is buried mid-list exactly when you go looking for it.
-  // Sessions with no `archivedAt` (archived before the field existed) sort last.
-  const archivedSessions = React.useMemo(
-    () =>
-      filtered
-        .filter((s) => s.archived)
-        .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? "")),
-    [filtered]
+  const filtered = React.useMemo(
+    () => filterSessions(sessions, filter, filters),
+    [sessions, filter, filters]
   )
-  const groups = React.useMemo(() => {
-    if (groupBy === "status") return groupByStatus(activeSessions, statusOf)
-    const byRepo = groupByRepo(activeSessions)
-    if (!starredRepoNames || starredRepoNames.size === 0) return byRepo
-    // Stable sort: starred repo groups float to the top, order otherwise kept.
-    return [...byRepo].sort(
-      (a, b) => Number(starredRepoNames.has(b[0])) - Number(starredRepoNames.has(a[0]))
-    )
-  }, [activeSessions, groupBy, statusOf, starredRepoNames])
 
-  const archivedCollapsed = collapsedRepoNames?.has(ARCHIVED_GROUP_KEY) ?? false
+  const groups = React.useMemo(
+    () => groupSessions(filtered, filters, statusOf, starredRepoNames),
+    [filtered, filters, statusOf, starredRepoNames]
+  )
+
+  // Counts for the Status flyout, computed over the SEARCH-narrowed list rather
+  // than the whole store: while you're typing, "Archived 3" should mean three
+  // matches, not three in existence.
+  const searched = React.useMemo(
+    () => filterSessions(sessions, filter, { ...filters, status: "all", repo: null }),
+    [sessions, filter, filters]
+  )
+
+  const axes = React.useMemo(
+    () => sessionFilterAxes(filters, setFilters, searched),
+    [filters, setFilters, searched]
+  )
+
+  const narrowed = isNarrowed(filters)
 
   // Which SPLIT (two panes or more) each session belongs to. Groups of one are
   // deliberately absent: they render as ordinary rows, which is the whole point
@@ -238,7 +247,7 @@ export function SessionSidebar({
    * repo group its first surviving pane sits) instead of one per group.
    */
   const pillOwner = React.useMemo(() => {
-    const rendered = new Set(activeSessions.map((s) => s.id))
+    const rendered = new Set(filtered.map((s) => s.id))
     const owner = new Map<string, string>()
     for (const g of splitGroups ?? []) {
       if (g.panes.length < 2) continue
@@ -247,7 +256,7 @@ export function SessionSidebar({
       if (first) owner.set(g.id, first.sessionId)
     }
     return owner
-  }, [splitGroups, activeSessions])
+  }, [splitGroups, filtered])
 
   /**
    * One entry in a sidebar list — a pill for a split, a row for anything else.
@@ -295,7 +304,20 @@ export function SessionSidebar({
   }
 
   return (
-    <div className="flex w-[266px] flex-none flex-col border-r border-hairline bg-panel">
+    <div
+      style={{ width }}
+      data-testid="session-sidebar"
+      className="relative flex flex-none flex-col border-r border-hairline bg-panel"
+    >
+      {/* The width was a hard `w-[266px]` with no way to change it — the only
+          fixed column in the app that couldn't be dragged. */}
+      {onResize && (
+        <ResizeHandle
+          onResize={onResize}
+          aria-label="Resize sidebar"
+          className="absolute inset-y-0 right-0"
+        />
+      )}
       {/* Header */}
       <div className="flex items-center justify-between px-4 pb-2 pt-4">
         <div className="flex items-center gap-2.5">
@@ -318,26 +340,48 @@ export function SessionSidebar({
         </button>
       </div>
 
-      {/* Filter + group-by */}
-      <div className="flex flex-col gap-2 px-3 pb-2">
-        <SearchInput
-          ref={filterRef}
-          value={filter}
-          onChange={setFilter}
-          placeholder="Filter sessions…"
-          kbd={<Kbd>⌘K</Kbd>}
-        />
-        <div className="flex items-center gap-[7px]">
-          <span className="font-mono text-[9.5px] tracking-[0.4px] text-muted-foreground">GROUP BY</span>
-          <SegmentedControl<GroupBy>
-            value={groupBy}
-            onChange={setGroupBy}
-            items={[
-              { value: "repo", label: "Repository" },
-              { value: "status", label: "Status" }
-            ]}
+      {/*
+        Search + the filter menu, on ONE row.
+
+        This replaced a second row holding a "GROUP BY [Repository|Status]"
+        segmented control. Two axes already cost a permanent row above the list
+        they filter; the four axes this now offers would have cost more vertical
+        space than the first three sessions. The menu folds them into a 24px
+        button that still reports each axis's current value on its own row, so
+        nothing is hidden — only folded.
+      */}
+      <div className="flex items-center gap-1.5 px-3 pb-2">
+        <div className="min-w-0 flex-1">
+          <SearchInput
+            ref={filterRef}
+            value={filter}
+            onChange={setFilter}
+            placeholder="Filter sessions…"
+            kbd={<Kbd>⌘K</Kbd>}
           />
         </div>
+        <FilterMenu axes={axes}>
+          <button
+            type="button"
+            aria-label="Filter and sort sessions"
+            title="Filter and sort sessions"
+            data-testid="session-filter-menu"
+            className={cn(
+              "relative flex size-7 flex-none items-center justify-center rounded-md outline-none transition-colors",
+              "hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring",
+              narrowed ? "text-blue" : "text-dim hover:text-text"
+            )}
+          >
+            <SlidersHorizontal size={14} />
+            {/* A dot, because the button's own colour is easy to miss and a
+                narrowed list looks exactly like a short one. Only NARROWING
+                earns it — grouping and sorting rearrange what's there rather
+                than hiding any of it. */}
+            {narrowed && (
+              <span className="absolute right-1 top-1 size-1.5 rounded-full bg-blue" />
+            )}
+          </button>
+        </FilterMenu>
       </div>
 
       {/* Groups (or the empty hint when there are no sessions yet) */}
@@ -370,10 +414,22 @@ export function SessionSidebar({
           </div>
         ) : (
           <>
-          {groups.map(([key, list]) => {
+          {groups.map((group) => {
+            // A `null` key is the flat list (Group by: None) — rows with no
+            // heading over them at all, rather than one heading called
+            // "Everything", which would be a header that says nothing.
+            if (group.key === null) {
+              return (
+                <div key="__flat__" className="mb-1 flex flex-col gap-[3px] pt-1">
+                  {group.sessions.map(renderEntry)}
+                </div>
+              )
+            }
+            const key = group.key
             // Collapse applies to repo grouping only (Status groups stay open).
-            const collapsible = groupBy === "repo" && Boolean(onToggleCollapsed)
+            const collapsible = filters.groupBy === "repo" && Boolean(onToggleCollapsed)
             const collapsed = collapsible && (collapsedRepoNames?.has(key) ?? false)
+            const isStatus = filters.groupBy === "status"
             return (
             <div key={key}>
               <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
@@ -400,22 +456,22 @@ export function SessionSidebar({
                 ) : (
                   <>
                     <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
-                    {groupBy === "status" ? (
+                    {isStatus ? (
                       <StatusDot status={displayStatusTone[key as SessionDisplayStatus]} size={8} />
                     ) : (
                       <GitBranch size={12} className="text-cyan" />
                     )}
                     <span
                       className={cn(
-                        "flex-1 text-[11.5px] font-semibold text-text",
-                        groupBy === "status" ? "" : "font-mono"
+                        "flex-1 truncate text-[11.5px] font-semibold text-text",
+                        isStatus ? "" : "font-mono"
                       )}
                     >
-                      {groupBy === "status" ? displayStatusLabel[key as SessionDisplayStatus] : key}
+                      {isStatus ? displayStatusLabel[key as SessionDisplayStatus] : key}
                     </span>
                   </>
                 )}
-                {groupBy === "repo" && onToggleStar && (
+                {filters.groupBy === "repo" && onToggleStar && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -432,65 +488,15 @@ export function SessionSidebar({
                   </Button>
                 )}
                 <Badge tone="count" size="xs">
-                  {list.length}
+                  {group.sessions.length}
                 </Badge>
               </div>
               {!collapsed && (
-                <div className="mb-1 flex flex-col gap-[3px]">{list.map(renderEntry)}</div>
+                <div className="mb-1 flex flex-col gap-[3px]">{group.sessions.map(renderEntry)}</div>
               )}
             </div>
             )
           })}
-
-          {archivedSessions.length > 0 && (
-            <div>
-              <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
-                {onToggleCollapsed ? (
-                  <button
-                    type="button"
-                    onClick={() => onToggleCollapsed(ARCHIVED_GROUP_KEY)}
-                    aria-expanded={!archivedCollapsed}
-                    aria-label={archivedCollapsed ? "Expand archived" : "Collapse archived"}
-                    className="flex min-w-0 flex-1 items-center gap-[7px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <ChevronRight
-                      size={11}
-                      className={cn(
-                        "flex-none text-muted-foreground transition-transform",
-                        !archivedCollapsed && "rotate-90"
-                      )}
-                    />
-                    <Archive size={12} className="flex-none text-purple" />
-                    <span className="flex-1 text-[11.5px] font-semibold text-text">Archived</span>
-                  </button>
-                ) : (
-                  <>
-                    <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
-                    <Archive size={12} className="text-purple" />
-                    <span className="flex-1 text-[11.5px] font-semibold text-text">Archived</span>
-                  </>
-                )}
-                <Badge tone="count" size="xs">
-                  {archivedSessions.length}
-                </Badge>
-              </div>
-              {!archivedCollapsed && (
-                <div className="mb-1 flex flex-col gap-[3px]">
-                  {archivedSessions.map((s) => (
-                    <SessionRow
-                      key={s.id}
-                      session={s}
-                      active={s.id === activeSessionId}
-                      slotIndex={slotBySession?.get(s.id) ?? null}
-                      onSelect={onSelect}
-                      onRestore={onRestore}
-                      onDelete={onDelete}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
           </>
         )}
       </div>
@@ -519,27 +525,222 @@ export function SessionSidebar({
   )
 }
 
-function groupByRepo(sessions: ReadonlyArray<Session>): ReadonlyArray<readonly [string, ReadonlyArray<Session>]> {
-  const map = new Map<string, Session[]>()
-  for (const s of sessions) {
-    const list = map.get(s.repo) ?? []
-    list.push(s)
-    map.set(s.repo, list)
+/** Docked width bounds. `initial` is the 266px the sidebar was hard-coded to. */
+const SIDEBAR_WIDTH = { storageKey: "sb.sidebar.width", initial: 266, min: 200, max: 380 } as const
+
+/** Below this much room for the whole shell, the sidebar becomes a rail. */
+const RAIL_THRESHOLD = 1000
+
+/** The collapsed rail's width — one avatar plus breathing room. */
+const RAIL_WIDTH = 52
+
+const PIN_STORAGE_KEY = "sb.sidebar.pinned"
+
+/** How long the pointer must rest on the rail before the overlay opens. */
+const HOVER_INTENT_MS = 150
+
+const readPinned = (): boolean | null => {
+  try {
+    const raw = localStorage.getItem(PIN_STORAGE_KEY)
+    return raw === null ? null : raw === "1"
+  } catch {
+    return null
   }
-  return [...map.entries()]
 }
 
-/** Group by effective status, ordered most-active first; empty statuses omitted. */
-function groupByStatus(
-  sessions: ReadonlyArray<Session>,
-  statusOf: (s: Session) => SessionDisplayStatus
-): ReadonlyArray<readonly [string, ReadonlyArray<Session>]> {
-  const map = new Map<SessionDisplayStatus, Session[]>()
-  for (const s of sessions) {
-    const status = statusOf(s)
-    const list = map.get(status) ?? []
-    list.push(s)
-    map.set(status, list)
-  }
-  return STATUS_ORDER.filter((s) => map.has(s)).map((s) => [s, map.get(s)!] as const)
+/**
+ * The collapsed sidebar: one cell per session, status carried by the dot.
+ *
+ * Deliberately NOT a scaled-down copy of the full sidebar. Grouping, filtering
+ * and the group-by control all need labels to mean anything, so the rail drops
+ * them entirely and keeps only the two things that survive at 52px: which
+ * sessions exist, and which one you're in. Everything else is one hover away.
+ */
+function SessionRail({
+  sessions,
+  activeSessionId,
+  liveActivity,
+  onSelect,
+  onNewSession,
+  onExpand,
+  onPin
+}: {
+  sessions: ReadonlyArray<Session>
+  activeSessionId: string | null
+  liveActivity?: Record<string, SessionActivity | undefined>
+  onSelect?: (id: string) => void
+  onNewSession?: () => void
+  onExpand: () => void
+  onPin: () => void
+}) {
+  const live = sessions.filter((s) => !s.archived)
+  return (
+    <div
+      style={{ width: RAIL_WIDTH }}
+      data-testid="session-rail"
+      className="flex flex-none flex-col items-center gap-1 border-r border-hairline bg-panel py-2"
+      onMouseEnter={onExpand}
+    >
+      <button
+        type="button"
+        onClick={onPin}
+        aria-label="Pin sidebar open"
+        title="Pin sidebar open (⌘B)"
+        className="flex size-8 flex-none items-center justify-center rounded-md text-dim outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <PanelLeft size={15} />
+      </button>
+      <button
+        type="button"
+        onClick={onNewSession}
+        aria-label="New session"
+        title="New session (⌘N)"
+        className="flex size-8 flex-none items-center justify-center rounded-md text-dim outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Plus size={15} />
+      </button>
+      <span className="my-1 h-px w-6 flex-none bg-hairline" />
+      <div className="sb-no-scrollbar flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto">
+        {live.map((s) => {
+          const active = s.id === activeSessionId
+          const status = displayStatusOf(liveActivity?.[s.id], s.status)
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => onSelect?.(s.id)}
+              aria-current={active ? "page" : undefined}
+              // The title is the ONLY place the session's name exists in this
+              // mode, so it carries the status word too — at 52px there is no
+              // second line to put it on.
+              title={`${s.title || UNTITLED_SESSION} — ${displayStatusLabel[status]}`}
+              aria-label={s.title || UNTITLED_SESSION}
+              className={cn(
+                "relative flex size-8 flex-none items-center justify-center rounded-md text-[11px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                active
+                  ? "bg-surface text-text-bright ring-1 ring-blue/50"
+                  : "text-muted-foreground hover:bg-surface hover:text-text"
+              )}
+            >
+              {(s.title || UNTITLED_SESSION).slice(0, 2).toUpperCase()}
+              {/* Bottom-right rather than inline: a 32px cell has no room for a
+                  dot beside the initials without pushing them off-centre. */}
+              <span className="absolute -bottom-px -right-px">
+                <StatusDot status={displayStatusTone[status]} size={7} />
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
+
+/**
+ * The session sidebar, at whatever width the shell can spare.
+ *
+ * Above `RAIL_THRESHOLD` this is the docked, drag-resizable column it has always
+ * been. Below it, the column becomes a 52px rail and the full sidebar moves to a
+ * hover overlay — which FLOATS rather than pushing, so opening it costs the
+ * content nothing and closing it causes no reflow. ⌘B pins the full sidebar open
+ * at any width, and the pin is persisted: an operator who would rather give up
+ * content width than navigate by hover should only have to say so once.
+ */
+export function SessionSidebar(props: SessionSidebarProps) {
+  // The SHELL's width, from the provider in `app-shell.tsx` — not this
+  // component's own box, which is the sidebar and would always report ~266px
+  // and so always claim to be cramped.
+  const { width: shellWidth } = usePaneWidth()
+  const { width, adjust } = useResizableWidth(SIDEBAR_WIDTH)
+  const [pinned, setPinned] = React.useState<boolean | null>(readPinned)
+  const [hovering, setHovering] = React.useState(false)
+  const hoverTimer = React.useRef(0)
+
+  // `shellWidth === 0` is the pre-measurement frame; treat it as roomy so the
+  // sidebar doesn't flash a rail on every launch before the observer reports.
+  const cramped = shellWidth !== 0 && shellWidth < RAIL_THRESHOLD
+  const expanded = pinned ?? !cramped
+
+  const setPin = React.useCallback((next: boolean) => {
+    setPinned(next)
+    try {
+      localStorage.setItem(PIN_STORAGE_KEY, next ? "1" : "0")
+    } catch {
+      /* private mode / quota — the pin is still live for this session */
+    }
+  }, [])
+
+  // ⌘B toggles the pin. Deliberately a PIN and not a one-shot open: a toggle
+  // that the next resize silently undoes is a control that lies about its state.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault()
+        setPin(!(pinned ?? !cramped))
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [pinned, cramped, setPin])
+
+  // Escape closes the overlay without disturbing the pin.
+  React.useEffect(() => {
+    if (!hovering) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHovering(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [hovering])
+
+  React.useEffect(() => () => window.clearTimeout(hoverTimer.current), [])
+
+  // Hover INTENT, not hover. Opening on the first pixel of contact means the
+  // overlay fires every time the pointer crosses the rail on its way somewhere
+  // else — the classic reason hover menus feel hostile.
+  const openSoon = () => {
+    window.clearTimeout(hoverTimer.current)
+    hoverTimer.current = window.setTimeout(() => setHovering(true), HOVER_INTENT_MS)
+  }
+  const closeNow = () => {
+    window.clearTimeout(hoverTimer.current)
+    setHovering(false)
+  }
+
+  if (expanded) return <SidebarBody {...props} width={width} onResize={adjust} />
+
+  return (
+    <div className="relative flex flex-none" onMouseLeave={closeNow}>
+      <SessionRail
+        sessions={props.sessions}
+        activeSessionId={props.activeSessionId}
+        liveActivity={props.liveActivity}
+        onSelect={props.onSelect}
+        onNewSession={props.onNewSession}
+        onExpand={openSoon}
+        onPin={() => setPin(true)}
+      />
+      {hovering && (
+        <div
+          data-testid="sidebar-overlay"
+          // `absolute` + `left-full`: the overlay hangs off the rail's right
+          // edge in its own layer, so the panes behind it neither reflow when it
+          // opens nor jump when it closes.
+          className="absolute inset-y-0 left-full z-40 flex shadow-2xl"
+        >
+          <SidebarBody
+            {...props}
+            width={SIDEBAR_WIDTH.initial}
+            // Selecting a session is the overlay's whole purpose, so it closes
+            // on the way out rather than lingering over the pane you just chose.
+            onSelect={(id) => {
+              closeNow()
+              props.onSelect?.(id)
+            }}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+

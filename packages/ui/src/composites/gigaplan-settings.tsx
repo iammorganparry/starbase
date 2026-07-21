@@ -39,7 +39,7 @@ export interface GigaplanSettingsProps {
 }
 
 /** `<cli>:<model>` — ids aren't unique across harnesses, so the pair is the value. */
-const valueOf = (cli: CliKind, model: string) => `${cli}:${model}`
+const harnessModelValue = (cli: CliKind, model: string) => `${cli}:${model}`
 
 export function GigaplanSettings({
   catalog,
@@ -80,7 +80,7 @@ export function GigaplanSettings({
           for the plan&rsquo;s individual steps is made per step and is not set here.
         </span>
         <Select
-          value={valueOf(active.cli, active.model)}
+          value={harnessModelValue(active.cli, active.model)}
           onValueChange={(v) => {
             const at = v.indexOf(":")
             if (at < 0) return
@@ -93,7 +93,7 @@ export function GigaplanSettings({
           <SelectContent>
             {groups.map((p) =>
               p.models.map((m) => (
-                <SelectItem key={valueOf(p.cli, m.id)} value={valueOf(p.cli, m.id)}>
+                <SelectItem key={harnessModelValue(p.cli, m.id)} value={harnessModelValue(p.cli, m.id)}>
                   {p.label} · {m.label}
                 </SelectItem>
               ))

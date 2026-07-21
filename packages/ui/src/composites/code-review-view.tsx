@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { AdversarialReview, PrFileChange, PrReviewThread, ReviewFinding } from "@starbase/core"
-import { MessageSquare, Undo2 } from "lucide-react"
+import { MessageSquare, PanelLeft, PanelRight, Undo2 } from "lucide-react"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { DiffStat } from "../components/diff-stat.js"
@@ -8,6 +8,7 @@ import { FileIcon } from "../components/file-icon.js"
 import { SegmentedControl } from "../components/segmented-control.js"
 import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { feedbackCounts } from "../lib/review-feedback.js"
 import { ReviewDiff } from "./review-diff.js"
 import { ReviewFileRow } from "./review-file-row.js"
@@ -241,10 +242,24 @@ export function CodeReviewView({
   const fileList = useResizableWidth({ storageKey: "sb.review.files", initial: 212, min: 160, max: 440 })
   const tray = useResizableWidth({ storageKey: "sb.review.tray.v2", initial: 300, min: 260, max: 480 })
 
+  // Below `mid` the two rails stop being columns and become sheets.
+  //
+  // Docked, they take a combined 420px minimum off the row before the diff gets
+  // a single pixel — and `review-diff.tsx` then spends another 84px on fixed
+  // line-number gutters. In a 500px pane that left roughly 70px of actual code,
+  // which is not a narrower view of the diff so much as no view of it.
+  const roomy = atLeast(useWidthTier(), "mid")
+  const [sheet, setSheet] = useState<"files" | "tray" | null>(null)
+  // Widening the pane re-docks both rails; a sheet left open across that change
+  // would sit on top of the column it just turned back into.
+  useEffect(() => {
+    if (roomy) setSheet(null)
+  }, [roomy])
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {/* Header — source toggle (PR vs local) + the review's "finish" action. */}
-      <div className="flex h-10 flex-none items-center gap-3 border-b border-hairline px-[14px]">
+      <div className="flex min-h-10 flex-none flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-hairline px-[14px] py-1">
         <SegmentedControl
           value={source}
           onChange={onSetSource}
@@ -253,7 +268,37 @@ export function CodeReviewView({
             { value: "local", label: "Uncommitted", disabled: !localAvailable }
           ]}
         />
-        <div className="flex-1" />
+        <div className="min-w-[8px] flex-1" />
+        {!roomy && (
+          <>
+            <button
+              type="button"
+              aria-label="Changed files"
+              aria-pressed={sheet === "files"}
+              title="Changed files"
+              onClick={() => setSheet((s) => (s === "files" ? null : "files"))}
+              className={cn(
+                "flex size-6 flex-none items-center justify-center rounded transition-colors hover:bg-hairline",
+                sheet === "files" ? "text-blue" : "text-dim hover:text-text-bright"
+              )}
+            >
+              <PanelLeft size={15} />
+            </button>
+            <button
+              type="button"
+              aria-label="Review drafts"
+              aria-pressed={sheet === "tray"}
+              title="Review drafts"
+              onClick={() => setSheet((s) => (s === "tray" ? null : "tray"))}
+              className={cn(
+                "flex size-6 flex-none items-center justify-center rounded transition-colors hover:bg-hairline",
+                sheet === "tray" ? "text-blue" : "text-dim hover:text-text-bright"
+              )}
+            >
+              <PanelRight size={15} />
+            </button>
+          </>
+        )}
         {!isLocal && (
           <Button
             size="sm"
@@ -279,11 +324,19 @@ export function CodeReviewView({
         </div>
       )}
 
-      <div className="flex min-h-0 min-w-0 flex-1">
-        {/* File list (resizable) */}
+      {/* `relative` is what the two sheets anchor to when the pane is narrow —
+          they float inside the body row rather than over the header, so the
+          toggles that opened them stay visible and clickable. */}
+      <div className="relative flex min-h-0 min-w-0 flex-1">
+        {/* File list — a resizable column when there's room, a left-hand sheet
+            when there isn't. Same subtree either way: only its box changes. */}
         <div
-          style={{ width: fileList.width }}
-          className="flex flex-none flex-col border-r border-hairline bg-panel"
+          style={{ width: roomy ? fileList.width : 264 }}
+          className={cn(
+            "flex flex-col border-r border-hairline bg-panel",
+            roomy ? "flex-none" : "absolute inset-y-0 left-0 z-30 shadow-2xl",
+            !roomy && sheet !== "files" && "hidden"
+          )}
         >
           <div className="flex h-[42px] flex-none items-center gap-2 border-b border-hairline px-[14px]">
             <span className="flex-1 text-[12px] font-semibold text-text-bright">Changed files</span>
@@ -332,7 +385,7 @@ export function CodeReviewView({
           </div>
         </div>
 
-        <ResizeHandle onResize={fileList.adjust} aria-label="Resize file list" />
+        {roomy && <ResizeHandle onResize={fileList.adjust} aria-label="Resize file list" />}
 
         {/* Diff center — one continuous scroll through every changed file. Each
             file gets a sticky header; scrolling tracks the current file in the
@@ -454,8 +507,15 @@ export function CodeReviewView({
         </div>
 
         {/* Review tray (resizable) — drag left edge; moving right shrinks it. */}
-        <ResizeHandle onResize={(dx) => tray.adjust(-dx)} aria-label="Resize review panel" />
-        <div style={{ width: tray.width }} className="flex flex-none border-l border-hairline">
+        {roomy && <ResizeHandle onResize={(dx) => tray.adjust(-dx)} aria-label="Resize review panel" />}
+        <div
+          style={{ width: roomy ? tray.width : 300 }}
+          className={cn(
+            "flex border-l border-hairline",
+            roomy ? "flex-none" : "absolute inset-y-0 right-0 z-30 shadow-2xl",
+            !roomy && sheet !== "tray" && "hidden"
+          )}
+        >
           <ReviewTray drafts={drafts} onRemoveDraft={onRemoveDraft} onFinishReview={onFinishReview} />
         </div>
       </div>

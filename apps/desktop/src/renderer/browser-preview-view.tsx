@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Session } from "@starbase/core"
 import { BrowserPreview, type DockSide } from "@starbase/ui"
+import { isPaintableRect } from "./browser-preview-bounds.js"
 import { rpc } from "./rpc-client.js"
 
 // Default target until run-scripts (#1) can seed the session's real dev-server
@@ -84,7 +85,16 @@ export function BrowserPreviewView({ session, visible, onToggle, side, onSideCha
     let last = ""
     const tick = () => {
       const r = rect()
-      if (r) {
+      // A degenerate rect is NOT a small view — it's a placeholder that is
+      // hidden, unmounted, or mid-transition through a dock switch. Pushing one
+      // parks a zero-size (or negative) overlay over the placeholder, and
+      // Chromium reflows the page to that size on the way through. Skipping
+      // holds the last good bounds until the layout settles, one frame later.
+      //
+      // A SMALL rect is a different thing entirely and must still be pushed —
+      // see `isPaintableRect` for what happened when this guard couldn't tell
+      // the two apart.
+      if (r && isPaintableRect(r)) {
         const key = `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)},${Math.round(r.height)}`
         if (key !== last) {
           last = key

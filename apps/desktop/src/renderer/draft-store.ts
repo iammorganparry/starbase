@@ -131,7 +131,10 @@ const subscribe = (listener: () => void): (() => void) => {
 export const setDraft = (sessionId: string, draft: Draft): void => {
   // An empty draft IS no draft — normalising here keeps storage tidy and keeps
   // `getDraft` returning the shared EMPTY_DRAFT reference.
-  if (isEmpty(draft)) return clearDraft(sessionId)
+  if (isEmpty(draft)) {
+    clearDraft(sessionId)
+    return
+  }
   hydrated.add(sessionId)
   drafts = { ...drafts, [sessionId]: draft }
   write(sessionId, draft)

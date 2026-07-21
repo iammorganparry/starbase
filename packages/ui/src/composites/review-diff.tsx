@@ -1,6 +1,8 @@
 import * as React from "react"
 import { cn } from "../lib/cn.js"
 import { parseUnifiedDiff, type DiffRow } from "../diff/parse.js"
+import type { Token } from "../diff/highlight.js"
+import { HighlightedLine, useDiffHighlight } from "../diff/use-highlight.js"
 import { InlineCommentComposer } from "./inline-comment-composer.js"
 
 interface Selection {
@@ -105,6 +107,18 @@ export function ReviewDiff({
 
   const composerAnchor = selection === null ? null : hi(selection)
 
+  // Highlighted ONCE for the whole file, then handed to each row by index.
+  //
+  // Per-row highlighting cannot work: a line inside a template literal is only a
+  // string because of a line above it. `codeLines` therefore carries every row's
+  // content in order — including context lines, which are the very lines that
+  // give the added ones their context.
+  const codeLines = React.useMemo(
+    () => rows.map((r) => (r.kind === "hunk" ? "" : r.content)),
+    [rows]
+  )
+  const highlighted = useDiffHighlight(codeLines, path)
+
   // Size to the widest line (`w-max`) but never narrower than the viewport
   // (`min-w-full`) so every row's background + selection highlight spans the full
   // line — not just the visible width — when scrolled horizontally.
@@ -125,6 +139,7 @@ export function ReviewDiff({
           <React.Fragment key={row.key}>
             <DiffLine
               row={row}
+              tokens={highlighted?.[i]}
               selected={inRange(selection, i)}
               onPointerDown={(e) => {
                 // Suppress native text selection so the drag selects lines cleanly.
@@ -171,11 +186,14 @@ export function ReviewDiff({
 
 function DiffLine({
   row,
+  tokens,
   selected,
   onPointerDown,
   onPointerEnter
 }: {
   row: LineRow
+  /** This line's themed runs, or undefined while the grammar loads. */
+  tokens: ReadonlyArray<Token> | undefined
   selected: boolean
   onPointerDown: (e: React.PointerEvent) => void
   onPointerEnter: () => void
@@ -183,7 +201,14 @@ function DiffLine({
   const add = row.type === "add"
   const del = row.type === "del"
   const bg = selected ? "bg-blue/[0.08]" : add ? "bg-green/[0.13]" : del ? "bg-red/[0.12]" : ""
-  const fg = add ? "text-green" : del ? "text-red" : "text-muted-foreground"
+  // The SIGN is green/red. The code is not.
+  //
+  // Painting the whole line one flat colour spends the only channel that says
+  // what a token IS on a fact the background already states. You could see that
+  // a line changed but not whether it was a call, a string or a comment — which
+  // is most of what reading a diff is. Add/remove is the wash; syntax is the
+  // text; they stop competing.
+  const signFg = add ? "text-green" : del ? "text-red" : "text-line-strong"
   const gutter = selected
     ? "text-blue"
     : add
@@ -209,9 +234,9 @@ function DiffLine({
       <span className={cn("w-[42px] flex-none select-none pr-3 text-right tabular-nums", gutter)}>
         {row.newLn ?? ""}
       </span>
-      <span className={cn("flex-1 whitespace-pre pl-3.5", fg)}>
-        {sign}
-        {row.content}
+      <span className="flex-1 whitespace-pre pl-3.5 text-text-body">
+        <span className={cn("select-none", signFg)}>{sign}</span>
+        <HighlightedLine text={row.content} tokens={tokens} />
       </span>
     </div>
   )

@@ -1,6 +1,7 @@
 import type { Issue } from "@starbase/core"
 import { CircleDot, CheckCircle2, ExternalLink, Link2Off, MessageSquare } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { Avatar, githubAvatarUrl } from "../components/avatar.js"
 import { Markdown } from "../components/markdown.js"
 import { Spinner } from "../components/loading.js"
@@ -26,6 +27,10 @@ export function IssueView({
   /** Detach the issue from this session. */
   onUnlink?: () => void
 }) {
+  // Above every early return below — a hook that only runs on some renders is
+  // the one thing React's hook order cannot survive.
+  const tier = useWidthTier()
+
   if (loading && !issue) {
     return (
       <div className="flex flex-1 items-center justify-center text-muted-foreground">
@@ -45,9 +50,9 @@ export function IssueView({
   const open = issue.state === "open"
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <div className="mx-auto w-full max-w-[820px] px-8 py-7">
+      <div className={cn("mx-auto w-full max-w-[820px] py-7", atLeast(tier, "mid") ? "px-8" : "px-4")}>
         {/* Title + number + actions */}
-        <div className="mb-3 flex items-start gap-3">
+        <div className="mb-3 flex flex-wrap items-start gap-x-3 gap-y-2">
           <h1 className="min-w-0 flex-1 text-[22px] font-semibold leading-tight text-text-bright">
             {issue.title} <span className="font-normal text-muted-foreground">#{issue.number}</span>
           </h1>

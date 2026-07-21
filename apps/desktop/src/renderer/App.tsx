@@ -357,6 +357,16 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
         })
       )
   })
+  // The lifecycle half of the same poll, for the pure sweep functions below.
+  //
+  // Those two ask exactly one question — "has this PR resolved?" — and the CI
+  // rollup would be noise in their signature and in their tests. Derived here
+  // rather than fetched twice: one poll, two shapes.
+  const prLifecycle = useMemo(
+    () => Object.fromEntries(Object.entries(prStates).map(([id, pr]) => [id, pr.state] as const)),
+    [prStates]
+  )
+
   // Auto adversarial review (opt-in). Polls `Review.run` on the same cadence as
   // the archive sweep, which sounds expensive but isn't: the main process
   // short-circuits on an unchanged PR head, so a tick with no new commits costs
@@ -436,11 +446,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   // every tick, since a merged PR stays merged forever.
   const closedIssuesRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    for (const id of issuesToCloseOnMerge(prStates, sessions, closedIssuesRef.current)) {
+    for (const id of issuesToCloseOnMerge(prLifecycle, sessions, closedIssuesRef.current)) {
       closedIssuesRef.current.add(id)
       void rpc.githubCloseIssue(id).catch(() => {})
     }
-  }, [prStates, sessions])
+  }, [prLifecycle, sessions])
 
   // Tell the operator when a session's PR resolves on GitHub. Guarded by its own
   // ref for the same reason as the issue-closing sweep above: the poll re-runs
@@ -457,9 +467,9 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   useEffect(() => {
     // An empty first result is the "still loading" state, not a real baseline —
     // taking it would let the genuine first result through as an edge.
-    const seeding = !prBaselineRef.current && Object.keys(prStates).length > 0
+    const seeding = !prBaselineRef.current && Object.keys(prLifecycle).length > 0
     for (const { session, state: prState } of prsToNotify(
-      prStates,
+      prLifecycle,
       sweepTargets,
       notifiedPrsRef.current
     )) {
@@ -480,7 +490,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
         .catch(() => {})
     }
     if (seeding) prBaselineRef.current = true
-  }, [prStates, sweepTargets])
+  }, [prLifecycle, sweepTargets])
 
   if (state.matches("loading") || state.matches("starting")) {
     return <LoadingScreen />

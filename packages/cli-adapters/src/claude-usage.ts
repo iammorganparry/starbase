@@ -71,6 +71,9 @@ export const fetchClaudeUsage = async (binPath: string | null): Promise<SdkUsage
   let release: () => void = () => {}
   const gate = new Promise<void>((resolve) => (release = resolve))
   // Streaming-input mode keeps the control channel alive; we never yield a turn.
+  // The SDK wants an async iterable to hold the control channel open, and
+  // yielding anything at all would send a turn we do not want sent.
+  // biome-ignore lint/correctness/useYield: never yielding IS the behaviour here
   async function* prompt() {
     await gate
   }

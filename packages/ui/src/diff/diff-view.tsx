@@ -6,6 +6,8 @@ import { Button } from "../components/button.js"
 import { ClaudeGlyph } from "../components/eyebrow.js"
 import type { DiffRow } from "./parse.js"
 import { parseUnifiedDiff } from "./parse.js"
+import type { Token } from "./highlight.js"
+import { HighlightedLine, useMultiFileHighlight } from "./use-highlight.js"
 
 const ROW_HEIGHT = { file: 34, hunk: 26, line: 21 } as const
 
@@ -73,6 +75,18 @@ export function DiffView({ rows, patch, className, overscan = 24, actions }: Dif
     }
     return out
   }, [parsed])
+
+  // Syntax highlighting, one grammar run per FILE in the changeset.
+  //
+  // Hoisted here rather than done in the row: the rows are virtualized, so a
+  // per-row hook would re-tokenize on every scroll — and a line inside a
+  // template literal is only a string because of a line above it, which a row
+  // that only sees itself can never know.
+  const rowContent = useMemo(
+    () => parsed.map((r) => (r.kind === "line" ? r.content : null)),
+    [parsed]
+  )
+  const highlighted = useMultiFileHighlight(rowContent, rowFile)
 
   const [selection, setSelection] = useState<Selection | null>(null)
   const [body, setBody] = useState("")
@@ -143,6 +157,7 @@ export function DiffView({ rows, patch, className, overscan = 24, actions }: Dif
               >
                 <DiffRowView
                   row={row}
+                  tokens={highlighted[item.index]}
                   selected={selectedRow(item.index)}
                   onRevertFile={actions?.onRevertFile}
                   onPointerDown={
@@ -189,7 +204,9 @@ export function DiffView({ rows, patch, className, overscan = 24, actions }: Dif
             rows={2}
             className="w-full resize-none rounded-md border border-line bg-sunken px-2 py-1.5 font-sans text-[12px] text-text-body outline-none placeholder:text-dim focus-visible:border-blue"
           />
-          <div className="flex items-center gap-2">
+          {/* Wraps rather than overflows: two nowrap buttons and a spacer in a
+              diff column that can be a couple of hundred pixels wide. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Button
               variant="danger"
               size="sm"
@@ -224,12 +241,15 @@ export function DiffView({ rows, patch, className, overscan = 24, actions }: Dif
 
 function DiffRowView({
   row,
+  tokens,
   selected = false,
   onRevertFile,
   onPointerDown,
   onPointerEnter
 }: {
   row: DiffRow
+  /** This line's themed runs, or undefined while the grammar loads. */
+  tokens?: ReadonlyArray<Token>
   selected?: boolean
   onRevertFile?: (path: string) => void
   onPointerDown?: (e: ReactPointerEvent) => void
@@ -270,7 +290,10 @@ function DiffRowView({
       : row.type === "del"
         ? "bg-red/[0.12]"
         : ""
-  const fg = row.type === "add" ? "text-green" : row.type === "del" ? "text-red" : "text-muted-foreground"
+  // The SIGN is green/red. The code is not — see the same note in
+  // `review-diff.tsx`. Add/remove is carried by the background wash so the text
+  // colour is free to say what each token IS.
+  const signFg = row.type === "add" ? "text-green" : row.type === "del" ? "text-red" : "text-line-strong"
   const gutter = selected
     ? "text-blue"
     : row.type === "add"
@@ -296,8 +319,10 @@ function DiffRowView({
       <span className={cn("w-10 shrink-0 select-none pr-2 text-right tabular-nums", gutter)}>
         {row.newLn ?? ""}
       </span>
-      <span className={cn("w-4 shrink-0 select-none text-center", fg)}>{sign}</span>
-      <span className={cn("whitespace-pre", fg)}>{row.content}</span>
+      <span className={cn("w-4 shrink-0 select-none text-center", signFg)}>{sign}</span>
+      <span className="whitespace-pre text-text-body">
+        <HighlightedLine text={row.content} tokens={tokens} />
+      </span>
     </div>
   )
 }

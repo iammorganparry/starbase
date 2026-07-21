@@ -17,7 +17,7 @@ import type {
   McpServerStatus,
   ModelOption,
   OpencodeProviderInfo,
-  PrState,
+  SessionPrStatus,
   PrSummary,
   ProviderConfig,
   ProviderModels,
@@ -35,7 +35,6 @@ import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
 import { SettingsView } from "../composites/settings-view.js"
 import { type ConversationPaneCtx, SessionConversation } from "../screens/session-conversation.js"
-import { ARCHIVED_GROUP_KEY } from "./session-sidebar.js"
 import { useSplitLayout } from "./use-split-layout.js"
 import { MAX_PANES } from "./split-layout.js"
 import { matchSplitShortcut } from "./split-shortcuts.js"
@@ -76,7 +75,7 @@ export interface StarbaseAppProps {
   /** What each session's agent is doing right now ("Running npm test"), keyed by id. */
   liveActivity?: Record<string, SessionActivity>
   /** Live linked-PR state per session id, badged onto sidebar rows. */
-  prStates?: Record<string, PrState>
+  prStates?: Record<string, SessionPrStatus>
   /** Live per-session worktree diff totals, for the Changes tab badge. */
   liveDiff?: Record<string, DiffStat>
   /** Provider usage snapshot for the Usage & limits modal. */
@@ -362,17 +361,21 @@ export function StarbaseApp({
     [repos, onToggleStar]
   )
 
-  // Same path→name translation for collapsed repos; the archived sentinel is
-  // passed through untranslated (it is not a repo).
-  const collapsedRepoNames = useMemo(() => {
-    const paths = new Set(collapsedRepos)
-    const names = new Set(repos.filter((r) => paths.has(r.path)).map((r) => r.name))
-    if (paths.has(ARCHIVED_GROUP_KEY)) names.add(ARCHIVED_GROUP_KEY)
-    return names
-  }, [repos, collapsedRepos])
+  // Same path→name translation for collapsed repos.
+  //
+  // The archived sentinel that used to be threaded through here is gone with the
+  // Archived GROUP it collapsed — archived is a filter now, not a place. A stale
+  // `__archived__` left in a persisted `collapsedRepos` matches no repo path and
+  // is simply ignored, so no migration is needed.
+  const collapsedRepoNames = useMemo(
+    () => {
+      const paths = new Set(collapsedRepos)
+      return new Set(repos.filter((r) => paths.has(r.path)).map((r) => r.name))
+    },
+    [repos, collapsedRepos]
+  )
   const toggleCollapsedByName = useCallback(
     (repoName: string) => {
-      if (repoName === ARCHIVED_GROUP_KEY) return onToggleCollapsed?.(ARCHIVED_GROUP_KEY)
       const repo = repos.find((r) => r.name === repoName)
       if (repo) return onToggleCollapsed?.(repo.path)
     },
@@ -395,7 +398,9 @@ export function StarbaseApp({
   // and the ⌃⇧1..4 shortcuts below address exactly the same set.
   const paneBySession = useMemo(() => {
     const map = new Map<string, number>()
-    group?.panes.forEach((p, i) => map.set(p.sessionId, i))
+    group?.panes.forEach((p, i) => {
+      map.set(p.sessionId, i)
+    })
     return map
   }, [group])
 

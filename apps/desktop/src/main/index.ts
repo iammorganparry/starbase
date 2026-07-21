@@ -115,6 +115,14 @@ if (!gotPrimaryLock) {
     const window = new BrowserWindow({
       width: 1320,
       height: 860,
+      // The shell collapses gracefully (see `width-tier.tsx`) but it collapses
+      // to a floor, not to nothing: below this the sidebar rail, a pane's tab
+      // bar and the composer's wrapped toolbar have no room left to give, and
+      // the fixed-width dialogs would clip. Half of a 1920px display is 960 —
+      // deliberately just above this, so the commonest split-screen gesture
+      // lands inside the supported range rather than at the limit.
+      minWidth: 900,
+      minHeight: 600,
       show: false,
       backgroundColor: "#16181d",
       titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",

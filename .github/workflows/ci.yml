@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    name: Typecheck & unit tests
+    name: Lint, typecheck & unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +25,13 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # Biome, linter only (the formatter is deliberately disabled — see
+      # biome.json). Errors are the correctness + suspicious rules, which flag
+      # real bugs; a11y/style/complexity report as warnings and do not gate.
+      # Runs FIRST because it is the fastest signal by an order of magnitude.
+      - name: Lint
+        run: pnpm lint
 
       - name: Typecheck
         run: pnpm typecheck

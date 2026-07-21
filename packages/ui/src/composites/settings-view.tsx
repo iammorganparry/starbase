@@ -45,6 +45,7 @@ import {
   X
 } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
 import { Eyebrow } from "../components/eyebrow.js"
@@ -515,12 +516,22 @@ export function SettingsView({
 }: SettingsViewProps) {
   const [section, setSection] = React.useState<SectionKey>("providers")
 
+  // Three `flex-none` columns (216 + 328 + detail) is ~544px of chrome before
+  // the settings themselves get a pixel. Below `mid` the nav narrows to an icon
+  // rail so the section you're editing keeps the room.
+  const compact = !atLeast(useWidthTier(), "mid")
+
   return (
     <div className="flex min-h-0 flex-1 bg-editor">
       {/* nav */}
-      <nav className="flex w-[216px] flex-none flex-col gap-0.5 border-r border-hairline bg-panel p-2.5">
-        <div className="flex items-center justify-between px-2.5 pb-1.5 pt-1">
-          <Eyebrow>Settings</Eyebrow>
+      <nav
+        className={cn(
+          "flex flex-none flex-col gap-0.5 border-r border-hairline bg-panel p-2.5",
+          compact ? "w-[56px] items-center" : "w-[216px]"
+        )}
+      >
+        <div className={cn("flex items-center px-2.5 pb-1.5 pt-1", compact ? "justify-center" : "justify-between")}>
+          {!compact && <Eyebrow>Settings</Eyebrow>}
           {onClose && (
             <button
               type="button"
@@ -538,8 +549,13 @@ export function SettingsView({
             type="button"
             onClick={() => setSection(item.key)}
             aria-current={section === item.key}
+            // The label is the accessible name in both modes — the compact rail
+            // hides the TEXT, not the name, so a by-name lookup still finds it.
+            aria-label={item.label}
+            title={item.label}
             className={cn(
-              "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] transition-colors",
+              "flex items-center gap-2.5 rounded-md py-2 text-[13px] transition-colors",
+              compact ? "justify-center px-2" : "px-2.5",
               section === item.key
                 ? "border border-blue/45 bg-surface font-semibold text-text-bright shadow-[0_0_0_3px_rgba(97,175,239,0.1)]"
                 : "border border-transparent text-text-body hover:bg-surface/60"
@@ -548,19 +564,24 @@ export function SettingsView({
             <span className={cn(section === item.key ? "text-blue" : "text-muted-foreground")}>
               {item.icon}
             </span>
-            <span className="flex-1 text-left">{item.label}</span>
-            {item.key === "providers" && (
+            {!compact && <span className="flex-1 text-left">{item.label}</span>}
+            {!compact && item.key === "providers" && (
               <span className="rounded bg-white/5 px-1.5 py-px font-mono text-[9px] text-muted-foreground">
                 {clis.length}
               </span>
             )}
           </button>
         ))}
-        <div className="mt-auto rounded-md border border-line px-2.5 py-2 font-mono text-[10px] leading-relaxed text-dim">
-          config · <span className="text-muted-foreground">~/starbase/config.json</span>
-          <br />
-          user scope
-        </div>
+        {/* A three-line path caption is the first thing to go at 56px — it is
+            reference material, not navigation, and the same path is printed in
+            the Settings body. */}
+        {!compact && (
+          <div className="mt-auto rounded-md border border-line px-2.5 py-2 font-mono text-[10px] leading-relaxed text-dim">
+            config · <span className="text-muted-foreground">~/starbase/config.json</span>
+            <br />
+            user scope
+          </div>
+        )}
       </nav>
 
       {section === "general" ? (
@@ -667,7 +688,7 @@ function ProvidersSection({
   return (
     <>
       {/* provider list */}
-      <div className="flex w-[328px] flex-none flex-col border-r border-hairline">
+      <div className="flex w-[328px] max-w-[45%] flex-none flex-col border-r border-hairline">
         <div className="flex flex-none flex-col gap-1 p-4 pb-3">
           <span className="text-[15px] font-bold text-text-bright">Providers</span>
           <span className="text-[11.5px] leading-relaxed text-muted-foreground">

@@ -244,7 +244,9 @@ function renderParts(
     if (run.length >= COLLAPSE_MIN) {
       out.push(<ToolGroup key={`g${runStart}`} tools={run.map((p) => p.tool)} />)
     } else {
-      run.forEach((p, k) => out.push(<ToolCardView key={`${runStart}-${k}`} tool={p.tool} />))
+      run.forEach((p, k) => {
+        out.push(<ToolCardView key={`${runStart}-${k}`} tool={p.tool} />)
+      })
     }
     run = []
   }

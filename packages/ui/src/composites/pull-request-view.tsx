@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import type {
   PrLabel,
   PrMergeMethod,
@@ -7,8 +8,9 @@ import type {
   PullRequest,
   ReviewSubmitKind
 } from "@starbase/core"
-import { GitPullRequest } from "lucide-react"
+import { GitPullRequest, PanelRight } from "lucide-react"
 import { cn } from "../lib/cn.js"
+import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { relativeTime } from "../lib/relative-time.js"
 import { Avatar, githubAvatarUrl } from "../components/avatar.js"
 import { Badge } from "../components/badge.js"
@@ -181,6 +183,19 @@ export function PullRequestView({
   updateBranchError,
   review
 }: PullRequestViewProps) {
+  // Declared ABOVE the early returns below — this component returns early for
+  // the loading and no-PR states, and a hook after those runs on some renders
+  // and not others, which is the one thing React's hook order cannot survive.
+  //
+  // Below `mid` the 352px rail floats instead of docking: the centre column is a
+  // 760px reading measure with 60px of gutter, so a docked rail in a 500px pane
+  // left roughly 88px of it — narrower than the PR title.
+  const roomy = atLeast(useWidthTier(), "mid")
+  const [railOpen, setRailOpen] = useState(false)
+  useEffect(() => {
+    if (roomy) setRailOpen(false)
+  }, [roomy])
+
   // Loading — avoid flashing the "Create PR" empty state before the PR resolves.
   if (pr === null && busy) {
     return (
@@ -235,7 +250,7 @@ export function PullRequestView({
   const feed = buildFeed(pr)
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="relative flex min-h-0 min-w-0 flex-1">
       {/* Centre column: header + timeline + sticky composer */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/*
@@ -364,8 +379,28 @@ export function PullRequestView({
         </div>
       </div>
 
-      {/* Right rail */}
+      {/* Right rail — docked when there's room, a floating sheet when not. */}
+      {!roomy && (
+        <button
+          type="button"
+          aria-label="Pull request details"
+          aria-pressed={railOpen}
+          title="Reviewers, checks and merge"
+          onClick={() => setRailOpen((v) => !v)}
+          className={cn(
+            "absolute right-2 top-2 z-20 flex size-7 items-center justify-center rounded-md border border-line bg-sunken shadow-lg transition-colors",
+            railOpen ? "text-blue" : "text-dim hover:text-text-bright"
+          )}
+        >
+          <PanelRight size={15} />
+        </button>
+      )}
       <PrSidePanel
+        // The rail holds the merge button, so it can't just be dropped at narrow
+        // widths — it has to remain reachable, which is what the toggle above is
+        // for. Hidden rather than unmounted so its scroll position and merge-
+        // method choice survive being closed.
+        className={cn(!roomy && "absolute inset-y-0 right-0 z-30 shadow-2xl", !roomy && !railOpen && "hidden")}
         pr={pr}
         connected={connected}
         onMerge={onMerge}

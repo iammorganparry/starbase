@@ -2,6 +2,7 @@ import { type ReactNode, useState } from "react"
 import type { DiffStat, Session, SessionActivity, SessionDisplayStatus } from "@starbase/core"
 import { activityLabel, displayStatusOf, UNTITLED_SESSION } from "@starbase/core"
 import { displayStatusLabel } from "../tokens.js"
+import { atLeast, useWidthTier, WidthTierProvider } from "../hooks/width-tier.js"
 import { TabBar, type TabKey } from "../app/tab-bar.js"
 import { ConversationView } from "../app/conversation-view.js"
 import { SEED_CONVERSATION } from "../seed.js"
@@ -134,7 +135,26 @@ export const visibleTabs = (
  * than looking an id up in a list, so a slot always renders the session it was
  * given even mid-reorder.
  */
+/**
+ * THE responsive boundary.
+ *
+ * Everything below here — the tab bar, the composer, a pane's side rails —
+ * collapses against THIS pane's width, so a four-way split degrades each pane
+ * independently and a single maximised pane keeps the full layout.
+ *
+ * Split into a provider and a body deliberately: a component cannot read the
+ * context it is itself installing, and `SessionPaneBody` has to know its own
+ * width to decide whether the plan split will fit.
+ */
 export function SessionPane(props: SessionPaneProps) {
+  return (
+    <WidthTierProvider className="flex-col">
+      <SessionPaneBody {...props} />
+    </WidthTierProvider>
+  )
+}
+
+function SessionPaneBody(props: SessionPaneProps) {
   const [tab, setTab] = useState<TabKey>("conversation")
   // A pending deep link into Plan Review (set when the Conversation rail jumps to
   // a step). One-shot: Plan Review reports its own selection back and we drop it,
@@ -158,7 +178,23 @@ export function SessionPane(props: SessionPaneProps) {
   // with no plan has nothing to split, so the same reasoning that hides the Plan
   // tab collapses the split — otherwise a plan-less session would leave an empty
   // column pinned open with no control on screen to close it.
-  const splitAvailable = activeTab === "conversation" && tabs.includes("plan")
+  //
+  // …and it now also needs ROOM. The plan column has a 360px floor and never
+  // collapsed, so in a 500px pane the transcript beside it was squeezed to about
+  // 35px. Below `wide` the split is simply not offered — the Plan Review tab is
+  // the same screen at full width, one click away, so nothing is lost but the
+  // side-by-side reading the pane couldn't have delivered anyway.
+  //
+  // The hook is HOISTED out of the `&&` chain. Inline as the third operand it
+  // was skipped whenever either of the first two was false, so it ran on some
+  // renders and not others — a Rules of Hooks violation that today's React
+  // happens to tolerate only because `useContext` doesn't occupy a slot in the
+  // hook list. Give `useWidthTier` any internal state (a `useSyncExternalStore`
+  // selector, say) and that becomes "rendered fewer hooks than expected". The
+  // same rule is spelled out in `issue-view.tsx` and `pull-request-view.tsx`;
+  // it applies here too — and `useHookAtTopLevel` now enforces it.
+  const roomy = atLeast(useWidthTier(), "wide")
+  const splitAvailable = activeTab === "conversation" && tabs.includes("plan") && roomy
   const splitOpen = split && splitAvailable
   const connectGithub = props.onOpenSettings ?? (() => {})
   // What this session's agent is doing — drives the tab bar's pill.

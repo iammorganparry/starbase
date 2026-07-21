@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import type { CliInfo, DiffStat, PrState, Session, SessionActivity, User } from "@starbase/core"
+import type { CliInfo, DiffStat, SessionPrStatus, Session, SessionActivity, User } from "@starbase/core"
 import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
 import { SessionSplit } from "../app/session-split.js"
@@ -91,7 +91,7 @@ export interface SessionConversationProps {
   /** What each session's agent is doing right now, keyed by id (live). */
   liveActivity?: Record<string, SessionActivity>
   /** Live linked-PR state per session id, badged onto sidebar rows. */
-  prStates?: Record<string, PrState>
+  prStates?: Record<string, SessionPrStatus>
   /** Live per-session worktree diff totals, for the Changes tab badge. */
   liveDiff?: Record<string, DiffStat>
   /** Open the New Session dialog. */

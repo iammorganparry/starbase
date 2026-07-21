@@ -339,6 +339,22 @@
 }
 
 /*
+ * Scrollable, but with no visible track.
+ *
+ * For strips whose height IS the content's — a 36px tab bar, a chip row — where
+ * the 10px scrollbar above would take a third of the row and shove the labels
+ * off-centre. The overflow is still discoverable by trackpad, shift-wheel and
+ * keyboard; only the gutter is gone.
+ */
+.sb-no-scrollbar {
+  scrollbar-width: none;
+}
+.sb-no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/*
  * Assistant markdown (Streamdown output) — One Dark prose tuned for the compact
  * chat column. Element selectors so we don't depend on Streamdown's own classes.
  */

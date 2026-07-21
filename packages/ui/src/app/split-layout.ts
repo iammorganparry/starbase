@@ -71,6 +71,28 @@ export const MAX_PANES = 4
 /** Smallest share a pane may be dragged to — below this it can't be read. */
 export const MIN_RATIO = 0.15
 
+/**
+ * The narrowest a pane may be and still hold a readable transcript.
+ *
+ * `MIN_RATIO` alone is not a floor, it's a proportion: on a 1440px window with
+ * the 266px sidebar taken out, 0.15 of the row is ~176px — narrower than a
+ * single diff row's fixed gutters. The ratio guards the DRAG; this guards the
+ * COUNT, so the split can't be arranged into panes that were never legible.
+ */
+export const MIN_PANE_PX = 350
+
+/**
+ * How many panes the row can actually seat, given its measured width.
+ *
+ * A width of 0 means "not measured yet" and yields the static cap — refusing a
+ * split during the first frame, before any ResizeObserver has reported, would
+ * make ⌃⇧= fail intermittently on launch.
+ */
+export const maxPanesForWidth = (rowWidth: number): number =>
+  rowWidth <= 0
+    ? MAX_PANES
+    : Math.max(1, Math.min(MAX_PANES, Math.floor(rowWidth / MIN_PANE_PX)))
+
 /** The empty workspace — also the fallback whenever stored state is unusable. */
 export const EMPTY_WORKSPACE: Workspace = { groups: [], activeGroupId: null }
 

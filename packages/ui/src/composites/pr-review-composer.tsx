@@ -59,7 +59,7 @@ export function PrReviewComposer({
           <Callout tone="red">{error}</Callout>
         </div>
       )}
-      <div className="flex items-center gap-[9px] border-t border-hairline px-[14px] py-[11px]">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-[9px] gap-y-2 border-t border-hairline px-[14px] py-[11px]">
         <label className="flex items-center gap-2 text-[11.5px] text-text">
           <Toggle checked={routeToAgent} onCheckedChange={setRouteToAgent} />
           Route to agent
