@@ -2,8 +2,8 @@ import type { ReactNode } from "react"
 import type { CliInfo, DiffStat, PrState, Session, SessionActivity, User } from "@starbase/core"
 import type { DockSide } from "../app/terminal-panel.js"
 import { SessionSidebar } from "../app/session-sidebar.js"
-import { SessionGrid } from "../app/session-grid.js"
-import type { GridLayout } from "../app/layout-grid.js"
+import { SessionSplit } from "../app/session-split.js"
+import type { SplitGroup } from "../app/split-layout.js"
 import { EmptyConversation } from "./empty-conversation.js"
 import type { ConversationPaneCtx } from "./session-pane.js"
 
@@ -18,18 +18,38 @@ export interface SessionConversationProps {
   activeSessionId: string | null
   onSelectSession: (id: string) => void
   /**
-   * The session grid — which sessions sit in which slots, and which slot has the
-   * operator's attention. Absent in stories, where a single implicit 1-up slot
-   * holding `activeSessionId` is synthesised instead.
+   * The split on screen — which sessions sit in which panes, in what proportion,
+   * and which pane has the operator's attention. Absent in stories, where a
+   * single implicit pane holding `activeSessionId` is synthesised instead.
    */
-  layout?: GridLayout
-  /** Move the focus ring to a slot (a click anywhere inside that pane). */
-  onFocusSlot?: (slot: number) => void
-  /** Put a session in a specific slot — what a sidebar drag-and-drop means. */
-  onAssignSlot?: (slot: number, sessionId: string) => void
-  /** Empty a slot, leaving the session itself running. */
-  onClearSlot?: (slot: number) => void
-  /** Which slot each gridded session occupies, for the sidebar's badges. */
+  group?: SplitGroup | null
+  /** Every split, so the sidebar can draw a multi-pane group as one pill. */
+  splitGroups?: ReadonlyArray<SplitGroup>
+  /** Which group is on screen (highlights its sidebar pill). */
+  activeGroupId?: string | null
+  /** Move the focus ring to a pane (a click anywhere inside it). */
+  onFocusPane?: (index: number) => void
+  /** Focus a pane of ANY group from the sidebar — activates that group too. */
+  onFocusGroupPane?: (groupId: string, index: number) => void
+  /** Insert a session as a new pane at `at` — what an edge drop means. */
+  onSplitWith?: (sessionId: string, at: number) => void
+  /** Merge a session into a named group (a drop on its sidebar pill). */
+  onSplitGroupWith?: (groupId: string, sessionId: string, at: number) => void
+  /** Swap a pane's session — what a drop on a pane's middle means. */
+  onReplacePane?: (index: number, sessionId: string) => void
+  /** Close a pane of the active group, leaving the session running. */
+  onClosePane?: (index: number) => void
+  /** Close a pane of any group (a sidebar segment's ×). */
+  onCloseGroupPane?: (groupId: string, index: number) => void
+  /** Reorder a pane within the active group. */
+  onMovePane?: (index: number, direction: -1 | 1) => void
+  /** Arc's "Separate all tabs" — every pane of a group flies out to its own row. */
+  onSeparateAll?: (groupId: string) => void
+  /** Continuous divider drag, as a fraction of the split's width. */
+  onResizePane?: (index: number, delta: number) => void
+  /** Add a pane to the active group (the ghost panel on the right edge). */
+  onAddSplit?: () => void
+  /** Which pane each on-screen session occupies, for the sidebar's badges. */
   slotBySession?: ReadonlyMap<string, number>
   /** Manually rename a session (double-click its sidebar title). */
   onRenameSession?: (id: string, title: string) => void
@@ -140,13 +160,16 @@ export interface SessionConversationProps {
  * tab body and docks) lives in `SessionPane`, which is what the grid multiplies.
  */
 export function SessionConversation(props: SessionConversationProps) {
-  // Stories and standalone use pass no layout — synthesise the 1-up grid holding
-  // whatever `activeSessionId` says, so this screen renders identically either way.
-  const layout: GridLayout = props.layout ?? {
-    mode: "1",
-    slots: [props.activeSessionId],
-    focused: 0
-  }
+  // Stories and standalone use pass no split — synthesise the one-pane group
+  // holding whatever `activeSessionId` says, so this screen renders identically
+  // either way. A one-pane group is not a special case; it is what a single
+  // session IS in this model.
+  const group: SplitGroup | null =
+    props.group !== undefined
+      ? props.group
+      : props.activeSessionId === null
+        ? null
+        : { id: "standalone", panes: [{ sessionId: props.activeSessionId, ratio: 1 }], focused: 0 }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -154,6 +177,12 @@ export function SessionConversation(props: SessionConversationProps) {
         sessions={props.sessions}
         activeSessionId={props.activeSessionId}
         slotBySession={props.slotBySession}
+        splitGroups={props.splitGroups}
+        activeGroupId={props.activeGroupId}
+        onFocusPane={props.onFocusGroupPane}
+        onClosePane={props.onCloseGroupPane}
+        onSeparateAll={props.onSeparateAll}
+        onSplitWith={props.onSplitGroupWith}
         onSelect={props.onSelectSession}
         onRename={props.onRenameSession}
         onArchive={props.onArchiveSession}
@@ -184,12 +213,19 @@ export function SessionConversation(props: SessionConversationProps) {
             onNewSession={props.onNewSession}
           />
         ) : (
-          <SessionGrid
-            layout={layout}
+          <SessionSplit
+            group={group}
             sessions={props.sessions}
-            onFocusSlot={props.onFocusSlot ?? (() => {})}
-            onAssignSlot={props.onAssignSlot}
-            onClearSlot={props.onClearSlot}
+            onFocusPane={props.onFocusPane}
+            onSplitWith={props.onSplitWith}
+            onReplacePane={props.onReplacePane}
+            onResize={props.onResizePane}
+            onClosePane={props.onClosePane}
+            onMovePane={props.onMovePane}
+            onAddSplit={props.onAddSplit}
+            emptyState={
+              <span className="text-[12px] text-dim">Nothing on screen — pick a session</span>
+            }
             renderConversation={props.renderConversation}
             conversationPane={props.conversationPane}
             planSessions={props.planSessions}

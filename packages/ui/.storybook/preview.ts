@@ -1,7 +1,14 @@
+import { createElement } from "react"
 import type { Preview } from "@storybook/react-vite"
+import { MotionConfig } from "motion/react"
 import "../src/globals.css"
 
 const preview: Preview = {
+  // Mirrors the `MotionConfig` in `AppShell`, so a component's motion looks the
+  // same in Storybook as it does in the app — including the reduced-motion
+  // behaviour, which is the whole point of approving these here first.
+  // `createElement` rather than JSX because this file is `.ts`.
+  decorators: [(Story) => createElement(MotionConfig, { reducedMotion: "user" }, createElement(Story))],
   parameters: {
     layout: "centered",
     backgrounds: {

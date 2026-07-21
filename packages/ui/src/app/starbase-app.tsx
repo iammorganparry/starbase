@@ -36,8 +36,8 @@ import { UsageModal } from "../composites/usage-modal.js"
 import { SettingsView } from "../composites/settings-view.js"
 import { type ConversationPaneCtx, SessionConversation } from "../screens/session-conversation.js"
 import { ARCHIVED_GROUP_KEY } from "./session-sidebar.js"
-import { LayoutPicker } from "./session-grid.js"
-import { useGridLayout } from "./use-grid-layout.js"
+import { useSplitLayout } from "./use-split-layout.js"
+import { MAX_PANES } from "./split-layout.js"
 import { SEED_PATCH } from "../seed.js"
 
 const GH_UNAVAILABLE: GhStatus = {
@@ -288,13 +288,14 @@ export function StarbaseApp({
   onCreateSessionFromIssue,
   version
 }: StarbaseAppProps) {
-  // The session grid replaces what used to be a single `selected` useState. The
-  // focused slot's session IS the old "selected" — every existing call site below
-  // still reads `selected` / calls `setSelected` and behaves as it always did when
-  // the layout is 1-up.
-  const grid = useGridLayout(sessions, activeSessionId ?? sessions[0]?.id ?? null)
-  const selected = grid.activeSessionId
-  const setSelected = grid.selectSession
+  // The split replaces what used to be a single `selected` useState. The focused
+  // pane's session IS the old "selected" — every existing call site below still
+  // reads `selected` / calls `setSelected` and behaves as it always did when the
+  // group has one pane.
+  const split = useSplitLayout(sessions, activeSessionId ?? sessions[0]?.id ?? null)
+  const selected = split.activeSessionId
+  const setSelected = split.selectSession
+  const group = split.group
   const [newOpen, setNewOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageLoading, setUsageLoading] = useState(false)
@@ -319,8 +320,8 @@ export function StarbaseApp({
   // Publish the selection so the notifier can tell whether a session is the one
   // already on screen (see `active-session.ts` in the desktop renderer).
   useEffect(() => {
-    onVisibleSessionsChange?.(grid.visibleSessionIds)
-  }, [grid.visibleSessionIds, onVisibleSessionsChange])
+    onVisibleSessionsChange?.(split.visibleSessionIds)
+  }, [split.visibleSessionIds, onVisibleSessionsChange])
 
   const openUsage = useCallback(() => {
     setUsageOpen(true)
@@ -377,26 +378,99 @@ export function StarbaseApp({
   // closure that baked in the single active session; each SessionPane calls it
   // with its OWN session, which is what lets the grid render several at once.
   //
-  // The empty state is for an empty GRID, never merely an empty focused SLOT.
-  // `selected` is the focused slot's session, which is legitimately null the
-  // moment you close a pane or click a "Drag a session here" placeholder — keying
-  // the empty state off that would replace every other live pane with the
-  // first-launch screen, and the only way back would be a sidebar click.
-  const showEmpty =
-    Boolean(renderConversation) && grid.layout.slots.every((id) => id === null)
+  // The empty state is for an empty WORKSPACE, never merely an empty pane. A
+  // split always has a session in every pane — closing the last one is what
+  // leaves no group at all, and that is the only thing the first-launch screen
+  // should answer to.
+  const showEmpty = Boolean(renderConversation) && group === null
 
-  // ⌘N / Ctrl-N opens the New Session dialog (only when creation is wired).
+  // Which pane each ON-SCREEN session sits in, for the sidebar's numbered badges.
+  // Only the active group is badged: those are the panes the numbers refer to,
+  // and the ⌃⇧1..4 shortcuts below address exactly the same set.
+  const paneBySession = useMemo(() => {
+    const map = new Map<string, number>()
+    group?.panes.forEach((p, i) => map.set(p.sessionId, i))
+    return map
+  }, [group])
+
+  /** Merge a session into the active group at `at` — a drop, or ⌃⇧=. */
+  const splitActiveWith = useCallback(
+    (sessionId: string, at: number) => {
+      if (group) split.splitInto(group.id, sessionId, at)
+    },
+    [group, split]
+  )
+
+  // ⌘N opens New Session; the rest is Arc's split map. All registered in ONE
+  // listener so the ordering between them is explicit rather than dependent on
+  // effect order, and all of them check `metaKey || ctrlKey` so the same physical
+  // chord works on both platforms.
   useEffect(() => {
-    if (!onCreateSession) return
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (onCreateSession && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
         e.preventDefault()
         setNewOpen(true)
+        return
+      }
+      if (!e.shiftKey) return
+
+      // ⌃⇧= — add a pane holding the first session not already on screen. Arc
+      // splits with a new tab; the nearest thing here is a session you have but
+      // aren't looking at, which beats opening a pane onto nothing.
+      if ((e.key === "=" || e.key === "+") && group && group.panes.length < MAX_PANES) {
+        const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
+        if (next) {
+          e.preventDefault()
+          splitActiveWith(next.id, group.panes.length)
+        }
+        return
+      }
+
+      // ⌃⇧1..4 — focus pane N. Out-of-range is a no-op rather than a clamp: ⌃⇧4
+      // in a two-pane split means "the fourth pane", and there isn't one.
+      const digit = Number.parseInt(e.key, 10)
+      if (group && Number.isInteger(digit) && digit >= 1 && digit <= MAX_PANES) {
+        if (digit <= group.panes.length) {
+          e.preventDefault()
+          split.focusPane(group.id, digit - 1)
+        }
+        return
+      }
+
+      // ⌃⇧[ / ⌃⇧] — the pane to the left / right. Stops at the ends (the reducer
+      // refuses to wrap): wrapping from the last pane to the first reads as a
+      // jump, and in a two-pane split it makes the two keys indistinguishable.
+      if (e.key === "[") {
+        e.preventDefault()
+        split.focusNeighbour(-1)
+        return
+      }
+      if (e.key === "]") {
+        e.preventDefault()
+        split.focusNeighbour(1)
+        return
+      }
+
+      // ⌃⇧⌥← / → — move the FOCUSED pane, rather than the focus.
+      if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault()
+        split.moveFocused(e.key === "ArrowLeft" ? -1 : 1)
+        return
+      }
+
+      // ⌃⇧W — close the focused pane. The session keeps running; this closes the
+      // VIEW of it, which is why it isn't bound to a bare ⌘W (that reads as
+      // "close the window" and would be a much more destructive miss).
+      if (e.key.toLowerCase() === "w" && group && group.panes.length > 1) {
+        e.preventDefault()
+        split.closeFocused()
       }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [onCreateSession])
+  }, [onCreateSession, group, sessions, split, splitActiveWith])
 
   const handleCreate = useCallback(
     async (input: CreateSessionInput) => {
@@ -426,20 +500,47 @@ export function StarbaseApp({
   )
 
   return (
-    <AppShell
-      title="Starbase"
-      actions={<LayoutPicker mode={grid.layout.mode} onChange={grid.changeMode} />}
-    >
+    // No layout picker in the title bar any more: the shape of the split is a
+    // consequence of what you dragged where, not a mode you pick up front.
+    <AppShell title="Starbase">
       <SessionConversation
         sessions={sessions}
         clis={clis}
         activeSessionId={selected}
         onSelectSession={setSelected}
-        layout={grid.layout}
-        onFocusSlot={grid.focusSlot}
-        onAssignSlot={grid.assignToSlot}
-        onClearSlot={grid.clearSlot}
-        slotBySession={grid.slotBySession}
+        group={group}
+        splitGroups={split.workspace.groups}
+        activeGroupId={split.workspace.activeGroupId}
+        onFocusPane={(index) => group && split.focusPane(group.id, index)}
+        onFocusGroupPane={(groupId, index) => {
+          // A sidebar segment belongs to a group that may not be on screen, so
+          // showing it is part of focusing it.
+          split.activateGroup(groupId)
+          split.focusPane(groupId, index)
+        }}
+        onSplitWith={splitActiveWith}
+        onSplitGroupWith={split.splitInto}
+        onReplacePane={(index, sessionId) => {
+          // Replace = close what's there, then put the dropped session in its
+          // place. Two reducer steps rather than one primitive, because "swap
+          // this pane's session" is exactly those two things and the model is
+          // smaller without a third way to mutate a pane.
+          if (!group) return
+          if (group.panes.length === 1) return setSelected(sessionId)
+          split.closePane(group.id, index)
+          split.splitInto(group.id, sessionId, index)
+        }}
+        onClosePane={(index) => group && split.closePane(group.id, index)}
+        onCloseGroupPane={split.closePane}
+        onMovePane={(index, direction) => group && split.movePane(group.id, index, direction)}
+        onSeparateAll={split.separateAll}
+        onResizePane={(index, delta) => group && split.resizePane(group.id, index, delta)}
+        onAddSplit={() => {
+          if (!group || group.panes.length >= MAX_PANES) return
+          const next = sessions.find((s) => !s.archived && !split.visibleSessionIds.has(s.id))
+          if (next) splitActiveWith(next.id, group.panes.length)
+        }}
+        slotBySession={paneBySession}
         onRenameSession={onRenameSession}
         onArchiveSession={onArchiveSession}
         onRestoreSession={onRestoreSession}

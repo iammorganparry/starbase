@@ -10,8 +10,10 @@ import { StatusDot } from "../components/status-dot.js"
 import { SearchInput } from "../components/search-input.js"
 import { SegmentedControl } from "../components/segmented-control.js"
 import { SessionRow } from "../composites/session-row.js"
+import { SplitRow } from "../composites/split-row.js"
 import { displayStatusLabel, displayStatusTone } from "../tokens.js"
 import { UserMenu } from "../composites/user-menu.js"
+import type { SplitGroup } from "./split-layout.js"
 
 type GroupBy = "repo" | "status"
 
@@ -46,10 +48,27 @@ export interface SessionSidebarProps {
   sessions: ReadonlyArray<Session>
   activeSessionId: string | null
   /**
-   * Which grid slot each session occupies, for the numbered "on screen" badges.
-   * Absent when the grid isn't wired (stories) — rows then show no badge.
+   * Which pane each on-screen session occupies, for the numbered badges. Absent
+   * when the split isn't wired (stories) — rows then show no badge.
    */
   slotBySession?: ReadonlyMap<string, number>
+  /**
+   * The splits, so a multi-pane group renders as ONE row (Arc's pill) rather than
+   * as N unrelated rows. Groups of one aren't listed here — a one-pane group and
+   * a plain session are the same object, and the caller renders it as a
+   * `SessionRow` either way.
+   */
+  splitGroups?: ReadonlyArray<SplitGroup>
+  /** Which group is on screen (highlights its pill). */
+  activeGroupId?: string | null
+  /** Focus one pane of a split from its sidebar segment. */
+  onFocusPane?: (groupId: string, index: number) => void
+  /** Close one pane from its segment's × (the session keeps running). */
+  onClosePane?: (groupId: string, index: number) => void
+  /** Arc's "Separate all tabs" — every pane flies out to its own row. */
+  onSeparateAll?: (groupId: string) => void
+  /** A session was dropped on a pill, or picked from its "Split with ▸" submenu. */
+  onSplitWith?: (groupId: string, sessionId: string, at: number) => void
   onSelect: (id: string) => void
   /** Manually rename a session (double-click its title) — pins the auto-name. */
   onRename?: (id: string, title: string) => void
@@ -96,6 +115,12 @@ export function SessionSidebar({
   sessions,
   activeSessionId,
   slotBySession,
+  splitGroups,
+  activeGroupId,
+  onFocusPane,
+  onClosePane,
+  onSeparateAll,
+  onSplitWith,
   onSelect,
   onRename,
   onArchive,
@@ -180,6 +205,64 @@ export function SessionSidebar({
   }, [activeSessions, groupBy, statusOf, starredRepoNames])
 
   const archivedCollapsed = collapsedRepoNames?.has(ARCHIVED_GROUP_KEY) ?? false
+
+  // Which SPLIT (two panes or more) each session belongs to. Groups of one are
+  // deliberately absent: they render as ordinary rows, which is the whole point
+  // of the model — a lone pane and a lone session are indistinguishable.
+  const splitBySession = React.useMemo(() => {
+    const map = new Map<string, SplitGroup>()
+    for (const g of splitGroups ?? []) {
+      if (g.panes.length < 2) continue
+      for (const p of g.panes) map.set(p.sessionId, g)
+    }
+    return map
+  }, [splitGroups])
+
+  /**
+   * One entry in a sidebar list — a pill for a split, a row for anything else.
+   *
+   * A split is drawn ONCE, at the position of its first pane, and its other panes
+   * render nothing. Drawing it per-member would repeat the same pill two to four
+   * times; drawing it in a group of its own would tear a split across repos apart.
+   * The first pane's place in the list is the split's place in the list.
+   */
+  const renderEntry = (s: Session) => {
+    const split = splitBySession.get(s.id)
+    if (split) {
+      if (split.panes[0]?.sessionId !== s.id) return null
+      return (
+        <SplitRow
+          key={split.id}
+          group={split}
+          sessions={sessions}
+          liveActivity={liveActivity}
+          active={split.id === activeGroupId}
+          onFocusPane={onFocusPane}
+          onClosePane={onClosePane}
+          onSeparateAll={onSeparateAll}
+          onSplitWith={onSplitWith}
+          splitCandidates={sessions.filter(
+            (c) => !c.archived && !split.panes.some((p) => p.sessionId === c.id)
+          )}
+        />
+      )
+    }
+    return (
+      <SessionRow
+        key={s.id}
+        session={s}
+        activity={liveActivity?.[s.id]}
+        prState={prStates?.[s.id]}
+        active={s.id === activeSessionId}
+        slotIndex={slotBySession?.get(s.id) ?? null}
+        onSelect={onSelect}
+        onRename={onRename}
+        onArchive={onArchive}
+        onRestore={onRestore}
+        onDelete={onDelete}
+      />
+    )
+  }
 
   return (
     <div className="flex w-[266px] flex-none flex-col border-r border-hairline bg-panel">
@@ -323,23 +406,7 @@ export function SessionSidebar({
                 </Badge>
               </div>
               {!collapsed && (
-                <div className="mb-1 flex flex-col gap-[3px]">
-                  {list.map((s) => (
-                    <SessionRow
-                      key={s.id}
-                      session={s}
-                      activity={liveActivity?.[s.id]}
-                      prState={prStates?.[s.id]}
-                      active={s.id === activeSessionId}
-                      slotIndex={slotBySession?.get(s.id) ?? null}
-                      onSelect={onSelect}
-                      onRename={onRename}
-                      onArchive={onArchive}
-                      onRestore={onRestore}
-                      onDelete={onDelete}
-                    />
-                  ))}
-                </div>
+                <div className="mb-1 flex flex-col gap-[3px]">{list.map(renderEntry)}</div>
               )}
             </div>
             )

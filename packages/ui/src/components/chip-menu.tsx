@@ -43,6 +43,10 @@ export function ChipMenu<T extends string>({
   searchPlaceholder = "Search…",
   emptyLabel = "No matches",
   disabled = false,
+  trigger,
+  renderTrailing,
+  side = "top",
+  matchTriggerWidth = false,
   className
 }: {
   /** The currently-selected value (a check marks it in the list). */
@@ -64,6 +68,27 @@ export function ChipMenu<T extends string>({
   /** Shown when the filter matches nothing. */
   emptyLabel?: string
   disabled?: boolean
+  /**
+   * Render the trigger yourself instead of the default chip.
+   *
+   * The menu's real value is the searchable, sectioned, keyboard-driven list —
+   * the chip is just one way in. A form FIELD (the repo picker) wants the same
+   * list under a full-width control, and duplicating the list to get a different
+   * trigger is how two subtly different menus end up in one app.
+   */
+  trigger?: (state: { current: ChipOption<T> | undefined; open: boolean }) => ReactNode
+  /**
+   * Extra content at the end of an option's row — a star toggle, a badge.
+   *
+   * Anything interactive in here must stop `pointerdown`, `pointerup` and
+   * `click`: a Radix menu item commits on pointer UP, so swallowing click alone
+   * still lets the tap select the option and close the menu.
+   */
+  renderTrailing?: (option: ChipOption<T>) => ReactNode
+  /** Which side of the trigger the menu opens on. Chips open up; fields open down. */
+  side?: "top" | "bottom"
+  /** Make the menu exactly as wide as its trigger — what a field wants. */
+  matchTriggerWidth?: boolean
   className?: string
 }) {
   const [open, setOpen] = useState(false)
@@ -116,7 +141,9 @@ export function ChipMenu<T extends string>({
     setOpen(false)
   }
 
-  const chip = (
+  const chip = trigger ? (
+    trigger({ current, open })
+  ) : (
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-2 py-[3px] font-mono text-[11px] text-text-bright",
@@ -142,18 +169,34 @@ export function ChipMenu<T extends string>({
       }}
     >
       <DropdownMenu.Trigger asChild>
-        <button type="button" className="outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:rounded-md">
+        <button
+          type="button"
+          className={cn(
+            "outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring",
+            // A custom trigger is usually a full-width field; the default chip
+            // must stay intrinsically sized.
+            trigger && "w-full text-left"
+          )}
+        >
           {chip}
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          side="top"
+          side={side}
           align="start"
           sideOffset={6}
+          style={
+            matchTriggerWidth
+              ? // Radix exposes the trigger's measured width as a CSS var on the
+                // content — the only way to match it without measuring in React
+                // and re-rendering on every resize.
+                { width: "var(--radix-dropdown-menu-trigger-width)" }
+              : undefined
+          }
           className={cn(
             "z-50 flex max-h-[300px] flex-col gap-0.5 rounded-lg border border-line bg-sunken p-1.5 shadow-2xl",
-            searchable ? "min-w-[210px]" : "min-w-[160px]",
+            !matchTriggerWidth && (searchable ? "min-w-[210px]" : "min-w-[160px]"),
             // When searching, the filter box stays put and only the list scrolls.
             !searchable && "overflow-auto"
           )}
@@ -214,8 +257,9 @@ export function ChipMenu<T extends string>({
                         "text-text-body data-[highlighted]:bg-surface data-[highlighted]:text-text-bright"
                       )}
                     >
-                      <span className="flex-1">{o.label}</span>
-                      {o.value === value && <Check size={13} className="text-blue" />}
+                      <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                      {o.value === value && <Check size={13} className="flex-none text-blue" />}
+                      {renderTrailing?.(o)}
                     </DropdownMenu.Item>
                   ))}
                 </DropdownMenu.Group>

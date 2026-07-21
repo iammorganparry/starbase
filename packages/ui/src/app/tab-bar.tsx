@@ -1,4 +1,6 @@
 import {
+  ChevronLeft,
+  ChevronRight,
   CircleDot,
   FileDiff,
   GitCompareArrows,
@@ -55,7 +57,9 @@ export function TabBar({
   browserActive = false,
   onToggleSplit,
   splitActive = false,
-  onClosePane
+  onClosePane,
+  onMovePaneLeft,
+  onMovePaneRight
 }: {
   tabs: ReadonlyArray<TabKey>
   active: TabKey
@@ -85,11 +89,18 @@ export function TabBar({
   /** Whether the plan is currently split beside the conversation. */
   splitActive?: boolean
   /**
-   * Empty this pane's grid slot. Shown only in a multi-pane layout: in 1-up there
+   * Close this pane. Shown only in a multi-pane split: in a group of one there
    * is nothing to close back TO, and the control would just be a way to blank the
-   * app. Closing a slot never touches the session — its agent keeps running.
+   * app. Closing a pane never touches the session — its agent keeps running.
    */
   onClosePane?: () => void
+  /**
+   * Swap this pane with the one on its left (Arc's Move Left, ⌃⇧⌥←). Absent at
+   * the left-hand end — a control that can only fail is worse than no control.
+   */
+  onMovePaneLeft?: () => void
+  /** Swap this pane with the one on its right (Move Right, ⌃⇧⌥→). */
+  onMovePaneRight?: () => void
 }) {
   return (
     <div
@@ -173,6 +184,36 @@ export function TabBar({
           >
             <Globe className="size-4" />
           </button>
+        )}
+        {(onMovePaneLeft || onMovePaneRight) && (
+          // Grouped with the close × rather than beside the tabs: these are all
+          // operations on the PANE, not on what's inside it.
+          <div className="flex items-center">
+            {onMovePaneLeft && (
+              <button
+                type="button"
+                onClick={onMovePaneLeft}
+                aria-label="Move pane left"
+                data-testid="move-pane-left"
+                title="Move pane left (⌃⇧⌥←)"
+                className="flex size-6 items-center justify-center rounded text-dim transition-colors hover:bg-hairline hover:text-text-bright"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            )}
+            {onMovePaneRight && (
+              <button
+                type="button"
+                onClick={onMovePaneRight}
+                aria-label="Move pane right"
+                data-testid="move-pane-right"
+                title="Move pane right (⌃⇧⌥→)"
+                className="flex size-6 items-center justify-center rounded text-dim transition-colors hover:bg-hairline hover:text-text-bright"
+              >
+                <ChevronRight className="size-4" />
+              </button>
+            )}
+          </div>
         )}
         {onClosePane && (
           <button
