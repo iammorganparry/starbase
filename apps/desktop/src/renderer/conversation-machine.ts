@@ -270,7 +270,9 @@ const agentStream = fromCallback<
   // everything that matters downstream — the same StreamEvents, the same fold,
   // the same stop button.
   const cancel = input.adversarialBrief
-    ? rpc.planAdversarial(input.sessionId, input.adversarialBrief, onEvent)
+    ? // The brief's screenshots go with it: a Gigaplan round is very often
+      // "build this mockup", and the roles run headless with no other way to see it.
+      rpc.planAdversarial(input.sessionId, input.adversarialBrief, onEvent, input.images)
     : input.executePlanId
       ? rpc.planExecute(input.sessionId, input.executePlanId, input.executePlanMode, onEvent)
       : input.resumePlanId
@@ -752,12 +754,16 @@ export const conversationMachine = setup({
             ? event.text
             : null
       if (brief === null || brief.trim().length === 0) return {}
+      // Screenshots ride along with the brief. `pendingImages` is what the run
+      // actor reads, so clearing it here — as an ordinary send does after
+      // handing them over — would drop the very mockup the round is about.
+      const images = event.type === "SEND" ? (event.images ?? []) : []
       const now = new Date().toISOString()
       const id = stamp()
       return {
         adversarialBrief: brief,
         pendingText: "",
-        pendingImages: [],
+        pendingImages: images,
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         resumePlanId: null,
@@ -770,7 +776,7 @@ export const conversationMachine = setup({
         // it — would be silently dropped.
         messages: [
           ...context.messages,
-          userMessage(`u_local_${id}`, brief, now, []),
+          userMessage(`u_local_${id}`, brief, now, images),
           assistantMessage(`a_local_${id}`, now)
         ]
       }

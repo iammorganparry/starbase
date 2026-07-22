@@ -29,7 +29,9 @@ import {
   NOTIFICATIONS_DEFAULT,
   contextWindowFor,
   digestModelFor,
+  newSessionCli,
   reviewModelFor,
+  startableClis,
   triggerAt
 } from "@starbase/core"
 import { ContextMeter } from "./context-meter.js"
@@ -420,6 +422,13 @@ export interface SettingsViewProps {
   providers?: ProvidersConfig | null
   /** Persist one CLI's provider config. */
   onSaveProvider: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
+  /**
+   * The harness NEW sessions start on. Absent means "the first installed one" —
+   * the New Session dialog no longer asks, so this is where the answer lives.
+   */
+  defaultCli?: CliKind | null
+  /** Persist the default harness for new sessions. */
+  onSaveDefaultCli?: (cli: CliKind) => Promise<void> | void
   /** Every installed harness + its models, for the Gigaplan orchestrator picker. */
   catalog?: ReadonlyArray<ProviderModels>
   /** The configured orchestrator harness+model, or null for the default. */
@@ -490,6 +499,8 @@ export function SettingsView({
   clis,
   providers,
   onSaveProvider,
+  defaultCli,
+  onSaveDefaultCli,
   catalog,
   orchestrator,
   onSaveOrchestrator,
@@ -604,6 +615,8 @@ export function SettingsView({
           clis={clis}
           providers={providers ?? undefined}
           onSaveProvider={onSaveProvider}
+          defaultCli={defaultCli}
+          onSaveDefaultCli={onSaveDefaultCli}
           loadModels={loadModels}
           loadOpencodeProviders={loadOpencodeProviders}
           onSetOpencodeAuth={onSetOpencodeAuth}
@@ -656,6 +669,8 @@ function ProvidersSection({
   clis,
   providers,
   onSaveProvider,
+  defaultCli,
+  onSaveDefaultCli,
   loadModels,
   loadOpencodeProviders,
   onSetOpencodeAuth
@@ -663,6 +678,8 @@ function ProvidersSection({
   clis: ReadonlyArray<CliInfo>
   providers: ProvidersConfig | undefined
   onSaveProvider: (cli: CliKind, config: ProviderConfig) => Promise<void> | void
+  defaultCli?: CliKind | null
+  onSaveDefaultCli?: (cli: CliKind) => Promise<void> | void
   loadModels: (cli: CliKind) => Promise<ReadonlyArray<ModelOption>>
   loadOpencodeProviders?: () => Promise<ReadonlyArray<OpencodeProviderInfo>>
   onSetOpencodeAuth?: (providerId: string, key: string) => Promise<boolean>
@@ -692,6 +709,12 @@ function ProvidersSection({
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(stored)
   const patch = (next: Partial<ProviderConfig>) => setDraft((d) => ({ ...d, ...next }))
+
+  // Which harness new sessions actually get — resolved, not merely configured,
+  // so an unset default (or one naming an uninstalled CLI) still badges the
+  // harness that WOULD run rather than badging nothing.
+  const startable = startableClis(clis)
+  const isDefaultCli = newSessionCli(clis, defaultCli) === selected
 
   return (
     <>
@@ -746,6 +769,27 @@ function ProvidersSection({
                 )}
               </div>
             </div>
+            {/*
+              The New Session dialog has no harness picker — it asked the same
+              question every time. This is where that answer lives now. Only
+              startable harnesses qualify: `starbase` is the orchestrator, chosen
+              per turn via the Gigaplan mode chip, never as a session's harness.
+            */}
+            {onSaveDefaultCli && startable.some((c) => c.kind === selected) && (
+              isDefaultCli ? (
+                <span className="rounded-md bg-blue/10 px-2 py-1 text-[10.5px] font-medium text-blue">
+                  Default for new sessions
+                </span>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void onSaveDefaultCli(selected)}
+                >
+                  Make default
+                </Button>
+              )
+            )}
             <label className="flex cursor-pointer items-center gap-2 text-[11.5px] text-muted-foreground">
               Enabled
               <Toggle

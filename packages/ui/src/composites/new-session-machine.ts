@@ -8,6 +8,7 @@ import type {
   PrSummary,
   Repo
 } from "@starbase/core"
+import { newSessionCli } from "@starbase/core"
 import { assign, fromPromise, raise, setup } from "xstate"
 
 /** Which flavour of session the dialog is composing. */
@@ -36,7 +37,13 @@ export interface NewSessionDeps {
   repos: ReadonlyArray<Repo>
   /** Preselect this repo (by path) on open; falls back to the first repo. */
   defaultRepoPath?: string | null
+  /** Discovered CLIs; `newSessionCli` picks from the startable ones. */
   availableClis: ReadonlyArray<CliInfo>
+  /**
+   * The harness configured in Settings · Providers. The dialog no longer asks —
+   * it resolves this once on open and reports it read-only.
+   */
+  defaultCli?: CliKind | null
   loadBranches: (repoPath: string) => Promise<ReadonlyArray<string>>
   loadPrs?: (
     repoPath: string,
@@ -83,7 +90,6 @@ export type NewSessionEvent =
   | { type: "SET_MODE"; mode: NewSessionMode }
   | { type: "SET_REPO"; repoPath: string }
   | { type: "SET_TITLE"; title: string }
-  | { type: "SET_CLI"; cli: CliKind }
   | { type: "SET_BASE"; base: string }
   | { type: "SET_SEARCH"; search: string }
   | { type: "SET_MINE"; mine: boolean }
@@ -185,7 +191,10 @@ export const newSessionMachine = setup({
         mode: "blank" as NewSessionMode,
         repoPath: first?.path ?? "",
         title: "",
-        cli: deps.availableClis[0]?.kind ?? ("" as CliKind | ""),
+        // Not a form field any more: the harness comes from Settings, falling
+        // back to whatever IS installed so an unset (or stale) default still
+        // creates sessions.
+        cli: newSessionCli(deps.availableClis, deps.defaultCli) ?? ("" as CliKind | ""),
         base: "",
         branches: [] as ReadonlyArray<string>,
         search: "",
@@ -406,7 +415,6 @@ export const newSessionMachine = setup({
       ]
     },
     SET_TITLE: { actions: assign({ title: ({ event }) => event.title }) },
-    SET_CLI: { actions: assign({ cli: ({ event }) => event.cli }) },
     SET_BASE: { actions: assign({ base: ({ event }) => event.base }) },
     SET_SEARCH: {
       actions: [

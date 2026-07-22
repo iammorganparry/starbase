@@ -19,7 +19,7 @@ test("creating a session forks a real worktree and persists it", async ({ launch
 
   // Creating a session needs an installed coding CLI (real host discovery). Skip
   // cleanly on a host with none — this is a local, non-CI flow.
-  const noHarness = await window.getByText("No harness available").count()
+  const noHarness = await window.getByText("No coding CLI found", { exact: false }).count()
   test.skip(noHarness > 0, "no coding CLI installed on this host")
 
   // There is no title field anymore — the agent auto-names the session. Repo,
@@ -98,7 +98,7 @@ test("creating a session from a PR checks out its head branch and links the PR",
   await expect(window.getByRole("heading", { name: "New session" })).toBeVisible()
 
   // From-PR creation still needs an installed harness to drive the session.
-  const noHarness = await window.getByText("No harness available").count()
+  const noHarness = await window.getByText("No coding CLI found", { exact: false }).count()
   test.skip(noHarness > 0, "no coding CLI installed on this host")
 
   // The fake gh reports authenticated, so the "From PR" toggle is available.
@@ -176,7 +176,7 @@ test("creating a session from an issue forks a linked branch and seeds the task"
   await window.locator('button[title="New session"]').click()
   await expect(window.getByRole("heading", { name: "New session" })).toBeVisible()
 
-  const noHarness = await window.getByText("No harness available").count()
+  const noHarness = await window.getByText("No coding CLI found", { exact: false }).count()
   test.skip(noHarness > 0, "no coding CLI installed on this host")
 
   // Toggle to "From issue" → the seeded open issues render.

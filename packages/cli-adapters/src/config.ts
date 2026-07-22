@@ -63,6 +63,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.collapsedRepos ? { collapsedRepos: existing.collapsedRepos } : {}),
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...(existing?.providers ? { providers: existing.providers } : {}),
+            ...(existing?.defaultCli ? { defaultCli: existing.defaultCli } : {}),
             ...(existing?.gigaplanRouting ? { gigaplanRouting: existing.gigaplanRouting } : {}),
             ...(existing?.orchestrator ? { orchestrator: existing.orchestrator } : {}),
             ...(existing?.notifications ? { notifications: existing.notifications } : {}),
@@ -110,6 +111,12 @@ export class ConfigService extends Effect.Service<ConfigService>()(
       const setGigaplanRouting = (gigaplanRouting: GigaplanRoutingConfig) =>
         patch({ gigaplanRouting })
 
+      /**
+       * Which harness new sessions start on. Replaces the New Session dialog's
+       * harness select — one standing answer instead of the same click per session.
+       */
+      const setDefaultCli = (defaultCli: CliKind) => patch({ defaultCli })
+
       const setProvider = (cli: CliKind, provider: ProviderConfig) =>
         Effect.gen(function* () {
           const existing = yield* get()
@@ -147,6 +154,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setCollapsedRepos,
         setLastRepoPath,
         setContext,
+        setDefaultCli,
         setProvider,
         setOrchestrator,
         setGigaplanRouting

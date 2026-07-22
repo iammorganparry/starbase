@@ -270,4 +270,21 @@ describe("ConfigService", () => {
       expect(exit.value?.planAutoRun).toBe(false)
     }
   })
+
+  /**
+   * The default harness is the ONLY record of which CLI new sessions start on
+   * now that the New Session dialog stopped asking — losing it on an unrelated
+   * write would silently move every future session onto a different harness.
+   */
+  it("persists the default harness and keeps it across an unrelated save", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setDefaultCli("codex")
+        yield* ConfigService.setLastRepoPath("/repos/widget")
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") expect(exit.value?.defaultCli).toBe("codex")
+  })
 })

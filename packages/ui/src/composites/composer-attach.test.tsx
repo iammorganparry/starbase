@@ -5,27 +5,25 @@ import { Composer } from "./composer.js"
 /**
  * Attachments in Gigaplan.
  *
- * `Plan.adversarial` carries a brief and nothing else — its payload has no
- * images. So an attachment made in this mode cannot reach the round. The bug
- * worth guarding is not that images are unsupported; it is that they were
- * accepted, rendered into the transcript, and dropped in between, which reads to
- * the operator as "the planner saw my screenshot" when it never did.
+ * These used to be REFUSED, because `Plan.adversarial` carried a brief and
+ * nothing else: an image accepted here would render into the transcript and be
+ * dropped on the way to the round, which reads to the operator as "the planner
+ * saw my screenshot" when it never did.
  *
- * Refusing the gesture is the honest behaviour, and it must be visible: a
- * disabled control that says why beats one that silently swallows.
+ * The payload now carries `images` and hands them to every role's `SessionSpec`,
+ * so the honest behaviour flipped: accepting is correct, and a briefing that is
+ * half screenshot is exactly the case Gigaplan is for. These tests hold the new
+ * contract, and specifically that the control is not special-cased by mode —
+ * the old guard lived in three places (button, `addFiles`, the "+" tile) and any
+ * one left behind silently loses the attachment.
  */
 afterEach(cleanup)
 
 describe("Composer attachments in Gigaplan", () => {
-  it("disables attaching, rather than accepting an image the round cannot carry", () => {
+  it("allows attaching — the round carries images now", () => {
     render(<Composer mode="gigaplan" />)
-    const attach = screen.getByTitle(/images aren't sent/i)
-    expect((attach as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it("says why, so the operator is not left guessing at a dead control", () => {
-    render(<Composer mode="gigaplan" />)
-    expect(screen.getByTitle(/Planning rounds work from the written brief/i)).toBeTruthy()
+    const attach = screen.getByLabelText("Attach an image")
+    expect((attach as HTMLButtonElement).disabled).toBe(false)
   })
 
   it("keeps one stable accessible name, so it can't answer to another control's", () => {
@@ -33,6 +31,12 @@ describe("Composer attachments in Gigaplan", () => {
     // match a by-name lookup for the Gigaplan mode chip.
     render(<Composer mode="gigaplan" />)
     expect(screen.getByLabelText("Attach an image")).toBeTruthy()
+  })
+
+  it("says the same thing it says everywhere else — no mode-specific excuse", () => {
+    render(<Composer mode="gigaplan" />)
+    expect(screen.getByTitle("Attach an image")).toBeTruthy()
+    expect(screen.queryByTitle(/images aren't sent/i)).toBe(null)
   })
 
   it("leaves every other mode alone", () => {
