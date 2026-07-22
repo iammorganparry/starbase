@@ -1,5 +1,5 @@
 import type { HarnessBilling } from "@starbase/core"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { GigaplanSettings } from "./gigaplan-settings.js"
 
@@ -34,6 +34,31 @@ describe("GigaplanSettings", () => {
   it("explains itself when the host cannot orchestrate, rather than hiding", () => {
     render(<GigaplanSettings {...props} unavailableReason="Needs a second provider." />)
     expect(screen.getByText("Needs a second provider.")).toBeTruthy()
+  })
+
+  it("defaults legacy config to shadow and can opt the workspace into active mode", () => {
+    const onRoutingChange = vi.fn()
+    render(<GigaplanSettings {...props} onRoutingChange={onRoutingChange} />)
+    expect(screen.getByRole("tab", { name: "Shadow" }).getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByText(/OpenRouter's rolling task-usage rankings/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("tab", { name: "Active" }))
+    expect(onRoutingChange).toHaveBeenCalledWith({ mode: "active", overrides: [] })
+  })
+
+  it("keeps a stale override visible and labels it unavailable", () => {
+    render(
+      <GigaplanSettings
+        {...props}
+        routing={{
+          mode: "shadow",
+          overrides: [
+            { taskKind: "schema", routes: [{ cli: "codex", model: "retired-model" }] }
+          ]
+        }}
+      />
+    )
+    expect(screen.getByText("codex/retired-model unavailable")).toBeTruthy()
   })
 })
 

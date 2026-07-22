@@ -1,5 +1,5 @@
-import type { Plan, StreamEvent, VendorReach } from "@starbase/core"
-import { CliExecError } from "@starbase/core"
+import type { Plan, RoutingContext, StreamEvent, VendorReach } from "@starbase/core"
+import { CliExecError, GIGAPLAN_ROUTING_POLICY_VERSION } from "@starbase/core"
 import { Effect, Fiber, Layer, Stream, TestClock, TestContext } from "effect"
 import { describe, expect, it } from "vitest"
 import type { ParsedCritique } from "./adversarial-plan.js"
@@ -12,7 +12,6 @@ import {
   markUnchallenged,
   parseCritique,
   parseResponses,
-  annotateAssignees,
   unattendedAnswers
 } from "./adversarial-plan.js"
 import { formatQuestionAnswer } from "./claude-adapter.js"
@@ -47,6 +46,16 @@ const reach = (vendor: string, cli: VendorReach["cli"], ...ids: string[]): Vendo
 const ANTHROPIC = reach("anthropic", "claude", "opus", "claude-fable-5")
 const OPENAI = reach("openai", "codex", "gpt-5.6-sol")
 const MOONSHOT = reach("moonshot", "opencode", "openrouter/moonshot/kimi-k3")
+
+const routingFor = (vendors: ReadonlyArray<VendorReach>): RoutingContext => ({
+  catalog: vendors.map((vendor) => ({
+    cli: vendor.cli,
+    label: vendor.vendor,
+    models: vendor.models
+  })),
+  mode: "shadow",
+  affinityEnabled: false
+})
 
 /**
  * A fake adapter that replies with canned text per role, so the whole round runs
@@ -88,7 +97,8 @@ const runRound = (
         brief: "Add a tier column",
         vendors,
         binPathFor: () => "/usr/bin/fake",
-        assignAgents: false
+        assignAgents: false,
+        routing: routingFor(vendors)
       })
       .pipe(Stream.runCollect, Effect.map((c) => [...c]))
     const proposed = events.find((e) => e._tag === "PlanProposed")
@@ -299,9 +309,39 @@ describe("AdversarialPlanService", () => {
       revise: responseJson([{ id: "c1", status: "addressed" }])
     })
     expect(plan?.steps[0]!.challenges?.[0]?.status).toBe("addressed")
+    expect(plan?.steps[0]!.routing).toMatchObject({
+      effort: "standard",
+      risk: "medium",
+      policyVersion: GIGAPLAN_ROUTING_POLICY_VERSION
+    })
     // Each phase is surfaced as a subagent, so the existing tab UI renders it.
     const started = events.filter((e) => e._tag === "SubagentStarted")
     expect(started).toHaveLength(3)
+  })
+
+  it("resolves the revision again instead of inheriting the proposal route", async () => {
+    const revised = [
+      "```plan",
+      "summary: Add a frontend tier badge",
+      "01 Add the badge",
+      "  intent: Show the tier.",
+      "  task: frontend",
+      "  effort: quick",
+      "  risk: low",
+      "```",
+      "",
+      "```json",
+      JSON.stringify({ responses: [{ id: "c1", status: "addressed" }] }),
+      "```"
+    ].join("\n")
+    const { plan } = await runRound({
+      propose: PLAN_TEXT,
+      attack: critiqueJson([{ step: "01", title: "wrong surface", severity: "major" }]),
+      revise: revised
+    })
+
+    expect(plan?.steps[0]).toMatchObject({ taskKind: "frontend", effort: "quick", risk: "low" })
+    expect(plan?.steps[0]?.routing?.shadowDecision?.cli).toBe("claude")
   })
 
   it("degrades to an unchallenged plan when the adversary dies", async () => {
@@ -393,7 +433,8 @@ describe("AdversarialPlanService", () => {
           brief: "x",
           vendors: [ANTHROPIC, OPENAI],
           binPathFor: () => "/bin/fake",
-          assignAgents: false
+          assignAgents: false,
+          routing: routingFor([ANTHROPIC, OPENAI])
         })
         .pipe(Stream.runDrain)
     }).pipe(
@@ -415,60 +456,6 @@ describe("AdversarialPlanService", () => {
     expect(specs.every((s) => s.readOnly === true && s.fresh === true)).toBe(true)
     expect(specs[0]!.model).toBe("claude-fable-5")
     expect(specs[1]!.model).toBe("gpt-5.6-sol")
-  })
-})
-
-
-describe("annotateAssignees", () => {
-  const planWith = (assignee: { cli: "claude" | "codex"; model: string; reason: string } | undefined) => {
-    const p = parsePlan(PLAN_TEXT, "p")
-    return { ...p, steps: p.steps.map((s, i) => (i === 0 && assignee ? { ...s, assignee } : s)) }
-  }
-
-  const ranked = [
-    { cli: "codex" as const, model: "gpt-5.6-sol", level: "repo-model", observations: 19 }
-  ]
-
-  it("records what the KB said about the model's pick", () => {
-    const out = annotateAssignees(
-      planWith({ cli: "codex", model: "gpt-5.6-sol", reason: "schema work" }),
-      ranked
-    )
-    expect(out.steps[0]!.assignee?.evidence).toStrictEqual({
-      level: "repo-model",
-      observations: 19
-    })
-  })
-
-  it("never overwrites the model's choice or its reason", () => {
-    // The KB advises; it does not decide. Overriding the pick would make a thin
-    // cell authoritative.
-    const out = annotateAssignees(
-      planWith({ cli: "claude", model: "claude-fable-5", reason: "my own judgement" }),
-      ranked
-    )
-    expect(out.steps[0]!.assignee?.cli).toBe("claude")
-    expect(out.steps[0]!.assignee?.reason).toBe("my own judgement")
-  })
-
-  it("leaves evidence absent when the KB had nothing on that pair", () => {
-    // Absent evidence and zero-observation evidence are different claims.
-    const out = annotateAssignees(
-      planWith({ cli: "claude", model: "claude-fable-5", reason: "x" }),
-      ranked
-    )
-    expect(out.steps[0]!.assignee?.evidence).toBeUndefined()
-  })
-
-  it("is a no-op with an empty knowledge base", () => {
-    // Phase-A behaviour must be reachable by an empty KB, not just a disabled one.
-    const plan = planWith({ cli: "codex", model: "gpt-5.6-sol", reason: "r" })
-    expect(annotateAssignees(plan, [])).toStrictEqual(plan)
-  })
-
-  it("leaves an unassigned step alone", () => {
-    const plan = planWith(undefined)
-    expect(annotateAssignees(plan, ranked)).toStrictEqual(plan)
   })
 })
 
@@ -523,7 +510,8 @@ describe("a role that never finishes", () => {
             brief: "Add a tier column",
             vendors: [ANTHROPIC, OPENAI],
             binPathFor: () => "/usr/bin/fake",
-            assignAgents: false
+            assignAgents: false,
+            routing: routingFor([ANTHROPIC, OPENAI])
           })
           .pipe(Stream.runCollect, Effect.map((c) => [...c]))
       )

@@ -1,7 +1,10 @@
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
+import type { Page } from "@playwright/test"
 import { expect, test } from "./fixtures.js"
-import type { SeedSession } from "./fixtures.js"
+import type { LaunchOptions, SeedSession } from "./fixtures.js"
+
+const GIGAPLAN_SETTINGS = /^Gigaplan/
 
 /**
  * Gigaplan — the orchestrated mode — against the REAL built app.
@@ -37,9 +40,11 @@ const seeded = (worktreePath: string): SeedSession => ({
 })
 
 const openSession = async (
-  launchApp: Parameters<Parameters<typeof test>[1]>[0]["launchApp"]
+  launchApp: Parameters<Parameters<typeof test>[1]>[0]["launchApp"],
+  options: LaunchOptions = {}
 ) => {
   const launched = await launchApp({
+    ...options,
     configured: true,
     withRepo: true,
     sessions: ({ repoPath }) => [seeded(repoPath)]
@@ -47,6 +52,20 @@ const openSession = async (
   await expect(launched.window.getByText("Planning session")).toBeVisible()
   await launched.window.getByText("Planning session").click()
   return launched
+}
+
+const runGigaplanRound = async (window: Page) => {
+  await window.getByRole("button", { name: "accept edits" }).click()
+  await window.getByRole("menuitem", { name: "Gigaplan" }).click()
+  const composer = window.getByPlaceholder("Message Claude…")
+  await composer.fill("Add deterministic request limits")
+  await composer.press("Enter")
+  await expect(window.getByText("Plan Review").first()).toBeVisible({ timeout: 30_000 })
+  await window.getByText("Plan Review").first().click()
+  await expect(window.getByRole("button", { name: /^01 Add request limiter/ })).toBeVisible({
+    timeout: 30_000
+  })
+  await window.getByRole("button", { name: /^01 Add request limiter/ }).click()
 }
 
 test("Gigaplan is offered in the mode chip, beside the ordinary modes", async ({ launchApp }) => {
@@ -87,6 +106,41 @@ test("selecting Gigaplan takes the model picker away, and changing mode brings i
   await window.getByRole("button", { name: "Gigaplan" }).click()
   await window.getByRole("menuitem", { name: "ask" }).click()
   await expect(window.getByRole("button", { name: /opus/ })).toBeVisible()
+})
+
+test("a real shadow round preserves execution while showing the semantic recommendation", async ({
+  launchApp
+}) => {
+  test.setTimeout(90_000)
+  const { window } = await openSession(launchApp)
+  await runGigaplanRound(window)
+
+  await expect(window.getByLabel("Will run on claude opus").last()).toBeVisible()
+  await expect(window.getByText(/Shadow recommendation: codex\/gpt-5\.5/)).toBeVisible()
+  await expect(window.getByText(/system-default · gigaplan-routing-v3/)).toBeVisible()
+})
+
+test("a real active round applies the deterministic semantic route", async ({ launchApp }) => {
+  test.setTimeout(90_000)
+  const { window } = await openSession(launchApp, {
+    config: { gigaplanRouting: { mode: "active", overrides: [] } }
+  })
+  await runGigaplanRound(window)
+
+  await expect(window.getByLabel("Will run on codex gpt-5.5").last()).toBeVisible()
+  await expect(window.getByText(/policy-profile · gigaplan-routing-v3/)).toBeVisible()
+  await expect(window.getByText(/Shadow recommendation:/)).toHaveCount(0)
+})
+
+test("a disabled provider cannot make Gigaplan look runnable", async ({ launchApp }) => {
+  const { window } = await openSession(launchApp, {
+    config: {
+      providers: { codex: { enabled: false, defaultMode: "accept-edits" } }
+    }
+  })
+
+  await window.getByRole("button", { name: "accept edits" }).click()
+  await expect(window.getByRole("menuitem", { name: "Gigaplan" })).toHaveCount(0)
 })
 
 test("Starbase is no longer a harness you can pick a model from", async ({ launchApp }) => {
@@ -234,7 +288,7 @@ test("the Gigaplan settings pane is reachable and states its default", async ({ 
   await window.getByRole("button", { name: "Account menu" }).click()
   await window.getByRole("menuitem", { name: "Settings" }).click()
   await expect(window.getByRole("button", { name: "Close settings" })).toBeVisible()
-  await window.getByRole("button", { name: /^Gigaplan/ }).click()
+  await window.getByRole("button", { name: GIGAPLAN_SETTINGS }).click()
 
   await expect(window.getByText("Orchestrator model")).toBeVisible()
 
@@ -250,6 +304,23 @@ test("the Gigaplan settings pane is reachable and states its default", async ({ 
   // The default is stated, never left implicit — an operator should not have to
   // read the source to learn what it runs on out of the box.
   await expect(window.getByText(/Using the default \(claude · opus\)/)).toBeVisible()
+
+  // Legacy workspaces have no routing key, so they must enter the observational
+  // rollout. An explicit opt-in is persisted through the real RPC/config path.
+  const shadow = window.getByRole("tab", { name: "Shadow" })
+  const active = window.getByRole("tab", { name: "Active" })
+  await expect(shadow).toHaveAttribute("aria-selected", "true")
+  await active.click()
+  await expect(active).toHaveAttribute("aria-selected", "true")
+
+  await window.getByRole("button", { name: "Close settings" }).click()
+  await window.getByRole("button", { name: "Account menu" }).click()
+  await window.getByRole("menuitem", { name: "Settings" }).click()
+  await window.getByRole("button", { name: GIGAPLAN_SETTINGS }).click()
+  await expect(window.getByRole("tab", { name: "Active" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
 })
 
 /**

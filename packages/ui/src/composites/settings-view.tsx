@@ -3,6 +3,7 @@ import type {
   CliInfo,
   CliKind,
   GhStatus,
+  GigaplanRoutingConfig,
   GitConfig,
   GithubConfig,
   McpServer,
@@ -425,6 +426,9 @@ export interface SettingsViewProps {
   orchestrator?: { readonly cli: CliKind; readonly model: string } | null
   /** Persist the orchestrator's harness+model. */
   onSaveOrchestrator?: (cli: CliKind, model: string) => void
+  /** Deterministic per-step routing policy; absence means shadow defaults. */
+  gigaplanRouting?: GigaplanRoutingConfig | null
+  onSaveGigaplanRouting?: (routing: GigaplanRoutingConfig) => void
   /** Why Gigaplan can't run on this host, when it can't. */
   gigaplanUnavailableReason?: string | null
   /** What each installed harness is charged to. */
@@ -489,6 +493,8 @@ export function SettingsView({
   catalog,
   orchestrator,
   onSaveOrchestrator,
+  gigaplanRouting,
+  onSaveGigaplanRouting,
   gigaplanUnavailableReason,
   billing,
   loadModels,
@@ -618,6 +624,8 @@ export function SettingsView({
             orchestrator={orchestrator ?? null}
             defaultOrchestrator={ORCHESTRATOR_DEFAULT}
             onChange={onSaveOrchestrator ?? (() => {})}
+            routing={gigaplanRouting ?? null}
+            onRoutingChange={onSaveGigaplanRouting}
             unavailableReason={gigaplanUnavailableReason ?? null}
             billing={billing}
           />

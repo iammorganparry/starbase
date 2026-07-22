@@ -1,10 +1,20 @@
-import type { CliKind, ExecutionMode, Plan, PlanStep, PlanStepStatus, StreamEvent } from "@starbase/core"
+import type {
+  CliKind,
+  ExecutionMode,
+  Plan,
+  PlanStep,
+  RouteAttempt,
+  RouteCandidate,
+  StreamEvent
+} from "@starbase/core"
 import { executionOrder, PlanError, resolveRunner, scopeToAgent } from "@starbase/core"
 import { Effect, Mailbox, Ref, Schema, Stream } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { CliAdapter, isChildLifecycle, PlanDecision } from "./adapter.js"
 import { unattendedAnswers } from "./adversarial-plan.js"
 import { stepPrompt } from "./plan-executor-prompt.js"
+import type { RouteFailure } from "./provider-failure.js"
+import { classifyProviderFailure, toolMayMutate } from "./provider-failure.js"
 import { extractJsonBlock } from "./review.js"
 
 /**
@@ -30,7 +40,16 @@ export interface StepRunInput {
   readonly cwd: string
   readonly plan: Plan
   /** Harness+model pairs this host can actually run. */
-  readonly available: ReadonlyArray<{ readonly cli: CliKind; readonly model: string }>
+  readonly available: ReadonlyArray<{
+    readonly cli: CliKind
+    readonly model: string
+  }>
+  /** Known catalogue routes that cannot run now, with the operator-facing cause. */
+  readonly unavailable?: ReadonlyArray<{
+    readonly cli: CliKind
+    readonly model: string
+    readonly reason: string
+  }>
   /** Used when a step names no assignee, or names one that isn't installed. */
   readonly fallback: { readonly cli: CliKind; readonly model: string } | null
   readonly binPathFor: (cli: CliKind) => string | null
@@ -38,6 +57,8 @@ export interface StepRunInput {
   readonly executionMode?: ExecutionMode
   /** Called as each step finishes, so progress survives a crash mid-run. */
   readonly onStepDone?: (step: PlanStep) => Effect.Effect<void>
+  /** Called after every route attempt, so provenance survives a crash mid-step. */
+  readonly onStepUpdated?: (step: PlanStep) => Effect.Effect<void>
 }
 
 /** A step's subagent id — stable, so a reconnecting watcher lands on the same tab. */
@@ -73,6 +94,15 @@ export interface StepVerdict {
   readonly reason: string | null
 }
 
+export type StepAttemptOutcome =
+  | { readonly status: "done"; readonly mutationPossible: boolean }
+  | { readonly status: "blocked"; readonly reason: string | null; readonly mutationPossible: boolean }
+  | {
+      readonly status: "failed"
+      readonly failure: RouteFailure
+      readonly mutationPossible: boolean
+    }
+
 const RawVerdict = Schema.Struct({
   status: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.NullOr(Schema.String))
@@ -97,7 +127,10 @@ export const parseStepVerdict = (text: string): StepVerdict => {
   const status = decoded.right.status?.trim().toLowerCase()
   if (status !== "blocked") return { status: "done", reason: null }
   const reason = decoded.right.reason?.trim()
-  return { status: "blocked", reason: reason && reason.length > 0 ? reason : null }
+  return {
+    status: "blocked",
+    reason: reason && reason.length > 0 ? reason : null
+  }
 }
 
 /** Attribute a step's output to its own tab. See `scopeToAgent` for the trap. */
@@ -121,10 +154,12 @@ const runStep = (
   emit: (event: StreamEvent) => Effect.Effect<void>,
   /** Run-level spend accumulator — see the `Done` branch in `ctx.emit`. */
   spend: Ref.Ref<{ costUsd: number; tokens: number }>
-): Effect.Effect<StepVerdict, PlanError, CliAdapter> =>
+): Effect.Effect<StepAttemptOutcome, PlanError, CliAdapter> =>
   Effect.gen(function* () {
     const adapter = yield* CliAdapter
     const collected = yield* Ref.make<ReadonlyArray<string>>([])
+    const childFailure = yield* Ref.make<string | null>(null)
+    const mutationPossible = yield* Ref.make(false)
     // Retries share the step's tab, but need distinct adapter session ids or the
     // resume map would hand attempt 2 attempt 1's context — which is exactly the
     // context we are trying to replace with a corrected brief.
@@ -174,9 +209,21 @@ const runStep = (
             // first step that succeeds.
             isChildLifecycle(event) ? Effect.void : emit(scopeTo(event, agentId))
           ),
-          event._tag === "Assistant" && event.agentId === undefined
-            ? Ref.update(collected, (acc) => [...acc, event.text])
-            : Effect.void
+          Effect.all(
+            [
+              event._tag === "Assistant" && event.agentId === undefined
+                ? Ref.update(collected, (acc) => [...acc, event.text])
+                : Effect.void,
+              event._tag === "Failed" ? Ref.set(childFailure, event.message) : Effect.void,
+              event._tag === "ToolStart" && toolMayMutate(event.name)
+                ? Ref.set(mutationPossible, true)
+                : Effect.void,
+              event._tag === "ToolEnd" && event.diff !== null
+                ? Ref.set(mutationPossible, true)
+                : Effect.void
+            ],
+            { discard: true }
+          )
         ),
       // The plan was approved; edits are the work. Commands still gate through
       // the harness's own `accept-edits` semantics rather than being waved
@@ -201,40 +248,79 @@ const runStep = (
       parentId: null
     })
 
-    const outcome = yield* adapter
-      .run(`${agentId}_${input.sessionId}_a${attempt}`, spec, ctx)
-      .pipe(
-        Effect.timeoutFail({
-          duration: STEP_TIMEOUT,
-          onTimeout: () => ({ _tag: "StepTimedOut" }) as const
-        }),
-        Effect.either
-      )
+    const outcome = yield* adapter.run(`${agentId}_${input.sessionId}_a${attempt}`, spec, ctx).pipe(
+      Effect.timeoutFail({
+        duration: STEP_TIMEOUT,
+        onTimeout: () => ({ _tag: "StepTimedOut" }) as const
+      }),
+      Effect.either
+    )
 
+    const failed = yield* Ref.get(childFailure)
+    const mutated = yield* Ref.get(mutationPossible)
     yield* emit({
       _tag: "SubagentEnded",
       id: agentId,
-      status: outcome._tag === "Right" ? "done" : "error"
+      status: outcome._tag === "Right" && failed === null ? "done" : "error"
     })
 
-    // A crashed or stalled attempt is reported as a BLOCKER rather than a
-    // failure, so the loop can try again. Only exhausting the attempts stops
-    // the run — the whole point is to carry the plan to completion unattended.
     if (outcome._tag === "Left") {
+      const failure =
+        outcome.left._tag === "StepTimedOut"
+          ? classifyProviderFailure(`The attempt timed out after ${STEP_TIMEOUT} without finishing.`)
+          : classifyProviderFailure(outcome.left)
       return {
-        status: "blocked",
-        reason:
-          outcome.left._tag === "StepTimedOut"
-            ? `The attempt ran past ${STEP_TIMEOUT} without finishing.`
-            : "The harness failed to run."
-      } as const
+        status: "failed",
+        failure,
+        mutationPossible: mutated
+      }
+    }
+    if (failed !== null) {
+      return {
+        status: "failed",
+        failure: classifyProviderFailure(failed),
+        mutationPossible: mutated
+      }
     }
     const verdict = parseStepVerdict((yield* Ref.get(collected)).join("\n"))
-    if (verdict.status === "done" && input.onStepDone) {
-      yield* input.onStepDone(step).pipe(Effect.ignore)
-    }
-    return verdict
+    return verdict.status === "done"
+      ? { status: "done", mutationPossible: mutated }
+      : { ...verdict, mutationPossible: mutated }
   })
+
+/** Keep provenance useful without allowing a transcript to grow without bound. */
+export const MAX_ROUTE_ATTEMPT_HISTORY = 16
+
+const sameRoute = (left: RouteCandidate, right: RouteCandidate): boolean =>
+  left.cli === right.cli && left.model === right.model
+
+const routeCandidates = (
+  step: PlanStep,
+  input: StepRunInput
+): ReadonlyArray<RouteCandidate> => {
+  const routing = step.routing
+  // Shadow is observational. Resolve its executable route exactly as a legacy
+  // plan would at run time and ignore counterfactual alternatives persisted by
+  // older builds; only Active mode may change providers automatically.
+  if (routing === undefined || routing.mode === "shadow") {
+    const legacy = resolveRunner(step, input.available, input.fallback)
+    return legacy === null ? [] : [legacy]
+  }
+  const selected: RouteCandidate = {
+    cli: routing.decision.cli,
+    model: routing.decision.model
+  }
+  return [selected, ...routing.decision.alternatives].filter(
+    (candidate, index, all) =>
+      all.findIndex((other) => sameRoute(candidate, other)) === index && candidate.cli !== "starbase"
+  )
+}
+
+const appendAttempt = (step: PlanStep, attempt: RouteAttempt): PlanStep => {
+  if (step.routing === undefined) return step
+  const attempts = [...step.routing.attempts, attempt].slice(-MAX_ROUTE_ATTEMPT_HISTORY)
+  return { ...step, routing: { ...step.routing, attempts } }
+}
 
 export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/PlanExecutor", {
   accessors: true,
@@ -256,7 +342,11 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
           const { order, skipped } = executionOrder(input.plan)
 
           const work = Effect.gen(function* () {
-            yield* emit({ _tag: "Started", sessionId: input.sessionId, model: undefined })
+            yield* emit({
+              _tag: "Started",
+              sessionId: input.sessionId,
+              model: undefined
+            })
 
             // Say what will NOT be run, before running anything. A branch left
             // for a human is a decision the operator has to make; discovering
@@ -281,72 +371,208 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
             // only caught up on reload. `PlanUpdated` is the live channel; hold
             // the evolving plan here and publish each transition through it.
             const live = yield* Ref.make(input.plan)
-            const publish = (stepId: string, status: PlanStepStatus) =>
+            const publish = (updated: PlanStep) =>
               Ref.updateAndGet(live, (p) => ({
                 ...p,
-                steps: p.steps.map((s) => (s.id === stepId ? { ...s, status } : s))
+                steps: p.steps.map((step) => (step.id === updated.id ? updated : step))
               })).pipe(Effect.flatMap((plan) => emit({ _tag: "PlanUpdated", plan })))
+            const persistStep = (updated: PlanStep) =>
+              input.onStepUpdated === undefined
+                ? Effect.void
+                : input.onStepUpdated(updated).pipe(Effect.ignore)
+            const updateStep = (updated: PlanStep) =>
+              Effect.all([publish(updated), persistStep(updated)], { discard: true })
+            const liveRoutes = new Set(
+              input.available
+                .filter((candidate) => candidate.cli !== "starbase")
+                .map((candidate) => `${candidate.cli}\u0000${candidate.model}`)
+            )
+            const unavailableRoutes = new Map(
+              (input.unavailable ?? []).map((candidate) => [
+                `${candidate.cli}\u0000${candidate.model}`,
+                candidate.reason
+              ])
+            )
 
             for (const step of order) {
-              const runner = resolveRunner(step, input.available, input.fallback)
-              if (runner === null) {
-                return yield* Effect.fail(
-                  new PlanError({
-                    message: `No installed harness can run step ${step.number} (${step.title}).`
-                  })
-                )
+              const candidates = routeCandidates(step, input)
+              let currentStep: PlanStep = { ...step, status: "current" }
+              let candidateIndex = 0
+              let attempts = 0
+              let previousOutcome: string | null = null
+              let settled = false
+              let terminalReason: string | null = null
+              const unavailableReasons: Array<string> = []
+
+              const record = (attempt: RouteAttempt) => {
+                if (currentStep.routing === undefined) return Effect.void
+                currentStep = appendAttempt(currentStep, attempt)
+                return updateStep(currentStep)
               }
 
-              // Iterate this step until it reports done or runs out of attempts.
-              // A retry is given the previous blocker verbatim, because most
-              // first failures are a missing detail the agent can work around
-              // once it knows what stopped it.
-              let blocker: string | null = null
-              let settled = false
               // Mark it running BEFORE the first attempt, so the operator can
               // see which step a long run is actually on. Retries stay
               // `current` — the tab and the blocker line carry that detail.
-              yield* publish(step.id, "current")
-              for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
-                const verdict: StepVerdict = yield* runStep(
+              yield* updateStep(currentStep)
+
+              while (attempts < MAX_STEP_ATTEMPTS && !settled) {
+                let runner = candidates[candidateIndex]
+                while (
+                  runner !== undefined &&
+                  !liveRoutes.has(`${runner.cli}\u0000${runner.model}`)
+                ) {
+                  const route = `${runner.cli}/${runner.model}`
+                  const reason =
+                    unavailableRoutes.get(`${runner.cli}\u0000${runner.model}`) ??
+                    "not in the execution-time model catalogue"
+                  unavailableReasons.push(`${route}: ${reason}`)
+                  const createdAt = yield* Effect.sync(() => new Date().toISOString())
+                  yield* record({
+                    attempt: null,
+                    candidate: runner,
+                    outcome: "unavailable",
+                    reason,
+                    mutationPossible: false,
+                    createdAt
+                  })
+                  yield* emit({
+                    _tag: "Assistant",
+                    text: `Route ${route} cannot run step ${step.number}: ${reason}. Checking the next candidate.`,
+                    agentId: undefined
+                  })
+                  candidateIndex += 1
+                  runner = candidates[candidateIndex]
+                }
+
+                if (runner === undefined) {
+                  terminalReason =
+                    step.routing === undefined
+                      ? `No installed harness can run step ${step.number} (${step.title}).`
+                      : `No executable route remains for step ${step.number} (${step.title}).${
+                          unavailableReasons.length === 0
+                            ? ""
+                            : ` ${unavailableReasons.join("; ")}`
+                        }`
+                  break
+                }
+
+                attempts += 1
+                const outcome: StepAttemptOutcome = yield* runStep(
                   input,
-                  step,
+                  currentStep,
                   runner,
-                  attempt,
-                  blocker,
+                  attempts,
+                  previousOutcome,
                   emit,
                   spend
                 )
-                if (verdict.status === "done") {
+                const createdAt = yield* Effect.sync(() => new Date().toISOString())
+                yield* record({
+                  attempt: attempts,
+                  candidate: runner,
+                  outcome: outcome.status,
+                  reason:
+                    outcome.status === "done"
+                      ? null
+                      : outcome.status === "blocked"
+                        ? outcome.reason
+                        : outcome.failure.message,
+                  mutationPossible: outcome.mutationPossible,
+                  createdAt
+                })
+
+                if (outcome.status === "done") {
                   settled = true
                   break
                 }
-                blocker = verdict.reason ?? "It did not say why."
-                yield* emit({
-                  _tag: "Assistant",
-                  text: `Step ${step.number} (${step.title}) is blocked: ${blocker}${
-                    attempt < MAX_STEP_ATTEMPTS ? " Trying again." : ""
-                  }`,
-                  agentId: undefined
-                })
+
+                if (outcome.status === "blocked") {
+                  previousOutcome = outcome.reason ?? "It did not say why."
+                  yield* emit({
+                    _tag: "Assistant",
+                    text: `Step ${step.number} (${step.title}) is blocked: ${previousOutcome}${
+                      attempts < MAX_STEP_ATTEMPTS ? " Trying again." : ""
+                    }`,
+                    agentId: undefined
+                  })
+                  continue
+                }
+
+                previousOutcome = outcome.failure.message
+                const preservesLegacySemantics =
+                  step.routing === undefined || step.routing.mode === "shadow"
+
+                // Shadow must behave exactly like a pre-routing plan. Active
+                // mode also keeps bounded same-route recovery for non-operator
+                // failures; only changing providers requires proof that no
+                // mutation-capable tool started.
+                if (preservesLegacySemantics) {
+                  if (attempts < MAX_STEP_ATTEMPTS) {
+                    yield* emit({
+                      _tag: "Assistant",
+                      text: `Step ${step.number} (${step.title}) failed: ${previousOutcome} Trying again.`,
+                      agentId: undefined
+                    })
+                    continue
+                  }
+                  break
+                }
+
+                if (outcome.failure.classification === "terminal-operator") {
+                  terminalReason =
+                    `Step ${step.number} (${step.title}) stopped on ${runner.cli}/${runner.model}: ` +
+                    outcome.failure.message
+                  break
+                }
+
+                if (
+                  outcome.failure.classification === "transient-provider" &&
+                  !outcome.mutationPossible &&
+                  candidateIndex + 1 < candidates.length
+                ) {
+                  candidateIndex += 1
+                  const next = candidates[candidateIndex]!
+                  yield* emit({
+                    _tag: "Assistant",
+                    text:
+                      `Step ${step.number} provider failure on ${runner.cli}/${runner.model}: ` +
+                      `${outcome.failure.message} Falling back to ${next.cli}/${next.model}.`,
+                    agentId: undefined
+                  })
+                  continue
+                }
+
+                if (attempts < MAX_STEP_ATTEMPTS) {
+                  const fallbackNote = outcome.mutationPossible
+                    ? " The worktree may have changed, so retrying the same route instead of falling back."
+                    : " Retrying the same route."
+                  yield* emit({
+                    _tag: "Assistant",
+                    text:
+                      `Step ${step.number} (${step.title}) failed on ${runner.cli}/${runner.model}: ` +
+                      `${previousOutcome}${fallbackNote}`,
+                    agentId: undefined
+                  })
+                  continue
+                }
+                break
               }
 
-              // Out of attempts. This is the ONE thing that stops an approved
-              // plan, and it is deliberately the only one: an agent that has
-              // failed three times with three explanations is not one attempt
-              // from success. Stopping here — rather than pressing on into
-              // steps that depended on this one — is what makes the run safe to
-              // leave alone.
               if (!settled) {
                 return yield* Effect.fail(
                   new PlanError({
-                    message:
+                    message: terminalReason ??
                       `Stuck on step ${step.number} (${step.title}) after ${MAX_STEP_ATTEMPTS} attempts. ` +
-                      `Last blocker: ${blocker ?? "unknown"}`
+                        `Last blocker: ${previousOutcome ?? "unknown"}`
                   })
                 )
               }
-              yield* publish(step.id, "done")
+
+              currentStep = { ...currentStep, status: "done" }
+              yield* publish(currentStep)
+              if (input.onStepDone !== undefined) {
+                yield* input.onStepDone(currentStep).pipe(Effect.ignore)
+              }
               yield* Ref.update(done, (n) => n + 1)
             }
 
@@ -359,7 +585,11 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
             })
             // The run's real spend, summed from the steps rather than asserted
             // as zero.
-            yield* emit({ _tag: "Done", costUsd: total.costUsd, tokens: total.tokens })
+            yield* emit({
+              _tag: "Done",
+              costUsd: total.costUsd,
+              tokens: total.tokens
+            })
           })
 
           yield* Effect.forkScoped(

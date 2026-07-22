@@ -8,6 +8,7 @@ import type {
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
+  GigaplanRoutingConfig,
   GitConfig,
   GithubConfig,
   NotificationsConfig,
@@ -166,6 +167,11 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     })
   const saveOrchestrator = (cli: CliKind, model: string) => {
     void rpc.configSetOrchestrator(cli, model).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  }
+  const saveGigaplanRouting = (routing: GigaplanRoutingConfig) => {
+    void rpc.configSetGigaplanRouting(routing).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
   }
@@ -559,6 +565,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       modelCatalog={catalogQuery.data ?? []}
       orchestrator={configQuery.data?.orchestrator ?? null}
       onSaveOrchestrator={saveOrchestrator}
+      gigaplanRouting={configQuery.data?.gigaplanRouting ?? null}
+      onSaveGigaplanRouting={saveGigaplanRouting}
       gigaplanUnavailableReason={readinessQuery.data?.ready === false ? readinessQuery.data.reason : null}
       billing={billingQuery.data ?? []}
       loadModels={rpc.modelsList}

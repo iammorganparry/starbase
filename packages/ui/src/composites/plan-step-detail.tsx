@@ -125,7 +125,7 @@ export function PlanStepDetail({
           {step.diff && <DiffStat added={step.diff.added} removed={step.diff.removed} />}
         </div>
 
-        {(step.origin || step.assignee || step.taskKind) && (
+        {(step.origin || step.assignee || step.taskKind || step.routing) && (
           <Section title="Routing">
             <PlanProvenance step={step} />
           </Section>

@@ -28,6 +28,7 @@ import {
   TerminalService,
   TranscriptStore,
   BackgroundTaskStore,
+  RankingService,
   UsageService,
   WorkspaceService
 } from "@starbase/cli-adapters"
@@ -99,8 +100,9 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provide(Layer.mergeAll(SkillsService.Default, McpService.Default)),
   // provideMerge: the `Models.*` handlers consume ModelsService AND the startup
   // prefetch reaches the very same instance — a different one would warm a cache
-  // nobody reads, so the merge is what makes the prefetch actually count.
-  Layer.provideMerge(ModelsService.Default),
+  // nobody reads, so the merge is what makes the prefetch actually count. The
+  // rankings peer is also process-cached and has no dependencies.
+  Layer.provideMerge(Layer.mergeAll(ModelsService.Default, RankingService.Default)),
   Layer.provide(UsageService.Default),
   Layer.provide(GhService.Default),
   Layer.provide(ConfigService.Default),

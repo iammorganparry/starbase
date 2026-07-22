@@ -16,6 +16,7 @@ import {
   CreateSessionInput,
   GateDecision,
   GhStatus,
+  GigaplanRoutingConfig,
   GitConfig,
   GithubConfig,
   NotificationKind,
@@ -577,6 +578,12 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: WorkspaceConfig,
     error: ConfigError,
     payload: { cli: CliKind, model: Schema.String }
+  }),
+
+  Rpc.make("Config.setGigaplanRouting", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { routing: GigaplanRoutingConfig }
   }),
 
   Rpc.make("Config.setProvider", {

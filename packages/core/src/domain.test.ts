@@ -7,10 +7,12 @@ import {
   GhStatus,
   GithubConfig,
   Repo,
+  RouteCandidate,
   Session,
   supportsPlanMode,
   WorkspaceConfig
 } from "./domain.js"
+import { RouteCandidate as ConversationRouteCandidate } from "./conversation.js"
 
 /**
  * These schemas back persistence (config.json, sessions.json) and the RPC wire
@@ -22,6 +24,12 @@ import {
 
 const decode = <A, I>(schema: Schema.Schema<A, I>, input: unknown) =>
   Schema.decodeUnknownEither(schema)(input)
+
+describe("RouteCandidate", () => {
+  it("uses one schema for configuration and conversation routing", () => {
+    expect(ConversationRouteCandidate).toBe(RouteCandidate)
+  })
+})
 
 describe("WorkspaceConfig", () => {
   it("decodes a configured workspace", () => {
@@ -51,6 +59,28 @@ describe("WorkspaceConfig", () => {
       Schema.encodeSync(WorkspaceConfig)(config)
     )
     expect(roundTripped).toStrictEqual(config)
+  })
+
+  it("accepts routing config while legacy absence remains valid", () => {
+    const configured = decode(WorkspaceConfig, {
+      reposDir: "/repos",
+      createdAt: "2026-07-22T00:00:00.000Z",
+      gigaplanRouting: {
+        mode: "shadow",
+        overrides: [
+          { taskKind: "frontend", routes: [{ cli: "claude", model: "opus" }] }
+        ]
+      }
+    })
+    expect(Either.isRight(configured)).toBe(true)
+    expect(
+      Either.isRight(
+        decode(WorkspaceConfig, {
+          reposDir: "/repos",
+          createdAt: "2026-07-22T00:00:00.000Z"
+        })
+      )
+    ).toBe(true)
   })
 })
 

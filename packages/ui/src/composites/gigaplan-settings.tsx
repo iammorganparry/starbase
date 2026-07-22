@@ -1,4 +1,15 @@
-import type { CliKind, HarnessBilling, ProviderModels } from "@starbase/core"
+import type {
+  CliKind,
+  GigaplanRoutingConfig,
+  HarnessBilling,
+  ProviderModels,
+  RouteCandidate,
+  TaskKind
+} from "@starbase/core"
+import { GIGAPLAN_ROUTING_DEFAULT, TASK_KINDS } from "@starbase/core"
+import { Plus, Trash2 } from "lucide-react"
+import { Button } from "../components/button.js"
+import { SegmentedControl } from "../components/segmented-control.js"
 import { cn } from "../lib/cn.js"
 import {
   Select,
@@ -31,6 +42,9 @@ export interface GigaplanSettingsProps {
   /** What it falls back to when unset — stated, never left implicit. */
   readonly defaultOrchestrator: { readonly cli: CliKind; readonly model: string }
   readonly onChange: (cli: CliKind, model: string) => void
+  /** Semantic step policy; absence is the legacy-safe shadow default. */
+  readonly routing?: GigaplanRoutingConfig | null
+  readonly onRoutingChange?: (routing: GigaplanRoutingConfig) => void
   /** Why Gigaplan can't run here, when it can't. Null when it can. */
   readonly unavailableReason?: string | null
   /** What each installed harness is charged to. Empty until the probe returns. */
@@ -46,14 +60,28 @@ export function GigaplanSettings({
   orchestrator,
   defaultOrchestrator,
   onChange,
+  routing,
+  onRoutingChange,
   unavailableReason,
   billing = [],
   className
 }: GigaplanSettingsProps) {
   const active = orchestrator ?? defaultOrchestrator
+  const routeConfig = routing ?? GIGAPLAN_ROUTING_DEFAULT
   // `starbase` is filtered for the same reason it is filtered from the composer's
   // picker: the orchestrator cannot be its own backend.
   const groups = catalog.filter((p) => p.cli !== "starbase" && p.models.length > 0)
+  const liveRoutes: ReadonlyArray<RouteCandidate> = groups.flatMap((provider) =>
+    provider.models.map((model) => ({ cli: provider.cli, model: model.id }))
+  )
+  const updateRoutes = (taskKind: TaskKind, routes: ReadonlyArray<RouteCandidate>) => {
+    if (onRoutingChange === undefined) return
+    const rest = routeConfig.overrides.filter((override) => override.taskKind !== taskKind)
+    onRoutingChange({
+      ...routeConfig,
+      overrides: routes.length === 0 ? rest : [...rest, { taskKind, routes }]
+    })
+  }
 
   return (
     <div className={cn("flex flex-col gap-5", className)}>
@@ -106,6 +134,126 @@ export function GigaplanSettings({
             on purpose: this model plans, and reads whole repositories to do it.
           </span>
         ) : null}
+      </div>
+
+      <div className="flex flex-col gap-3 border-t border-hairline pt-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <span className="block text-[12px] font-semibold text-text">Step routing policy</span>
+            <span className="text-[11.5px] leading-relaxed text-muted-foreground">
+              Shadow records semantic recommendations without changing execution. Active applies
+              eligible overrides, OpenRouter&apos;s rolling task-usage rankings, and deterministic
+              task profiles. Usage rankings only reorder models available on this machine.
+            </span>
+          </div>
+          <SegmentedControl
+            items={[
+              { value: "shadow", label: "Shadow" },
+              { value: "active", label: "Active" }
+            ]}
+            value={routeConfig.mode}
+            onChange={(mode) => onRoutingChange?.({ ...routeConfig, mode })}
+          />
+        </div>
+
+        <details className="rounded-lg border border-line bg-panel p-3">
+          <summary className="cursor-pointer text-[11.5px] font-semibold text-text">
+            Advanced task-kind overrides
+          </summary>
+          <div className="mt-3 flex flex-col gap-3">
+            {TASK_KINDS.map((taskKind) => {
+              const routes =
+                routeConfig.overrides.find((override) => override.taskKind === taskKind)?.routes ?? []
+              return (
+                <div key={taskKind} className="grid gap-2 border-t border-hairline pt-3 first:border-0 first:pt-0">
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {taskKind}
+                  </span>
+                  {routes.map((route, index) => {
+                    const isLive = liveRoutes.some(
+                      (candidate) => candidate.cli === route.cli && candidate.model === route.model
+                    )
+                    const options = isLive ? liveRoutes : [route, ...liveRoutes]
+                    return (
+                      <div key={`${route.cli}:${route.model}:${index}`} className="flex items-center gap-2">
+                        <span className="w-5 font-mono text-[10px] text-dim">{index + 1}</span>
+                        <Select
+                          value={harnessModelValue(route.cli, route.model)}
+                          onValueChange={(value) => {
+                            const candidate = options.find(
+                              (option) => harnessModelValue(option.cli, option.model) === value
+                            )
+                            if (candidate === undefined) return
+                            const next = [...routes]
+                            next[index] = candidate
+                            updateRoutes(taskKind, next)
+                          }}
+                        >
+                          <SelectTrigger
+                            aria-label={`${taskKind} route ${index + 1}`}
+                            className="min-w-0 flex-1"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {options.map((candidate) => (
+                              <SelectItem
+                                key={harnessModelValue(candidate.cli, candidate.model)}
+                                value={harnessModelValue(candidate.cli, candidate.model)}
+                              >
+                                {candidate.cli} · {candidate.model}
+                                {!liveRoutes.some(
+                                  (live) =>
+                                    live.cli === candidate.cli && live.model === candidate.model
+                                )
+                                  ? " (unavailable)"
+                                  : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {!isLive && (
+                          <span className="text-[10px] text-yellow">
+                            {route.cli}/{route.model} unavailable
+                          </span>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Remove ${taskKind} route ${index + 1}`}
+                          onClick={() => updateRoutes(taskKind, routes.filter((_, i) => i !== index))}
+                        >
+                          <Trash2 size={13} />
+                        </Button>
+                      </div>
+                    )
+                  })}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="w-fit"
+                    disabled={liveRoutes.every((candidate) =>
+                      routes.some(
+                        (route) => route.cli === candidate.cli && route.model === candidate.model
+                      )
+                    )}
+                    onClick={() => {
+                      const candidate = liveRoutes.find(
+                        (live) =>
+                          !routes.some(
+                            (route) => route.cli === live.cli && route.model === live.model
+                          )
+                      )
+                      if (candidate !== undefined) updateRoutes(taskKind, [...routes, candidate])
+                    }}
+                  >
+                    <Plus size={12} /> Add route
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+        </details>
       </div>
 
       {billing.length > 0 ? (

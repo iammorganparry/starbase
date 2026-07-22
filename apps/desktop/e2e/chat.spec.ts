@@ -477,7 +477,7 @@ test("the Pull Request tab leads with the description, in the conversation's col
     }
   })
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()
-  await window.getByText("Pull Request").first().click()
+  await window.getByRole("button", { name: "Pull Request" }).click()
 
   // The description renders as the opening comment — markdown and all.
   await expect(window.getByRole("heading", { name: "Why" })).toBeVisible({ timeout: 20_000 })
@@ -515,7 +515,7 @@ test("the merge box offers a strategy, and merges with the one chosen", async ({
       ]
     }
   })
-  await window.getByText("Pull Request").first().click()
+  await window.getByRole("button", { name: "Pull Request" }).click()
 
   // Default is a merge commit — the picker must not silently change what the
   // button already did.
@@ -552,7 +552,7 @@ test("an out-of-date branch offers Update branch, not just a blocker", async ({ 
       ]
     }
   })
-  await window.getByText("Pull Request").first().click()
+  await window.getByRole("button", { name: "Pull Request" }).click()
 
   await expect(window.getByText("Branch is out of date with the base")).toBeVisible({
     timeout: 20_000
@@ -582,7 +582,7 @@ test("a passing check still links to its run", async ({ launchApp }) => {
       ]
     }
   })
-  await window.getByText("Pull Request").first().click()
+  await window.getByRole("button", { name: "Pull Request" }).click()
 
   const details = window.getByRole("link", { name: "Details for build" })
   await expect(details).toBeVisible({ timeout: 20_000 })
@@ -973,7 +973,7 @@ test("a running adversarial review reports its phase and appears in the agent ta
   const preview = window.getByRole("button", { name: "Browser preview", exact: true })
   if ((await preview.getAttribute("aria-pressed")) === "true") await preview.click()
 
-  await window.getByText("Pull Request").first().click()
+  await window.getByRole("button", { name: "Pull Request" }).click()
   const runButton = window.getByRole("button", { name: /Adversarial review/ })
   await expect(runButton).toBeEnabled()
   await runButton.click()

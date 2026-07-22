@@ -137,8 +137,8 @@ export function PlanChallenges({ step, className }: { step: PlanStep; className?
  * cold-start guess never reads like a measured result.
  */
 export function PlanProvenance({ step, className }: { step: PlanStep; className?: string }) {
-  const { origin, assignee, taskKind } = step
-  if (!origin && !assignee && !taskKind) return null
+  const { origin, assignee, taskKind, routing } = step
+  if (!origin && !assignee && !taskKind && !routing) return null
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       {(origin || taskKind) && (
@@ -156,7 +156,54 @@ export function PlanProvenance({ step, className }: { step: PlanStep; className?
           )}
         </div>
       )}
-      {assignee && <PlanAssignee assignee={assignee} />}
+      {assignee && (
+        <PlanAssignee
+          assignee={assignee}
+          heading={routing ? "Planner preference" : "Assigned model"}
+          labelPrefix={routing ? "Planner preference" : "Assigned to"}
+        />
+      )}
+      {routing && (
+        <div className="flex flex-col gap-2">
+          <PlanAssignee
+            assignee={routing.decision}
+            heading="Will run on"
+            labelPrefix="Will run on"
+          />
+          <div className="rounded-md border border-line bg-surface/40 px-2.5 py-2 text-[10.5px] leading-relaxed text-muted-foreground">
+            <div>
+              {routing.decision.provenance} · {routing.policyVersion} · {routing.effort} effort · {routing.risk} risk
+            </div>
+            {routing.shadowDecision && (
+              <div>
+                Shadow recommendation: {routing.shadowDecision.cli}/{routing.shadowDecision.model}
+                {` — ${routing.shadowDecision.reason}`}
+              </div>
+            )}
+            {routing.decision.alternatives.length > 0 && (
+              <div>
+                Fallbacks: {routing.decision.alternatives.map((candidate) => `${candidate.cli}/${candidate.model}`).join(" → ")}
+              </div>
+            )}
+            {routing.rejected.length > 0 && (
+              <div>
+                Skipped: {routing.rejected.map((item) => `${item.candidate.cli}/${item.candidate.model} (${item.reason})`).join("; ")}
+              </div>
+            )}
+            {routing.attempts.length > 0 && (
+              <div>
+                Attempts:{" "}
+                {routing.attempts
+                  .map(
+                    (attempt) =>
+                      `${attempt.attempt === null ? "availability check:" : `${attempt.attempt}.`} ${attempt.candidate.cli}/${attempt.candidate.model} ${attempt.outcome}`
+                  )
+                  .join("; ")}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

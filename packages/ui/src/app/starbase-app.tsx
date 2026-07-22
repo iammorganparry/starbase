@@ -8,6 +8,7 @@ import type {
   CreateSessionFromPrInput,
   CreateSessionInput,
   GhStatus,
+  GigaplanRoutingConfig,
   GitConfig,
   GithubConfig,
   NotificationsConfig,
@@ -120,6 +121,8 @@ export interface StarbaseAppProps {
   /** The configured orchestrator harness+model, or null for the default. */
   orchestrator?: { readonly cli: CliKind; readonly model: string } | null
   onSaveOrchestrator?: (cli: CliKind, model: string) => void
+  gigaplanRouting?: GigaplanRoutingConfig | null
+  onSaveGigaplanRouting?: (routing: GigaplanRoutingConfig) => void
   /** Why Gigaplan can't run on this host, when it can't. */
   gigaplanUnavailableReason?: string | null
   /** What each installed harness is charged to. */
@@ -258,6 +261,8 @@ export function StarbaseApp({
   modelCatalog,
   orchestrator,
   onSaveOrchestrator,
+  gigaplanRouting,
+  onSaveGigaplanRouting,
   gigaplanUnavailableReason,
   billing,
   loadModels,
@@ -582,6 +587,8 @@ export function StarbaseApp({
               catalog={modelCatalog}
               orchestrator={orchestrator}
               onSaveOrchestrator={onSaveOrchestrator}
+              gigaplanRouting={gigaplanRouting}
+              onSaveGigaplanRouting={onSaveGigaplanRouting}
               gigaplanUnavailableReason={gigaplanUnavailableReason}
               billing={billing}
               loadModels={loadModels ?? (async () => [])}

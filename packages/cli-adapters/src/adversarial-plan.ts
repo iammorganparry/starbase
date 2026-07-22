@@ -9,10 +9,16 @@ import type {
   PlanStep,
   QuestionAnswer,
   ReviewSeverity,
+  RoutingContext,
   StreamEvent,
   VendorReach
 } from "@starbase/core"
-import { DEFAULT_REVIEW_MODEL, PlanError, scopeToAgent } from "@starbase/core"
+import {
+  DEFAULT_REVIEW_MODEL,
+  PlanError,
+  resolvePlanRoutes,
+  scopeToAgent
+} from "@starbase/core"
 import { Effect, Mailbox, Ref, Schema, Stream } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { CliAdapter, isChildLifecycle, PlanDecision } from "./adapter.js"
@@ -220,33 +226,6 @@ export const markUnchallenged = (plan: Plan): Plan => ({
   steps: plan.steps.map((s): PlanStep => ({ ...s, challenges: [] }))
 })
 
-/**
- * Record what the knowledge base actually said about each chosen assignee.
- *
- * The MODEL picks and writes the reason; this only annotates. Letting the KB
- * overwrite the pick would make a thin cell authoritative, and letting the model
- * write its own `evidence` would let it invent a track record — so the two
- * halves come from the two places that can honestly supply them.
- */
-export const annotateAssignees = (
-  plan: Plan,
-  ranked: ReadonlyArray<{ cli: CliKind; model: string; level: string; observations: number }>
-): Plan => ({
-  ...plan,
-  steps: plan.steps.map((s): PlanStep => {
-    if (!s.assignee) return s
-    const match = ranked.find((r) => r.cli === s.assignee!.cli && r.model === s.assignee!.model)
-    if (match === undefined) return s
-    return {
-      ...s,
-      assignee: {
-        ...s.assignee,
-        evidence: { level: match.level, observations: match.observations }
-      }
-    }
-  })
-})
-
 /** Stamp each step with the model that proposed it. */
 export const markOrigin = (plan: Plan, by: PlanParticipant): Plan => ({
   ...plan,
@@ -307,19 +286,8 @@ export interface PlanRoundInput {
   readonly binPathFor: (cli: CliKind) => string | null
   /** Whether to ask the round to route each step to an agent. */
   readonly assignAgents: boolean
-  /**
-   * What this repo's history says about each candidate, when learning is on and
-   * has anything to say. Absent means phase-A behaviour: the model routes on its
-   * own judgement, which is exactly what should happen with an empty or disabled
-   * knowledge base.
-   */
-  readonly affinity?: ReadonlyArray<{
-    readonly cli: CliKind
-    readonly model: string
-    readonly level: string
-    readonly observations: number
-    readonly estimate: number
-  }>
+  /** Complete live catalogue plus deterministic workspace routing policy. */
+  readonly routing: RoutingContext
   /**
    * Where the finished round goes — the plan library wires the store in here.
    * A hook rather than a service dependency so the round logic stays pure of
@@ -329,6 +297,15 @@ export interface PlanRoundInput {
 }
 
 type RoundEnv = CliAdapter
+
+const requireRoutes = (plan: Plan, context: RoutingContext): Effect.Effect<Plan, PlanError> => {
+  const resolved = resolvePlanRoutes(plan, context)
+  if (resolved.unresolved.length === 0) return Effect.succeed(resolved.plan)
+  const steps = resolved.unresolved.map((item) => item.stepNumber).join(", ")
+  return Effect.fail(
+    new PlanError({ message: `No live model can route plan step${resolved.unresolved.length === 1 ? "" : "s"} ${steps}.` })
+  )
+}
 
 const ROLE_IDS = { propose: "plan_propose", attack: "plan_attack", revise: "plan_revise" } as const
 
@@ -550,7 +527,12 @@ export class AdversarialPlanService extends Effect.Service<AdversarialPlanServic
               const adversary = participant(roles.adversary, adversaryModel)
               const agents: ReadonlyArray<AvailableAgent> = input.vendors.flatMap((v) =>
                 v.models.map((m) => {
-                  const known = input.affinity?.find((a) => a.cli === v.cli && a.model === m.id)
+                  const known = input.routing.affinity
+                    ?.filter(
+                      (affinity) =>
+                        affinity.candidate.cli === v.cli && affinity.candidate.model === m.id
+                    )
+                    .sort((left, right) => right.score - left.score)[0]
                   return {
                     cli: v.cli,
                     model: m.id,
@@ -558,9 +540,9 @@ export class AdversarialPlanService extends Effect.Service<AdversarialPlanServic
                     ...(known
                       ? {
                           evidence: {
-                            level: known.level,
+                            level: "affinity",
                             observations: known.observations,
-                            estimate: known.estimate
+                            estimate: known.score
                           }
                         }
                       : {})
@@ -578,7 +560,10 @@ export class AdversarialPlanService extends Effect.Service<AdversarialPlanServic
                 proposalPrompt({ brief: input.brief, agents, assignAgents: input.assignAgents }),
                 emit
               )
-              const proposal = markOrigin(parsePlan(proposalText, `${input.sessionId}_proposal`), proposer)
+              const proposal = yield* requireRoutes(
+                markOrigin(parsePlan(proposalText, `${input.sessionId}_proposal`), proposer),
+                input.routing
+              )
 
               // ── Attack ─────────────────────────────────────────────────────
               // A dead adversary must not fail the round: an unchallenged plan is
@@ -661,9 +646,9 @@ export class AdversarialPlanService extends Effect.Service<AdversarialPlanServic
                 parsePlan(revisionText.right, `${input.sessionId}_revised`),
                 proposer
               )
-              const answered = annotateAssignees(
+              const answered = yield* requireRoutes(
                 applyChallenges(revised, parsed, parseResponses(revisionText.right), proposal),
-                input.affinity ?? []
+                input.routing
               )
               yield* emit({ _tag: "PlanProposed", plan: answered })
               yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })

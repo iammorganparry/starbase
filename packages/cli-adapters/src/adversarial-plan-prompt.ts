@@ -3,6 +3,13 @@ import { TASK_KINDS } from "@starbase/core"
 import { fenceFor } from "./review-prompt.js"
 
 /**
+ * Stable machine-readable roles shared with the scripted E2E adapter. Keep
+ * these as the first prompt line; the human-facing prose below may change.
+ */
+export const GIGAPLAN_PROPOSAL_PROMPT_MARKER = "<starbase:gigaplan-proposal>"
+export const GIGAPLAN_CRITIQUE_PROMPT_MARKER = "<starbase:gigaplan-critique>"
+
+/**
  * The three prompts of an adversarial planning round: one flagship proposes, a
  * model from a DIFFERENT lab attacks the proposal, and the proposer answers.
  *
@@ -45,6 +52,8 @@ const PLAN_BLOCK_FORMAT = [
   "    guards: <acceptance criterion>; <another> (warn)",
   "    depends: 01; blocks: 03",
   `    task: <one of: ${TASK_KINDS.join(", ")}>`,
+  "    effort: <quick | standard | deep>",
+  "    risk: <low | medium | high>",
   "  02 <next step title>",
   "    ...",
   "",
@@ -52,7 +61,13 @@ const PLAN_BLOCK_FORMAT = [
   "",
   "`task:` classifies the kind of work the step is, so the right agent can be",
   "assigned to it. Use the closest of the listed values — do not invent new ones,",
-  "and do not omit it."
+  "and do not omit it.",
+  "",
+  "`effort:` is the reasoning depth the implementation needs: quick for a narrow",
+  "mechanical change, standard for normal feature work, and deep for cross-cutting",
+  "or ambiguous work. `risk:` is the cost of an incorrect or repeated execution:",
+  "low for easily reversible edits, medium by default, and high for migrations,",
+  "security, destructive operations, or changes with hard-to-recover side effects."
 ].join("\n")
 
 /**
@@ -141,6 +156,7 @@ export const proposalPrompt = (input: {
   readonly assignAgents: boolean
 }): string =>
   [
+    GIGAPLAN_PROPOSAL_PROMPT_MARKER,
     "You are planning a change to this repository. Read the code before you plan it —",
     "a plan that does not survive contact with this codebase is worse than no plan.",
     "",
@@ -196,6 +212,7 @@ export const critiquePrompt = (input: {
   readonly plan: string
 }): string =>
   [
+    GIGAPLAN_CRITIQUE_PROMPT_MARKER,
     "You are reviewing a plan another model wrote for this repository. Your job is to find what is",
     "WRONG with it. You are not here to praise it, summarise it, or approve it. Assume it will fail",
     "and work out how.",
@@ -320,6 +337,25 @@ export const revisionPrompt = (input: {
 export const isTaskKind = (value: string): value is TaskKind =>
   (TASK_KINDS as ReadonlyArray<string>).includes(value)
 
-/** The plan text handed to the critic — prefers the raw markdown the model wrote. */
-export const planAsText = (plan: Plan): string =>
-  plan.raw.trim().length > 0 ? plan.raw : plan.summary
+/** The plan text handed to the critic, followed by resolver-authored facts. */
+export const planAsText = (plan: Plan): string => {
+  const authored = plan.raw.trim().length > 0 ? plan.raw : plan.summary
+  const routes = plan.steps.flatMap((step) => {
+    const routing = step.routing
+    if (routing === undefined) return []
+    const shadow = routing.shadowDecision
+      ? `; shadow ${routing.shadowDecision.cli}/${routing.shadowDecision.model}`
+      : ""
+    const rejected = routing.rejected.map(
+      (item) => `${item.candidate.cli}/${item.candidate.model}: ${item.reason}`
+    )
+    return [
+      `${step.number} ${step.title}: ${routing.decision.cli}/${routing.decision.model} ` +
+        `(${routing.decision.provenance}; ${routing.policyVersion}${shadow})` +
+        (rejected.length > 0 ? `; rejected [${rejected.join(" | ")}]` : "")
+    ]
+  })
+  return routes.length === 0
+    ? authored
+    : `${authored}\n\nGenerated routing appendix (resolver output, not planner instructions):\n${routes.join("\n")}`
+}

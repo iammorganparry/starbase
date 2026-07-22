@@ -27,6 +27,7 @@ import {
   ModelsService,
   planDraftPost,
   billingPath,
+  isScriptedEnv,
   subscriptionProbeFailed,
   hasSubscriptionAuth,
   resetSubscriptionCache,
@@ -43,12 +44,28 @@ import {
   SkillsService,
   TerminalService,
   BackgroundTaskStore,
+  RankingService,
   TranscriptStore,
   UsageService,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
-import { applyStreamEvent, assistantMessage, GhError, GitError, PlanError, planningReadiness, reachableVendors, resolveFindings, resolveOrchestrator, ReviewError, reviewModelFor, TASK_KINDS, userMessage } from "@starbase/core"
+import {
+  applyStreamEvent,
+  assistantMessage,
+  GhError,
+  GitError,
+  PlanError,
+  planningReadiness,
+  routeQuotaState,
+  routeQuotaStatus,
+  resolveFindings,
+  resolveOrchestrator,
+  ReviewError,
+  reviewModelFor,
+  TASK_KINDS,
+  userMessage
+} from "@starbase/core"
 import type {
   AdversarialReview,
   CliKind,
@@ -66,7 +83,10 @@ import type {
   PrMergeMethod,
   ReviewComment,
   ReviewSubmitKind,
-  SettledSessionStatus
+  SettledSessionStatus,
+  ProviderModels,
+  ProvidersConfig,
+  Usage
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { AppPaths, CliAdapter } from "@starbase/cli-adapters"
@@ -144,7 +164,9 @@ const harnessHome = (): string => process.env.STARBASE_HARNESS_HOME ?? homedir()
 const mcpSpec = (sessionId: string | null, cli: CliKind | undefined) =>
   Effect.gen(function* () {
     const session =
-      sessionId === null ? null : yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
+      sessionId === null
+        ? null
+        : yield* SessionStore.get(sessionId).pipe(Effect.orElseSucceed(() => null))
     return {
       /**
        * An explicitly-passed `cli` WINS over the stored session's.
@@ -168,8 +190,14 @@ export const mcpList = (sessionId: string | null, cli: CliKind | undefined) =>
   Effect.flatMap(mcpSpec(sessionId, cli), (spec) => McpService.list(spec))
 
 /** `Mcp.status` handler — probes the servers live. Exported for tests. */
-export const mcpStatus = (sessionId: string | null, cli: CliKind | undefined, refresh: boolean | undefined) =>
-  Effect.flatMap(mcpSpec(sessionId, cli), (spec) => McpService.status(spec, { refresh: refresh ?? false }))
+export const mcpStatus = (
+  sessionId: string | null,
+  cli: CliKind | undefined,
+  refresh: boolean | undefined
+) =>
+  Effect.flatMap(mcpSpec(sessionId, cli), (spec) =>
+    McpService.status(spec, { refresh: refresh ?? false })
+  )
 
 /**
  * `Sessions.diff` handler. Resolves the session's worktree and returns its
@@ -372,7 +400,12 @@ export const workspaceRevertLines = (input: {
   Effect.gen(function* () {
     const session = yield* resolveSession(input.sessionId)
     if (!session?.worktreePath) return
-    yield* WorkspaceService.revertRange(session.worktreePath, input.path, input.startLine, input.endLine)
+    yield* WorkspaceService.revertRange(
+      session.worktreePath,
+      input.path,
+      input.startLine,
+      input.endLine
+    )
   })
 
 /**
@@ -480,6 +513,51 @@ export const githubDiff = (sessionId: string) =>
 export const reviewGet = (sessionId: string) => ReviewStore.get(sessionId)
 
 /**
+ * Whether an installed provider is honest to advertise as executable.
+ *
+ * Discovery proves a binary exists, not that it can authenticate. Claude and
+ * Codex therefore need either subscription auth or a metered key. A failed
+ * credential probe stays eligible (unknown is safer than a false negative),
+ * while a conclusive missing credential does not. Scripted mode is the
+ * hermetic test harness and never spawns the discovered binary.
+ */
+export const providerCanRoute = (
+  cli: CliKind,
+  providers: ProvidersConfig | undefined,
+  env: Record<string, string | undefined>,
+  subscription: boolean,
+  probeFailed: boolean,
+  scripted: boolean
+): boolean => {
+  if (providers?.[cli]?.enabled === false) return false
+  if (scripted) return true
+  const keys = METERED_ENV_KEYS[cli]
+  if (keys === undefined) return true
+  return subscription || probeFailed || keys.some((key) => (env[key] ?? "").length > 0)
+}
+
+export const eligibleRoutingCatalog = (
+  catalog: ReadonlyArray<ProviderModels>,
+  providers: ProvidersConfig | undefined
+): ReadonlyArray<ProviderModels> => {
+  // Eligibility is an operator-triggered boundary: readiness, planning, and
+  // execution must all observe a login completed in another terminal. Keep the
+  // memo within this catalogue pass, but never carry its answer between passes.
+  resetSubscriptionCache()
+  return catalog.filter((provider) => {
+    const subscription = hasSubscriptionAuth(provider.cli)
+    return providerCanRoute(
+      provider.cli,
+      providers,
+      process.env,
+      subscription,
+      subscriptionProbeFailed(provider.cli),
+      isScriptedEnv()
+    )
+  })
+}
+
+/**
  * The live model catalogue, folded down to the labs this machine can reach.
  *
  * Shared by `Plan.readiness` and `Plan.adversarial` so the entry the operator
@@ -487,10 +565,74 @@ export const reviewGet = (sessionId: string) => ReviewStore.get(sessionId)
  * exist — a readiness check computed from a different source than the run is a
  * button that lies.
  */
+const quotaEligiblePlanningCatalog = (
+  catalog: ReadonlyArray<ProviderModels>,
+  usage: Usage
+): ReadonlyArray<ProviderModels> =>
+  catalog.map((provider) => ({
+    ...provider,
+    models: provider.models.filter(
+      (model) => routeQuotaStatus({ cli: provider.cli, model: model.id }, usage) !== "limited"
+    )
+  }))
+
+const readableList = (values: ReadonlyArray<string>): string =>
+  values.length < 2
+    ? (values[0] ?? "a configured route")
+    : `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`
+
 const planningVendors = Effect.gen(function* () {
   const clis = yield* DiscoveryService.list()
-  const catalog = yield* ModelsService.catalog(clis)
-  return { clis, catalog, vendors: reachableVendors(catalog) }
+  const discoveredCatalog = yield* ModelsService.catalog(clis)
+  const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+  const catalog = eligibleRoutingCatalog(discoveredCatalog, config?.providers)
+  const usage = yield* UsageService.get(clis)
+  const quotaCatalog = quotaEligiblePlanningCatalog(catalog, usage)
+  const readiness = planningReadiness(quotaCatalog)
+  const baseReadiness = planningReadiness(catalog)
+  if (!readiness.ready && baseReadiness.ready) {
+    const limitedRoutes = catalog.flatMap((provider) =>
+      provider.models
+        .filter(
+          (model) => routeQuotaStatus({ cli: provider.cli, model: model.id }, usage) === "limited"
+        )
+        .map((model) => ({ cli: provider.cli, label: `${provider.label} · ${model.label}` }))
+    )
+    const limitedClis = new Set(limitedRoutes.map((route) => route.cli))
+    const reset = usage.providers
+      .filter((provider) => limitedClis.has(provider.cli))
+      .flatMap((provider) =>
+        provider.windows.flatMap((window) =>
+          window.status === "limited" && window.resetsAt !== null ? [window.resetsAt] : []
+        )
+      )
+      .sort()
+      .at(-1)
+    return {
+      clis,
+      catalog,
+      config,
+      usage,
+      vendors: readiness.vendors,
+      readiness: {
+        ...readiness,
+        reason:
+          `Adversarial planning needs two model providers, but local usage limits remove ` +
+          `${readableList(limitedRoutes.map((route) => route.label))}${
+            reset === undefined ? "" : ` until ${reset}`
+          }. ` +
+          "Wait for the limit to reset or enable another route in Settings · Providers."
+      }
+    }
+  }
+  return {
+    clis,
+    catalog,
+    config,
+    usage,
+    vendors: readiness.vendors,
+    readiness
+  }
 })
 
 /**
@@ -529,9 +671,7 @@ export const billingPaths = Effect.gen(function* () {
  * computation. Duplicating those two lines is exactly how a readiness check
  * drifts from the run it describes.
  */
-export const planReadiness = Effect.map(planningVendors, ({ catalog }) =>
-  planningReadiness(catalog)
-)
+export const planReadiness = Effect.map(planningVendors, ({ readiness }) => readiness)
 
 type PlanExecuteEnv =
   | AppPaths
@@ -543,6 +683,7 @@ type PlanExecuteEnv =
   | ModelsService
   | PlanExecutor
   | CliAdapter
+  | UsageService
   | FileSystem.FileSystem
   | Path.Path
 
@@ -566,7 +707,11 @@ export const planExecute = (
     Effect.gen(function* () {
       const session = yield* resolveSession(sessionId)
       if (!session?.worktreePath) {
-        return Stream.fail(new PlanError({ message: "This session has no worktree to work in." }))
+        return Stream.fail(
+          new PlanError({
+            message: "This session has no worktree to work in."
+          })
+        )
       }
       const messages = yield* TranscriptStore.list(sessionId).pipe(
         Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
@@ -588,14 +733,35 @@ export const planExecute = (
       const plan = located.plan
 
       const clis = yield* DiscoveryService.list()
-      const catalog = yield* ModelsService.catalog(clis)
+      const discoveredCatalog = yield* ModelsService.catalog(clis)
+      const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+      const catalog = eligibleRoutingCatalog(discoveredCatalog, config?.providers)
+      const usage = yield* UsageService.get(clis)
       // What this host can actually run, as (harness, model) pairs. The plan's
       // assignee is only a recommendation — it was written on whatever machine
       // reviewed the plan, and cannot conjure an install here.
-      const available = catalog.flatMap((p) =>
-        p.models.length > 0 ? [{ cli: p.cli, model: p.models[0]!.id }] : []
+      const executionRoutes = catalog.flatMap((provider) =>
+        provider.models.map((model) => {
+          const candidate = { cli: provider.cli, model: model.id }
+          return { candidate, quota: routeQuotaState(candidate, usage) }
+        })
       )
-      const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+      const available = executionRoutes
+        .filter((route) => route.quota.status !== "limited")
+        .map((route) => route.candidate)
+      const unavailable = executionRoutes.flatMap((route) =>
+        route.quota.status !== "limited"
+          ? []
+          : [
+              {
+                ...route.candidate,
+                reason:
+                  route.quota.resetsAt === null
+                    ? "quota limited (reset time unavailable)"
+                    : `quota limited until ${route.quota.resetsAt}`
+              }
+            ]
+      )
 
       // Approval and the run itself have to reach disk, for two separate
       // reasons. The plan is still `proposed` on the record until we say
@@ -611,7 +777,10 @@ export const planExecute = (
         ...m,
         parts: m.parts.map((p) =>
           p._tag === "Plan" && p.plan.id === planId
-            ? ({ _tag: "Plan", plan: { ...p.plan, status: "approved" as const } } as const)
+            ? ({
+                _tag: "Plan",
+                plan: { ...p.plan, status: "approved" as const }
+              } as const)
             : p
         )
       })).pipe(Effect.ignore)
@@ -639,47 +808,61 @@ export const planExecute = (
       if (executionMode !== undefined) {
         yield* SessionStore.setMode(sessionId, executionMode).pipe(Effect.ignore)
       }
-      return executor.run({
-        sessionId,
-        repo: session.repo,
-        branch: session.branch,
-        cwd: session.worktreePath,
-        plan,
-        available,
-        // The orchestrator's own model backs any step the plan left unassigned —
-        // the same identity Gigaplan speaks as, rather than an arbitrary pick.
-        fallback: resolveOrchestrator(config),
-        binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null,
-        executionMode,
-        // Wired, not just declared. `onStepDone` documents itself as the thing
-        // that makes progress survive a crash mid-run, and nothing was passing
-        // it — so a 12-step plan killed after step 9 came back with the plan
-        // already marked `approved` (we do that before starting, so it can't be
-        // re-approved), no record of which steps had run, and a half-applied
-        // worktree. Ticking the step on the stored plan is what that comment
-        // was promising.
-        onStepDone: (step) =>
-          TranscriptStore.patchById(sessionId, located.messageId, (m) => ({
-            ...m,
-            parts: m.parts.map((p) =>
-              p._tag === "Plan" && p.plan.id === planId
-                ? ({
-                    _tag: "Plan",
-                    plan: {
-                      ...p.plan,
-                      steps: p.plan.steps.map((st) =>
-                        st.id === step.id ? { ...st, status: "done" as const } : st
-                      )
-                    }
-                  } as const)
-                : p
-            )
-          })).pipe(Effect.provide(txCtx), Effect.ignore)
-      }).pipe(
-        // `ToolDelta` excluded for the reason `AgentRunner` excludes it: it ticks
-        // constantly and every patch rewrites the whole transcript.
-        Stream.tap((event) => (event._tag === "ToolDelta" ? Effect.void : persist(event)))
-      )
+      const persistPlanStep = (
+        step: Plan["steps"][number],
+        phase: "attempt" | "completion"
+      ) =>
+        TranscriptStore.patchById(sessionId, located.messageId, (m) => ({
+          ...m,
+          parts: m.parts.map((p) =>
+            p._tag === "Plan" && p.plan.id === planId
+              ? ({
+                  _tag: "Plan",
+                  plan: {
+                    ...p.plan,
+                    steps: p.plan.steps.map((stored) =>
+                      stored.id !== step.id
+                        ? stored
+                        : phase === "attempt"
+                          ? { ...step, status: stored.status }
+                          : { ...step, status: "done" }
+                    )
+                  }
+                } as const)
+              : p
+          )
+        })).pipe(Effect.provide(txCtx), Effect.ignore)
+      return executor
+        .run({
+          sessionId,
+          repo: session.repo,
+          branch: session.branch,
+          cwd: session.worktreePath,
+          plan,
+          available,
+          unavailable,
+          // The orchestrator's own model backs any step the plan left unassigned —
+          // the same identity Gigaplan speaks as, rather than an arbitrary pick.
+          fallback: resolveOrchestrator(config),
+          binPathFor: (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null,
+          executionMode,
+          // Wired, not just declared. `onStepDone` documents itself as the thing
+          // that makes progress survive a crash mid-run, and nothing was passing
+          // it — so a 12-step plan killed after step 9 came back with the plan
+          // already marked `approved` (we do that before starting, so it can't be
+          // re-approved), no record of which steps had run, and a half-applied
+          // worktree. Ticking the step on the stored plan is what that comment
+          // was promising.
+          // `current` is a live-stream-only state. Attempts are durable, but a
+          // process killed mid-step must reopen as resumable rather than running.
+          onStepUpdated: (step) => persistPlanStep(step, "attempt"),
+          onStepDone: (step) => persistPlanStep(step, "completion")
+        })
+        .pipe(
+          // `ToolDelta` excluded for the reason `AgentRunner` excludes it: it ticks
+          // constantly and every patch rewrites the whole transcript.
+          Stream.tap((event) => (event._tag === "ToolDelta" ? Effect.void : persist(event)))
+        )
     })
   )
 
@@ -687,6 +870,8 @@ export const planExecute = (
 export const planRound = (sessionId: string) => PlanRoundStore.get(sessionId)
 
 type PlanAdversarialEnv =
+  | RankingService
+  | UsageService
   | ConfigService
   | GitService
   | SessionStore
@@ -717,10 +902,14 @@ export const planAdversarial = (
       const session = yield* resolveSession(sessionId)
       if (!session?.worktreePath) {
         return Stream.fail(
-          new PlanError({ message: "This session has no worktree to plan against." })
+          new PlanError({
+            message: "This session has no worktree to plan against."
+          })
         )
       }
-      const { clis, vendors } = yield* planningVendors
+      const { clis, catalog, config, usage, vendors } = yield* planningVendors
+      const routingMode = config?.gigaplanRouting?.mode ?? "shadow"
+      const ranking = routingMode === "active" ? yield* RankingService.latest : null
       const service = yield* AdversarialPlanService
       // Capture the store's context here so the persistence hook the service
       // calls later — on its own fiber, with only the adapter in scope — is a
@@ -767,25 +956,36 @@ export const planAdversarial = (
           Effect.ignore
         )
       const binPathFor = (cli: CliKind) => clis.find((c) => c.kind === cli)?.binPath ?? null
-      return service.run({
-        sessionId,
-        repo: session.repo,
-        branch: session.branch,
-        cwd: session.worktreePath,
-        brief,
-        vendors,
-        binPathFor,
-        assignAgents: true,
-        // Persistence is wired in here rather than inside the service so the
-        // round logic stays free of the filesystem and testable without one.
-        onRound: (round: PlanRound) => PlanRoundStore.set(round).pipe(Effect.provide(storeCtx))
-      }).pipe(
-        // Best-effort, like every other transcript write: a round the operator
-        // watched succeed must not fail because a file could not be written.
-        // `ToolDelta` is skipped for the reason `AgentRunner` skips it — it
-        // ticks constantly and each patch rewrites the whole file.
-        Stream.tap((event) => (event._tag === "ToolDelta" ? Effect.void : persist(event)))
-      )
+      return service
+        .run({
+          sessionId,
+          repo: session.repo,
+          branch: session.branch,
+          cwd: session.worktreePath,
+          brief,
+          vendors,
+          binPathFor,
+          assignAgents: true,
+          routing: {
+            catalog,
+            mode: routingMode,
+            overrides: config?.gigaplanRouting?.overrides ?? [],
+            systemDefault: resolveOrchestrator(config),
+            ranking,
+            usage,
+            affinityEnabled: false
+          },
+          // Persistence is wired in here rather than inside the service so the
+          // round logic stays free of the filesystem and testable without one.
+          onRound: (round: PlanRound) => PlanRoundStore.set(round).pipe(Effect.provide(storeCtx))
+        })
+        .pipe(
+          // Best-effort, like every other transcript write: a round the operator
+          // watched succeed must not fail because a file could not be written.
+          // `ToolDelta` is skipped for the reason `AgentRunner` skips it — it
+          // ticks constantly and each patch rewrites the whole file.
+          Stream.tap((event) => (event._tag === "ToolDelta" ? Effect.void : persist(event)))
+        )
     })
   )
 
@@ -864,14 +1064,18 @@ export const reviewRun = (sessionId: string, force: boolean) =>
     )
     if (!session?.worktreePath || session.prNumber === null) {
       return yield* Effect.fail(
-        new ReviewError({ message: "This session has no linked pull request to review." })
+        new ReviewError({
+          message: "This session has no linked pull request to review."
+        })
       )
     }
 
     const headSha = yield* GhService.prHeadSha(session.worktreePath, session.prNumber)
     if (headSha === null) {
       return yield* Effect.fail(
-        new ReviewError({ message: "Could not resolve the pull request's head commit." })
+        new ReviewError({
+          message: "Could not resolve the pull request's head commit."
+        })
       )
     }
 
@@ -980,7 +1184,9 @@ export const githubCreatePr = (input: {
   Effect.gen(function* () {
     const session = yield* resolveSession(input.sessionId)
     if (!session?.worktreePath) {
-      return yield* Effect.fail(new GhError({ message: "Session has no worktree to open a PR from" }))
+      return yield* Effect.fail(
+        new GhError({ message: "Session has no worktree to open a PR from" })
+      )
     }
     const n = yield* GhService.prCreate(session.worktreePath, {
       title: input.title,
@@ -1030,7 +1236,9 @@ export const githubSubmitReview = (input: {
     const headSha = yield* GhService.prHeadSha(session.worktreePath, session.prNumber)
     if (headSha === null) {
       return yield* Effect.fail(
-        new GhError({ message: "Couldn't resolve the pull request's head commit to anchor comments against" })
+        new GhError({
+          message: "Couldn't resolve the pull request's head commit to anchor comments against"
+        })
       )
     }
     const diff = yield* GhService.prDiff(session.worktreePath, session.prNumber)
@@ -1046,11 +1254,7 @@ export const githubSubmitReview = (input: {
   })
 
 /** `Github.review` handler — submit a review (comment/approve/request-changes). */
-export const githubReview = (input: {
-  sessionId: string
-  kind: ReviewSubmitKind
-  body: string
-}) =>
+export const githubReview = (input: { sessionId: string; kind: ReviewSubmitKind; body: string }) =>
   Effect.gen(function* () {
     const session = yield* resolveSession(input.sessionId)
     if (!session?.worktreePath || session.prNumber === null) {
@@ -1084,7 +1288,12 @@ export const githubReplyToThread = (input: {
     if (!session?.worktreePath || session.prNumber === null) {
       return yield* Effect.fail(new GhError({ message: "No linked pull request to reply to" }))
     }
-    yield* GhService.replyToThread(session.worktreePath, session.prNumber, input.commentId, input.body)
+    yield* GhService.replyToThread(
+      session.worktreePath,
+      session.prNumber,
+      input.commentId,
+      input.body
+    )
   })
 
 /** `Github.merge` handler — merge the session's linked PR (merge commit by default). */
@@ -1132,7 +1341,12 @@ export const createTerminal = (input: {
   Effect.gen(function* () {
     const cwd = input.cwd ?? (yield* resolveSession(input.sessionId))?.worktreePath ?? undefined
     const terminals = yield* TerminalService
-    return yield* terminals.create({ sessionId: input.sessionId, cwd, cols: input.cols, rows: input.rows })
+    return yield* terminals.create({
+      sessionId: input.sessionId,
+      cwd,
+      cols: input.cols,
+      rows: input.rows
+    })
   })
 
 /**
@@ -1177,7 +1391,9 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
   // renderer subscribes to normalized events, harness-agnostic.
   "Agent.run": ({ sessionId, text, images }) =>
-    Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.prompt(sessionId, text, images ?? []))),
+    Stream.unwrap(
+      Effect.map(AgentRunner, (runner) => runner.prompt(sessionId, text, images ?? []))
+    ),
   "Agent.decideGate": ({ sessionId, gateId, decision }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.decideGate(sessionId, gateId, decision)),
   "Agent.answerQuestion": ({ sessionId, requestId, answers }) =>
@@ -1185,7 +1401,9 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Agent.setMode": ({ sessionId, mode }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.setMode(sessionId, mode)),
   "Agent.commentPlanStep": ({ sessionId, planId, stepId, body }) =>
-    Effect.flatMap(AgentRunner, (runner) => runner.commentPlanStep(sessionId, planId, stepId, body)),
+    Effect.flatMap(AgentRunner, (runner) =>
+      runner.commentPlanStep(sessionId, planId, stepId, body)
+    ),
   "Agent.revisePlan": ({ sessionId, planId }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.revisePlan(sessionId, planId)),
   "Agent.approvePlan": ({ sessionId, planId, executionMode }) =>
@@ -1194,8 +1412,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Stream.unwrap(Effect.map(AgentRunner, (runner) => runner.resumePlan(sessionId, planId))),
   "Agent.setHarness": ({ sessionId, cli, model }) =>
     SessionStore.setHarness(sessionId, cli, model).pipe(Effect.ignore),
-  "Agent.stop": ({ sessionId }) =>
-    Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
+  "Agent.stop": ({ sessionId }) => Effect.flatMap(AgentRunner, (runner) => runner.stop(sessionId)),
   "Skills.list": ({ sessionId }) => skillsList(sessionId),
   "Mcp.list": ({ sessionId, cli }) => mcpList(sessionId, cli),
   "Mcp.status": ({ sessionId, cli, refresh }) => mcpStatus(sessionId, cli, refresh),
@@ -1259,6 +1476,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setCollapsedRepos": ({ paths }) => ConfigService.setCollapsedRepos(paths),
   "Config.setLastRepoPath": ({ path }) => ConfigService.setLastRepoPath(path),
   "Config.setOrchestrator": ({ cli, model }) => ConfigService.setOrchestrator(cli, model),
+  "Config.setGigaplanRouting": ({ routing }) => ConfigService.setGigaplanRouting(routing),
   "Config.setProvider": ({ cli, provider }) => ConfigService.setProvider(cli, provider),
   "Github.pr": ({ sessionId }) => githubPr(sessionId),
   "Github.prState": ({ sessionId }) => githubPrState(sessionId),
@@ -1302,15 +1520,14 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(TerminalService, (t) => t.write(terminalId, data)),
   "Terminal.resize": ({ terminalId, cols, rows }) =>
     Effect.flatMap(TerminalService, (t) => t.resize(terminalId, cols, rows)),
-  "Terminal.kill": ({ terminalId }) =>
-    Effect.flatMap(TerminalService, (t) => t.kill(terminalId)),
-  "Terminal.list": ({ sessionId }) =>
-    Effect.flatMap(TerminalService, (t) => t.list(sessionId)),
+  "Terminal.kill": ({ terminalId }) => Effect.flatMap(TerminalService, (t) => t.kill(terminalId)),
+  "Terminal.list": ({ sessionId }) => Effect.flatMap(TerminalService, (t) => t.list(sessionId)),
 
   // Background tasks — harness work that outlives the turn that started it.
   "BackgroundTasks.list": ({ sessionId }) => BackgroundTaskStore.list(sessionId),
   "BackgroundTasks.stop": ({ sessionId, taskId }) => BackgroundTaskStore.stop(sessionId, taskId),
-  "BackgroundTasks.dismiss": ({ sessionId, taskId }) => BackgroundTaskStore.dismiss(sessionId, taskId),
+  "BackgroundTasks.dismiss": ({ sessionId, taskId }) =>
+    BackgroundTaskStore.dismiss(sessionId, taskId),
   "BackgroundTasks.output": ({ sessionId, taskId }) => backgroundTaskOutput(sessionId, taskId),
 
   // Browser preview — a native WebContentsView over a localhost dev server,

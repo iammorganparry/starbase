@@ -9,6 +9,10 @@ import type {
 } from "@starbase/core"
 import { CliExecError } from "@starbase/core"
 import { Context, Data, Effect, Layer } from "effect"
+import {
+  GIGAPLAN_CRITIQUE_PROMPT_MARKER,
+  GIGAPLAN_PROPOSAL_PROMPT_MARKER
+} from "./adversarial-plan-prompt.js"
 
 /** Parameters for starting a new agent turn against a CLI. */
 export interface SessionSpec {
@@ -285,6 +289,39 @@ export const scriptedRun =
 
       yield* emit({ _tag: "Started", sessionId })
       yield* pause
+
+      // Full adversarial-planning E2E fixture. Stable machine-readable role
+      // markers drive the same proposal → critique → resolver path without a
+      // real model or coupling the fixture to editable prompt prose.
+      if (spec.prompt.startsWith(`${GIGAPLAN_PROPOSAL_PROMPT_MARKER}\n`)) {
+        yield* emit({
+          _tag: "Assistant",
+          text: `\`\`\`plan
+summary: Add deterministic request limits
+01 Add request limiter
+  intent: Protect the refund route from bursts.
+  approach: Reuse the repository limiter; cover the rejection path
+  files: M src/routes/billing.ts +12 -1; M src/routes/billing.test.ts +18 -0
+  guards: Requests over the threshold return 429
+  task: backend
+  effort: standard
+  risk: medium
+\`\`\`
+
+Add the existing limiter to the refund route and verify its rejection path.`
+        })
+        yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+        return
+      }
+
+      if (spec.prompt.startsWith(`${GIGAPLAN_CRITIQUE_PROMPT_MARKER}\n`)) {
+        yield* emit({
+          _tag: "Assistant",
+          text: '```json\n{ "challenges": [] }\n```'
+        })
+        yield* emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+        return
+      }
 
       // A `[[background]]` marker starts a background task that keeps running
       // after the turn ends — the case the dock exists for, and the only way to

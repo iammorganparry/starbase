@@ -50,6 +50,8 @@ export interface LaunchOptions {
   readonly userDataDir?: string
   /** Seed config.json so the app boots configured (past first-run). */
   readonly configured?: boolean
+  /** Additional persisted workspace config for settings/routing scenarios. */
+  readonly config?: Readonly<Record<string, unknown>>
   /** Create a real git repo in the seeded repos dir (for the create-session flow). */
   readonly withRepo?: boolean
   /**
@@ -623,7 +625,15 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         mkdirSync(starbaseDir, { recursive: true })
         writeFileSync(
           join(starbaseDir, "config.json"),
-          JSON.stringify({ reposDir, createdAt: "2026-07-11T00:00:00.000Z" }, null, 2)
+          JSON.stringify(
+            {
+              reposDir,
+              createdAt: "2026-07-11T00:00:00.000Z",
+              ...options.config
+            },
+            null,
+            2
+          )
         )
       }
       if (options.sessions) {
