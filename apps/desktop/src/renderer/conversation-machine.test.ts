@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   statusWrites: [] as Array<string>,
   skillsListCalls: 0,
   stopCalls: [] as Array<string>,
+  // Drives the "a stop that rejects must still let the session move on" case.
+  stopFails: false,
   /** Push reviewer events into the machine, as ReviewService's stream would. */
   reviewCb: null as null | ((event: unknown) => void),
   // Lets a test hold the catalogue in flight to prove nothing waits on it.
@@ -120,6 +122,7 @@ vi.mock("./rpc-client.js", () => ({
     agentApprovePlan: async () => {},
     agentStop: async (sessionId: string) => {
       h.stopCalls.push(sessionId)
+      if (h.stopFails) throw new Error("stop failed")
     },
     sessionsSetStatus: async (_id: string, status: string) => {
       h.statusWrites.push(status)
@@ -148,6 +151,7 @@ beforeEach(() => {
   h.statusWrites.length = 0
   h.skillsListCalls = 0
   h.stopCalls.length = 0
+  h.stopFails = false
   h.setHarnessCalls.length = 0
   h.catalogGate = Promise.resolve()
   h.skillsGate = Promise.resolve()
@@ -845,6 +849,51 @@ describe("conversationMachine — stop", () => {
 
     expect(h.stopCalls).toContain("s1")
     expect(actor.getSnapshot().context.queued).toEqual([])
+    actor.stop()
+  })
+
+  /**
+   * The renderer half of the silent-turn fix.
+   *
+   * `callStop` used to be fire-and-forget: the machine asked main to halt the
+   * run and transitioned onward in the same breath, so the interrupt could land
+   * after the NEXT turn had been forked and kill that instead. The operator's
+   * fresh message came back as a bare "Stopped." and they re-sent it. Going
+   * through `stopping` means the halt has landed before anything can start.
+   */
+  it("waits in `stopping` until the halt lands, before any next turn", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+    actor.send({ type: "SEND", text: "next" })
+
+    actor.send({ type: "SEND_NOW", index: 0 })
+
+    // Not `running` yet — the promoted message must not start until the stop
+    // has been acknowledged. This is the assertion the old code failed.
+    expect(actor.getSnapshot().matches("stopping")).toBe(true)
+    expect(h.stopCalls).toContain("s1")
+
+    // …and once it has, the promoted message runs as normal.
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(actor.getSnapshot().context.pendingText).toBe("next")
+    actor.stop()
+  })
+
+  // Every exit from `stopping` leads onward, including the unhappy ones: a stop
+  // that rejects must never strand the session in a state with no composer.
+  it("moves on even when the stop RPC fails", async () => {
+    h.stopFails = true
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SEND", text: "go" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    actor.send({ type: "STOP" })
+
+    await waitFor(actor, (s) => s.matches(idle))
+    expect(actor.getSnapshot().context.messages.at(-1)!.streaming).toBe(false)
     actor.stop()
   })
 })

@@ -32,6 +32,7 @@ import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Cause, Deferred, Effect, Fiber, Mailbox, Option, Ref, Stream } from "effect"
 import { adhdNote } from "./adhd-prompt.js"
+import { questionNote } from "./question-prompt.js"
 import { AppPaths } from "./app-paths.js"
 import { ConfigService } from "./config.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
@@ -47,6 +48,36 @@ import { PlanStore } from "./plan-store.js"
 
 /** Tools that write to disk — a successful one advances the matching plan step. */
 const EDIT_TOOLS = new Set(["Write", "Edit", "Update", "MultiEdit", "NotebookEdit"])
+
+/**
+ * How long `stop` waits for an interrupted run to finish unwinding before it
+ * gives up the session lock.
+ *
+ * Not a deadline on the interrupt — that is already delivered — only on our
+ * WAIT for it. The Claude adapter grants itself 15s to tear a child down, and a
+ * stop that held the lock for all of it would leave the operator's next message
+ * sitting unanswered for fifteen seconds, which is the very symptom this whole
+ * change exists to remove. Five seconds covers an ordinary teardown; past that
+ * we would rather overlap than stall.
+ */
+const INTERRUPT_GRACE = "5 seconds"
+
+/**
+ * How long a turn may produce NOTHING before we declare the harness wedged.
+ *
+ * Nothing else in the stack bounds this. `AgentRunner.prompt` has no timeout,
+ * `Effect.ensuring(out.end)` only runs once `adapter.run` returns, and the
+ * Claude adapter's `for await` over the SDK stream is unbounded — so a child
+ * that hangs before its `system/init` line is invisible everywhere, and the
+ * turn's placeholder message stays empty with `streaming: true` forever. That
+ * is the spinning-eyebrow-with-no-reply bug; 32 of 946 assistant turns in
+ * ~/starbase/transcripts are stuck in exactly that state.
+ *
+ * Generous on purpose. This is the wait for the FIRST event, not for the
+ * answer: harness startup, MCP server boot and a cold resume all land well
+ * inside two minutes, and a false trip costs the operator real work.
+ */
+const FIRST_EVENT_DEADLINE = "120 seconds"
 
 /**
  * A concise context note prepended to a run when the session's worktree has saved
@@ -259,6 +290,32 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     // client hanging up its stream does NOT tear the run down (verified: the run
     // survives its consumer). Without this handle a "stopped" agent keeps running.
     const fibers = yield* Ref.make(new Map<string, RunFiber>())
+    // sessionId → a mutex serialising `stop` against `prompt`'s SETUP.
+    //
+    // Without it, a stop and the next turn race for the same `fibers` slot, and
+    // the stop loses: the renderer fires `agentStop` and moves on, `prompt`
+    // forks and registers run B over run A's entry, and only THEN does the
+    // stop's `Ref.get` schedule — handing it run B's fiber to kill. The operator
+    // sees their fresh message answered with a bare "Stopped." and re-sends.
+    // (64 of 946 assistant turns in ~/starbase/transcripts are exactly that.)
+    //
+    // A token check alone cannot fix it: by the time the stop reads the map, the
+    // only entry that ever existed for that read IS run B's. The read and the
+    // registration have to be ordered, which is what this lock does.
+    const locks = yield* Ref.make(new Map<string, Effect.Semaphore>())
+    /** The session's mutex, created on first use. */
+    const sessionLock = (sessionId: string) =>
+      Effect.gen(function* () {
+        const existing = (yield* Ref.get(locks)).get(sessionId)
+        if (existing !== undefined) return existing
+        const made = yield* Effect.makeSemaphore(1)
+        // `Ref.modify` is atomic, so two concurrent first-users agree on one
+        // semaphore — the loser's freshly made one is simply dropped.
+        return yield* Ref.modify(locks, (m) => {
+          const current = m.get(sessionId)
+          return current !== undefined ? [current, m] : [made, new Map(m).set(sessionId, made)]
+        })
+      })
     // Monotonic id source — deterministic (no Date.now/random) for stable tests.
     const counter = yield* Ref.make(0)
     const nextId = Ref.updateAndGet(counter, (n) => n + 1)
@@ -477,17 +534,36 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         // Now kill the run. `Fiber.interrupt` awaits the finalizers, so once this
         // returns the agent is genuinely stopped — not merely asked to stop.
         //
-        // KNOWN GAP: `prompt` does its setup (session load, CLI discovery, plan
-        // lookup) BEFORE it forks, so a stop landing in that window finds no
-        // fiber and no-ops — the agent then starts. It's narrow (the operator has
-        // to hit stop within ~a tenth of a second of sending) and self-evident:
-        // the run visibly continues and a second stop lands. Closing it properly
-        // means forking first and moving the setup inside the fiber, so there's
-        // always something to interrupt; a session flag can't fix it, since a
-        // stop arriving with no run in flight is indistinguishable from a stale
-        // one, and acting on it would kill the operator's NEXT turn instead.
-        const running = (yield* Ref.get(fibers)).get(sessionId)
-        if (running !== undefined) yield* Fiber.interrupt(running.fiber)
+        // Read and interrupt under the session lock. `prompt` holds the SAME lock
+        // across its whole setup — session load, the compaction swap, appending
+        // the placeholder turns, and the fork+register — so the entry we read
+        // here can only ever be a run that already existed when this stop began.
+        // A turn the operator sends next queues behind us instead of being
+        // silently killed by our interrupt.
+        //
+        // The token re-check is belt-and-braces for the one case the lock cannot
+        // cover: a run that finishes and deregisters itself between our two
+        // reads. Interrupting a fiber that already left the slot is harmless, but
+        // comparing tokens says plainly which run we meant.
+        //
+        // The interrupt is time-capped. `Fiber.interrupt` waits for finalizers,
+        // and the Claude adapter allows itself TEARDOWN_GRACE (15s) to unwind —
+        // long enough that holding the lock for all of it would read as the app
+        // ignoring the operator's next message. After the cap we stop WAITING;
+        // the interrupt itself has already been delivered.
+        const lock = yield* sessionLock(sessionId)
+        yield* lock.withPermits(1)(
+          Effect.gen(function* () {
+            const running = (yield* Ref.get(fibers)).get(sessionId)
+            if (running === undefined) return
+            const current = (yield* Ref.get(fibers)).get(sessionId)
+            if (current?.token !== running.token) return
+            yield* Fiber.interrupt(running.fiber).pipe(
+              Effect.timeout(INTERRUPT_GRACE),
+              Effect.ignore
+            )
+          })
+        )
         // Kill any digest being prepared for this session too. It runs on a
         // DAEMON fiber, so interrupting the run leaves it alive — an operator who
         // stopped a session would otherwise keep paying for a summary of it, with
@@ -495,12 +571,25 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
         yield* ContextManager.cancel(sessionId).pipe(Effect.ignore)
       })
 
-    const prompt = (
+    /**
+     * Everything a turn needs before it has a fiber: session load, CLI
+     * discovery, the compaction swap, the placeholder turns, and the fork.
+     *
+     * Split out from `prompt` purely so the whole region can run under the
+     * session lock. It completes the moment the mailbox stream is handed back,
+     * so the permit covers setup only — never the life of the run.
+     *
+     * The placeholder append has to be inside the lock, not just the fork:
+     * `TranscriptStore.patchLast` patches whatever message is last, so a stop
+     * still unwinding while the next turn appended its placeholder would write
+     * its "Stopped." note onto the NEW turn.
+     */
+    const promptSetup = (
       sessionId: string,
       text: string,
-      images: ReadonlyArray<Attachment> = []
-    ): Stream.Stream<StreamEvent, never, PromptEnv> =>
-      Stream.unwrapScoped(
+      images: ReadonlyArray<Attachment>
+    ) =>
+      Effect.suspend(() =>
         Effect.gen(function* () {
           const adapter = yield* CliAdapter
           const session: Session | null = yield* SessionStore.get(sessionId).pipe(
@@ -598,6 +687,15 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // a setting the operator can flip mid-session has to apply to the NEXT
           // turn — which a session-start injection could not do.
           const adhd = adhdMode ? `${adhdNote(cli)}\n\n` : ""
+          // Not optional, and not a setting: an agent that asks in prose is an
+          // agent whose question never reaches the operator. Claude has the
+          // `AskUserQuestion` tool the adapter intercepts, Codex has the fenced
+          // block the adapter parses — but nothing tells either of them to
+          // prefer it, so both default to asking in chat text that renders as
+          // an unanswerable paragraph. Rides the same per-turn prefix as ADHD
+          // mode, for the same reason: no system-prompt hook is shared by every
+          // harness, and this has to survive a mid-session harness switch.
+          const ask = `${questionNote(cli)}\n\n`
 
           const spec: SessionSpec = {
             cli,
@@ -610,8 +708,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // with nothing to say — the empty "CLAUDE" block. When the operator
             // opens with a command, the context rides along AFTER it instead.
             prompt: isSlashCommand(text)
-              ? `${text}\n\n${primer}${planNote}${adhd}`.trimEnd()
-              : `${primer}${planNote}${adhd}${text}`,
+              ? `${text}\n\n${primer}${planNote}${adhd}${ask}`.trimEnd()
+              : `${primer}${planNote}${adhd}${ask}${text}`,
             images,
             binPath,
             mode,
@@ -1003,7 +1101,18 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // exit was an interrupt even in the case we most want to catch:
               // the one where this emit does not land.
               Ref.set(wasInterrupted, true).pipe(
-                Effect.andThen(emit({ _tag: "Failed", message: STOPPED_NOTE }))
+                Effect.andThen(
+                  Effect.gen(function* () {
+                    // Don't overwrite a reason the turn already has. The
+                    // first-event watchdog settles the turn with a message that
+                    // says what went wrong and THEN interrupts, so an
+                    // unconditional emit here would bury it under a bare
+                    // "Stopped." — telling the operator their own action halted a
+                    // turn they never touched.
+                    if (yield* Ref.get(sawTerminal)) return
+                    yield* emit({ _tag: "Failed", message: STOPPED_NOTE })
+                  })
+                )
               )
             ),
             // A stop is not a crash — don't report the operator's own interrupt as
@@ -1084,8 +1193,50 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           )
           const fiber = yield* Effect.forkScoped(run)
           yield* Ref.update(fibers, (m) => new Map(m).set(sessionId, { fiber, token }))
+
+          // Watchdog the FIRST event.
+          //
+          // A harness child that hangs before it says anything is invisible to
+          // every guarantee we have: `drainRun` in the renderer only synthesises
+          // a terminal event when the stream ends, `Effect.ensuring(out.end)`
+          // only runs when `adapter.run` returns, and the unsettled-turn
+          // instrumentation below is a FINALIZER — none of them can fire on a
+          // run that neither emits nor exits. The operator is left with a
+          // pulsing eyebrow over an empty message and no way to tell whether
+          // anything is happening. Only a timer can see this.
+          //
+          // Deliberately checks `eventCount` rather than racing the run: a
+          // harness that emitted even once is alive, and killing a slow-but-live
+          // turn would be far worse than the bug. Interrupting reuses the
+          // existing stop path, so the transcript settles the same way an
+          // operator stop does — except we say why.
+          yield* Effect.forkScoped(
+            Effect.sleep(FIRST_EVENT_DEADLINE).pipe(
+              Effect.zipRight(
+                Effect.gen(function* () {
+                  if ((yield* Ref.get(eventCount)) > 0) return
+                  yield* emit({
+                    _tag: "Failed",
+                    message: `${session?.cli ?? "The agent"} produced no output for ${FIRST_EVENT_DEADLINE}. The turn was cancelled — send your message again.`
+                  })
+                  yield* Fiber.interrupt(fiber)
+                })
+              )
+            )
+          )
           return Mailbox.toStream(out)
         })
+      )
+
+    const prompt = (
+      sessionId: string,
+      text: string,
+      images: ReadonlyArray<Attachment> = []
+    ): Stream.Stream<StreamEvent, never, PromptEnv> =>
+      Stream.unwrapScoped(
+        Effect.flatMap(sessionLock(sessionId), (lock) =>
+          lock.withPermits(1)(promptSetup(sessionId, text, images))
+        )
       )
 
     return {

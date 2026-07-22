@@ -221,6 +221,33 @@ const refreshDiff = fromPromise<string, { session: Session }>(({ input }) =>
   rpc.sessionsDiff(input.session.id)
 )
 
+/**
+ * Halt the current run, and WAIT for the halt to land.
+ *
+ * Firing this and moving on is what used to eat the operator's next message.
+ * `agentStop` interrupts the run's fiber, but the runner keyed that fiber by
+ * session id alone — so if the next turn had already started, the interrupt
+ * found the NEW run and killed it. The operator's fresh message came back as a
+ * bare "Stopped." and they re-sent it, usually within five seconds.
+ *
+ * The runner now serialises stop against a turn's setup, so this await is the
+ * belt to that braces: waiting here means the next run is not merely
+ * unkillable-by-mistake, it does not exist yet.
+ */
+const stopAgent = fromPromise<void, { sessionId: string }>(({ input }) =>
+  rpc.agentStop(input.sessionId)
+)
+
+/**
+ * How long we wait for a stop to land before starting the next turn anyway.
+ *
+ * A harness can take real time to tear a child down, and an operator who hit
+ * "send now" is asking for the next turn, not for a progress bar. Past the cap
+ * we proceed: the runner's own lock still orders the two runs correctly, so the
+ * cost of being early here is a slower first token, not a lost turn.
+ */
+const STOP_SETTLE_CAP = 3_000
+
 /** Subscribe to the agent's event stream, forwarding each event into the machine. */
 const agentStream = fromCallback<
   ConversationEvent,
@@ -292,7 +319,7 @@ export const conversationMachine = setup({
     events: {} as ConversationEvent,
     input: {} as { session: Session }
   },
-  actors: { loadConversation, agentStream, refreshDiff, reviewStream },
+  actors: { loadConversation, agentStream, refreshDiff, reviewStream, stopAgent },
   guards: {
     isTerminal: ({ event }) =>
       event.type === "STREAM_EVENT" &&
@@ -824,9 +851,6 @@ export const conversationMachine = setup({
         })
       return { persistedStatus: status }
     }),
-    callStop: ({ context }) => {
-      void rpc.agentStop(context.session.id)
-    },
     /**
      * Close out the turn the operator just halted.
      *
@@ -1024,11 +1048,12 @@ export const conversationMachine = setup({
         SEND: { actions: "enqueue" },
         UNQUEUE: { actions: "removeQueued" },
         // "Send now": interrupt the current turn and run the picked message next,
-        // so the operator can steer mid-stream. Promote it to the head, stop the
-        // run, and let refreshingDiff dequeue it (the rest of the queue follows).
+        // so the operator can steer mid-stream. Promote it to the head, then go
+        // through `stopping` so the halt has landed before the next turn starts;
+        // refreshingDiff dequeues it (the rest of the queue follows).
         SEND_NOW: {
-          target: "refreshingDiff",
-          actions: ["promoteQueued", "callStop", "settleStoppedRun"]
+          target: "stopping",
+          actions: ["promoteQueued", "settleStoppedRun"]
         },
         DECIDE_GATE: { actions: "optimisticGate" },
         ANSWER_QUESTION: { actions: "optimisticAnswer" },
@@ -1040,9 +1065,43 @@ export const conversationMachine = setup({
         // Stopping abandons the queue too — the operator asked the agent to halt.
         // Live sub-agent tabs go with it (no completion events will arrive).
         STOP: {
-          target: "refreshingDiff",
-          actions: ["callStop", "settleStoppedRun", "clearQueue", "clearSubagents"]
+          target: "stopping",
+          actions: ["settleStoppedRun", "clearQueue", "clearSubagents"]
         }
+      }
+    },
+    /**
+     * Waiting for a halt to actually land, before anything else may start a run.
+     *
+     * This state exists for one reason: the old code fired `agentStop` and
+     * transitioned onward in the same breath, so the interrupt could arrive
+     * after the next turn had already been forked and kill that instead. The
+     * operator saw their new message answered with "Stopped.".
+     *
+     * Every exit leads to `refreshingDiff`, including the failure and timeout
+     * arms — a stop that errors or hangs must never strand the machine in a
+     * state with no composer.
+     */
+    stopping: {
+      invoke: {
+        src: "stopAgent",
+        input: ({ context }) => ({ sessionId: context.session.id }),
+        onDone: { target: "refreshingDiff" },
+        // A failed stop still means we are no longer streaming: the turn was
+        // already settled by `settleStoppedRun` on the way in.
+        onError: { target: "refreshingDiff" }
+      },
+      after: { [STOP_SETTLE_CAP]: { target: "refreshingDiff" } },
+      on: {
+        // Keep accepting sends — they run once the diff settles, as elsewhere.
+        SEND: { actions: "enqueue" },
+        UNQUEUE: { actions: "removeQueued" },
+        SEND_NOW: { actions: "promoteQueued" },
+        // The run is already being halted; a second STOP only clears the queue.
+        STOP: { actions: ["clearQueue", "clearSubagents"] },
+        PATCH_UPDATED: { actions: "applyLivePatch" },
+        SET_MODE: { actions: "persistMode" },
+        SET_HARNESS: { actions: "persistHarness" }
       }
     },
     // After a turn ends, re-read the worktree diff so the Changes rail reflects

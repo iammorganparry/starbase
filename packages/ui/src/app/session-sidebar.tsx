@@ -1,7 +1,17 @@
 import * as React from "react"
 import type { SessionPrStatus, Session, SessionActivity, SessionDisplayStatus, User } from "@starbase/core"
 import { displayStatusOf, UNTITLED_SESSION } from "@starbase/core"
-import { ChevronRight, GitBranch, Layers, PanelLeft, Plus, Search, SlidersHorizontal, Star } from "lucide-react"
+import {
+  ChevronRight,
+  Columns2,
+  GitBranch,
+  Layers,
+  PanelLeft,
+  Plus,
+  Search,
+  SlidersHorizontal,
+  Star
+} from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { usePaneWidth } from "../hooks/width-tier.js"
 import { ResizeHandle, useResizableWidth } from "../components/resizable.js"
@@ -201,9 +211,36 @@ function SidebarBody({
     [sessions, filter, filters]
   )
 
+  /**
+   * Sessions that sit inside a SPLIT of two panes or more.
+   *
+   * Groups of one are deliberately absent: they render as ordinary rows, which
+   * is the whole point of the model — a lone pane and a lone session are
+   * indistinguishable.
+   */
+  const splitMemberIds = React.useMemo(() => {
+    const ids = new Set<string>()
+    for (const g of splitGroups ?? []) {
+      if (g.panes.length < 2) continue
+      for (const p of g.panes) ids.add(p.sessionId)
+    }
+    return ids
+  }, [splitGroups])
+
+  // Sessions that belong to a SPLIT (two panes or more) are held out of the
+  // grouped lists entirely — they are drawn once, above, in the splits section.
+  // Held out BEFORE grouping rather than skipped during render, so a group's
+  // count badge matches the rows under it and a repo whose every session is in
+  // a split disappears instead of rendering an empty heading.
   const groups = React.useMemo(
-    () => groupSessions(filtered, filters, statusOf, starredRepoNames),
-    [filtered, filters, statusOf, starredRepoNames]
+    () =>
+      groupSessions(
+        filtered.filter((s) => !splitMemberIds.has(s.id)),
+        filters,
+        statusOf,
+        starredRepoNames
+      ),
+    [filtered, splitMemberIds, filters, statusOf, starredRepoNames]
   )
 
   // Counts for the Status flyout, computed over the SEARCH-narrowed list rather
@@ -221,77 +258,51 @@ function SidebarBody({
 
   const narrowed = isNarrowed(filters)
 
-  // Which SPLIT (two panes or more) each session belongs to. Groups of one are
-  // deliberately absent: they render as ordinary rows, which is the whole point
-  // of the model — a lone pane and a lone session are indistinguishable.
-  const splitBySession = React.useMemo(() => {
-    const map = new Map<string, SplitGroup>()
-    for (const g of splitGroups ?? []) {
-      if (g.panes.length < 2) continue
-      for (const p of g.panes) map.set(p.sessionId, g)
-    }
-    return map
-  }, [splitGroups])
-
   /**
-   * Which session's list entry DRAWS each split's pill.
+   * The splits worth drawing, in workspace order.
    *
-   * The first pane whose session is actually being rendered — not simply the
-   * first pane. Those differ whenever the list is a subset of the workspace, and
-   * keying on `panes[0]` unconditionally lost the pill entirely in two ordinary
-   * situations:
+   * A split used to be drawn INSIDE whichever repo group its first surviving
+   * pane happened to sit in. That stopped making sense the moment a split could
+   * span two repos: the pill claimed one repo as its home, and the other repo's
+   * session had no entry of its own to show. Splits now sit above the groups
+   * entirely, so a split belongs to no repo — which is the truth.
    *
-   * - **Filtering.** Search for a title that only pane 2 matches: pane 1 has no
-   *   entry to hang the pill on, and pane 2's entry bowed out because it wasn't
-   *   first. The search found a session and then rendered nothing at all.
-   * - **Archiving.** Archive pane 1's session and it leaves the active list, so
-   *   no entry satisfied the check — the whole pill vanished while the split was
-   *   still on screen, stranding its other sessions with no sidebar presence.
-   *
-   * Resolved ONCE against the whole active list rather than per rendered group,
-   * so a split spanning two repos still draws exactly one pill (in whichever
-   * repo group its first surviving pane sits) instead of one per group.
+   * Kept only while at least one pane survives the current search/filters: a
+   * split none of whose sessions match should no more appear than a session that
+   * doesn't match. ONE surviving pane is enough — the pill names every member,
+   * so hiding it because pane 1 didn't match would lose pane 2's only entry.
    */
-  const pillOwner = React.useMemo(() => {
+  const visibleSplits = React.useMemo(() => {
     const rendered = new Set(filtered.map((s) => s.id))
-    const owner = new Map<string, string>()
-    for (const g of splitGroups ?? []) {
-      if (g.panes.length < 2) continue
-      const first = g.panes.find((p) => rendered.has(p.sessionId))
-      // No surviving pane means nothing matched the filter — no pill is right.
-      if (first) owner.set(g.id, first.sessionId)
-    }
-    return owner
+    return (splitGroups ?? []).filter(
+      (g) => g.panes.length >= 2 && g.panes.some((p) => rendered.has(p.sessionId))
+    )
   }, [splitGroups, filtered])
 
+  const renderSplit = (split: SplitGroup) => (
+    <SplitRow
+      key={split.id}
+      group={split}
+      sessions={sessions}
+      liveActivity={liveActivity}
+      active={split.id === activeGroupId}
+      onFocusPane={onFocusPane}
+      onClosePane={onClosePane}
+      onSeparateAll={onSeparateAll}
+      onSplitWith={onSplitWith}
+      splitCandidates={sessions.filter(
+        (c) => !c.archived && !split.panes.some((p) => p.sessionId === c.id)
+      )}
+    />
+  )
+
   /**
-   * One entry in a sidebar list — a pill for a split, a row for anything else.
+   * One row in a grouped list.
    *
-   * A split is drawn ONCE, at its owning entry (above), and its other panes
-   * render nothing. Drawing it per-member would repeat the same pill two to four
-   * times; drawing it in a group of its own would tear a split across repos apart.
+   * Split members never reach here — they are held out of `groups` before
+   * grouping, so a session cannot appear both in a pill and as a loose row.
    */
   const renderEntry = (s: Session) => {
-    const split = splitBySession.get(s.id)
-    if (split) {
-      if (pillOwner.get(split.id) !== s.id) return null
-      return (
-        <SplitRow
-          key={split.id}
-          group={split}
-          sessions={sessions}
-          liveActivity={liveActivity}
-          active={split.id === activeGroupId}
-          onFocusPane={onFocusPane}
-          onClosePane={onClosePane}
-          onSeparateAll={onSeparateAll}
-          onSplitWith={onSplitWith}
-          splitCandidates={sessions.filter(
-            (c) => !c.archived && !split.panes.some((p) => p.sessionId === c.id)
-          )}
-        />
-      )
-    }
     return (
       <SessionRow
         key={s.id}
@@ -433,6 +444,25 @@ function SidebarBody({
           </div>
         ) : (
           <>
+          {/* Splits, above every group and directly under the filters.
+              A split can span repos, so nesting it under one repo's heading
+              named an owner it doesn't have. Its own section says the true
+              thing: these are on screen together, wherever they came from. */}
+          {visibleSplits.length > 0 && (
+            <div>
+              <div className="flex items-center gap-[7px] px-1.5 pb-1.5 pt-2.5">
+                <span className="w-2 text-center text-[9px] text-muted-foreground">▾</span>
+                <Columns2 size={12} className="text-blue" />
+                <span className="flex-1 truncate text-[11.5px] font-semibold text-text">
+                  {visibleSplits.length === 1 ? "Split" : "Splits"}
+                </span>
+                <Badge tone="count" size="xs">
+                  {visibleSplits.length}
+                </Badge>
+              </div>
+              <div className="mb-1 flex flex-col gap-[3px]">{visibleSplits.map(renderSplit)}</div>
+            </div>
+          )}
           {groups.map((group) => {
             // A `null` key is the flat list (Group by: None) — rows with no
             // heading over them at all, rather than one heading called

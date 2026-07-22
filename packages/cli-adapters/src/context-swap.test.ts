@@ -324,6 +324,10 @@ describe("no compaction pending", () => {
     )
     expect(spec.resumeId).toBe("harness_thread_old")
     expect(spec.fresh).toBeUndefined()
-    expect(spec.prompt).toBe("just a normal turn")
+    // "Byte-identical" now means "carries no compaction primer". The standing
+    // question-channel note prefixes every turn regardless, so the meaningful
+    // assertion is that no summary was spliced in and the user's text is last.
+    expect(spec.prompt).not.toContain("[CONTEXT COMPACTED]")
+    expect(spec.prompt.endsWith("just a normal turn")).toBe(true)
   })
 })

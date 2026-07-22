@@ -4,6 +4,7 @@ import type { ApprovalMode, SandboxMode, ThreadEvent } from "@openai/codex-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
+import { formatQuestionAnswers, parseQuestionBlock } from "./question-prompt.js"
 import { requireWorktree } from "./cwd.js"
 import { worktreeEnv } from "./worktree-env.js"
 import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
@@ -116,6 +117,16 @@ export const rememberThread = (input: {
   if (input.fresh === true) return
   input.resume.set(input.sessionId, input.threadId)
 }
+
+/**
+ * How many times one operator turn may be interrupted by a Codex question.
+ *
+ * Each round costs a real harness turn, and a model that has misread the task
+ * will happily ask its way around the problem forever. Four is generous for a
+ * genuine clarification and short enough that a loop is visible rather than
+ * expensive.
+ */
+const MAX_QUESTION_ROUNDS = 4
 
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
 export const codexEventToStreamEvents = (
@@ -296,14 +307,52 @@ export const runCodex = (
           ? codex.resumeThread(prior, threadOptions)
           : codex.startThread(threadOptions)
 
-        const { events } = await thread.runStreamed(spec.prompt, { signal: abort.signal })
-        for await (const event of events) {
-          if (event.type === "thread.started" && event.thread_id) {
-            rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
+        // One operator-facing turn can span several Codex turns, because a
+        // question is answered by RE-PROMPTING: Codex has no `canUseTool`
+        // callback to hand a reply back through (see `mapCodexPolicy`), so the
+        // only way its answers reach the model is as the next turn's prompt.
+        //
+        // Bounded so a model that keeps asking the same thing cannot spin the
+        // operator in a loop; past the cap its block is left in the text, which
+        // is exactly the behaviour before this channel existed.
+        let turnPrompt = spec.prompt
+        let round = 0
+        for (;;) {
+          let followUp: string | null = null
+          const { events } = await thread.runStreamed(turnPrompt, { signal: abort.signal })
+          for await (const event of events) {
+            if (event.type === "thread.started" && event.thread_id) {
+              rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
+            }
+            const asked =
+              followUp === null && round < MAX_QUESTION_ROUNDS && event.type === "item.completed" &&
+              event.item.type === "agent_message"
+                ? parseQuestionBlock(event.item.text)
+                : null
+            if (asked !== null) {
+              // Emit the prose around the block, but never the block itself —
+              // raw JSON in the transcript reads as the agent malfunctioning.
+              if (asked.stripped.length > 0) {
+                await runP(ctx.emit({ _tag: "Assistant", text: asked.stripped }))
+              }
+              const answers = await runP(
+                ctx.askQuestion({ id: `q_${sessionId}_${round}`, questions: asked.questions })
+              )
+              followUp = formatQuestionAnswers(asked.questions, answers)
+              continue
+            }
+            for (const se of codexEventToStreamEvents(event, sessionId)) {
+              // Hold this Codex turn's terminal event while another is queued to
+              // carry the answers: the operator asked one question and is owed
+              // one continuous reply, not a turn that "finished" the instant it
+              // asked and settled the message out from under the answer.
+              if (followUp !== null && se._tag === "Done") continue
+              await runP(ctx.emit(se))
+            }
           }
-          for (const se of codexEventToStreamEvents(event, sessionId)) {
-            await runP(ctx.emit(se))
-          }
+          if (followUp === null) break
+          turnPrompt = followUp
+          round += 1
         }
       },
       catch: (cause) =>

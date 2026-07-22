@@ -37,8 +37,10 @@ const registry = new Map<string, ConversationActor>()
 /** Where the machine is, in the terms `activityOf` reasons about. */
 const phaseOf = (snap: ConversationSnapshot): ActivityPhase => {
   if (snap.matches("running")) return "running"
-  // The turn is over; we're only re-reading the worktree diff.
-  if (snap.matches("refreshingDiff")) return "settling"
+  // The turn is over — we're either waiting for the halt to land or re-reading
+  // the worktree diff. Both are "settling": the sidebar should not claim the
+  // agent is still thinking, but nor is the session idle and ready.
+  if (snap.matches("stopping") || snap.matches("refreshingDiff")) return "settling"
   return "idle"
 }
 

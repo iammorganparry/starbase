@@ -461,6 +461,29 @@ export type PlanPart = Schema.Schema.Type<typeof PlanPart>
 export const ContextDigest = Schema.Struct({
   /** What the user is ultimately trying to achieve in this session. */
   goal: Schema.String,
+  /**
+   * What actually happened in the recent stretch, oldest first.
+   *
+   * The goal says where the session is heading and `decisions` say what was
+   * settled, but neither answers the question an agent asks first on waking up:
+   * what did I just do? Without it a compacted agent re-runs the command it
+   * just ran, or reports progress it cannot actually describe. Concrete
+   * outcomes — the command, the file, the result — not activity labels.
+   *
+   * OPTIONAL for the same reason as `midFlow`: digests are persisted inside
+   * transcripts, so every marker written before this field existed must still
+   * decode.
+   */
+  recentWork: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * The single action the session was about to take next.
+   *
+   * Distinct from `openThreads`, which is an unordered backlog — this is the
+   * one thing to do first. A compacted agent that knows its goal and its
+   * backlog but not its next move tends to re-plan from scratch, which reads to
+   * the operator as the agent having forgotten the conversation.
+   */
+  nextStep: Schema.optional(Schema.String),
   /** Choices made and why — the part a summary most often destroys. */
   decisions: Schema.Array(Schema.String),
   /** Files created or modified, so the fresh conversation knows where it is. */

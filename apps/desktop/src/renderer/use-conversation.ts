@@ -117,9 +117,12 @@ export function useConversation(session: Session): Conversation {
   // drives the actionable "needs-input" status.
   const plan = useMemo(() => latestPlan(messages), [messages])
   const openPlan = useMemo(() => pendingPlan(messages), [messages])
-  // Busy through the diff refresh too, so the composer keeps queueing across the
-  // brief gap between a turn ending and the next queued turn starting.
-  const busy = state.matches("running") || state.matches("refreshingDiff")
+  // Busy through the stop and the diff refresh too, so the composer keeps
+  // queueing across the gap between a turn ending and the next queued turn
+  // starting. `stopping` in particular is a state the operator often types
+  // into — it is the moment right after they hit stop or "send now".
+  const busy =
+    state.matches("running") || state.matches("stopping") || state.matches("refreshingDiff")
   const status: SessionStatus | null =
     paused || question || openPlan ? "needs-input" : busy ? "thinking" : null
 
