@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { teeLogPath, teeRewrite } from "./bash-tee.js"
+import { startTeeStream, teeLogPath, teeRewrite } from "./bash-tee.js"
+import { capOutput } from "./output-cap.js"
 
 describe("teeLogPath", () => {
   it("names a deterministic file under the given dir, keyed by the tool-use id", () => {
@@ -41,5 +42,92 @@ describe("teeRewrite", () => {
     // With `;` as the delimiter, `cmd # note ;` would comment out the closing brace.
     const rewritten = teeRewrite("echo hi # a note", "/l")
     expect(rewritten.startsWith("{\necho hi # a note\n}")).toBe(true)
+  })
+})
+
+describe("startTeeStream", () => {
+  it("serialises slow polls and reads a growing log in bounded chunks", async () => {
+    let size = 256 * 1024
+    let active = 0
+    let maxActive = 0
+    let largestRead = 0
+    let opens = 0
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("tee poll did not produce two snapshots")), 1_000)
+      stream = startTeeStream(
+        "slow-log",
+        "pnpm test",
+        () => {
+          size += 64 * 1024
+          if (opens < 2) return
+          clearTimeout(timeout)
+          stream?.stop()
+          resolve()
+        },
+        {
+          pollMs: 1,
+          io: {
+            size: async () => size,
+            open: async () => {
+              opens += 1
+              active += 1
+              maxActive = Math.max(maxActive, active)
+              return {
+                read: async (_offset, length) => {
+                  largestRead = Math.max(largestRead, length)
+                  // Longer than the poll interval: an interval-based poller would
+                  // pile up reads here; a serial poller waits before scheduling.
+                  await new Promise((r) => setTimeout(r, 10))
+                  return Buffer.alloc(length, 65)
+                },
+                close: async () => {
+                  active -= 1
+                }
+              }
+            },
+            remove: async () => {}
+          }
+        }
+      )
+    })
+
+    stream?.stop()
+    expect(opens).toBeGreaterThanOrEqual(2)
+    expect(maxActive).toBe(1)
+    expect(largestRead).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it("matches the shared output cap when a UTF-8 character crosses a read boundary", async () => {
+    const text = `${"a".repeat(64 * 1024 - 1)}🙂${"z".repeat(10_000)}`
+    const bytes = Buffer.from(text)
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    const snapshot = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("tee poll produced no snapshot")), 1_000)
+      stream = startTeeStream(
+        "utf8-log",
+        "pnpm test",
+        (value) => {
+          clearTimeout(timeout)
+          stream?.stop()
+          resolve(value)
+        },
+        {
+          pollMs: 1,
+          io: {
+            size: async () => bytes.length,
+            open: async () => ({
+              read: async (offset, length) => bytes.subarray(offset, offset + length),
+              close: async () => {}
+            }),
+            remove: async () => {}
+          }
+        }
+      )
+    })
+
+    expect(snapshot).toBe(capOutput(text))
   })
 })

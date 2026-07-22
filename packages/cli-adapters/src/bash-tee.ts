@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { capOutput } from "./output-cap.js"
+import { StringDecoder } from "node:string_decoder"
+import { OUTPUT_CAP, OUTPUT_HEAD } from "./output-cap.js"
 
 /**
  * Rewriting a Bash command so a copy of its output lands in a file we can watch —
@@ -61,6 +62,78 @@ export interface TeeStream {
   readonly stop: () => void
 }
 
+interface TeeReadHandle {
+  readonly read: (offset: number, length: number) => Promise<Buffer>
+  readonly close: () => Promise<void>
+}
+
+interface TeePollIo {
+  readonly size: (file: string) => Promise<number>
+  readonly open: (file: string) => Promise<TeeReadHandle>
+  readonly remove: (file: string) => Promise<void>
+}
+
+const nodeTeePollIo: TeePollIo = {
+  size: async (file) => (await fs.stat(file)).size,
+  open: async (file) => {
+    const handle = await fs.open(file, "r")
+    return {
+      read: async (offset, length) => {
+        const buffer = Buffer.allocUnsafe(length)
+        const { bytesRead } = await handle.read(buffer, 0, length, offset)
+        return buffer.subarray(0, bytesRead)
+      },
+      close: () => handle.close()
+    }
+  },
+  remove: async (file) => fs.rm(file, { force: true })
+}
+
+/** Bound each allocation while consuming a log that may be gigabytes long. */
+const READ_CHUNK_BYTES = 64 * 1024
+const OUTPUT_TAIL = OUTPUT_CAP - OUTPUT_HEAD
+
+/**
+ * Append-only capped text, retaining exactly the same head/tail snapshot shape
+ * as `capOutput` without retaining the text between them.
+ */
+const cappedTail = () => {
+  let decoder = new StringDecoder("utf8")
+  let chars = 0
+  let head = ""
+  let tail = ""
+
+  const reset = (): void => {
+    decoder = new StringDecoder("utf8")
+    chars = 0
+    head = ""
+    tail = ""
+  }
+
+  const push = (buffer: Buffer): void => {
+    const text = decoder.write(buffer)
+    if (text.length === 0) return
+    chars += text.length
+    if (head.length < OUTPUT_HEAD) {
+      head += text.slice(0, OUTPUT_HEAD - head.length)
+    }
+    tail = `${tail}${text}`.slice(-OUTPUT_TAIL)
+  }
+
+  const snapshot = (): string => {
+    if (chars <= OUTPUT_CAP) {
+      // Before the cap, head and tail overlap. Remove that overlap to reconstruct
+      // the complete text without retaining a third copy.
+      const overlap = Math.max(0, head.length + tail.length - chars)
+      return `${head}${tail.slice(overlap)}`
+    }
+    const dropped = chars - head.length - tail.length
+    return `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
+  }
+
+  return { push, reset, snapshot }
+}
+
 /**
  * Start tailing a Bash command's teed output, calling `onOutput` with the whole
  * capped snapshot each time the file grows.
@@ -76,28 +149,63 @@ export const startTeeStream = (
   toolUseId: string,
   command: string,
   onOutput: (snapshot: string) => void,
-  opts: { dir?: string; pollMs?: number } = {}
+  opts: { dir?: string; pollMs?: number; io?: TeePollIo } = {}
 ): TeeStream => {
   const file = teeLogPath(toolUseId, opts.dir)
-  let lastLen = -1
+  const io = opts.io ?? nodeTeePollIo
+  const output = cappedTail()
+  let offset = 0
   let stopped = false
-  const timer = setInterval(() => {
-    void fs
-      .readFile(file, "utf8")
-      .then((text) => {
-        if (stopped || text.length === lastLen) return
-        lastLen = text.length
-        onOutput(capOutput(text))
-      })
-      .catch(() => {}) // ENOENT until tee first writes — ignore.
-  }, opts.pollMs ?? 150)
-  // Don't let a pending poll keep the process alive past a finished run.
-  timer.unref?.()
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const schedule = (): void => {
+    if (stopped) return
+    timer = setTimeout(() => void poll(), opts.pollMs ?? 150)
+    // Don't let a pending poll keep the process alive past a finished run.
+    timer.unref?.()
+  }
+
+  const poll = async (): Promise<void> => {
+    try {
+      const size = await io.size(file)
+      if (stopped) return
+      // `tee` truncates on open. Reset if a stale file was observed before the
+      // command replaced it, or if a tool-use id is unexpectedly reused.
+      if (size < offset) {
+        offset = 0
+        output.reset()
+      }
+      if (size === offset) return
+
+      const end = size
+      const handle = await io.open(file)
+      try {
+        while (!stopped && offset < end) {
+          const chunk = await handle.read(offset, Math.min(READ_CHUNK_BYTES, end - offset))
+          if (chunk.length === 0) break
+          offset += chunk.length
+          output.push(chunk)
+        }
+      } finally {
+        await handle.close().catch(() => {})
+      }
+      if (!stopped) onOutput(output.snapshot())
+    } catch {
+      // ENOENT until tee first writes — ignore. The next poll retries.
+    } finally {
+      // Schedule only after this read has settled. `setInterval` allowed reads of
+      // a growing test log to overlap until hundreds of whole-file strings were
+      // live at once, exhausting Electron's heap.
+      schedule()
+    }
+  }
+
+  schedule()
   const stop = (): void => {
     if (stopped) return
     stopped = true
-    clearInterval(timer)
-    void fs.rm(file, { force: true }).catch(() => {})
+    if (timer !== null) clearTimeout(timer)
+    void io.remove(file).catch(() => {})
   }
   return { command: teeRewrite(command, file), file, stop }
 }
