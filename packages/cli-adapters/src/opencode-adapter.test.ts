@@ -1,9 +1,11 @@
-import type { Event } from "@opencode-ai/sdk"
+import type { Event, Part } from "@opencode-ai/sdk"
 import { describe, expect, it } from "vitest"
 import {
   asPermissionAsked,
+  assistantText,
   createOpencodeMapper,
   mapOpencodePermission,
+  planTools,
   parseServerUrl,
   permissionToRequest,
   promptError,
@@ -110,6 +112,107 @@ describe("mapOpencodePermission", () => {
   it("always pins external_directory rather than leaving it defaulted", () => {
     expect(mapOpencodePermission("auto").external_directory).toBe("allow")
     expect(mapOpencodePermission("ask").external_directory).toBe("ask")
+  })
+
+  /**
+   * Plan mode is confined per-PROMPT (`planTools`), not here. This map is baked
+   * into the server's config when it spawns, and an approved plan has to gain
+   * write access without restarting the server and re-attaching the session.
+   */
+  it("leaves plan mode to the per-prompt tool map, so approval can widen it", () => {
+    expect(mapOpencodePermission("plan")).toStrictEqual(mapOpencodePermission("ask"))
+  })
+})
+
+describe("planTools", () => {
+  /**
+   * Withholding beats gating: a gate asks the operator to approve an edit that
+   * has not been planned yet — the exact decision plan mode exists to defer —
+   * and an unanswered one parks the turn.
+   */
+  it("withholds every way of writing to the worktree", () => {
+    expect(planTools.edit).toBe(false)
+    expect(planTools.write).toBe(false)
+    expect(planTools.patch).toBe(false)
+  })
+
+  /**
+   * A subagent inherits none of this: it runs in a child session whose own edits
+   * raise their own permissions, so a planner could otherwise spawn its way
+   * straight around the restriction.
+   */
+  it("withholds task, which would otherwise be the way around it", () => {
+    expect(planTools.task).toBe(false)
+  })
+
+  /**
+   * Planning means READING the code. Claude's plan mode leaves Bash available
+   * for exactly that (`agent-runner`'s `verdict` auto-allows commands under
+   * `plan`), and Codex's `read-only` sandbox blocks writes, not commands.
+   */
+  it("leaves the research tools alone", () => {
+    expect(planTools.bash).toBeUndefined()
+    expect(planTools.read).toBeUndefined()
+    expect(planTools.grep).toBeUndefined()
+  })
+})
+
+describe("assistantText", () => {
+  const text = (over: Record<string, unknown>) => ({ type: "text", ...over }) as unknown as Part
+
+  it("joins the model's text parts in order", () => {
+    expect(assistantText([text({ text: "Here is " }), text({ text: "the plan." })])).toBe(
+      "Here is the plan."
+    )
+  })
+
+  /**
+   * The same filter `forPart` applies: `synthetic` parts are opencode's own
+   * scaffolding (injected context), not the model talking. Letting them through
+   * here would splice the harness's own boilerplate into a plan.
+   */
+  it("drops opencode's scaffolding", () => {
+    expect(
+      assistantText([text({ text: "ctx", synthetic: true }), text({ text: "real" }), text({ text: "x", ignored: true })])
+    ).toBe("real")
+  })
+
+  it("survives a response with no parts at all", () => {
+    expect(assistantText(undefined)).toBe("")
+    expect(assistantText([])).toBe("")
+  })
+})
+
+describe("createOpencodeMapper — plan-turn text suppression", () => {
+  const SESSION = "ses_1"
+  const part = (p: Record<string, unknown>) =>
+    ({ type: "message.part.updated", properties: { part: { sessionID: SESSION, ...p } } }) as unknown as Event
+
+  /**
+   * A plan turn's whole reply IS the plan. Streaming it as chat text would show
+   * the operator the same plan twice — once as an interactive card they can
+   * comment on, once as inert markdown they can't.
+   */
+  it("holds the agent's prose back while a plan turn is in flight", () => {
+    let planning = true
+    const m = createOpencodeMapper(
+      () => SESSION,
+      () => planning
+    )
+    expect(m.apply(part({ id: "prt_1", messageID: "msg_a", type: "text", text: "the plan" }))).toStrictEqual([])
+    // …and resumes the moment approval flips the flag, so the execution turn
+    // that follows still narrates itself.
+    planning = false
+    expect(m.apply(part({ id: "prt_2", messageID: "msg_b", type: "text", text: "done" }))).toStrictEqual([
+      { _tag: "Assistant", text: "done" }
+    ])
+  })
+
+  it("suppresses nothing by default, so ordinary turns are untouched", () => {
+    const m = createOpencodeMapper(() => SESSION)
+    expect(m.apply(part({ id: "prt_1", messageID: "msg_a", type: "text", text: "hi" }))).toStrictEqual([
+      { _tag: "Assistant", text: "hi" }
+    ])
   })
 })
 

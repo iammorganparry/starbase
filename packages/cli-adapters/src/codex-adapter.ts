@@ -1,9 +1,10 @@
 import type { PermissionMode, StreamEvent } from "@starbase/core"
-import { CliExecError } from "@starbase/core"
+import { CliExecError, resumePlanPrompt } from "@starbase/core"
 import type { ApprovalMode, SandboxMode, ThreadEvent } from "@openai/codex-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
+import { hasPlanBlock, parsePlan } from "./plan-parse.js"
 import { formatQuestionAnswers, parseQuestionBlock } from "./question-prompt.js"
 import { requireWorktree } from "./cwd.js"
 import { worktreeEnv } from "./worktree-env.js"
@@ -31,6 +32,16 @@ import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
  * denies every gated action (the adversarial reviewer) gets no protection at all
  * from that callback, and would otherwise run `workspace-write` + approval
  * `never`, i.e. free rein over the worktree it was told not to touch.
+ *
+ * `plan` is read-only for exactly the same reason, and it is the whole of the
+ * enforcement: plan mode's promise is that the agent CANNOT edit until the
+ * operator approves, and on Claude that promise is kept by the SDK's own plan
+ * permission mode. Codex has no equivalent, so without this branch a planning
+ * turn fell through to `workspace-write` and quietly rewrote the worktree while
+ * claiming to be planning. `gigaplan` is deliberately NOT here: it never reaches
+ * an adapter as a mode — `adversarial-plan.ts` runs its roles as `ask` +
+ * `readOnly: true` — so a branch for it would be dead code implying a guarantee
+ * nothing upholds.
  */
 export const mapCodexPolicy = (
   mode: PermissionMode,
@@ -43,7 +54,7 @@ export const mapCodexPolicy = (
    */
   unattended = false
 ): { sandboxMode: SandboxMode; approvalPolicy: ApprovalMode } =>
-  readOnly
+  readOnly || mode === "plan"
     ? { sandboxMode: "read-only", approvalPolicy: "never" }
     : mode === "auto" && !unattended
       ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
@@ -127,6 +138,38 @@ export const rememberThread = (input: {
  * expensive.
  */
 const MAX_QUESTION_ROUNDS = 4
+
+/**
+ * How many plans one operator turn may propose before we stop intercepting.
+ *
+ * Separate from the question budget because they are separate failure modes and
+ * a shared counter would let a chatty planner exhaust the questioner's allowance
+ * (or the reverse). Higher than the question cap because revision is the
+ * EXPECTED path here — the operator comments on steps and sends the plan back,
+ * and three rounds of that is an ordinary review, not a malfunction.
+ *
+ * Past the cap the block is left in the reply as plain text: no card, no error.
+ * That mirrors what the question channel already does, and is what happened
+ * before this existed — a degradation, not a dead end.
+ */
+const MAX_PLAN_ROUNDS = 6
+
+/**
+ * The model's own finished reply text, or null for every other event.
+ *
+ * Codex has no `canUseTool` and no `ExitPlanMode`, so BOTH of its out-of-band
+ * channels — structured questions and proposed plans — arrive as fenced blocks
+ * in an ordinary `agent_message`. Naming that condition once turns each channel
+ * into a predicate over a string, instead of two near-identical event walks that
+ * have to agree about what "the model talking" means.
+ *
+ * `item.completed`, not `item.updated`: a block is only answerable once the
+ * message is whole. Reading a partial one would parse a half-written fence.
+ */
+export const agentReply = (event: ThreadEvent): string | null =>
+  event.type === "item.completed" && event.item.type === "agent_message"
+    ? event.item.text
+    : null
 
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
 export const codexEventToStreamEvents = (
@@ -303,9 +346,13 @@ export const runCodex = (
         // Codex was the odd one out, so on Codex both features quietly no-opped
         // while still paying for the run.
         const prior = threadIdFor({ resume, sessionId, resumeId: spec.resumeId, fresh: spec.fresh })
-        const thread = prior
+        let thread = prior
           ? codex.resumeThread(prior, threadOptions)
           : codex.startThread(threadOptions)
+        // Tracked separately from `prior` because a fresh thread only learns its
+        // id from `thread.started` — and approving a plan has to re-open THIS
+        // thread (see below), which needs an id we may not have had at the top.
+        let threadId: string | null = prior ?? null
 
         // One operator-facing turn can span several Codex turns, because a
         // question is answered by RE-PROMPTING: Codex has no `canUseTool`
@@ -315,20 +362,34 @@ export const runCodex = (
         // Bounded so a model that keeps asking the same thing cannot spin the
         // operator in a loop; past the cap its block is left in the text, which
         // is exactly the behaviour before this channel existed.
+        //
+        // Plan mode rides the same loop for the same reason, and it is why the
+        // loop was worth generalising: a proposed plan is answered by the
+        // operator, and their verdict can only reach Codex as another prompt.
         let turnPrompt = spec.prompt
         let round = 0
+        let planRound = 0
         for (;;) {
           let followUp: string | null = null
           const { events } = await thread.runStreamed(turnPrompt, { signal: abort.signal })
           for await (const event of events) {
             if (event.type === "thread.started" && event.thread_id) {
+              threadId = event.thread_id
               rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
             }
+            // Both of Codex's out-of-band channels — questions and plans — are
+            // fenced blocks in an ordinary reply, because there is no tool to
+            // call for either. So the reply is extracted ONCE and each channel
+            // is a predicate over it, rather than each re-deriving "is this the
+            // model talking" from the raw event.
+            //
+            // Null once a follow-up is queued: one Codex turn answers one
+            // interception, and a reply that has already been acted on must not
+            // be re-read by the next channel down.
+            const reply = followUp === null ? agentReply(event) : null
+
             const asked =
-              followUp === null && round < MAX_QUESTION_ROUNDS && event.type === "item.completed" &&
-              event.item.type === "agent_message"
-                ? parseQuestionBlock(event.item.text)
-                : null
+              reply !== null && round < MAX_QUESTION_ROUNDS ? parseQuestionBlock(reply) : null
             if (asked !== null) {
               // Emit the prose around the block, but never the block itself —
               // raw JSON in the transcript reads as the agent malfunctioning.
@@ -339,6 +400,47 @@ export const runCodex = (
                 ctx.askQuestion({ id: `q_${sessionId}_${round}`, questions: asked.questions })
               )
               followUp = formatQuestionAnswers(asked.questions, answers)
+              continue
+            }
+            // `hasPlanBlock` demands the exact ` ```plan ` info string, so a
+            // model merely *discussing* planning doesn't trip this.
+            const proposed =
+              reply !== null && spec.mode === "plan" && planRound < MAX_PLAN_ROUNDS &&
+              hasPlanBlock(reply)
+                ? reply
+                : null
+            if (proposed !== null) {
+              planRound += 1
+              // The WHOLE message is the plan, not just the fence: `parsePlan`
+              // also reads the per-step ```flow and ```<lang> step <NN> blocks
+              // that sit below it, exactly as it does for Claude's ExitPlanMode
+              // payload. So this is deliberately not emitted as Assistant text —
+              // the Plan card renders it, and doing both would double it up.
+              const plan = parsePlan(proposed, `plan_${sessionId}_${planRound}`)
+              const decision = await runP(ctx.proposePlan(plan))
+              if (decision._tag === "Revise") followUp = decision.feedback
+              else if (decision._tag === "Approve") {
+                // Codex fixes its sandbox when the thread OPENS, so widening it
+                // for execution means re-opening the same thread id under the
+                // restored exec mode. Same id ⇒ the planning conversation is
+                // still there; a fresh thread would make the agent re-derive
+                // everything it just worked out.
+                //
+                // `spec.readOnly` still wins: a caller that pinned this run
+                // read-only (the adversarial roles) does not get write access
+                // handed back to it by an approval.
+                const policy = mapCodexPolicy(
+                  decision.mode,
+                  spec.readOnly ?? false,
+                  spec.unattended ?? false
+                )
+                if (threadId !== null) {
+                  thread = codex.resumeThread(threadId, { ...threadOptions, ...policy })
+                }
+                followUp = resumePlanPrompt(plan)
+              }
+              // Reject: `followUp` stays null, so the turn ends here — which is
+              // what rejection means. `Done` is emitted normally below.
               continue
             }
             for (const se of codexEventToStreamEvents(event, sessionId)) {

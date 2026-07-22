@@ -113,7 +113,7 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
  * - `accept-edits` — auto-apply file edits, still pause for shell commands,
  * - `auto` — auto-apply edits and run allowlisted commands without prompting,
  * - `plan` — read-only planning: the agent designs a plan for review and cannot
- *   edit or run commands until the operator approves it (Claude harness only),
+ *   edit or run commands until the operator approves it (see `supportsPlanMode`),
  * - `gigaplan` — the orchestrated mode. One flagship proposes a plan, a model
  *   from a rival lab attacks it, the proposer revises, and on approval each step
  *   runs on the harness the plan chose for it.
@@ -132,6 +132,30 @@ export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 /** Concrete harness permission modes that can execute an approved plan. */
 export const ExecutionMode = Schema.Literal("ask", "accept-edits", "auto")
 export type ExecutionMode = Schema.Schema.Type<typeof ExecutionMode>
+
+/**
+ * Whether a harness can hold a plan-mode turn.
+ *
+ * "Can" means two things, and a harness needs both: a way to be held read-only
+ * while it thinks, and a channel to submit a plan through. Claude has a real
+ * `ExitPlanMode` tool the adapter intercepts; Codex and opencode have neither,
+ * so they are instructed to emit a fenced ` ```plan ` block instead, parsed by
+ * the same `parsePlan` — the trick adversarial planning already relies on to run
+ * any role on any harness.
+ *
+ * `cursor` and `starbase` are out for the same reason `vendorOf` excludes them:
+ * cursor falls through to the scripted stub (its "plan" would be fabricated),
+ * and starbase is an orchestrator that picks a harness per step rather than
+ * running turns itself.
+ *
+ * A predicate rather than a scatter of `cli === "claude"` checks because the
+ * gate is enforced in four places — the composer chip, the Shift+Tab cycle, and
+ * the renderer AND main-process coercions on harness switch — and three of them
+ * silently drop the mode instead of erroring, so a missed site looks like a bug
+ * with no message.
+ */
+export const supportsPlanMode = (cli: CliKind): boolean =>
+  cli === "claude" || cli === "codex" || cli === "opencode"
 
 /**
  * Automations for a session linked to a GitHub issue (design I2 toggles).

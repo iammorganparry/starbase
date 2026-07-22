@@ -522,7 +522,7 @@ describe("conversationMachine — image attachments", () => {
       actor.stop()
     })
 
-    it("degrades plan mode to ask when leaving Claude", async () => {
+    it("keeps plan mode when the new harness can plan too", async () => {
       const actor = start()
       await waitFor(actor, (s) => s.matches(idle))
       actor.send({ type: "SET_MODE", mode: "plan" })
@@ -530,7 +530,22 @@ describe("conversationMachine — image attachments", () => {
 
       actor.send({ type: "SET_HARNESS", cli: "codex", model: "gpt-5.6-sol" })
 
-      // Plan mode is Claude-only — Codex would be handed a mode it can't honour.
+      // Codex submits its plan as a fenced block instead of `ExitPlanMode`, so
+      // there is nothing to downgrade — dropping the mode would have discarded
+      // the operator's in-flight planning session for no reason.
+      expect(actor.getSnapshot().context.mode).toBe("plan")
+      actor.stop()
+    })
+
+    it("degrades plan mode to ask on a harness that cannot plan", async () => {
+      const actor = start()
+      await waitFor(actor, (s) => s.matches(idle))
+      actor.send({ type: "SET_MODE", mode: "plan" })
+
+      actor.send({ type: "SET_HARNESS", cli: "cursor", model: "composer-1" })
+
+      // Cursor falls through to the scripted stub, so its "plan" would be
+      // fabricated. Better to say `ask` than to invent one.
       expect(actor.getSnapshot().context.mode).toBe("ask")
       actor.stop()
     })

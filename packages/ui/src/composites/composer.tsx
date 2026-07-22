@@ -49,7 +49,7 @@ const MODE_OPTIONS: ReadonlyArray<ChipOption<PermissionMode>> = [
  * reason is surfaced beside the chip instead.
  */
 const GIGAPLAN_OPTION: ChipOption<PermissionMode> = { value: "gigaplan", label: "Gigaplan" }
-/** Plan mode is Claude-only (the other harnesses are autonomous). */
+/** Offered on any harness that can hold a plan turn — see `supportsPlanMode`. */
 const PLAN_OPTION: ChipOption<PermissionMode> = { value: "plan", label: "plan" }
 
 type MenuState = { kind: "slash" | "mention"; query: string; start: number }
@@ -128,7 +128,7 @@ export function Composer({
   /** Current HITL mode (shown in the mode chip; Shift+Tab cycles it). */
   mode?: PermissionMode
   onSetMode?: (mode: PermissionMode) => void
-  /** Offer the Plan mode option (Claude sessions only). */
+  /** Offer the Plan mode option (harnesses that pass `supportsPlanMode`). */
   allowPlan?: boolean
   /**
    * Whether an adversarial planning round can run here, and why not when it

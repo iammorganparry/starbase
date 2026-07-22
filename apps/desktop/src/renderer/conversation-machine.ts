@@ -45,6 +45,7 @@ import {
   settleLoaded,
   settleStreaming,
   STOPPED_NOTE,
+  supportsPlanMode,
   userMessage
 } from "@starbase/core"
 import { assign, fromCallback, fromPromise, setup } from "xstate"
@@ -681,7 +682,8 @@ export const conversationMachine = setup({
      *  - `resumeId` is dropped (main does the authoritative write) — the new
      *    harness starts a fresh thread, so the transcript stays on screen but the
      *    agent won't recall earlier turns;
-     *  - `plan` mode is Claude-only, so it degrades to `ask` elsewhere;
+     *  - `plan` mode degrades to `ask` on a harness that can't hold it
+     *    (`supportsPlanMode`) — cursor and starbase;
      *  - skills are per-harness, so the `/` menu is refetched.
      */
     persistHarness: assign(({ context, event, self }) => {
@@ -695,7 +697,7 @@ export const conversationMachine = setup({
         .then((skills) => self.send({ type: "SKILLS_LOADED", skills }))
         .catch(() => {})
 
-      const mode = context.mode === "plan" && event.cli !== "claude" ? "ask" : context.mode
+      const mode = context.mode === "plan" && !supportsPlanMode(event.cli) ? "ask" : context.mode
       return {
         cli: event.cli,
         model: event.model,

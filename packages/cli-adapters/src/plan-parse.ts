@@ -29,11 +29,37 @@ import { CLI_KINDS, TASK_KINDS } from "@starbase/core"
 // ── The output protocol injected into the plan-mode system prompt ─────────────
 
 /**
- * Appended to the plan-mode instructions. Documents the ` ```plan ` block so the
- * agent's `ExitPlanMode` payload parses into structured steps. Kept declarative:
- * one block, documented field names, no per-call string assembly elsewhere.
+ * How the agent hands its finished plan back. Claude has a real `ExitPlanMode`
+ * tool the adapter intercepts; every other harness has nothing to call, so it
+ * ends its reply with the block and stops, and the adapter reads it out of the
+ * message text.
+ *
+ * Parameterised rather than duplicated because the GRAMMAR is the contract with
+ * `parsePlan` and must not drift between harnesses — only the two sentences
+ * about how to submit it legitimately differ.
  */
-export const planModeInstructions = `When you present your plan with ExitPlanMode, put a fenced \`\`\`plan block at the top of the plan text, then your normal human-readable markdown below it. Starbase renders the block as an interactive, reviewable plan.
+export type PlanChannel = "tool" | "reply"
+
+const OPENING: Readonly<Record<PlanChannel, string>> = {
+  tool: "When you present your plan with ExitPlanMode, put a fenced ```plan block at the top of the plan text, then your normal human-readable markdown below it.",
+  reply:
+    "When your plan is ready, put a fenced ```plan block at the top of your reply, then your normal human-readable markdown below it — and STOP there, without editing anything."
+}
+
+const SUBMIT_RULE: Readonly<Record<PlanChannel, string>> = {
+  tool: "Only ExitPlanMode; do not edit files or run commands in plan mode.",
+  reply:
+    "Emit the block and stop — do not edit files or run commands in plan mode. The block is parsed into an interactive plan the operator approves, comments on, or sends back for revision; if they approve it you will be prompted again, with write access, to carry it out."
+}
+
+/**
+ * The plan output protocol injected for a plan-mode turn. Documents the
+ * ` ```plan ` block so what the agent submits parses into structured steps. Kept
+ * declarative: one block, documented field names, no per-call string assembly
+ * elsewhere.
+ */
+export const planInstructions = (channel: PlanChannel): string =>
+  `${OPENING[channel]} Starbase renders the block as an interactive, reviewable plan.
 
 Format of the \`\`\`plan block (one step per header line; two-space-indented fields):
 
@@ -55,7 +81,7 @@ Format of the \`\`\`plan block (one step per header line; two-space-indented fie
   05 <step>
   06 <step>
 
-Rules: number steps 01, 02, … in order; a branch's arms are numbered 4a, 4b under it (two extra spaces). Keep each step's title under ~6 words and its intent to one sentence. Only ExitPlanMode; do not edit files or run commands in plan mode.
+Rules: number steps 01, 02, … in order; a branch's arms are numbered 4a, 4b under it (two extra spaces). Keep each step's title under ~6 words and its intent to one sentence. ${SUBMIT_RULE[channel]}
 
 ALSO, for each step whose logic actually branches or moves through states, include a fenced \`\`\`flow step <NN> block that maps THAT STEP's own control flow — a state machine, a user flow, or the decision tree grounded in the step's code. One flow PER STEP, scoped to what that step does. Skip the block entirely for steps that are a straight-line edit with no meaningful decisions (most simple steps need none). This is the most important visual: focus on the branch points, not a linear list of actions. One node or edge per line:
 
@@ -90,6 +116,9 @@ FINALLY, for the steps where it aids review — new service methods, key types, 
   \`\`\`
 
 The language is the highlight hint (ts, tsx, py, go, …); \`step <NN>\` (or \`step=<NN>\`) links the sample to that plan step.`
+
+/** The Claude variant, passed to the SDK as `planModeInstructions`. */
+export const planModeInstructions = planInstructions("tool")
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
