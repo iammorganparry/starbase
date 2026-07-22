@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs"
+import { promises as fs, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { StringDecoder } from "node:string_decoder"
@@ -68,12 +68,15 @@ interface TeeReadHandle {
 }
 
 interface TeePollIo {
+  /** Establish a clean baseline synchronously, before the rewritten command can start. */
+  readonly prepare: (file: string) => void
   readonly size: (file: string) => Promise<number>
   readonly open: (file: string) => Promise<TeeReadHandle>
   readonly remove: (file: string) => Promise<void>
 }
 
 const nodeTeePollIo: TeePollIo = {
+  prepare: (file) => rmSync(file, { force: true }),
   size: async (file) => (await fs.stat(file)).size,
   open: async (file) => {
     const handle = await fs.open(file, "r")
@@ -157,6 +160,9 @@ export const startTeeStream = (
   let offset = 0
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
+
+  // Prevent a stale log from being read before `tee` truncates and regrows it.
+  io.prepare(file)
 
   const schedule = (): void => {
     if (stopped) return

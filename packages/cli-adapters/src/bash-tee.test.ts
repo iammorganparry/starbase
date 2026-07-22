@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { startTeeStream, teeLogPath, teeRewrite } from "./bash-tee.js"
 import { capOutput } from "./output-cap.js"
@@ -69,6 +72,7 @@ describe("startTeeStream", () => {
         {
           pollMs: 1,
           io: {
+            prepare: () => {},
             size: async () => size,
             open: async () => {
               opens += 1
@@ -117,6 +121,7 @@ describe("startTeeStream", () => {
         {
           pollMs: 1,
           io: {
+            prepare: () => {},
             size: async () => bytes.length,
             open: async () => ({
               read: async (offset, length) => bytes.subarray(offset, offset + length),
@@ -129,5 +134,38 @@ describe("startTeeStream", () => {
     })
 
     expect(snapshot).toBe(capOutput(text))
+  })
+
+  it("removes a stale log before the first poll can observe it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sb-tee-stale-"))
+    const file = teeLogPath("reused-id", dir)
+    const fresh = "new run output ".repeat(100)
+    writeFileSync(file, "stale output")
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    try {
+      const snapshot = new Promise<string>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("tee poll produced no snapshot")), 1_000)
+        stream = startTeeStream(
+          "reused-id",
+          "pnpm test",
+          (value) => {
+            clearTimeout(timeout)
+            resolve(value)
+          },
+          { dir, pollMs: 1 }
+        )
+
+        // Cleanup must finish before startTeeStream returns and the caller can
+        // launch the rewritten command, even if its output immediately regrows.
+        expect(existsSync(file)).toBe(false)
+        writeFileSync(file, fresh)
+      })
+
+      expect(await snapshot).toBe(fresh)
+    } finally {
+      stream?.stop()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
