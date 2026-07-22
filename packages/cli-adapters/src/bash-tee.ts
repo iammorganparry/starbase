@@ -2,7 +2,7 @@ import { promises as fs, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { StringDecoder } from "node:string_decoder"
-import { OUTPUT_CAP, OUTPUT_HEAD } from "./output-cap.js"
+import { formatCappedOutput, OUTPUT_CAP, OUTPUT_HEAD, OUTPUT_TAIL } from "./output-cap.js"
 
 /**
  * Rewriting a Bash command so a copy of its output lands in a file we can watch —
@@ -94,7 +94,6 @@ const nodeTeePollIo: TeePollIo = {
 
 /** Bound each allocation while consuming a log that may be gigabytes long. */
 const READ_CHUNK_BYTES = 64 * 1024
-const OUTPUT_TAIL = OUTPUT_CAP - OUTPUT_HEAD
 
 /**
  * Append-only capped text, retaining exactly the same head/tail snapshot shape
@@ -124,6 +123,8 @@ const cappedTail = () => {
   }
 
   const snapshot = (): string => {
+    // Do not flush the decoder here: more bytes may arrive after any snapshot,
+    // and flushing would corrupt a UTF-8 character split across two polls.
     if (chars <= OUTPUT_CAP) {
       // Before the cap, head and tail overlap. Remove that overlap to reconstruct
       // the complete text without retaining a third copy.
@@ -131,7 +132,7 @@ const cappedTail = () => {
       return `${head}${tail.slice(overlap)}`
     }
     const dropped = chars - head.length - tail.length
-    return `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
+    return formatCappedOutput(head, tail, dropped)
   }
 
   return { push, reset, snapshot }
@@ -160,13 +161,19 @@ export const startTeeStream = (
   let offset = 0
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
+  let pendingPoll: Promise<void> | null = null
+  let lastSnapshot = ""
 
   // Prevent a stale log from being read before `tee` truncates and regrows it.
   io.prepare(file)
 
   const schedule = (): void => {
     if (stopped) return
-    timer = setTimeout(() => void poll(), opts.pollMs ?? 150)
+    timer = setTimeout(() => {
+      // Defer invocation by one microtask so pendingPoll is assigned before any
+      // custom I/O implementation can synchronously trigger stop().
+      pendingPoll = Promise.resolve().then(poll)
+    }, opts.pollMs ?? 150)
     // Don't let a pending poll keep the process alive past a finished run.
     timer.unref?.()
   }
@@ -195,7 +202,11 @@ export const startTeeStream = (
       } finally {
         await handle.close().catch(() => {})
       }
-      if (!stopped) onOutput(output.snapshot())
+      const snapshot = output.snapshot()
+      if (!stopped && snapshot !== lastSnapshot) {
+        lastSnapshot = snapshot
+        onOutput(snapshot)
+      }
     } catch {
       // ENOENT until tee first writes — ignore. The next poll retries.
     } finally {
@@ -211,7 +222,10 @@ export const startTeeStream = (
     if (stopped) return
     stopped = true
     if (timer !== null) clearTimeout(timer)
-    void io.remove(file).catch(() => {})
+    // Windows cannot unlink an open file. Wait for an active read to close its
+    // handle before best-effort cleanup; an already-settled poll resolves now.
+    const afterPoll = pendingPoll ?? Promise.resolve()
+    void afterPoll.then(() => io.remove(file)).catch(() => {})
   }
   return { command: teeRewrite(command, file), file, stop }
 }

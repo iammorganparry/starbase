@@ -136,6 +136,115 @@ describe("startTeeStream", () => {
     expect(snapshot).toBe(capOutput(text))
   })
 
+  it("reconstructs below-cap output across polls and resets after truncation", async () => {
+    let bytes = Buffer.from("first")
+    const snapshots: string[] = []
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("tee poll produced no reset snapshot")), 1_000)
+      stream = startTeeStream(
+        "reset-log",
+        "pnpm test",
+        (value) => {
+          snapshots.push(value)
+          if (snapshots.length === 1) bytes = Buffer.from("first second")
+          if (snapshots.length === 2) bytes = Buffer.from("new")
+          if (snapshots.length !== 3) return
+          clearTimeout(timeout)
+          resolve()
+        },
+        {
+          pollMs: 1,
+          io: {
+            prepare: () => {},
+            size: async () => bytes.length,
+            open: async () => ({
+              read: async (offset, length) => bytes.subarray(offset, offset + length),
+              close: async () => {}
+            }),
+            remove: async () => {}
+          }
+        }
+      )
+    })
+
+    stream?.stop()
+    expect(snapshots).toEqual(["first", "first second", "new"])
+    expect(snapshots).toEqual(snapshots.map(capOutput))
+  })
+
+  it("does not emit an unchanged snapshot for an incomplete UTF-8 character", async () => {
+    let bytes = Buffer.from([0xf0])
+    const snapshots: string[] = []
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    const completed = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("tee poll did not decode completed UTF-8")), 1_000)
+      stream = startTeeStream(
+        "partial-utf8",
+        "pnpm test",
+        (value) => {
+          snapshots.push(value)
+          clearTimeout(timeout)
+          resolve()
+        },
+        {
+          pollMs: 1,
+          io: {
+            prepare: () => {},
+            size: async () => bytes.length,
+            open: async () => ({
+              read: async (offset, length) => bytes.subarray(offset, offset + length),
+              close: async () => {}
+            }),
+            remove: async () => {}
+          }
+        }
+      )
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    bytes = Buffer.from("🙂")
+    await completed
+    stream?.stop()
+    expect(snapshots).toEqual(["🙂"])
+  })
+
+  it("waits for an active read handle to close before removing the log", async () => {
+    const events: string[] = []
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("tee cleanup did not finish")), 1_000)
+      stream = startTeeStream("cleanup-log", "pnpm test", () => {}, {
+        pollMs: 1,
+        io: {
+          prepare: () => {},
+          size: async () => 1,
+          open: async () => ({
+            read: async () => {
+              events.push("read")
+              stream?.stop()
+              await new Promise((done) => setTimeout(done, 10))
+              return Buffer.from("x")
+            },
+            close: async () => {
+              events.push("close")
+            }
+          }),
+          remove: async () => {
+            events.push("remove")
+            clearTimeout(timeout)
+            resolve()
+          }
+        }
+      })
+    })
+
+    expect(events).toEqual(["read", "close", "remove"])
+  })
+
   it("removes a stale log before the first poll can observe it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "sb-tee-stale-"))
     const file = teeLogPath("reused-id", dir)

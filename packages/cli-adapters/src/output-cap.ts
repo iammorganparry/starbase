@@ -9,6 +9,12 @@
 export const OUTPUT_CAP = 6_000
 /** Kept from the front when capping — enough to see what the command started doing. */
 export const OUTPUT_HEAD = 3_600
+/** Kept from the end when capping — enough to retain a test or build summary. */
+export const OUTPUT_TAIL = OUTPUT_CAP - OUTPUT_HEAD
+
+/** Format retained output consistently for whole strings and incremental streams. */
+export const formatCappedOutput = (head: string, tail: string, dropped: number): string =>
+  `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
 
 /**
  * Cap a tool's output, keeping BOTH ends.
@@ -22,7 +28,6 @@ export const OUTPUT_HEAD = 3_600
 export const capOutput = (text: string): string => {
   if (text.length <= OUTPUT_CAP) return text
   const head = text.slice(0, OUTPUT_HEAD)
-  const tail = text.slice(text.length - (OUTPUT_CAP - OUTPUT_HEAD))
-  const dropped = text.length - OUTPUT_HEAD - (OUTPUT_CAP - OUTPUT_HEAD)
-  return `${head}\n\n… ${dropped.toLocaleString()} characters omitted …\n\n${tail}`
+  const tail = text.slice(text.length - OUTPUT_TAIL)
+  return formatCappedOutput(head, tail, text.length - OUTPUT_HEAD - OUTPUT_TAIL)
 }
