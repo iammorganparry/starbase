@@ -1,6 +1,7 @@
 import type { ThreadEvent } from "@openai/codex-sdk"
 import { describe, expect, it } from "vitest"
 import {
+  agentReply,
   codexContextTokens,
   codexEventToStreamEvents,
   mapCodexPolicy,
@@ -66,6 +67,46 @@ describe("mapCodexPolicy", () => {
     // The approval path re-opens the thread with the RESTORED mode, not "plan" —
     // if this widened nothing, an approved plan could never be carried out.
     expect(mapCodexPolicy("accept-edits").sandboxMode).toBe("workspace-write")
+  })
+})
+
+describe("agentReply", () => {
+  /**
+   * Codex has no `canUseTool` and no `ExitPlanMode`, so BOTH out-of-band
+   * channels arrive as fenced blocks in an ordinary message. This is the one
+   * place that decides what "the model talking" means; without it the question
+   * and plan interceptions each re-derived it and could drift apart.
+   */
+  it("returns the text of a completed agent message", () => {
+    expect(
+      agentReply(ev({ type: "item.completed", item: { id: "m1", type: "agent_message", text: "hello" } }))
+    ).toBe("hello")
+  })
+
+  /**
+   * A block is only answerable once the message is whole — reading a partial one
+   * would parse a half-written fence and propose a truncated plan.
+   */
+  it("ignores an in-progress message", () => {
+    expect(
+      agentReply(ev({ type: "item.started", item: { id: "m1", type: "agent_message", text: "hel" } }))
+    ).toBe(null)
+  })
+
+  it("ignores every non-message event", () => {
+    expect(agentReply(ev({ type: "thread.started", thread_id: "t1" }))).toBe(null)
+    expect(agentReply(ev({ type: "turn.completed", usage: {} }))).toBe(null)
+    expect(
+      agentReply(ev({ type: "item.completed", item: { id: "c1", type: "command_execution", command: "ls" } }))
+    ).toBe(null)
+  })
+
+  it("preserves an empty reply as empty rather than as absent", () => {
+    // "" is the model saying nothing; null is a different event entirely. A
+    // conflation here would make `reply !== null` skip a real (if useless) turn.
+    expect(
+      agentReply(ev({ type: "item.completed", item: { id: "m1", type: "agent_message", text: "" } }))
+    ).toBe("")
   })
 })
 

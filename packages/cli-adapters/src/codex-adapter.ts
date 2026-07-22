@@ -154,6 +154,23 @@ const MAX_QUESTION_ROUNDS = 4
  */
 const MAX_PLAN_ROUNDS = 6
 
+/**
+ * The model's own finished reply text, or null for every other event.
+ *
+ * Codex has no `canUseTool` and no `ExitPlanMode`, so BOTH of its out-of-band
+ * channels — structured questions and proposed plans — arrive as fenced blocks
+ * in an ordinary `agent_message`. Naming that condition once turns each channel
+ * into a predicate over a string, instead of two near-identical event walks that
+ * have to agree about what "the model talking" means.
+ *
+ * `item.completed`, not `item.updated`: a block is only answerable once the
+ * message is whole. Reading a partial one would parse a half-written fence.
+ */
+export const agentReply = (event: ThreadEvent): string | null =>
+  event.type === "item.completed" && event.item.type === "agent_message"
+    ? event.item.text
+    : null
+
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
 export const codexEventToStreamEvents = (
   event: ThreadEvent,
@@ -360,11 +377,19 @@ export const runCodex = (
               threadId = event.thread_id
               rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
             }
+            // Both of Codex's out-of-band channels — questions and plans — are
+            // fenced blocks in an ordinary reply, because there is no tool to
+            // call for either. So the reply is extracted ONCE and each channel
+            // is a predicate over it, rather than each re-deriving "is this the
+            // model talking" from the raw event.
+            //
+            // Null once a follow-up is queued: one Codex turn answers one
+            // interception, and a reply that has already been acted on must not
+            // be re-read by the next channel down.
+            const reply = followUp === null ? agentReply(event) : null
+
             const asked =
-              followUp === null && round < MAX_QUESTION_ROUNDS && event.type === "item.completed" &&
-              event.item.type === "agent_message"
-                ? parseQuestionBlock(event.item.text)
-                : null
+              reply !== null && round < MAX_QUESTION_ROUNDS ? parseQuestionBlock(reply) : null
             if (asked !== null) {
               // Emit the prose around the block, but never the block itself —
               // raw JSON in the transcript reads as the agent malfunctioning.
@@ -377,15 +402,12 @@ export const runCodex = (
               followUp = formatQuestionAnswers(asked.questions, answers)
               continue
             }
-            // A plan arrives the same way a question does: as a fenced block in
-            // an ordinary reply, because Codex has no `ExitPlanMode` to call.
             // `hasPlanBlock` demands the exact ` ```plan ` info string, so a
             // model merely *discussing* planning doesn't trip this.
             const proposed =
-              followUp === null && spec.mode === "plan" && planRound < MAX_PLAN_ROUNDS &&
-              event.type === "item.completed" && event.item.type === "agent_message" &&
-              hasPlanBlock(event.item.text)
-                ? event.item.text
+              reply !== null && spec.mode === "plan" && planRound < MAX_PLAN_ROUNDS &&
+              hasPlanBlock(reply)
+                ? reply
                 : null
             if (proposed !== null) {
               planRound += 1
