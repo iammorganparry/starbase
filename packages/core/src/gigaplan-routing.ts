@@ -520,12 +520,17 @@ const routeStep = (
       : uniqueEntries([
           ...overrides,
           ...preferQuotaHeadroom(
-            [...rankings, ...plannerCandidates, ...affinities, ...profiles, ...defaults],
+            [...plannerCandidates, ...rankings, ...affinities, ...profiles, ...defaults],
             usage
           )
         ])
-  const decision = decisionFrom(effectiveEntries)
-  if (decision === null) return { routing: null, rejected: rejections }
+  const effectiveDecision = decisionFrom(effectiveEntries)
+  if (effectiveDecision === null) return { routing: null, rejected: rejections }
+  // Shadow carries the chosen legacy route for provenance, but never an
+  // executable fallback chain. Its semantic alternatives live exclusively on
+  // `shadowDecision` and cannot alter a run.
+  const decision =
+    mode === "shadow" ? { ...effectiveDecision, alternatives: [] } : effectiveDecision
 
   return {
     routing: {

@@ -57,7 +57,6 @@ import {
   GitError,
   PlanError,
   planningReadiness,
-  reachableVendors,
   routeQuotaStatus,
   resolveFindings,
   resolveOrchestrator,
@@ -85,7 +84,8 @@ import type {
   ReviewSubmitKind,
   SettledSessionStatus,
   ProviderModels,
-  ProvidersConfig
+  ProvidersConfig,
+  Usage
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
 import { AppPaths, CliAdapter } from "@starbase/cli-adapters"
@@ -559,12 +559,74 @@ export const eligibleRoutingCatalog = (
  * exist — a readiness check computed from a different source than the run is a
  * button that lies.
  */
+const quotaEligiblePlanningCatalog = (
+  catalog: ReadonlyArray<ProviderModels>,
+  usage: Usage
+): ReadonlyArray<ProviderModels> =>
+  catalog.map((provider) => ({
+    ...provider,
+    models: provider.models.filter(
+      (model) => routeQuotaStatus({ cli: provider.cli, model: model.id }, usage) !== "limited"
+    )
+  }))
+
+const readableList = (values: ReadonlyArray<string>): string =>
+  values.length < 2
+    ? (values[0] ?? "a configured route")
+    : `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`
+
 const planningVendors = Effect.gen(function* () {
   const clis = yield* DiscoveryService.list()
   const discoveredCatalog = yield* ModelsService.catalog(clis)
   const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
   const catalog = eligibleRoutingCatalog(discoveredCatalog, config?.providers)
-  return { clis, catalog, config, vendors: reachableVendors(catalog) }
+  const usage = yield* UsageService.get(clis)
+  const quotaCatalog = quotaEligiblePlanningCatalog(catalog, usage)
+  const readiness = planningReadiness(quotaCatalog)
+  const baseReadiness = planningReadiness(catalog)
+  if (!readiness.ready && baseReadiness.ready) {
+    const limitedRoutes = catalog.flatMap((provider) =>
+      provider.models
+        .filter(
+          (model) => routeQuotaStatus({ cli: provider.cli, model: model.id }, usage) === "limited"
+        )
+        .map((model) => ({ cli: provider.cli, label: `${provider.label} · ${model.label}` }))
+    )
+    const limitedClis = new Set(limitedRoutes.map((route) => route.cli))
+    const reset = usage.providers
+      .filter((provider) => limitedClis.has(provider.cli))
+      .flatMap((provider) =>
+        provider.windows.flatMap((window) =>
+          window.status === "limited" && window.resetsAt !== null ? [window.resetsAt] : []
+        )
+      )
+      .sort()
+      .at(-1)
+    return {
+      clis,
+      catalog,
+      config,
+      usage,
+      vendors: readiness.vendors,
+      readiness: {
+        ...readiness,
+        reason:
+          `Adversarial planning needs two model providers, but local usage limits remove ` +
+          `${readableList(limitedRoutes.map((route) => route.label))}${
+            reset === undefined ? "" : ` until ${reset}`
+          }. ` +
+          "Wait for the limit to reset or enable another route in Settings · Providers."
+      }
+    }
+  }
+  return {
+    clis,
+    catalog,
+    config,
+    usage,
+    vendors: readiness.vendors,
+    readiness
+  }
 })
 
 /**
@@ -603,9 +665,7 @@ export const billingPaths = Effect.gen(function* () {
  * computation. Duplicating those two lines is exactly how a readiness check
  * drifts from the run it describes.
  */
-export const planReadiness = Effect.map(planningVendors, ({ catalog }) =>
-  planningReadiness(catalog)
-)
+export const planReadiness = Effect.map(planningVendors, ({ readiness }) => readiness)
 
 type PlanExecuteEnv =
   | AppPaths
@@ -814,18 +874,8 @@ export const planAdversarial = (
           })
         )
       }
-      const { clis, catalog, config } = yield* planningVendors
+      const { clis, catalog, config, usage, vendors } = yield* planningVendors
       const ranking = yield* RankingService.latest
-      const usage = yield* UsageService.get(clis)
-      const vendors = reachableVendors(
-        catalog.map((provider) => ({
-          ...provider,
-          models: provider.models.filter(
-            (model) =>
-              routeQuotaStatus({ cli: provider.cli, model: model.id }, usage) !== "limited"
-          )
-        }))
-      )
       const service = yield* AdversarialPlanService
       // Capture the store's context here so the persistence hook the service
       // calls later — on its own fiber, with only the adapter in scope — is a

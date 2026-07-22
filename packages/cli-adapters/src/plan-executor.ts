@@ -261,7 +261,7 @@ const runStep = (
     if (outcome._tag === "Left") {
       const failure =
         outcome.left._tag === "StepTimedOut"
-          ? classifyProviderFailure(`The attempt ran past ${STEP_TIMEOUT} without finishing.`)
+          ? classifyProviderFailure(`The attempt timed out after ${STEP_TIMEOUT} without finishing.`)
           : classifyProviderFailure(outcome.left)
       return {
         status: "failed",
@@ -293,7 +293,10 @@ const routeCandidates = (
   input: StepRunInput
 ): ReadonlyArray<RouteCandidate> => {
   const routing = step.routing
-  if (routing === undefined) {
+  // Shadow is observational. Resolve its executable route exactly as a legacy
+  // plan would at run time and ignore counterfactual alternatives persisted by
+  // older builds; only Active mode may change providers automatically.
+  if (routing === undefined || routing.mode === "shadow") {
     const legacy = resolveRunner(step, input.available, input.fallback)
     return legacy === null ? [] : [legacy]
   }
@@ -474,16 +477,35 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
                 }
 
                 previousOutcome = outcome.failure.message
-                if (outcome.mutationPossible) {
+                const preservesLegacySemantics =
+                  step.routing === undefined || step.routing.mode === "shadow"
+
+                // Shadow must behave exactly like a pre-routing plan. Active
+                // mode also keeps bounded same-route recovery for non-operator
+                // failures; only changing providers requires proof that no
+                // mutation-capable tool started.
+                if (preservesLegacySemantics) {
+                  if (attempts < MAX_STEP_ATTEMPTS) {
+                    yield* emit({
+                      _tag: "Assistant",
+                      text: `Step ${step.number} (${step.title}) failed: ${previousOutcome} Trying again.`,
+                      agentId: undefined
+                    })
+                    continue
+                  }
+                  break
+                }
+
+                if (outcome.failure.classification === "terminal-operator") {
                   terminalReason =
-                    `Step ${step.number} (${step.title}) may have changed the worktree before ` +
-                    `${runner.cli}/${runner.model} failed: ${outcome.failure.message} ` +
-                    "Automatic fallback stopped."
+                    `Step ${step.number} (${step.title}) stopped on ${runner.cli}/${runner.model}: ` +
+                    outcome.failure.message
                   break
                 }
 
                 if (
                   outcome.failure.classification === "transient-provider" &&
+                  !outcome.mutationPossible &&
                   candidateIndex + 1 < candidates.length
                 ) {
                   candidateIndex += 1
@@ -498,24 +520,19 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
                   continue
                 }
 
-                // Plans persisted before routing metadata keep their historical
-                // same-route retry semantics. New routed plans only change
-                // providers for positively classified transient failures.
-                if (step.routing === undefined) {
-                  if (attempts < MAX_STEP_ATTEMPTS) {
-                    yield* emit({
-                      _tag: "Assistant",
-                      text: `Step ${step.number} (${step.title}) failed: ${previousOutcome} Trying again.`,
-                      agentId: undefined
-                    })
-                    continue
-                  }
-                  break
+                if (attempts < MAX_STEP_ATTEMPTS) {
+                  const fallbackNote = outcome.mutationPossible
+                    ? " The worktree may have changed, so retrying the same route instead of falling back."
+                    : " Retrying the same route."
+                  yield* emit({
+                    _tag: "Assistant",
+                    text:
+                      `Step ${step.number} (${step.title}) failed on ${runner.cli}/${runner.model}: ` +
+                      `${previousOutcome}${fallbackNote}`,
+                    agentId: undefined
+                  })
+                  continue
                 }
-
-                terminalReason =
-                  `Step ${step.number} (${step.title}) stopped on ${runner.cli}/${runner.model}: ` +
-                  outcome.failure.message
                 break
               }
 

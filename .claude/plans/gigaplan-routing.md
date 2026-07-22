@@ -147,13 +147,14 @@ export interface GigaplanRoutingConfig {
 | -------: | ---------------------------- | -------------------------------------------------------------------------------------------------- |
 |        1 | Workspace task-kind override | Exact CLI/model exists in the live catalogue and CLI is installed                                  |
 |        2 | Planner preference           | Exact emitted CLI/model is live and compatible with policy constraints                             |
-|        3 | Learned affinity             | Mode allows it, sample threshold is met, and confidence beats the configured margin                |
-|        4 | Evaluated policy profile     | Checked-in `TaskKind × effort × risk` selectors produce live candidates                            |
-|        5 | System default               | Configured orchestrator if live, otherwise the first stable candidate in canonical catalogue order |
+|        3 | Runtime task-usage ranking   | A matching live model has a finite task score in the supplied OpenRouter usage snapshot             |
+|        4 | Learned affinity             | Mode allows it, sample threshold is met, and confidence beats the configured margin                |
+|        5 | Evaluated policy profile     | Checked-in `TaskKind × effort × risk` selectors produce live candidates                            |
+|        6 | System default               | Configured orchestrator if live, otherwise the first stable candidate in canonical catalogue order |
 
 Every ineligible candidate is skipped with a structured reason suitable for tests and diagnostics. Candidate order must never depend on object iteration, provider response timing, or localized display names.
 
-In shadow mode, the resolver records what the semantic policy would select, but `decision` remains the legacy planner assignment after availability normalization. This allows comparison without changing execution behavior.
+In shadow mode, the resolver records what the semantic policy would select, but `decision` remains the legacy planner assignment after availability normalization and has no fallback alternatives. At execution time Shadow re-runs legacy route selection and legacy same-route retries; the counterfactual `shadowDecision` is never executable.
 
 ## Execution state machine
 
@@ -163,9 +164,9 @@ stateDiagram-v2
     Revalidate --> Run: selected route is live
     Revalidate --> Advance: route is unavailable
     Run --> Done: explicit done verdict
-    Run --> RetrySame: task blocked and attempts remain
+    Run --> RetrySame: blocker, timeout, or non-operator failure and attempts remain
     Run --> Advance: transient provider failure before mutation
-    Run --> Stop: permission, credential, user-decision, invalid-plan, or post-mutation failure
+    Run --> Stop: operator action or attempts exhausted
     RetrySame --> Run: include blocker and current worktree state
     Advance --> Revalidate: next candidate and attempts remain
     Advance --> Stop: exhausted or no candidate
@@ -180,8 +181,8 @@ stateDiagram-v2
 | Explicit `blocked:` executor verdict                                           | Task blocker                      | Retry the same route with blocker context               |
 | Rate limit, transient network error, provider overload, missing deployed model | Reroutable infrastructure failure | Advance only if no mutation was observed                |
 | Permission denial, missing credential, user decision, invalid plan             | Terminal operator action          | Stop and surface the exact cause                        |
-| Tool or edit observed before adapter failure                                   | Possible partial mutation         | Stop; do not ask another model to repeat unknown work   |
-| Child `Failed` event with no final text                                        | Adapter failure                   | Classify as failure; never parse empty output as `done` |
+| Tool or edit observed before adapter failure                                   | Possible partial mutation         | Retry the same route; never ask another model to repeat |
+| Child `Failed` event with no final text                                        | Adapter failure                   | Classify and retry the same route unless operator-caused |
 
 Count all runs—same-route retries and fallback runs—against the existing `MAX_STEP_ATTEMPTS = 3`. A retry prompt must instruct the model to inspect the current worktree before acting and include the prior blocker or provider failure.
 
@@ -286,8 +287,8 @@ pnpm typecheck
 | Risk                                                  | Mitigation                                                                      |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Model availability changes after plan approval        | Revalidate immediately before every attempt and record divergence               |
-| Prompt preference conflicts with deterministic policy | Preserve it as provenance-bearing input, never as unchecked execution state     |
-| Automatic fallback repeats partial edits              | Track mutation signals and permit fallback only before mutation                 |
+| Prompt preference conflicts with deterministic policy | Keep it above automatic usage/profile signals and preserve its provenance       |
+| Automatic fallback repeats partial edits              | Change providers only before mutation; otherwise retry the same route           |
 | Sparse self-reported outcomes bias affinity           | Shadow only, minimum samples, confidence margin, and future review/test signals |
 | Config schema changes get dropped by unrelated saves  | Add round-trip and patch-preservation tests before exposing the settings UI     |
 

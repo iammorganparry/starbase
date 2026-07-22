@@ -262,7 +262,87 @@ describe("PlanExecutor", () => {
     ])
   })
 
-  it("stops rather than falling back after a mutation-capable tool starts", async () => {
+  it("retries the same route when a transient failure has no alternative", async () => {
+    const ran: Array<string> = []
+    const prompts: Array<string> = []
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: []
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, spec, ctx) => {
+        ran.push(`${spec.cli}/${spec.model}`)
+        prompts.push(spec.prompt)
+        return ran.length === 1
+          ? ctx.emit({ _tag: "Failed", message: "429 rate limit exceeded" })
+          : ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await execute(planOf([routed]), layer, [
+      { cli: "codex", model: "gpt-5.6-sol" }
+    ])
+    expect(ran).toStrictEqual(["codex/gpt-5.6-sol", "codex/gpt-5.6-sol"])
+    expect(prompts[1]).toMatch(/429 rate limit exceeded/)
+    expect(prompts[1]).toMatch(/inspect the current worktree and tests/i)
+    expect(events.find((event) => event._tag === "Failed")).toBeUndefined()
+  })
+
+  it("retries an unclassified execution failure on the same route", async () => {
+    let attempts = 0
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: []
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, _spec, ctx) => {
+        attempts += 1
+        return attempts === 1
+          ? Effect.fail(new CliExecError({ kind: "codex", message: "unexpected protocol frame" }))
+          : ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await execute(planOf([routed]), layer, [
+      { cli: "codex", model: "gpt-5.6-sol" }
+    ])
+    expect(attempts).toBe(2)
+    expect(events.find((event) => event._tag === "Failed")).toBeUndefined()
+  })
+
+  it("retries the same route rather than falling back after mutation", async () => {
     const ran: Array<string> = []
     const routed = step({
       id: "a",
@@ -287,17 +367,67 @@ describe("PlanExecutor", () => {
       run: (_id, spec, ctx) =>
         Effect.gen(function* () {
           ran.push(`${spec.cli}/${spec.model}`)
-          yield* ctx.emit({ _tag: "ToolStart", id: "edit-1", name: "Edit", target: "src/a.ts" })
-          yield* ctx.emit({ _tag: "Failed", message: "provider temporarily unavailable" })
+          if (ran.length === 1) {
+            yield* ctx.emit({
+              _tag: "ToolStart",
+              id: "edit-1",
+              name: "Edit",
+              target: "src/a.ts"
+            })
+            yield* ctx.emit({ _tag: "Failed", message: "provider temporarily unavailable" })
+          } else {
+            yield* ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+          }
         }),
       stop: () => Effect.void
     } as CliAdapterShape)
 
     const events = await execute(planOf([routed]), layer)
-    expect(ran).toStrictEqual(["codex/gpt-5.6-sol"])
-    const failed = events.find((event) => event._tag === "Failed")
-    expect(failed?._tag === "Failed" && failed.message).toMatch(/may have changed the worktree/)
-    expect(failed?._tag === "Failed" && failed.message).toMatch(/Automatic fallback stopped/)
+    expect(ran).toStrictEqual(["codex/gpt-5.6-sol", "codex/gpt-5.6-sol"])
+    expect(events.find((event) => event._tag === "Failed")).toBeUndefined()
+    expect(
+      events.some(
+        (event) =>
+          event._tag === "Assistant" && /retrying the same route instead of falling back/i.test(event.text)
+      )
+    ).toBe(true)
+  })
+
+  it("keeps shadow failures on the legacy route even if old metadata has alternatives", async () => {
+    const ran: Array<string> = []
+    const routed = step({
+      id: "a",
+      number: "01",
+      assignee: { cli: "codex", model: "gpt-5.6-sol", reason: "planner choice" },
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "shadow",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "planner-preference",
+          reason: "planner choice",
+          alternatives: [{ cli: "claude", model: "opus" }]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, spec, ctx) => {
+        ran.push(`${spec.cli}/${spec.model}`)
+        return ran.length === 1
+          ? ctx.emit({ _tag: "Failed", message: "provider temporarily unavailable" })
+          : ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await execute(planOf([routed]), layer)
+    expect(ran).toStrictEqual(["codex/gpt-5.6-sol", "codex/gpt-5.6-sol"])
+    expect(events.find((event) => event._tag === "Failed")).toBeUndefined()
   })
 
   it("does not fall back for credentials or permission failures", async () => {
@@ -449,13 +579,38 @@ describe("PlanExecutor", () => {
     expect(failed?._tag === "Failed" && failed.message).toMatch(/No installed harness/)
   })
 
-  it("gives up on a step that never finishes", async () => {
+  it("retries a timed-out routed step on the same route after possible mutation", async () => {
     // A run that never ends leaves the session at "Idle" with no explanation —
     // the exact failure the planning round shipped with. A stall is treated as
     // a blocker, so it is retried like any other; the clock is advanced once per
     // attempt.
+    let attempts = 0
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "high",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: [{ cli: "claude", model: "opus" }]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
     const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
-      run: () => Effect.never,
+      run: (_id, _spec, ctx) =>
+        Effect.gen(function* () {
+          attempts += 1
+          yield* ctx.emit({ _tag: "ToolStart", id: "edit-1", name: "Edit", target: "src/a.ts" })
+          return yield* Effect.never
+        }),
       stop: () => Effect.void
     } as CliAdapterShape)
 
@@ -468,8 +623,11 @@ describe("PlanExecutor", () => {
             repo: "widget",
             branch: "b",
             cwd: "/tmp/wt",
-            plan: planOf([step({ id: "a", number: "01" })]),
-            available: [{ cli: "claude", model: "opus" }],
+            plan: planOf([routed]),
+            available: [
+              { cli: "codex", model: "gpt-5.6-sol" },
+              { cli: "claude", model: "opus" }
+            ],
             fallback: null,
             binPathFor: () => null
           })
@@ -492,7 +650,8 @@ describe("PlanExecutor", () => {
 
     const failed = events.find((e) => e._tag === "Failed")
     expect(failed?._tag === "Failed" && failed.message).toMatch(/Stuck on step 01/)
-    expect(failed?._tag === "Failed" && failed.message).toMatch(/ran past 30 minutes/)
+    expect(failed?._tag === "Failed" && failed.message).toMatch(/timed out after 30 minutes/)
+    expect(attempts).toBe(MAX_STEP_ATTEMPTS)
     expect(STEP_TIMEOUT).toBe("30 minutes")
   })
 

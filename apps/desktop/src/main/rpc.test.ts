@@ -52,6 +52,7 @@ import {
   workspaceRevertFile,
   planAdversarial,
   planExecute,
+  planReadiness,
   workspaceRevertLines
 } from "./rpc.js"
 
@@ -176,6 +177,65 @@ describe("RPC handlers", () => {
     DiscoveryService,
     new DiscoveryService({ list: () => Effect.succeed([]) })
   )
+
+  describe("Plan.readiness — quotas", () => {
+    it("uses the same quota-eligible routes as the planning round and names the reset", async () => {
+      const models = Layer.succeed(
+        ModelsService,
+        new ModelsService({
+          list: () => Effect.succeed([]),
+          catalog: () =>
+            Effect.succeed([
+              {
+                cli: "opencode" as const,
+                label: "OpenCode",
+                models: [
+                  {
+                    id: "openrouter/anthropic/claude-opus",
+                    label: "Claude Opus"
+                  },
+                  { id: "openrouter/openai/gpt-5", label: "GPT-5" }
+                ]
+              }
+            ])
+        })
+      )
+      const usage = Layer.succeed(
+        UsageService,
+        new UsageService({
+          get: () =>
+            Effect.succeed({
+              fetchedAt: "2026-07-22T01:00:00.000Z",
+              providers: [
+                {
+                  cli: "opencode" as const,
+                  name: "OpenCode",
+                  plan: null,
+                  available: true,
+                  windows: [
+                    {
+                      label: "Weekly · Claude Opus",
+                      resetsAt: "2026-07-23T00:00:00.000Z",
+                      utilization: 100,
+                      status: "limited" as const
+                    }
+                  ]
+                }
+              ]
+            })
+        })
+      )
+
+      const readiness = await Effect.runPromise(
+        planReadiness.pipe(Effect.provide(Layer.mergeAll(base, noHarnesses, models, usage)))
+      )
+
+      expect(readiness.ready).toBe(false)
+      expect(readiness.vendors.map((vendor) => vendor.vendor)).toStrictEqual(["openai"])
+      expect(readiness.reason).toMatch(/local usage limits remove OpenCode · Claude Opus/)
+      expect(readiness.reason).toContain("2026-07-23T00:00:00.000Z")
+    })
+  })
 
   /**
    * `visibleModels` narrows the COMPOSER's menu. Letting it narrow Settings'

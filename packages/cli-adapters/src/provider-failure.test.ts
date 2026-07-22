@@ -8,7 +8,8 @@ describe("classifyProviderFailure", () => {
     "provider overloaded",
     "ECONNRESET",
     "model is not deployed",
-    "service temporarily unavailable"
+    "service temporarily unavailable",
+    "The attempt timed out after 30 minutes without finishing."
   ])("classifies %s as reroutable provider infrastructure", (message) => {
     expect(classifyProviderFailure(message).classification).toBe("transient-provider")
   })

@@ -164,6 +164,7 @@ describe("resolvePlanRoutes", () => {
       model: "sonnet",
       provenance: "planner-preference"
     })
+    expect(routing?.decision.alternatives).toStrictEqual([])
     expect(routing?.shadowDecision).toMatchObject({
       cli: "codex",
       provenance: "policy-profile"
@@ -171,7 +172,7 @@ describe("resolvePlanRoutes", () => {
     expect(routing?.policyVersion).toBe(GIGAPLAN_ROUTING_POLICY_VERSION)
   })
 
-  it("uses runtime rankings ahead of planner preference only in active mode", () => {
+  it("keeps planner preference ahead of runtime usage rankings in active mode", () => {
     const input = plan(
       step({
         taskKind: "backend",
@@ -181,13 +182,11 @@ describe("resolvePlanRoutes", () => {
     const active = resolvePlanRoutes(input, { catalog, mode: "active", ranking }).plan.steps[0]
       ?.routing
     expect(active?.decision).toMatchObject({
-      cli: "codex",
-      model: "gpt-5.5",
-      provenance: "runtime-ranking"
+      cli: "claude",
+      model: "sonnet",
+      provenance: "planner-preference"
     })
-    expect(active?.decision.reason).toContain(
-      "OpenRouter Rankings 30-day backend usage at 2026-07-22; share 60.0%"
-    )
+    expect(active?.decision.alternatives[0]).toStrictEqual({ cli: "codex", model: "gpt-5.5" })
 
     const shadow = resolvePlanRoutes(input, { catalog, mode: "shadow", ranking }).plan.steps[0]
       ?.routing
