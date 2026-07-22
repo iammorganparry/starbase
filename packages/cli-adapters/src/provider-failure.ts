@@ -59,6 +59,9 @@ const messageOf = (failure: unknown): { readonly message: string; readonly kind:
 /** Conservative and deterministic: unknown failures never change providers. */
 export const classifyProviderFailure = (failure: unknown): RouteFailure => {
   const normalized = messageOf(failure)
+  // Operator-action evidence deliberately wins ties with transient evidence.
+  // Stopping unnecessarily is recoverable; switching providers after a mixed
+  // credential/permission failure could repeat work under an invalid identity.
   if (OPERATOR.some((pattern) => pattern.test(normalized.message))) {
     return { ...normalized, classification: "terminal-operator" }
   }

@@ -24,6 +24,13 @@ describe("classifyProviderFailure", () => {
     expect(classifyProviderFailure(message).classification).toBe("terminal-operator")
   })
 
+  it.each([
+    "credential refresh timed out",
+    "retrying after API key rotation because the provider is temporarily unavailable"
+  ])("lets operator-action evidence win mixed-signal ties in %s", (message) => {
+    expect(classifyProviderFailure(message).classification).toBe("terminal-operator")
+  })
+
   it("preserves typed CLI error details", () => {
     expect(
       classifyProviderFailure(new CliExecError({ kind: "codex", message: "provider unavailable" }))

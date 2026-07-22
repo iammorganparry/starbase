@@ -6,6 +6,7 @@ import type { RoutingRankingSnapshot } from "./gigaplan-routing.js"
 import {
   GIGAPLAN_ROUTING_POLICY_VERSION,
   canonicalRouteCandidates,
+  routeQuotaState,
   resolvePlanRoutes
 } from "./gigaplan-routing.js"
 import type { ProviderModels } from "./models.js"
@@ -117,6 +118,49 @@ describe("canonicalRouteCandidates", () => {
 })
 
 describe("resolvePlanRoutes", () => {
+  it("attaches matching task affinity evidence to the planner assignee", () => {
+    const result = resolvePlanRoutes(
+      plan(
+        step({
+          taskKind: "schema",
+          assignee: {
+            cli: "codex",
+            model: "gpt-5.6-sol",
+            reason: "planner choice"
+          }
+        })
+      ),
+      {
+        catalog,
+        mode: "shadow",
+        affinityEnabled: false,
+        affinity: [
+          {
+            candidate: { cli: "codex", model: "gpt-5.6-sol" },
+            taskKind: "backend",
+            observations: 99,
+            confidence: 0.99,
+            score: 0.99
+          },
+          {
+            candidate: { cli: "codex", model: "gpt-5.6-sol" },
+            taskKind: "schema",
+            observations: 19,
+            confidence: 0.9,
+            score: 0.8
+          }
+        ]
+      }
+    )
+
+    expect(result.plan.steps[0]?.assignee).toStrictEqual({
+      cli: "codex",
+      model: "gpt-5.6-sol",
+      reason: "planner choice",
+      evidence: { level: "affinity", observations: 19 }
+    })
+  })
+
   it("uses an eligible workspace override before the planner preference", () => {
     const result = resolvePlanRoutes(
       plan(
@@ -146,6 +190,31 @@ describe("resolvePlanRoutes", () => {
       model: "gpt-5.6-sol",
       provenance: "user-override"
     })
+  })
+
+  it("caps active fallback to two policy-ordered alternatives", () => {
+    const wideCatalog: ReadonlyArray<ProviderModels> = [
+      ...catalog,
+      {
+        cli: "opencode",
+        label: "OpenCode",
+        models: [{ id: "openrouter/moonshot/kimi", label: "Kimi" }]
+      }
+    ]
+    const routing = resolvePlanRoutes(
+      plan(step({ taskKind: "backend", effort: "deep", risk: "high" })),
+      {
+        catalog: wideCatalog,
+        mode: "active",
+        systemDefault: { cli: "codex", model: "gpt-5.6-sol" }
+      }
+    ).plan.steps[0]?.routing
+
+    expect(routing?.decision).toMatchObject({ cli: "codex", model: "gpt-5.6-sol" })
+    expect(routing?.decision.alternatives).toStrictEqual([
+      { cli: "codex", model: "gpt-5.5" },
+      { cli: "claude", model: "opus" }
+    ])
   })
 
   it("records semantic policy while shadow mode preserves the live planner route", () => {
@@ -232,6 +301,38 @@ describe("resolvePlanRoutes", () => {
     })
   })
 
+  it("records each rejected candidate and reason once across source pools", () => {
+    const rankedOpus: RoutingRankingSnapshot = {
+      source: "OpenRouter Rankings",
+      windowDays: 30,
+      fetchedAt: "2026-07-22T00:00:00.000Z",
+      models: [
+        {
+          model: "anthropic/claude-4.8-opus-20260528",
+          scores: { frontend: 0.9 }
+        }
+      ]
+    }
+    const rejected = resolvePlanRoutes(plan(step({ taskKind: "frontend" })), {
+      catalog,
+      mode: "active",
+      ranking: rankedOpus,
+      usage: usage("limited", "ok")
+    }).plan.steps[0]?.routing?.rejected
+
+    const facts = rejected?.map(
+      (item) => `${item.candidate.cli}:${item.candidate.model}:${item.reason}`
+    )
+    expect(new Set(facts).size).toBe(facts?.length)
+    expect(rejected?.filter((item) => item.candidate.model === "opus")).toStrictEqual([
+      {
+        candidate: { cli: "claude", model: "opus" },
+        provenance: "runtime-ranking",
+        reason: "local provider usage is at its limit"
+      }
+    ])
+  })
+
   it("demotes a nearing automatic route behind one with known headroom", () => {
     const routed = resolvePlanRoutes(plan(step({ taskKind: "backend" })), {
       catalog,
@@ -295,6 +396,43 @@ describe("resolvePlanRoutes", () => {
     expect(routed?.rejected.some((item) => item.candidate.model === "opus")).toBe(true)
   })
 
+  it("reports the reset for the applicable model-scoped quota", () => {
+    const scoped: Usage = {
+      fetchedAt: "2026-07-22T00:00:00.000Z",
+      providers: [
+        {
+          cli: "claude",
+          name: "Claude",
+          plan: "Max",
+          available: true,
+          windows: [
+            {
+              label: "Weekly · Opus",
+              resetsAt: "2026-07-23T00:00:00.000Z",
+              utilization: 100,
+              status: "limited"
+            },
+            {
+              label: "Weekly · Sonnet",
+              resetsAt: "2026-07-24T00:00:00.000Z",
+              utilization: 100,
+              status: "limited"
+            }
+          ]
+        }
+      ]
+    }
+
+    expect(routeQuotaState({ cli: "claude", model: "opus" }, scoped)).toStrictEqual({
+      status: "limited",
+      resetsAt: "2026-07-23T00:00:00.000Z"
+    })
+    expect(routeQuotaState({ cli: "claude", model: "sonnet" }, scoped)).toStrictEqual({
+      status: "limited",
+      resetsAt: "2026-07-24T00:00:00.000Z"
+    })
+  })
+
   it("fails open when local usage cannot be read", () => {
     const unavailable: Usage = {
       fetchedAt: "2026-07-22T00:00:00.000Z",
@@ -309,6 +447,31 @@ describe("resolvePlanRoutes", () => {
       usage: unavailable
     }).plan.steps[0]?.routing
     expect(routed?.decision).toMatchObject({ cli: "codex", model: "gpt-5.5" })
+  })
+
+  it("does not transfer a variant ranking to the base model", () => {
+    const variantOnly: RoutingRankingSnapshot = {
+      source: "OpenRouter Rankings",
+      windowDays: 30,
+      fetchedAt: "2026-07-22T00:00:00.000Z",
+      models: [
+        {
+          model: "openai/gpt-5.5-mini-20260423",
+          scores: { backend: 0.99 }
+        }
+      ]
+    }
+    const routed = resolvePlanRoutes(plan(step({ taskKind: "backend" })), {
+      catalog,
+      mode: "active",
+      ranking: variantOnly
+    }).plan.steps[0]?.routing
+
+    expect(routed?.decision).toMatchObject({
+      cli: "codex",
+      model: "gpt-5.5",
+      provenance: "policy-profile"
+    })
   })
 
   it("matches dated OpenRouter permaslugs to live CLI ids and Claude aliases", () => {

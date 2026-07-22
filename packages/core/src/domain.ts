@@ -474,21 +474,19 @@ export const ProvidersConfig = Schema.partial(
 )
 export type ProvidersConfig = Schema.Schema.Type<typeof ProvidersConfig>
 
-/** An ordered exact route in a workspace's Gigaplan policy. */
-export const GigaplanRouteConfigCandidate = Schema.Struct({
+/** An exact harness/model pair used by both persisted policy and plan routing. */
+export const RouteCandidate = Schema.Struct({
   cli: CliKind,
   model: Schema.String
 })
-export type GigaplanRouteConfigCandidate = Schema.Schema.Type<
-  typeof GigaplanRouteConfigCandidate
->
+export type RouteCandidate = Schema.Schema.Type<typeof RouteCandidate>
 
 export const GigaplanRoutingConfig = Schema.Struct({
   mode: Schema.Literal("shadow", "active"),
   overrides: Schema.Array(
     Schema.Struct({
       taskKind: TaskKind,
-      routes: Schema.Array(GigaplanRouteConfigCandidate)
+      routes: Schema.Array(RouteCandidate)
     })
   )
 })

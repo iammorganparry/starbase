@@ -44,6 +44,12 @@ export interface StepRunInput {
     readonly cli: CliKind
     readonly model: string
   }>
+  /** Known catalogue routes that cannot run now, with the operator-facing cause. */
+  readonly unavailable?: ReadonlyArray<{
+    readonly cli: CliKind
+    readonly model: string
+    readonly reason: string
+  }>
   /** Used when a step names no assignee, or names one that isn't installed. */
   readonly fallback: { readonly cli: CliKind; readonly model: string } | null
   readonly binPathFor: (cli: CliKind) => string | null
@@ -381,6 +387,12 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
                 .filter((candidate) => candidate.cli !== "starbase")
                 .map((candidate) => `${candidate.cli}\u0000${candidate.model}`)
             )
+            const unavailableRoutes = new Map(
+              (input.unavailable ?? []).map((candidate) => [
+                `${candidate.cli}\u0000${candidate.model}`,
+                candidate.reason
+              ])
+            )
 
             for (const step of order) {
               const candidates = routeCandidates(step, input)
@@ -390,6 +402,7 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
               let previousOutcome: string | null = null
               let settled = false
               let terminalReason: string | null = null
+              const unavailableReasons: Array<string> = []
 
               const record = (attempt: RouteAttempt) => {
                 if (currentStep.routing === undefined) return Effect.void
@@ -408,18 +421,23 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
                   runner !== undefined &&
                   !liveRoutes.has(`${runner.cli}\u0000${runner.model}`)
                 ) {
+                  const route = `${runner.cli}/${runner.model}`
+                  const reason =
+                    unavailableRoutes.get(`${runner.cli}\u0000${runner.model}`) ??
+                    "not in the execution-time model catalogue"
+                  unavailableReasons.push(`${route}: ${reason}`)
                   const createdAt = yield* Effect.sync(() => new Date().toISOString())
                   yield* record({
-                    attempt: attempts + 1,
+                    attempt: null,
                     candidate: runner,
                     outcome: "unavailable",
-                    reason: "not in the execution-time model catalogue",
+                    reason,
                     mutationPossible: false,
                     createdAt
                   })
                   yield* emit({
                     _tag: "Assistant",
-                    text: `Route ${runner.cli}/${runner.model} is no longer available for step ${step.number}; checking the next candidate.`,
+                    text: `Route ${route} cannot run step ${step.number}: ${reason}. Checking the next candidate.`,
                     agentId: undefined
                   })
                   candidateIndex += 1
@@ -430,7 +448,11 @@ export class PlanExecutor extends Effect.Service<PlanExecutor>()("@starbase/Plan
                   terminalReason =
                     step.routing === undefined
                       ? `No installed harness can run step ${step.number} (${step.title}).`
-                      : `No live route remains for step ${step.number} (${step.title}).`
+                      : `No executable route remains for step ${step.number} (${step.title}).${
+                          unavailableReasons.length === 0
+                            ? ""
+                            : ` ${unavailableReasons.join("; ")}`
+                        }`
                   break
                 }
 

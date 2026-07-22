@@ -1,9 +1,9 @@
 import type {
   CliKind,
-  GigaplanRouteConfigCandidate,
   GigaplanRoutingConfig,
   HarnessBilling,
   ProviderModels,
+  RouteCandidate,
   TaskKind
 } from "@starbase/core"
 import { GIGAPLAN_ROUTING_DEFAULT, TASK_KINDS } from "@starbase/core"
@@ -71,10 +71,10 @@ export function GigaplanSettings({
   // `starbase` is filtered for the same reason it is filtered from the composer's
   // picker: the orchestrator cannot be its own backend.
   const groups = catalog.filter((p) => p.cli !== "starbase" && p.models.length > 0)
-  const liveRoutes: ReadonlyArray<GigaplanRouteConfigCandidate> = groups.flatMap((provider) =>
+  const liveRoutes: ReadonlyArray<RouteCandidate> = groups.flatMap((provider) =>
     provider.models.map((model) => ({ cli: provider.cli, model: model.id }))
   )
-  const updateRoutes = (taskKind: TaskKind, routes: ReadonlyArray<GigaplanRouteConfigCandidate>) => {
+  const updateRoutes = (taskKind: TaskKind, routes: ReadonlyArray<RouteCandidate>) => {
     if (onRoutingChange === undefined) return
     const rest = routeConfig.overrides.filter((override) => override.taskKind !== taskKind)
     onRoutingChange({

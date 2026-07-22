@@ -57,6 +57,7 @@ import {
   GitError,
   PlanError,
   planningReadiness,
+  routeQuotaState,
   routeQuotaStatus,
   resolveFindings,
   resolveOrchestrator,
@@ -538,8 +539,12 @@ export const providerCanRoute = (
 export const eligibleRoutingCatalog = (
   catalog: ReadonlyArray<ProviderModels>,
   providers: ProvidersConfig | undefined
-): ReadonlyArray<ProviderModels> =>
-  catalog.filter((provider) => {
+): ReadonlyArray<ProviderModels> => {
+  // Eligibility is an operator-triggered boundary: readiness, planning, and
+  // execution must all observe a login completed in another terminal. Keep the
+  // memo within this catalogue pass, but never carry its answer between passes.
+  resetSubscriptionCache()
+  return catalog.filter((provider) => {
     const subscription = hasSubscriptionAuth(provider.cli)
     return providerCanRoute(
       provider.cli,
@@ -550,6 +555,7 @@ export const eligibleRoutingCatalog = (
       isScriptedEnv()
     )
   })
+}
 
 /**
  * The live model catalogue, folded down to the labs this machine can reach.
@@ -734,10 +740,27 @@ export const planExecute = (
       // What this host can actually run, as (harness, model) pairs. The plan's
       // assignee is only a recommendation — it was written on whatever machine
       // reviewed the plan, and cannot conjure an install here.
-      const available = catalog.flatMap((provider) =>
-        provider.models
-          .map((model) => ({ cli: provider.cli, model: model.id }))
-          .filter((candidate) => routeQuotaStatus(candidate, usage) !== "limited")
+      const executionRoutes = catalog.flatMap((provider) =>
+        provider.models.map((model) => {
+          const candidate = { cli: provider.cli, model: model.id }
+          return { candidate, quota: routeQuotaState(candidate, usage) }
+        })
+      )
+      const available = executionRoutes
+        .filter((route) => route.quota.status !== "limited")
+        .map((route) => route.candidate)
+      const unavailable = executionRoutes.flatMap((route) =>
+        route.quota.status !== "limited"
+          ? []
+          : [
+              {
+                ...route.candidate,
+                reason:
+                  route.quota.resetsAt === null
+                    ? "quota limited (reset time unavailable)"
+                    : `quota limited until ${route.quota.resetsAt}`
+              }
+            ]
       )
 
       // Approval and the run itself have to reach disk, for two separate
@@ -785,7 +808,10 @@ export const planExecute = (
       if (executionMode !== undefined) {
         yield* SessionStore.setMode(sessionId, executionMode).pipe(Effect.ignore)
       }
-      const persistPlanStep = (step: Plan["steps"][number]) =>
+      const persistPlanStep = (
+        step: Plan["steps"][number],
+        phase: "attempt" | "completion"
+      ) =>
         TranscriptStore.patchById(sessionId, located.messageId, (m) => ({
           ...m,
           parts: m.parts.map((p) =>
@@ -795,7 +821,11 @@ export const planExecute = (
                   plan: {
                     ...p.plan,
                     steps: p.plan.steps.map((stored) =>
-                      stored.id === step.id ? step : stored
+                      stored.id !== step.id
+                        ? stored
+                        : phase === "attempt"
+                          ? { ...step, status: stored.status }
+                          : { ...step, status: "done" }
                     )
                   }
                 } as const)
@@ -810,6 +840,7 @@ export const planExecute = (
           cwd: session.worktreePath,
           plan,
           available,
+          unavailable,
           // The orchestrator's own model backs any step the plan left unassigned —
           // the same identity Gigaplan speaks as, rather than an arbitrary pick.
           fallback: resolveOrchestrator(config),
@@ -822,8 +853,10 @@ export const planExecute = (
           // re-approved), no record of which steps had run, and a half-applied
           // worktree. Ticking the step on the stored plan is what that comment
           // was promising.
-          onStepUpdated: persistPlanStep,
-          onStepDone: (step) => persistPlanStep({ ...step, status: "done" })
+          // `current` is a live-stream-only state. Attempts are durable, but a
+          // process killed mid-step must reopen as resumable rather than running.
+          onStepUpdated: (step) => persistPlanStep(step, "attempt"),
+          onStepDone: (step) => persistPlanStep(step, "completion")
         })
         .pipe(
           // `ToolDelta` excluded for the reason `AgentRunner` excludes it: it ticks
@@ -875,7 +908,8 @@ export const planAdversarial = (
         )
       }
       const { clis, catalog, config, usage, vendors } = yield* planningVendors
-      const ranking = yield* RankingService.latest
+      const routingMode = config?.gigaplanRouting?.mode ?? "shadow"
+      const ranking = routingMode === "active" ? yield* RankingService.latest : null
       const service = yield* AdversarialPlanService
       // Capture the store's context here so the persistence hook the service
       // calls later — on its own fiber, with only the adapter in scope — is a
@@ -934,7 +968,7 @@ export const planAdversarial = (
           assignAgents: true,
           routing: {
             catalog,
-            mode: config?.gigaplanRouting?.mode ?? "shadow",
+            mode: routingMode,
             overrides: config?.gigaplanRouting?.overrides ?? [],
             systemDefault: resolveOrchestrator(config),
             ranking,

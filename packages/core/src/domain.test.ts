@@ -7,10 +7,12 @@ import {
   GhStatus,
   GithubConfig,
   Repo,
+  RouteCandidate,
   Session,
   supportsPlanMode,
   WorkspaceConfig
 } from "./domain.js"
+import { RouteCandidate as ConversationRouteCandidate } from "./conversation.js"
 
 /**
  * These schemas back persistence (config.json, sessions.json) and the RPC wire
@@ -22,6 +24,12 @@ import {
 
 const decode = <A, I>(schema: Schema.Schema<A, I>, input: unknown) =>
   Schema.decodeUnknownEither(schema)(input)
+
+describe("RouteCandidate", () => {
+  it("uses one schema for configuration and conversation routing", () => {
+    expect(ConversationRouteCandidate).toBe(RouteCandidate)
+  })
+})
 
 describe("WorkspaceConfig", () => {
   it("decodes a configured workspace", () => {

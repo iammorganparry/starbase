@@ -12,7 +12,6 @@ import {
   markUnchallenged,
   parseCritique,
   parseResponses,
-  annotateAssignees,
   unattendedAnswers
 } from "./adversarial-plan.js"
 import { formatQuestionAnswer } from "./claude-adapter.js"
@@ -457,60 +456,6 @@ describe("AdversarialPlanService", () => {
     expect(specs.every((s) => s.readOnly === true && s.fresh === true)).toBe(true)
     expect(specs[0]!.model).toBe("claude-fable-5")
     expect(specs[1]!.model).toBe("gpt-5.6-sol")
-  })
-})
-
-
-describe("annotateAssignees", () => {
-  const planWith = (assignee: { cli: "claude" | "codex"; model: string; reason: string } | undefined) => {
-    const p = parsePlan(PLAN_TEXT, "p")
-    return { ...p, steps: p.steps.map((s, i) => (i === 0 && assignee ? { ...s, assignee } : s)) }
-  }
-
-  const ranked = [
-    { cli: "codex" as const, model: "gpt-5.6-sol", level: "repo-model", observations: 19 }
-  ]
-
-  it("records what the KB said about the model's pick", () => {
-    const out = annotateAssignees(
-      planWith({ cli: "codex", model: "gpt-5.6-sol", reason: "schema work" }),
-      ranked
-    )
-    expect(out.steps[0]!.assignee?.evidence).toStrictEqual({
-      level: "repo-model",
-      observations: 19
-    })
-  })
-
-  it("never overwrites the model's choice or its reason", () => {
-    // The KB advises; it does not decide. Overriding the pick would make a thin
-    // cell authoritative.
-    const out = annotateAssignees(
-      planWith({ cli: "claude", model: "claude-fable-5", reason: "my own judgement" }),
-      ranked
-    )
-    expect(out.steps[0]!.assignee?.cli).toBe("claude")
-    expect(out.steps[0]!.assignee?.reason).toBe("my own judgement")
-  })
-
-  it("leaves evidence absent when the KB had nothing on that pair", () => {
-    // Absent evidence and zero-observation evidence are different claims.
-    const out = annotateAssignees(
-      planWith({ cli: "claude", model: "claude-fable-5", reason: "x" }),
-      ranked
-    )
-    expect(out.steps[0]!.assignee?.evidence).toBeUndefined()
-  })
-
-  it("is a no-op with an empty knowledge base", () => {
-    // Phase-A behaviour must be reachable by an empty KB, not just a disabled one.
-    const plan = planWith({ cli: "codex", model: "gpt-5.6-sol", reason: "r" })
-    expect(annotateAssignees(plan, [])).toStrictEqual(plan)
-  })
-
-  it("leaves an unassigned step alone", () => {
-    const plan = planWith(undefined)
-    expect(annotateAssignees(plan, ranked)).toStrictEqual(plan)
   })
 })
 

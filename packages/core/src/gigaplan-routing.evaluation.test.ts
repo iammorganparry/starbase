@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Plan, PlanStep, RouteEffort, RouteRisk } from "./conversation.js"
-import {
-  canonicalRouteCandidates,
-  resolvePlanRoutes,
-  summarizeRouteAttempts
-} from "./gigaplan-routing.js"
+import { canonicalRouteCandidates, resolvePlanRoutes } from "./gigaplan-routing.js"
 import type { ProviderModels } from "./models.js"
 import { TASK_KINDS } from "./task-kind.js"
 
@@ -92,51 +88,5 @@ describe("Gigaplan routing release fixtures", () => {
         }
       }
     }
-  })
-
-  it("derives rollout counters locally from persisted attempts", () => {
-    const routed = resolvePlanRoutes(plan(step("standard", "medium")), {
-      catalog,
-      mode: "active"
-    }).plan
-    const item = routed.steps[0]!
-    const decision = item.routing!.decision
-    const withAttempts: Plan = {
-      ...routed,
-      steps: [
-        {
-          ...item,
-          routing: {
-            ...item.routing!,
-            attempts: [
-              {
-                attempt: 1,
-                candidate: { cli: decision.cli, model: decision.model },
-                outcome: "failed",
-                reason: "provider overloaded",
-                mutationPossible: false,
-                createdAt: "2026-07-22T00:00:00.000Z"
-              },
-              {
-                attempt: 2,
-                candidate: decision.alternatives[0]!,
-                outcome: "done",
-                reason: null,
-                mutationPossible: true,
-                createdAt: "2026-07-22T00:01:00.000Z"
-              }
-            ]
-          }
-        }
-      ]
-    }
-    expect(summarizeRouteAttempts(withAttempts)).toStrictEqual({
-      routedSteps: 1,
-      attempts: 2,
-      divergences: 1,
-      blocked: 0,
-      failed: 1,
-      completed: 1
-    })
   })
 })

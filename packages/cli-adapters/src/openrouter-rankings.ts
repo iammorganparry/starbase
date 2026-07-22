@@ -7,6 +7,9 @@ const OPENROUTER_RANKINGS_URL = "https://openrouter.ai/api/frontend/v1/rankings/
 const MAX_RESPONSE_BYTES = 2_000_000
 const REQUEST_TIMEOUT_MS = 5_000
 export const RANKING_SUCCESS_TTL_MS = 6 * 60 * 60 * 1_000
+// The source is an undocumented, unversioned OpenRouter frontend endpoint and
+// may drift without notice. Cache failures so active routing degrades to its
+// deterministic profiles instead of retrying the unstable endpoint every plan.
 export const RANKING_FAILURE_TTL_MS = 5 * 60 * 1_000
 
 const RankingResponse = Schema.parseJson(

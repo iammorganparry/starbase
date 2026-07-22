@@ -183,6 +183,14 @@ describe("PlanProvenance", () => {
             rejected: [],
             attempts: [
               {
+                attempt: null,
+                candidate: { cli: "codex", model: "gpt-5" },
+                outcome: "unavailable",
+                reason: "quota limited",
+                mutationPossible: false,
+                createdAt: "2026-07-22T00:00:00.000Z"
+              },
+              {
                 attempt: 1,
                 candidate: { cli: "claude", model: "sonnet" },
                 outcome: "done",
@@ -200,6 +208,10 @@ describe("PlanProvenance", () => {
     expect(screen.getByText("Will run on")).toBeTruthy()
     expect(screen.getByText(/Shadow recommendation: codex\/gpt-5/)).toBeTruthy()
     expect(screen.getByText(/OpenRouter Rankings 30-day backend usage share 31.0%/)).toBeTruthy()
-    expect(screen.getByText(/Attempts: 1\. claude\/sonnet done/)).toBeTruthy()
+    expect(
+      screen.getByText(
+        /Attempts: availability check: codex\/gpt-5 unavailable; 1\. claude\/sonnet done/
+      )
+    ).toBeTruthy()
   })
 })

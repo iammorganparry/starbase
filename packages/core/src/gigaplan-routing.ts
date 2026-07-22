@@ -1,10 +1,9 @@
-import type { CliKind } from "./domain.js"
+import type { CliKind, RouteCandidate } from "./domain.js"
 import type {
   Plan,
   PlanStep,
   PlanStepAssignee,
   PlanStepRouting,
-  RouteCandidate,
   RouteDecision,
   RouteEffort,
   RouteProvenance,
@@ -16,7 +15,10 @@ import type { TaskKind } from "./task-kind.js"
 import type { ProviderUsage, Usage, UsageWindow } from "./usage.js"
 
 /** Bump whenever profile order or route eligibility changes. */
-export const GIGAPLAN_ROUTING_POLICY_VERSION = "gigaplan-routing-v3"
+export const GIGAPLAN_ROUTING_POLICY_VERSION = "gigaplan-routing-v5"
+
+/** The executor has a shared three-attempt budget: one choice plus two fallbacks. */
+export const MAX_ROUTE_ALTERNATIVES = 2
 
 export type RoutingMode = "shadow" | "active"
 
@@ -73,15 +75,6 @@ export interface PlanRouteResolution {
   readonly unresolved: ReadonlyArray<UnresolvedRoute>
 }
 
-export interface RouteAttemptSummary {
-  readonly routedSteps: number
-  readonly attempts: number
-  readonly divergences: number
-  readonly blocked: number
-  readonly failed: number
-  readonly completed: number
-}
-
 interface CandidateEntry {
   readonly candidate: RouteCandidate
   readonly provenance: RouteProvenance
@@ -89,6 +82,11 @@ interface CandidateEntry {
 }
 
 export type RouteQuotaStatus = "ok" | "nearing" | "limited" | "unknown"
+
+export interface RouteQuotaState {
+  readonly status: RouteQuotaStatus
+  readonly resetsAt: string | null
+}
 
 const CLI_ORDER: ReadonlyArray<CliKind> = ["claude", "codex", "opencode", "cursor", "starbase"]
 
@@ -112,6 +110,36 @@ const candidateKey = (candidate: RouteCandidate): string =>
 
 const sameCandidate = (left: RouteCandidate, right: RouteCandidate): boolean =>
   left.cli === right.cli && left.model === right.model
+
+const withAssigneeEvidence = (
+  step: PlanStep,
+  taskKind: TaskKind,
+  affinity: ReadonlyArray<RouteAffinity>
+): PlanStep => {
+  const assignee = step.assignee
+  if (assignee === undefined) return step
+  const match = affinity
+    .filter(
+      (item) =>
+        item.taskKind === taskKind &&
+        item.candidate.cli === assignee.cli &&
+        item.candidate.model === assignee.model
+    )
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        right.confidence - left.confidence ||
+        right.observations - left.observations
+    )[0]
+  if (match === undefined) return step
+  return {
+    ...step,
+    assignee: {
+      ...assignee,
+      evidence: { level: "affinity", observations: match.observations }
+    }
+  }
+}
 
 const normalizedQuotaScope = (window: UsageWindow): string | null => {
   const separator = window.label.indexOf("·")
@@ -140,20 +168,35 @@ const quotaWindowApplies = (
  * must never make a live catalogue route disappear. Model-scoped windows such
  * as "Weekly · Opus" affect Opus without needlessly suppressing Sonnet.
  */
-export const routeQuotaStatus = (
+export const routeQuotaState = (
   candidate: RouteCandidate,
   usage: Usage | null | undefined
-): RouteQuotaStatus => {
+): RouteQuotaState => {
   const provider = usage?.providers.find((item) => item.cli === candidate.cli)
-  if (provider === undefined || !provider.available) return "unknown"
+  if (provider === undefined || !provider.available) return { status: "unknown", resetsAt: null }
   const windows = provider.windows.filter((window) =>
     quotaWindowApplies(candidate, provider, window)
   )
-  if (windows.some((window) => window.status === "limited")) return "limited"
-  if (windows.some((window) => window.status === "nearing")) return "nearing"
-  if (windows.some((window) => window.status === "ok")) return "ok"
-  return "unknown"
+  const status: RouteQuotaStatus = windows.some((window) => window.status === "limited")
+    ? "limited"
+    : windows.some((window) => window.status === "nearing")
+      ? "nearing"
+      : windows.some((window) => window.status === "ok")
+        ? "ok"
+        : "unknown"
+  const resetsAt = windows
+    .flatMap((window) =>
+      window.status === status && window.resetsAt !== null ? [window.resetsAt] : []
+    )
+    .sort()
+    .at(-1)
+  return { status, resetsAt: resetsAt ?? null }
 }
+
+export const routeQuotaStatus = (
+  candidate: RouteCandidate,
+  usage: Usage | null | undefined
+): RouteQuotaStatus => routeQuotaState(candidate, usage).status
 
 const uniqueEntries = (entries: ReadonlyArray<CandidateEntry>): ReadonlyArray<CandidateEntry> => {
   const seen = new Set<string>()
@@ -192,6 +235,19 @@ const rejected = (
   provenance: RouteProvenance,
   reason: string
 ): RouteRejection => ({ candidate, provenance, reason })
+
+/** One persisted fact per candidate/reason; earlier source precedence wins provenance. */
+const uniqueRejections = (
+  rejections: ReadonlyArray<RouteRejection>
+): ReadonlyArray<RouteRejection> => {
+  const seen = new Set<string>()
+  return rejections.filter((item) => {
+    const key = `${candidateKey(item.candidate)}\u0000${item.reason}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 
 const eligibleEntries = (
   entries: ReadonlyArray<CandidateEntry>,
@@ -303,15 +359,36 @@ const containsEveryToken = (
   })
 }
 
+const DATE_VERSION_TOKEN = /^\d{8}$/
+
+const hasOnlyDateVersionExtras = (
+  available: ReadonlyArray<string>,
+  required: ReadonlyArray<string>
+): boolean => {
+  const remaining = [...available]
+  for (const token of required) {
+    const index = remaining.indexOf(token)
+    if (index === -1) return false
+    remaining.splice(index, 1)
+  }
+  return remaining.length > 0 && remaining.every((token) => DATE_VERSION_TOKEN.test(token))
+}
+
 const rankingMatchQuality = (candidate: RouteCandidate, rankedModel: string): number => {
   const route = routeModelTail(candidate)
   const rankedSegments = rankedModel.split("/").filter((segment) => segment.length > 0)
   const ranked = normalizedModel(rankedSegments[rankedSegments.length - 1] ?? rankedModel)
   if (route === ranked) return 3
-  if (route.length >= 5 && ranked.startsWith(`${route}-`)) return 2
   const routeTokens = route.split("-")
   const rankedTokens = ranked.split("-")
-  if (routeTokens.length >= 3 && containsEveryToken(rankedTokens, routeTokens)) return 2
+  if (
+    route.length >= 5 &&
+    ranked.startsWith(`${route}-`) &&
+    hasOnlyDateVersionExtras(rankedTokens, routeTokens)
+  ) {
+    return 2
+  }
+  if (routeTokens.length >= 3 && hasOnlyDateVersionExtras(rankedTokens, routeTokens)) return 2
   if (
     candidate.cli === "claude" &&
     ["opus", "sonnet", "haiku"].includes(route) &&
@@ -445,6 +522,7 @@ const decisionFrom = (
     reason: selected.reason,
     alternatives: entries
       .filter((_, index) => index !== selectedIndex)
+      .slice(0, MAX_ROUTE_ALTERNATIVES)
       .map((entry) => entry.candidate)
   }
 }
@@ -505,6 +583,7 @@ const routeStep = (
     usage,
     rejections
   )
+  const rejectedRoutes = uniqueRejections(rejections)
 
   // Shadow deliberately excludes the prompt-authored preference: it is the
   // counterfactual semantic route we want to compare with legacy behaviour.
@@ -525,7 +604,7 @@ const routeStep = (
           )
         ])
   const effectiveDecision = decisionFrom(effectiveEntries)
-  if (effectiveDecision === null) return { routing: null, rejected: rejections }
+  if (effectiveDecision === null) return { routing: null, rejected: rejectedRoutes }
   // Shadow carries the chosen legacy route for provenance, but never an
   // executable fallback chain. Its semantic alternatives live exclusively on
   // `shadowDecision` and cannot alter a run.
@@ -542,10 +621,10 @@ const routeStep = (
       ...(mode === "shadow" && semanticDecision !== null
         ? { shadowDecision: semanticDecision }
         : {}),
-      rejected: rejections,
+      rejected: rejectedRoutes,
       attempts: []
     },
-    rejected: rejections
+    rejected: rejectedRoutes
   }
 }
 
@@ -557,7 +636,8 @@ export const resolvePlanRoutes = (plan: Plan, context: RoutingContext): PlanRout
     const taskKind = step.taskKind ?? "backend"
     const effort = step.effort ?? "standard"
     const risk = step.risk ?? "medium"
-    const result = routeStep(step, context)
+    const annotated = withAssigneeEvidence(step, taskKind, context.affinity ?? [])
+    const result = routeStep(annotated, context)
     if (result.routing === null) {
       unresolved.push({
         stepId: step.id,
@@ -565,35 +645,9 @@ export const resolvePlanRoutes = (plan: Plan, context: RoutingContext): PlanRout
         reason: "no live model can run this step",
         rejected: result.rejected
       })
-      return { ...step, taskKind, effort, risk }
+      return { ...annotated, taskKind, effort, risk }
     }
-    return { ...step, taskKind, effort, risk, routing: result.routing }
+    return { ...annotated, taskKind, effort, risk, routing: result.routing }
   })
   return { plan: { ...plan, steps }, unresolved }
 }
-
-/** Local, anonymized rollout counters derived from the persisted plan itself. */
-export const summarizeRouteAttempts = (plan: Plan): RouteAttemptSummary =>
-  plan.steps.reduce<RouteAttemptSummary>(
-    (summary, step) => {
-      const routing = step.routing
-      if (routing === undefined) return summary
-      const divergences = routing.attempts.filter(
-        (attempt) =>
-          attempt.candidate.cli !== routing.decision.cli ||
-          attempt.candidate.model !== routing.decision.model
-      ).length
-      return {
-        routedSteps: summary.routedSteps + 1,
-        attempts: summary.attempts + routing.attempts.length,
-        divergences: summary.divergences + divergences,
-        blocked:
-          summary.blocked + routing.attempts.filter((attempt) => attempt.outcome === "blocked").length,
-        failed:
-          summary.failed + routing.attempts.filter((attempt) => attempt.outcome === "failed").length,
-        completed:
-          summary.completed + (routing.attempts.some((attempt) => attempt.outcome === "done") ? 1 : 0)
-      }
-    },
-    { routedSteps: 0, attempts: 0, divergences: 0, blocked: 0, failed: 0, completed: 0 }
-  )

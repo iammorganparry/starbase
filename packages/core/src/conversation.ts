@@ -1,7 +1,9 @@
 import { Match, Schema } from "effect"
-import { CliKind, DiffStat, ReviewSeverity } from "./domain.js"
+import { CliKind, DiffStat, ReviewSeverity, RouteCandidate } from "./domain.js"
 import type { SessionStatus } from "./domain.js"
 import { TaskKind } from "./task-kind.js"
+
+export { RouteCandidate }
 
 /**
  * Conversation domain — the transcript model plus the normalized `StreamEvent`
@@ -295,13 +297,6 @@ export type RouteEffort = Schema.Schema.Type<typeof RouteEffort>
 export const RouteRisk = Schema.Literal("low", "medium", "high")
 export type RouteRisk = Schema.Schema.Type<typeof RouteRisk>
 
-/** An exact harness/model pair. Both halves must exist in the live catalogue. */
-export const RouteCandidate = Schema.Struct({
-  cli: CliKind,
-  model: Schema.String
-})
-export type RouteCandidate = Schema.Schema.Type<typeof RouteCandidate>
-
 export const RouteProvenance = Schema.Literal(
   "user-override",
   "runtime-ranking",
@@ -332,9 +327,9 @@ export type RouteDecision = Schema.Schema.Type<typeof RouteDecision>
 export const RouteAttemptOutcome = Schema.Literal("done", "blocked", "failed", "unavailable")
 export type RouteAttemptOutcome = Schema.Schema.Type<typeof RouteAttemptOutcome>
 
-/** One persisted adapter run (or execution-time availability rejection). */
+/** One persisted adapter run, or an unnumbered execution-time availability rejection. */
 export const RouteAttempt = Schema.Struct({
-  attempt: Schema.Number,
+  attempt: Schema.NullOr(Schema.Number),
   candidate: RouteCandidate,
   outcome: RouteAttemptOutcome,
   reason: Schema.NullOr(Schema.String),

@@ -241,7 +241,7 @@ Exit condition: users can override policy without editing JSON and can see why t
 | Work item              | Change                                                                                                                   |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Routing scenario suite | Check in representative steps across all task kinds, efforts, risks, and catalogue shapes                                |
-| Attempt telemetry      | Derive anonymized counters from persisted route attempts: selection, divergence, retry, terminal failure, and completion |
+| Attempt evidence       | Persist and render route attempts locally; defer aggregate counters until a rollout consumer exists                     |
 | Affinity scorer        | Compute candidate rankings in shadow only with minimum-sample and confidence gates                                       |
 | Desktop E2E            | Exercise one semantic route, one unavailable-model normalization, and one safe provider fallback                         |
 | Release gate           | Compare shadow decisions with legacy choices and promote only policies that pass the thresholds below                    |

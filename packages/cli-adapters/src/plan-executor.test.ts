@@ -579,6 +579,131 @@ describe("PlanExecutor", () => {
     expect(failed?._tag === "Failed" && failed.message).toMatch(/No installed harness/)
   })
 
+  it("reports and persists a quota limit instead of calling it catalogue drift", async () => {
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: []
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const updates: Array<PlanStep> = []
+    const { ran, layer } = recording()
+    const events = await Effect.gen(function* () {
+      const svc = yield* PlanExecutor
+      return yield* svc
+        .run({
+          sessionId: "s1",
+          repo: "widget",
+          branch: "b",
+          cwd: "/tmp/wt",
+          plan: planOf([routed]),
+          available: [],
+          unavailable: [
+            {
+              cli: "codex",
+              model: "gpt-5.6-sol",
+              reason: "quota limited until 2026-07-23T00:00:00.000Z"
+            }
+          ],
+          fallback: null,
+          binPathFor: () => null,
+          onStepUpdated: (updated) => Effect.sync(() => updates.push(updated))
+        })
+        .pipe(
+          Stream.runCollect,
+          Effect.map((chunk) => [...chunk])
+        )
+    }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
+
+    expect(ran).toStrictEqual([])
+    expect(updates.at(-1)?.routing?.attempts.at(-1)?.reason).toBe(
+      "quota limited until 2026-07-23T00:00:00.000Z"
+    )
+    const said = events
+      .filter((event): event is Extract<StreamEvent, { _tag: "Assistant" }> =>
+        event._tag === "Assistant"
+      )
+      .map((event) => event.text)
+      .join("\n")
+    expect(said).toContain("quota limited until 2026-07-23T00:00:00.000Z")
+    const failed = events.find((event) => event._tag === "Failed")
+    expect(failed?._tag === "Failed" && failed.message).toContain(
+      "quota limited until 2026-07-23T00:00:00.000Z"
+    )
+  })
+
+  it("keeps unavailable route checks separate from real attempt numbers", async () => {
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: [
+            { cli: "claude", model: "opus" },
+            { cli: "opencode", model: "qwen3-coder" }
+          ]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const updates: Array<PlanStep> = []
+    const { ran, layer } = recording()
+
+    await Effect.gen(function* () {
+      const executor = yield* PlanExecutor
+      yield* executor
+        .run({
+          sessionId: "s1",
+          repo: "widget",
+          branch: "b",
+          cwd: "/tmp/wt",
+          plan: planOf([routed]),
+          available: [{ cli: "opencode", model: "qwen3-coder" }],
+          unavailable: [
+            { cli: "codex", model: "gpt-5.6-sol", reason: "quota limited" },
+            { cli: "claude", model: "opus", reason: "not installed" }
+          ],
+          fallback: null,
+          binPathFor: () => null,
+          onStepUpdated: (updated) => Effect.sync(() => updates.push(updated))
+        })
+        .pipe(Stream.runDrain)
+    }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
+
+    expect(ran.map((run) => `${run.cli}/${run.model}`)).toStrictEqual([
+      "opencode/qwen3-coder"
+    ])
+    expect(
+      updates.at(-1)?.routing?.attempts.map(({ attempt, outcome }) => ({ attempt, outcome }))
+    ).toStrictEqual([
+      { attempt: null, outcome: "unavailable" },
+      { attempt: null, outcome: "unavailable" },
+      { attempt: 1, outcome: "done" }
+    ])
+  })
+
   it("retries a timed-out routed step on the same route after possible mutation", async () => {
     // A run that never ends leaves the session at "Idle" with no explanation —
     // the exact failure the planning round shipped with. A stall is treated as

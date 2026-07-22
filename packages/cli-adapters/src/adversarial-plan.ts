@@ -226,33 +226,6 @@ export const markUnchallenged = (plan: Plan): Plan => ({
   steps: plan.steps.map((s): PlanStep => ({ ...s, challenges: [] }))
 })
 
-/**
- * Record what the knowledge base actually said about each chosen assignee.
- *
- * The MODEL picks and writes the reason; this only annotates. Letting the KB
- * overwrite the pick would make a thin cell authoritative, and letting the model
- * write its own `evidence` would let it invent a track record — so the two
- * halves come from the two places that can honestly supply them.
- */
-export const annotateAssignees = (
-  plan: Plan,
-  ranked: ReadonlyArray<{ cli: CliKind; model: string; level: string; observations: number }>
-): Plan => ({
-  ...plan,
-  steps: plan.steps.map((s): PlanStep => {
-    if (!s.assignee) return s
-    const match = ranked.find((r) => r.cli === s.assignee!.cli && r.model === s.assignee!.model)
-    if (match === undefined) return s
-    return {
-      ...s,
-      assignee: {
-        ...s.assignee,
-        evidence: { level: match.level, observations: match.observations }
-      }
-    }
-  })
-})
-
 /** Stamp each step with the model that proposed it. */
 export const markOrigin = (plan: Plan, by: PlanParticipant): Plan => ({
   ...plan,

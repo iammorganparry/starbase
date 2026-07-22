@@ -192,7 +192,13 @@ export function PlanProvenance({ step, className }: { step: PlanStep; className?
             )}
             {routing.attempts.length > 0 && (
               <div>
-                Attempts: {routing.attempts.map((attempt) => `${attempt.attempt}. ${attempt.candidate.cli}/${attempt.candidate.model} ${attempt.outcome}`).join("; ")}
+                Attempts:{" "}
+                {routing.attempts
+                  .map(
+                    (attempt) =>
+                      `${attempt.attempt === null ? "availability check:" : `${attempt.attempt}.`} ${attempt.candidate.cli}/${attempt.candidate.model} ${attempt.outcome}`
+                  )
+                  .join("; ")}
               </div>
             )}
           </div>

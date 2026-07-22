@@ -13,6 +13,7 @@ import {
   ModelsService,
   ReviewService,
   ReviewStore,
+  resetSubscriptionCache,
   AdversarialPlanService,
   PlanExecutor,
   PlanRoundStore,
@@ -24,7 +25,14 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
-import type { CliKind, Plan, RoutingRankingSnapshot, StreamEvent, Usage } from "@starbase/core"
+import type {
+  CliKind,
+  Plan,
+  RouteAttempt,
+  RoutingRankingSnapshot,
+  StreamEvent,
+  Usage
+} from "@starbase/core"
 import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
 import type { CommandExecutor } from "@effect/platform"
@@ -35,6 +43,7 @@ import {
   chooseReposDir,
   configGet,
   createTerminal,
+  eligibleRoutingCatalog,
   githubDetectPr,
   githubSubmitReview,
   githubPr,
@@ -82,6 +91,41 @@ describe("RPC handlers", () => {
 
   describe("Gigaplan provider eligibility", () => {
     const enabled = undefined
+
+    it("observes a terminal sign-in after a cached unauthenticated result", () => {
+      const previousHarnessHome = process.env.STARBASE_HARNESS_HOME
+      const previousOpenAiKey = process.env.OPENAI_API_KEY
+      const harnessHome = join(dir, "harness-home")
+      const catalog = [
+        {
+          cli: "codex" as const,
+          label: "Codex",
+          models: [{ id: "gpt-5", label: "GPT-5" }]
+        }
+      ]
+
+      process.env.STARBASE_HARNESS_HOME = harnessHome
+      delete process.env.OPENAI_API_KEY
+      resetSubscriptionCache()
+
+      try {
+        expect(eligibleRoutingCatalog(catalog, enabled)).toStrictEqual([])
+
+        mkdirSync(join(harnessHome, ".codex"), { recursive: true })
+        writeFileSync(
+          join(harnessHome, ".codex", "auth.json"),
+          JSON.stringify({ tokens: { access_token: "signed-in" } })
+        )
+
+        expect(eligibleRoutingCatalog(catalog, enabled)).toStrictEqual(catalog)
+      } finally {
+        if (previousHarnessHome === undefined) delete process.env.STARBASE_HARNESS_HOME
+        else process.env.STARBASE_HARNESS_HOME = previousHarnessHome
+        if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+        else process.env.OPENAI_API_KEY = previousOpenAiKey
+        resetSubscriptionCache()
+      }
+    })
 
     it("rejects a conclusively unauthenticated metered provider", () => {
       expect(providerCanRoute("codex", enabled, {}, false, false, false)).toBe(false)
@@ -1083,17 +1127,25 @@ describe("Gigaplan round persistence", () => {
   let dir: string
   let root: string
   let capturedAvailable: ReadonlyArray<{ readonly cli: CliKind; readonly model: string }> = []
+  let capturedUnavailable: ReadonlyArray<{
+    readonly cli: CliKind
+    readonly model: string
+    readonly reason: string
+  }> = []
   let capturedRanking: RoutingRankingSnapshot | null | undefined
   let capturedUsage: Usage | null | undefined
   let capturedVendors: ReadonlyArray<{ readonly vendor: string }> = []
   let currentUsage: Usage
+  let rankingReads = 0
   let previousAnthropicKey: string | undefined
   beforeEach(() => {
     capturedAvailable = []
+    capturedUnavailable = []
     capturedRanking = undefined
     capturedUsage = undefined
     capturedVendors = []
     currentUsage = HEALTHY_USAGE
+    rankingReads = 0
     previousAnthropicKey = process.env.ANTHROPIC_API_KEY
     process.env.ANTHROPIC_API_KEY = "e2e-test-key"
     dir = mkdtempSync(join(tmpdir(), "starbase-round-"))
@@ -1162,7 +1214,12 @@ describe("Gigaplan round persistence", () => {
       SessionStore.Default,
       Layer.succeed(
         RankingService,
-        new RankingService({ latest: Effect.succeed(RANKING) })
+        new RankingService({
+          latest: Effect.sync(() => {
+            rankingReads += 1
+            return RANKING
+          })
+        })
       ),
       Layer.succeed(
         UsageService,
@@ -1261,12 +1318,18 @@ describe("Gigaplan round persistence", () => {
       run: (input: {
         plan: Plan
         available: ReadonlyArray<{ readonly cli: CliKind; readonly model: string }>
+        unavailable?: ReadonlyArray<{
+          readonly cli: CliKind
+          readonly model: string
+          readonly reason: string
+        }>
         onStepDone?: (step: Plan["steps"][number]) => Effect.Effect<void>
         onStepUpdated?: (step: Plan["steps"][number]) => Effect.Effect<void>
       }) =>
         Stream.unwrap(
           Effect.gen(function* () {
             capturedAvailable = input.available
+            capturedUnavailable = input.unavailable ?? []
             // A real executor reports each finished step; the fake does too, or
             // the wiring under test is never exercised.
             const first = input.plan.steps[0]
@@ -1348,12 +1411,23 @@ describe("Gigaplan round persistence", () => {
     expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
   })
 
-  it("injects the cached OpenRouter ranking snapshot into the pure route context", async () => {
+  it("does not request OpenRouter rankings in the default shadow mode", async () => {
     await planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(
       Stream.runDrain,
       Effect.provide(roundLayer(root)),
       Effect.runPromise
     )
+    expect(rankingReads).toBe(0)
+    expect(capturedRanking).toBeNull()
+  })
+
+  it("requests and injects OpenRouter rankings when routing is active", async () => {
+    await Effect.gen(function* () {
+      yield* ConfigService.setGigaplanRouting({ mode: "active", overrides: [] })
+      yield* planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(Stream.runDrain)
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(rankingReads).toBe(1)
     expect(capturedRanking).toBe(RANKING)
   })
 
@@ -1443,6 +1517,64 @@ describe("Gigaplan round persistence", () => {
     expect(stored?.steps[0]?.routing?.attempts[0]?.outcome).toBe("done")
   })
 
+  it("persists an interrupted attempt without leaving the step durably current", async () => {
+    const attempt: RouteAttempt = {
+      attempt: 1,
+      candidate: { cli: "claude", model: "sonnet" },
+      outcome: "failed",
+      reason: "provider connection dropped",
+      mutationPossible: false,
+      createdAt: "2026-07-22T01:00:00.000Z"
+    }
+    const interruptedExecutor = Layer.succeed(
+      PlanExecutor,
+      new PlanExecutor({
+        run: (input) =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const first = input.plan.steps[0]
+              if (first?.routing !== undefined && input.onStepUpdated !== undefined) {
+                const updated: Plan["steps"][number] = {
+                  ...first,
+                  status: "current",
+                  routing: { ...first.routing, attempts: [attempt] }
+                }
+                yield* input.onStepUpdated(updated)
+              }
+              const interrupted: StreamEvent = {
+                _tag: "Failed",
+                message: "simulated process interruption"
+              }
+              return Stream.succeed(interrupted)
+            })
+          )
+      })
+    )
+
+    const stored = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part._tag === "Plan" && part.plan.id === PLAN.id ? [part.plan] : []
+        )
+      )[0]
+    }).pipe(
+      Effect.provide(Layer.mergeAll(roundLayer(root), interruptedExecutor)),
+      Effect.runPromise
+    )
+
+    expect(stored?.steps[0]?.status).toBe("proposed")
+    expect(stored?.steps[0]?.routing?.attempts).toStrictEqual([attempt])
+  })
+
   it("revalidates local limits immediately before execution", async () => {
     currentUsage = {
       fetchedAt: "2026-07-22T01:00:00.000Z",
@@ -1475,6 +1607,18 @@ describe("Gigaplan round persistence", () => {
     }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
 
     expect(capturedAvailable).toStrictEqual([])
+    expect(capturedUnavailable).toStrictEqual([
+      {
+        cli: "claude",
+        model: "opus",
+        reason: "quota limited until 2026-07-23T00:00:00.000Z"
+      },
+      {
+        cli: "claude",
+        model: "sonnet",
+        reason: "quota limited until 2026-07-23T00:00:00.000Z"
+      }
+    ])
   })
 
   it("persists the execution's own turns, so the run survives a reopen", async () => {
