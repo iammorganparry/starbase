@@ -211,6 +211,49 @@ describe("startTeeStream", () => {
     expect(snapshots).toEqual(["🙂"])
   })
 
+  it("does not re-emit the previous snapshot when a raced read returns no bytes", async () => {
+    const bytes = Buffer.from("ab")
+    const snapshots: string[] = []
+    let opens = 0
+    let stream: ReturnType<typeof startTeeStream> | undefined
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("tee poll did not recover after an empty read")), 1_000)
+      stream = startTeeStream(
+        "empty-read",
+        "pnpm test",
+        (value) => {
+          snapshots.push(value)
+          if (value !== "ab") return
+          clearTimeout(timeout)
+          resolve()
+        },
+        {
+          pollMs: 1,
+          io: {
+            prepare: () => {},
+            size: async () => (opens === 0 ? 1 : 2),
+            open: async () => {
+              opens += 1
+              const thisOpen = opens
+              return {
+                // The second poll sees growth in stat(), but the file is raced
+                // back to zero before read(). The third poll can read normally.
+                read: async (offset, length) =>
+                  thisOpen === 2 ? Buffer.alloc(0) : bytes.subarray(offset, offset + length),
+                close: async () => {}
+              }
+            },
+            remove: async () => {}
+          }
+        }
+      )
+    })
+
+    stream?.stop()
+    expect(snapshots).toEqual(["a", "ab"])
+  })
+
   it("waits for an active read handle to close before removing the log", async () => {
     const events: string[] = []
     let stream: ReturnType<typeof startTeeStream> | undefined
