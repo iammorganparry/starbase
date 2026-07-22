@@ -8,7 +8,7 @@ import type {
   Session,
   SettledSessionStatus
 } from "@starbase/core"
-import { GhError, GitError, SessionNotFoundError, UNTITLED_SESSION } from "@starbase/core"
+import { GhError, GitError, SessionNotFoundError, supportsPlanMode, UNTITLED_SESSION } from "@starbase/core"
 import { Session as SessionSchema } from "@starbase/core"
 import { basename } from "node:path"
 import { FileSystem, Path } from "@effect/platform"
@@ -492,8 +492,10 @@ export class SessionStore extends Effect.Service<SessionStore>()(
        * harness therefore starts a fresh thread — the transcript on screen is
        * unaffected, but the agent won't recall earlier turns.
        *
-       * `plan` mode is Claude-only, so leaving Claude coerces it back to `ask`
-       * rather than handing a mode the new harness can't honour to the runner.
+       * `plan` mode survives a switch between harnesses that can hold it (see
+       * `supportsPlanMode`) and coerces back to `ask` on one that can't, rather
+       * than handing the runner a mode the new harness cannot honour — which on
+       * Codex would have meant a "planning" turn with write access.
        */
       const setHarness = (id: string, cli: CliKind, model: string) =>
         update(id, (s) =>
@@ -505,7 +507,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
                 model,
                 // `optional`, not nullable — undefined drops the key on write.
                 resumeId: undefined,
-                mode: s.mode === "plan" && cli !== "claude" ? "ask" : s.mode
+                mode: s.mode === "plan" && !supportsPlanMode(cli) ? "ask" : s.mode
               }
         )
 

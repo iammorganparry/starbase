@@ -2,11 +2,13 @@ import { Either, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   AdversarialReview,
+  CLI_KINDS,
   CreateSessionInput,
   GhStatus,
   GithubConfig,
   Repo,
   Session,
+  supportsPlanMode,
   WorkspaceConfig
 } from "./domain.js"
 
@@ -285,5 +287,32 @@ describe("GhStatus", () => {
       version: null
     })
     expect(Either.isRight(result)).toBe(true)
+  })
+})
+
+describe("supportsPlanMode", () => {
+  /**
+   * The gate is enforced in four places — the composer chip, the Shift+Tab
+   * cycle, and the renderer AND main-process coercions on harness switch — and
+   * three of them silently drop the mode rather than erroring. A predicate is
+   * what keeps a missed site from looking like a bug with no message.
+   */
+  it("covers every harness that can actually hold a plan turn", () => {
+    // Claude via `ExitPlanMode`; codex and opencode via the fenced ```plan block.
+    expect(supportsPlanMode("claude")).toBe(true)
+    expect(supportsPlanMode("codex")).toBe(true)
+    expect(supportsPlanMode("opencode")).toBe(true)
+  })
+
+  it("excludes the harnesses that would fabricate a plan", () => {
+    // cursor falls through to the scripted stub in `harness-adapter.ts`, so its
+    // "plan" would be invented; starbase picks a harness per step rather than
+    // running turns itself.
+    expect(supportsPlanMode("cursor")).toBe(false)
+    expect(supportsPlanMode("starbase")).toBe(false)
+  })
+
+  it("classifies every CliKind, so a new harness cannot be forgotten", () => {
+    for (const cli of CLI_KINDS) expect(typeof supportsPlanMode(cli)).toBe("boolean")
   })
 })

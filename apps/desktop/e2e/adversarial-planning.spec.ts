@@ -251,3 +251,79 @@ test("the Gigaplan settings pane is reachable and states its default", async ({ 
   // read the source to learn what it runs on out of the box.
   await expect(window.getByText(/Using the default \(claude · opus\)/)).toBeVisible()
 })
+
+/**
+ * Plan mode on a NON-Claude harness, end to end.
+ *
+ * The gate that kept plan mode Claude-only lived in four places at once — the
+ * composer chip, the Shift+Tab cycle, and the renderer AND main-process
+ * coercions that fired on a harness switch. Each is unit-tested, but three of
+ * them fail SILENTLY (they drop the mode rather than erroring), so a disagreement
+ * between them looks like a bug with no message. Only driving the real app
+ * proves the four now agree.
+ *
+ * What this deliberately does NOT cover: the Codex adapter's own plan loop. The
+ * suite runs with `STARBASE_SCRIPTED_AGENT=1`, so the scripted adapter answers
+ * here — see `codex-plan-loop.test.ts` for the real fenced-block round trip
+ * against a mocked SDK.
+ */
+const codexSeed = (worktreePath: string): SeedSession => ({
+  ...seeded(worktreePath),
+  id: "s_plan_codex",
+  title: "Codex planning session",
+  cli: "codex",
+  mode: "accept-edits"
+})
+
+test("plan mode is offered on a Codex session and proposes a reviewable plan", async ({
+  launchApp
+}) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: ({ repoPath }) => [codexSeed(repoPath)]
+  })
+  await window.getByText("Codex planning session").click()
+
+  // 1. The chip offers it. Before this change `allowPlan` was false off-Claude,
+  //    so the option was omitted from the menu entirely — not disabled, absent.
+  await window.getByRole("button", { name: "accept edits" }).click()
+  await expect(window.getByRole("menuitem", { name: "plan", exact: true })).toBeVisible()
+  await window.getByRole("menuitem", { name: "plan", exact: true }).click()
+  await expect(window.locator("[data-mode]").first()).toHaveAttribute("data-mode", "plan")
+
+  // 2. The mode survives to the runner and comes back as a reviewable plan card,
+  //    rather than being coerced to `ask` on the way.
+  const composer = window.getByPlaceholder(/Message/)
+  await composer.fill("refactor auth to a TokenStore")
+  await composer.press("Enter")
+
+  await expect(window.getByRole("button", { name: "Approve", exact: true }).first()).toBeVisible({
+    timeout: 15_000
+  })
+  await expect(window.getByText("Audit session middleware").first()).toBeVisible()
+})
+
+test("switching harness mid-plan keeps plan mode instead of dropping it", async ({ launchApp }) => {
+  // Both coercion sites (renderer `persistHarness`, main `setHarness`) used to
+  // fire on any move off Claude. A switch between two planning harnesses now
+  // costs the operator nothing.
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: ({ repoPath }) => [seeded(repoPath)]
+  })
+  await window.getByText("Planning session").click()
+
+  await window.getByRole("button", { name: "accept edits" }).click()
+  await window.getByRole("menuitem", { name: "plan", exact: true }).click()
+  await expect(window.locator("[data-mode]").first()).toHaveAttribute("data-mode", "plan")
+
+  await window.getByRole("button", { name: /opus/ }).click()
+  // The catalogue comes from the CLI itself, so match the shape of an id
+  // (`GPT-5.…`) rather than a specific one — it moves upstream.
+  await window.getByRole("menuitem").filter({ hasText: /^GPT-5\./ }).first().click()
+
+  await expect(window.getByPlaceholder("Message Codex…")).toBeVisible()
+  await expect(window.locator("[data-mode]").first()).toHaveAttribute("data-mode", "plan")
+})

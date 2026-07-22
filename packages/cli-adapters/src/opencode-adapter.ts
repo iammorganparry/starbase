@@ -1,9 +1,10 @@
 import type { PermissionMode, StreamEvent } from "@starbase/core"
-import { CliExecError, splitModelId } from "@starbase/core"
+import { CliExecError, resumePlanPrompt, splitModelId } from "@starbase/core"
 import type { Event, Part } from "@opencode-ai/sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
+import { hasPlanBlock, parsePlan } from "./plan-parse.js"
 import { stopChild, trackChild } from "./child-registry.js"
 import { requireWorktree } from "./cwd.js"
 import { worktreeEnv } from "./worktree-env.js"
@@ -61,6 +62,14 @@ export { splitModelId }
  * never raises a permission would sail past it. Denying the mutating tools at
  * the harness is the guarantee.
  *
+ * `plan` deliberately does NOT take that branch, even though a planning turn is
+ * every bit as read-only. This map is baked into `OPENCODE_CONFIG_CONTENT` when
+ * the SERVER spawns, and plan mode has to widen mid-run the moment the operator
+ * approves — a denial fixed at spawn could only be lifted by restarting the
+ * server and re-attaching the session. Plan turns are confined per-prompt
+ * instead, via `planTools` on `session.prompt`, which is both stronger (the
+ * write tools are never offered to the model at all) and revocable.
+ *
  * `external_directory` is always pinned: it defaults to `ask` in opencode, and
  * an unanswered ask deadlocks a headless run the moment the agent looks outside
  * the worktree. We route it through the bridge like everything else — and unlike
@@ -108,6 +117,58 @@ export const mapOpencodePermission = (
     external_directory: gate
   }
 }
+
+/**
+ * Tools withheld for a plan-mode turn, as `session.prompt`'s per-prompt `tools`
+ * map. Everything not named stays enabled.
+ *
+ * Withholding beats gating here. A gate asks the operator to approve an edit
+ * that has not been planned yet — which is the exact decision plan mode exists
+ * to defer — and an unanswered one parks the turn. A withheld tool simply is not
+ * in the model's toolset, so "read-only planning" is true rather than merely
+ * likely, and there is nothing to answer.
+ *
+ * `bash` is deliberately still available: planning means READING the code, and
+ * Claude's own plan mode leaves it available for exactly that (`agent-runner`'s
+ * `verdict` auto-allows commands under `plan`). The Codex equivalent is the same
+ * shape — a `read-only` sandbox blocks writes, not commands.
+ *
+ * `task` is withheld because a subagent inherits none of this: it runs in a
+ * child session whose own edits raise their own permissions, so a planner could
+ * otherwise spawn its way straight around the restriction.
+ */
+export const planTools: Readonly<Record<string, boolean>> = {
+  edit: false,
+  write: false,
+  patch: false,
+  task: false
+}
+
+/**
+ * How many plans one operator turn may propose before we stop intercepting.
+ *
+ * Past the cap the reply is emitted as ordinary prose instead: the plan is still
+ * readable, just not reviewable. A degradation rather than a dead end, and the
+ * same bound `codex-adapter.ts` uses — a model that cannot converge in six
+ * rounds will not converge in sixteen.
+ */
+const MAX_PLAN_ROUNDS = 6
+
+/**
+ * The agent's prose from a finished `session.prompt`, in part order.
+ *
+ * Read off the RESPONSE rather than the event stream because a plan turn holds
+ * its text back from the stream (see `createOpencodeMapper`), so this is the
+ * only place it still exists. `synthetic` parts are opencode's own scaffolding,
+ * not the model talking — the same filter `forPart` applies.
+ */
+export const assistantText = (parts: ReadonlyArray<Part> | undefined): string =>
+  (parts ?? [])
+    .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
+    .filter((p) => p.synthetic !== true && p.ignored !== true)
+    .map((p) => p.text)
+    .join("")
+    .trim()
 
 /**
  * opencode tool names are lowercase (`bash`, `edit`); Starbase's transcript UI
@@ -317,7 +378,24 @@ export interface OpencodeMapper {
   readonly apply: (event: Event) => ReadonlyArray<StreamEvent>
 }
 
-export const createOpencodeMapper = (opencodeSessionId: () => string | null): OpencodeMapper => {
+export const createOpencodeMapper = (
+  opencodeSessionId: () => string | null,
+  /**
+   * Hold back the agent's prose this turn. True only while a plan-mode turn is
+   * in flight: the whole reply IS the plan, and streaming it as chat text would
+   * show the operator the same plan twice — once as an interactive card they can
+   * comment on, once as inert markdown they can't.
+   *
+   * A getter rather than a flag because one operator turn spans several prompts:
+   * the plan turn is held back, the execution turn that follows approval is not,
+   * and the mapper outlives both.
+   *
+   * Held back, not dropped: `driveOpencode` replays the text as an ordinary
+   * `Assistant` event when the turn produced no plan block, so a model that
+   * ignored the protocol still reaches the operator instead of returning silence.
+   */
+  suppressText: () => boolean = () => false
+): OpencodeMapper => {
   /** partID → characters already emitted, so we only ever send the suffix. */
   const emitted = new Map<string, number>()
   /** callID → true once ToolStart is out, so `running` updates don't re-open it. */
@@ -378,6 +456,7 @@ export const createOpencodeMapper = (opencodeSessionId: () => string | null): Op
         // `synthetic` parts are opencode's own scaffolding (e.g. injected
         // context), not the model talking — showing them would confuse.
         if (part.synthetic === true || part.ignored === true) return []
+        if (suppressText()) return []
         const text = suffix(part.id, part.text)
         return text.length === 0 ? [] : [{ _tag: "Assistant", text, ...forAgent }]
       }
@@ -636,7 +715,14 @@ const driveOpencode = async (
     const client = createOpencodeClient({ baseUrl: url })
 
     let opencodeSessionId: string | null = null
-    const mapper = createOpencodeMapper(() => opencodeSessionId)
+    // Whether the NEXT prompt is a planning one. Starts true in plan mode and
+    // flips exactly once, when the operator approves — which is why it is a
+    // mutable flag rather than `spec.mode === "plan"` read at each use.
+    let planning = spec.mode === "plan"
+    const mapper = createOpencodeMapper(
+      () => opencodeSessionId,
+      () => planning
+    )
 
     // Subscribe BEFORE prompting: the permission bus is how the agent asks to
     // act, so missing early events would deadlock the very first tool call.
@@ -701,33 +787,80 @@ const driveOpencode = async (
     await runP(ctx.emit({ _tag: "Started", sessionId: opencodeSessionId }))
 
     try {
-      const result = await client.session.prompt({
-        path: { id: opencodeSessionId },
-        body: {
-          ...(spec.model === null ? {} : { model: splitModelId(spec.model) }),
-          parts: [{ type: "text", text: spec.prompt }]
+      // One operator-facing turn can span several opencode prompts, because plan
+      // mode is a CONVERSATION: the agent proposes, the operator revises or
+      // approves, and their verdict can only reach the model as the next prompt.
+      // opencode has no `ExitPlanMode` to hand a decision back through, exactly
+      // as Codex has none — so both harnesses land on the same shape.
+      let turnPrompt = spec.prompt
+      let planRound = 0
+      for (;;) {
+        let followUp: string | null = null
+        const result = await client.session.prompt({
+          path: { id: opencodeSessionId },
+          body: {
+            ...(spec.model === null ? {} : { model: splitModelId(spec.model) }),
+            // Withheld per PROMPT, not per run: the plan turn cannot edit, and
+            // the execution prompt that follows approval can. See `planTools`.
+            ...(planning ? { tools: { ...planTools } } : {}),
+            parts: [{ type: "text", text: turnPrompt }]
+          }
+        })
+
+        // The SDK REPORTS failure rather than throwing it, so this has to be
+        // checked: an unchecked `data?.info` turns a rejected prompt into a `Done`
+        // with zero tokens — the run does nothing at all and reports success, and
+        // the operator is left with no error to act on. Raise it instead; the
+        // runner folds a failed run into a `Failed` the transcript shows.
+        if (result.error !== undefined) throw new Error(promptError(result.error))
+
+        if (planning) {
+          // The mapper held this turn's prose back, so the reply has to be read
+          // off the response rather than the stream. `parts` is the whole final
+          // message — which is what `parsePlan` wants anyway: it reads the
+          // ```flow and ```<lang> step <NN> blocks below the fence too, exactly
+          // as it does for Claude's ExitPlanMode payload.
+          const reply = assistantText(result.data?.parts)
+          if (hasPlanBlock(reply) && planRound < MAX_PLAN_ROUNDS) {
+            planRound += 1
+            const plan = parsePlan(reply, `plan_${sessionId}_${planRound}`)
+            const decision = await runP(ctx.proposePlan(plan))
+            if (decision._tag === "Revise") followUp = decision.feedback
+            else if (decision._tag === "Approve") {
+              // The restriction lifts here and nowhere else. `spec.readOnly`
+              // still wins — a caller that pinned this run read-only (the
+              // adversarial roles) is not handed write access by an approval.
+              planning = spec.readOnly !== true && decision.mode !== "plan"
+              followUp = resumePlanPrompt(plan)
+            }
+            // Reject: `followUp` stays null and the turn ends, which is what
+            // rejection means.
+          } else if (reply.length > 0) {
+            // No plan (or the round cap is spent), so the held-back prose is all
+            // the operator gets — replay it rather than returning silence.
+            await runP(ctx.emit({ _tag: "Assistant", text: reply }))
+          }
         }
-      })
 
-      // The SDK REPORTS failure rather than throwing it, so this has to be
-      // checked: an unchecked `data?.info` turns a rejected prompt into a `Done`
-      // with zero tokens — the run does nothing at all and reports success, and
-      // the operator is left with no error to act on. Raise it instead; the
-      // runner folds a failed run into a `Failed` the transcript shows.
-      if (result.error !== undefined) throw new Error(promptError(result.error))
-
-      // The turn is over the moment this resolves — `session.idle` lands AFTER
-      // it, so waiting for the bus would mean never emitting `Done` at all. The
-      // response's own message is the authoritative final context record.
-      const info = result.data?.info
-      if (!signal.aborted) {
-        await runP(
-          ctx.emit(
-            info === undefined
-              ? { _tag: "Done", costUsd: 0, tokens: 0 }
-              : { _tag: "Done", costUsd: info.cost, tokens: totalTokens(info.tokens) }
+        // The turn is over the moment this resolves — `session.idle` lands AFTER
+        // it, so waiting for the bus would mean never emitting `Done` at all. The
+        // response's own message is the authoritative final context record.
+        //
+        // Held while another prompt is queued: the operator asked for a plan and
+        // is owed one continuous turn, not one that "finished" the instant it
+        // proposed and settled the message out from under their verdict.
+        const info = result.data?.info
+        if (!signal.aborted && followUp === null) {
+          await runP(
+            ctx.emit(
+              info === undefined
+                ? { _tag: "Done", costUsd: 0, tokens: 0 }
+                : { _tag: "Done", costUsd: info.cost, tokens: totalTokens(info.tokens) }
+            )
           )
-        )
+        }
+        if (followUp === null || signal.aborted) break
+        turnPrompt = followUp
       }
     } finally {
       // Whatever happened to the turn, the server is about to go: stop the pump

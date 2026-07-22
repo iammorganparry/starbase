@@ -481,12 +481,37 @@ describe("SessionStore", () => {
       expect(exit.value.resumeId).toBeUndefined()
     })
 
-    it("coerces plan mode when leaving Claude (plan is Claude-only)", async () => {
+    /**
+     * Codex holds a plan turn through the fenced ` ```plan ` block, so switching
+     * to it mid-plan is no longer a downgrade. Coercing here would have thrown
+     * away the operator's in-flight planning session for no reason.
+     */
+    it("keeps plan mode when switching to another harness that can plan", async () => {
       const exit = await runExit(
         Effect.gen(function* () {
           const created = yield* SessionStore.create(input({ title: "Switcher" }))
           yield* SessionStore.setMode(created.id, "plan")
           yield* SessionStore.setHarness(created.id, "codex", "gpt-5.6-sol")
+          return yield* SessionStore.get(created.id)
+        }).pipe(Effect.provide(services)),
+        temp.layer
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.mode).toBe("plan")
+    })
+
+    /**
+     * Cursor has no real adapter — it falls through to the scripted stub — so a
+     * "plan" it produced would be fabricated. Handing the runner a mode the new
+     * harness cannot honour is exactly what this coercion exists to prevent.
+     */
+    it("coerces plan mode when switching to a harness that cannot plan", async () => {
+      const exit = await runExit(
+        Effect.gen(function* () {
+          const created = yield* SessionStore.create(input({ title: "Switcher" }))
+          yield* SessionStore.setMode(created.id, "plan")
+          yield* SessionStore.setHarness(created.id, "cursor", "composer-1")
           return yield* SessionStore.get(created.id)
         }).pipe(Effect.provide(services)),
         temp.layer

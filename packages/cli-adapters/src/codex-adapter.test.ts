@@ -42,6 +42,31 @@ describe("mapCodexPolicy", () => {
   it("defaults to not read-only, so ordinary sessions are unaffected", () => {
     expect(mapCodexPolicy("ask")).toStrictEqual(mapCodexPolicy("ask", false))
   })
+
+  /**
+   * Plan mode's entire promise is that the agent CANNOT edit until the operator
+   * approves. On Claude the SDK's own plan permission mode keeps that promise;
+   * Codex has no equivalent, so the sandbox is the only thing keeping it. Before
+   * this branch existed `plan` fell through to `workspace-write` and a planning
+   * turn could rewrite the worktree while claiming to be planning.
+   */
+  it("plan mode is read-only even without an explicit readOnly flag", () => {
+    expect(mapCodexPolicy("plan")).toStrictEqual({
+      sandboxMode: "read-only",
+      approvalPolicy: "never"
+    })
+    // And it is not quietly widened by the flags that widen other modes.
+    expect(mapCodexPolicy("plan", false, false)).toStrictEqual({
+      sandboxMode: "read-only",
+      approvalPolicy: "never"
+    })
+  })
+
+  it("still widens once an approved plan restores a real exec mode", () => {
+    // The approval path re-opens the thread with the RESTORED mode, not "plan" —
+    // if this widened nothing, an approved plan could never be carried out.
+    expect(mapCodexPolicy("accept-edits").sandboxMode).toBe("workspace-write")
+  })
 })
 
 describe("codexEventToStreamEvents", () => {

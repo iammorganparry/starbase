@@ -32,6 +32,7 @@ import { FileSystem, Path } from "@effect/platform"
 import type { CommandExecutor } from "@effect/platform"
 import { Cause, Deferred, Effect, Fiber, Mailbox, Option, Ref, Stream } from "effect"
 import { adhdNote } from "./adhd-prompt.js"
+import { planNote } from "./plan-prompt.js"
 import { questionNote } from "./question-prompt.js"
 import { AppPaths } from "./app-paths.js"
 import { ConfigService } from "./config.js"
@@ -680,7 +681,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                   digest.throughMessageId
                 )
 
-          const planNote = savedPlans.length > 0 ? `${planPointerNote(worktreePath, savedPlans)}\n\n` : ""
+          // Renamed from `planNote` when the plan-mode protocol note arrived: two
+          // different plan-related prefixes with one name is a trap.
+          const planPointer = savedPlans.length > 0 ? `${planPointerNote(worktreePath, savedPlans)}\n\n` : ""
           const primer = digest === null ? "" : `${renderPrimer(digest, tail)}\n\n`
           // ADHD mode rides in the same per-turn prefix as the primer and the plan
           // pointer. There is no system-prompt hook that every harness shares, and
@@ -696,6 +699,12 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // mode, for the same reason: no system-prompt hook is shared by every
           // harness, and this has to survive a mid-session harness switch.
           const ask = `${questionNote(cli)}\n\n`
+          // How this harness submits a plan. Null for Claude — the adapter passes
+          // `planModeInstructions` as a real SDK option there, and saying it twice
+          // would compete with the `ExitPlanMode` tool the harness is steered
+          // toward. Everything else is told to end its reply with the block.
+          const planProtocol = mode === "plan" ? planNote(cli) : null
+          const planning = planProtocol === null ? "" : `${planProtocol}\n\n`
 
           const spec: SessionSpec = {
             cli,
@@ -708,8 +717,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // with nothing to say — the empty "CLAUDE" block. When the operator
             // opens with a command, the context rides along AFTER it instead.
             prompt: isSlashCommand(text)
-              ? `${text}\n\n${primer}${planNote}${adhd}${ask}`.trimEnd()
-              : `${primer}${planNote}${adhd}${ask}${text}`,
+              ? `${text}\n\n${primer}${planPointer}${adhd}${ask}${planning}`.trimEnd()
+              : `${primer}${planPointer}${adhd}${ask}${planning}${text}`,
             images,
             binPath,
             mode,

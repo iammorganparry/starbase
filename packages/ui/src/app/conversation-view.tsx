@@ -17,6 +17,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { useHotkeys } from "react-hotkeys-hook"
 import { ImageIcon, Lock, RotateCcw, X, Zap } from "lucide-react"
 import type { ArchiveReason, ContextPhase } from "@starbase/core"
+import { supportsPlanMode } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { Button } from "../components/button.js"
@@ -52,7 +53,7 @@ const QUEUE_PREVIEW = 5
  */
 const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"]
 const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
-  cli === "claude" ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
+  supportsPlanMode(cli) ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
 
 export interface ConversationViewProps {
   messages: ReadonlyArray<Message>
@@ -466,7 +467,7 @@ export function ConversationView({
                 onSetMode={onSetMode}
                 adversarialPlanning={adversarialPlanning}
                 onPlanAdversarially={onPlanAdversarially}
-                allowPlan={cli === "claude"}
+                allowPlan={supportsPlanMode(cli)}
                 mcp={mcp}
                 onOpenMcp={onOpenMcp}
                 onSend={onSend}
