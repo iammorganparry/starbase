@@ -10,6 +10,7 @@ import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { requireWorktree } from "./cwd.js"
 import { worktreeEnv } from "./worktree-env.js"
 import { capOutput } from "./output-cap.js"
+import { formatQuestionAnswers } from "./question-prompt.js"
 import { hasPlanBlock, parsePlan, planModeInstructions } from "./plan-parse.js"
 
 /**
@@ -162,14 +163,7 @@ export const parseSdkQuestions = (payload: Record<string, unknown>): ReadonlyArr
 export const formatQuestionAnswer = (
   questions: ReadonlyArray<Question>,
   answers: ReadonlyArray<QuestionAnswer>
-): string => {
-  const lines = questions.map((q, i) => {
-    const a = answers[i]
-    const picks = a ? [...a.selected, ...(a.other ? [a.other] : [])] : []
-    return `• ${q.header || q.question}: ${picks.join(", ") || "(no selection)"}`
-  })
-  return `The user answered your question(s):\n${lines.join("\n")}\n\nUse these answers and continue — do not ask again.`
-}
+): string => formatQuestionAnswers(questions, answers)
 
 /**
  * Tools that spawn a watch-only sub-agent. Claude Code has surfaced this as

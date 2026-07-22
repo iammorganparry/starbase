@@ -182,9 +182,11 @@ Your summary REPLACES this conversation. The agent that reads it will have no ot
 
 Extract, faithfully and specifically:
 - goal: what the user is ultimately trying to achieve, in one or two sentences.
+- recentWork: the last 3-6 things that actually happened, OLDEST FIRST, ending with the most recent. Name the command, the file and the outcome: "ran pnpm test — 3 failures in context-manager.test.ts", "added the stopping state to conversation-machine.ts and typecheck passed". This is what the agent did just before the summary; it is how it knows not to redo work or claim progress it cannot describe.
+- nextStep: the ONE action the session was about to take next, in a single line. Not the backlog — the immediate next move, e.g. "re-run pnpm typecheck now that the import is fixed". Empty string only if the last exchange genuinely closed.
 - decisions: choices that were made AND the reasoning, e.g. "chose X over Y because Z". Include every decision that would be expensive to relitigate.
 - filesTouched: repo-relative paths that were created or modified.
-- openThreads: work explicitly left unfinished, known bugs, or agreed next steps.
+- openThreads: everything else left unfinished — known bugs, agreed follow-ups. Do not repeat nextStep here.
 - preferences: standing instructions from the user that must keep applying (style, tools, constraints, tone).
 - midFlow: true if the session is in the MIDDLE of something whose working state a summary would destroy — a half-finished edit sequence, a live debugging thread chasing a specific failure, a plan being executed step by step, a question the user has not answered yet. False if the last exchange reached a natural boundary: work landed, a question answered, a topic closed.
 - midFlowReason: one short line naming what is in flight. Empty string when midFlow is false.
@@ -199,6 +201,8 @@ Reply with ONLY a fenced json code block, no prose before or after:
 \`\`\`json
 {
   "goal": "…",
+  "recentWork": ["…"],
+  "nextStep": "…",
   "decisions": ["…"],
   "filesTouched": ["…"],
   "openThreads": ["…"],
@@ -232,6 +236,33 @@ const DigestReply = Schema.Struct({
  * read means "we don't know", and not knowing must never hold a session open:
  * it falls back to false, i.e. today's behaviour.
  */
+/**
+ * The short-term-memory fields, read LENIENTLY and outside `DigestReply` for
+ * the same reason as `midFlow`.
+ *
+ * These two are the difference between a compacted agent that picks up where it
+ * left off and one that re-plans from scratch — but they are also the two a
+ * small model is most likely to fumble, because they ask for prose rather than
+ * a copy of something already in the transcript. Rejecting an otherwise good
+ * digest over `"recentWork": "…"` (a string where an array was asked for) would
+ * trade the whole summary for a formatting slip, on the cheapest tier, where
+ * formatting slips are the norm. Absent or malformed reads as "nothing to say",
+ * which degrades to exactly the primer we rendered before these existed.
+ */
+const readShortTerm = (parsed: unknown): { recentWork: ReadonlyArray<string>; nextStep: string } => {
+  const record = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {}
+  const raw = record.recentWork
+  // A lone string is the common near-miss — take it as a one-item list rather
+  // than discarding what the model plainly meant.
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : []
+  const recentWork = list
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+  const nextStep = typeof record.nextStep === "string" ? record.nextStep.trim() : ""
+  return { recentWork, nextStep }
+}
+
 const readMidFlow = (parsed: unknown): { midFlow: boolean; midFlowReason?: string } => {
   const record = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {}
   const midFlow = record.midFlow === true
@@ -280,7 +311,7 @@ export const parseDigest = (
     // empty (a short session has made no decisions yet), but a summary that
     // cannot say what the session is FOR has failed at the only job it has.
     if (reply.goal.trim().length === 0) return null
-    return { ...reply, ...readMidFlow(parsed), throughMessageId, builtAt }
+    return { ...reply, ...readShortTerm(parsed), ...readMidFlow(parsed), throughMessageId, builtAt }
   } catch {
     return null
   }
@@ -314,12 +345,21 @@ export const renderPrimer = (
     .filter((line): line is string => line !== null)
     .join("\n\n")
 
+  // Ordered the way an agent picking the thread back up needs it: where we're
+  // going, what just happened, what to do next — and only then the reference
+  // material (decisions, files, backlog, standing preferences). Putting the
+  // backlog before the next action is what makes a compacted agent re-plan.
+  const nextStep =
+    digest.nextStep === undefined || digest.nextStep.trim().length === 0
+      ? ""
+      : `\n\nTHE IMMEDIATE NEXT ACTION\n${digest.nextStep.trim()}`
+
   return `[CONTEXT COMPACTED]
 
-This session has been running long enough that its earlier context was summarised to keep quality high. What follows is YOUR OWN prior context in condensed form — treat it as memory you already have, not as a briefing from someone else. Do not re-introduce yourself, and do not re-ask anything settled below.
+This session has been running long enough that its earlier context was summarised to keep quality high. What follows is YOUR OWN prior context in condensed form — treat it as memory you already have, not as a briefing from someone else. Do not re-introduce yourself, do not re-ask anything settled below, and do not redo work listed as already done.
 
 GOAL
-${digest.goal}${bullets("DECISIONS ALREADY MADE (do not relitigate)", digest.decisions)}${bullets("FILES TOUCHED", digest.filesTouched)}${bullets("OPEN THREADS", digest.openThreads)}${bullets("STANDING USER PREFERENCES (keep applying these)", digest.preferences)}${
+${digest.goal}${bullets("WHAT I JUST DID (most recent last)", digest.recentWork ?? [])}${nextStep}${bullets("DECISIONS ALREADY MADE (do not relitigate)", digest.decisions)}${bullets("FILES TOUCHED", digest.filesTouched)}${bullets("OTHER OPEN THREADS", digest.openThreads)}${bullets("STANDING USER PREFERENCES (keep applying these)", digest.preferences)}${
     tailRendered.length === 0
       ? ""
       : `\n\nMOST RECENT TURNS (verbatim, these happened after the summary above)\n\n${tailRendered}`

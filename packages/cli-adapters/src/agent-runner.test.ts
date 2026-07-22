@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, join } from "node:path"
 import type { GateDecision, Message, PermissionMode, Plan, Session, StreamEvent } from "@starbase/core"
 import { CliExecError, findApprovedPlan, STOPPED_NOTE } from "@starbase/core"
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Stream, TestClock, TestContext } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape, PermissionDecision } from "./adapter.js"
@@ -896,7 +896,11 @@ describe("AgentRunner plan library", () => {
         yield* runner.prompt(SESSION, "just do X").pipe(Stream.runDrain)
       }).pipe(Effect.provide(base))
     )
-    expect(captured.prompt).toBe("just do X")
+    // The standing "ask through your native channel" note prefixes every turn,
+    // so assert on the plan pointer's absence rather than the whole string.
+    expect(captured.prompt).toContain("just do X")
+    expect(captured.prompt).not.toContain("saved plan")
+    expect(captured.prompt?.endsWith("just do X")).toBe(true)
   })
 
   it("keeps a slash command first, so the harness still expands it", async () => {
@@ -1328,6 +1332,81 @@ describe("AgentRunner stop", () => {
     expect(wasInterrupted).toBe(true)
   })
 
+  /**
+   * The invariant behind the regression this change exists for.
+   *
+   * `stop` used to read a session's run by id alone, so an interrupt that landed
+   * after the NEXT turn had been forked killed that turn instead — the
+   * operator's fresh message came back as a bare "Stopped." and they re-sent it
+   * (64 of 946 assistant turns in ~/starbase/transcripts are exactly this).
+   *
+   * Asserting the SYMPTOM cannot be done honestly: reproducing it needs the
+   * stop's map read to be scheduled after the next run registers, which is a
+   * timing construction, not a fact about the code — the same reason the
+   * deregistration guard next to it is reviewed rather than pinned. What IS
+   * deterministic is the ordering that makes the symptom impossible: a turn
+   * cannot begin setup while a stop for that session is still in flight. Pin
+   * that, and the race has nowhere to happen.
+   *
+   * Run A's teardown is made slow on purpose, so "did B wait?" is observable
+   * rather than a coin toss.
+   */
+  it("holds the next turn until an in-flight stop has finished unwinding", async () => {
+    const log = await Effect.gen(function* () {
+      const started = yield* Deferred.make<boolean>()
+      const order = yield* Ref.make<ReadonlyArray<string>>([])
+      const note = (what: string) => Ref.update(order, (l) => [...l, what])
+      const slowAdapter = Layer.succeed(
+        CliAdapter,
+        CliAdapter.of({
+          run: (_sessionId, spec, ctx) =>
+            (spec.prompt.includes("second")
+              ? Effect.gen(function* () {
+                  yield* note("B-setup-ran")
+                  yield* ctx.emit({ _tag: "Assistant", text: "second" })
+                  yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 1 })
+                })
+              : Effect.gen(function* () {
+                  yield* ctx.emit({ _tag: "Assistant", text: "first" })
+                  yield* Deferred.succeed(started, true)
+                  yield* Effect.never
+                }).pipe(
+                  // A real harness takes time to tear its child down; without
+                  // that, "B waited" and "B raced and won" look identical.
+                  Effect.onInterrupt(() => Effect.sleep("400 millis").pipe(Effect.zipRight(note("A-torn-down"))))
+                )) as ReturnType<CliAdapterShape["run"]>,
+          stop: () => Effect.void
+        })
+      )
+      const base = Layer.mergeAll(
+        AgentRunner.Default,
+        ConfigService.Default,
+        SessionStore.Default,
+        TranscriptStore.Default,
+        BackgroundTaskStore.Default,
+        PlanStore.Default,
+        ContextManager.Default,
+        slowAdapter,
+        noHarnesses,
+        temp.layer
+      )
+      return yield* Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        yield* runner.setMode(SESSION, "ask")
+        yield* Effect.fork(runner.prompt(SESSION, "first").pipe(Stream.runDrain))
+        yield* Deferred.await(started).pipe(Effect.timeout("5 seconds"))
+        // Forked, NOT awaited — this is how the renderer used to fire it, and
+        // the whole point is that firing it that way must still be safe.
+        yield* Effect.fork(runner.stop(SESSION))
+        yield* Effect.sleep("50 millis")
+        yield* runner.prompt(SESSION, "second").pipe(Stream.runDrain, Effect.timeout("5 seconds"))
+        return yield* Ref.get(order)
+      }).pipe(Effect.provide(base))
+    }).pipe(Effect.runPromise)
+
+    expect(log).toEqual(["A-torn-down", "B-setup-ran"])
+  })
+
   it("ends the stream and records the stop, rather than reporting a crash", async () => {
     const { events, transcript } = await runAndStop()
     // The stream must terminate — a consumer that never completes hangs the UI.
@@ -1336,6 +1415,113 @@ describe("AgentRunner stop", () => {
     expect(events.some((e) => e._tag === "Failed" && e.message.includes("failed"))).toBe(false)
     // And the turn settles, rather than streaming forever.
     expect(transcript[transcript.length - 1]!.streaming).toBe(false)
+  })
+})
+
+/**
+ * The other half of the silent-turn bug: a harness child that hangs before it
+ * says anything at all.
+ *
+ * Nothing in the stack used to bound this. `drainRun` in the renderer only
+ * synthesises a terminal event when the stream ENDS, `Effect.ensuring(out.end)`
+ * only runs when `adapter.run` RETURNS, and the unsettled-turn instrumentation
+ * is a finalizer — none of them can fire on a run that neither emits nor exits.
+ * 32 of 946 assistant turns in ~/starbase/transcripts are frozen exactly there:
+ * empty parts, `streaming: true`, and an eyebrow pulsing over nothing.
+ */
+describe("AgentRunner first-event watchdog", () => {
+  it("settles a turn whose harness never says anything", async () => {
+    const events = await Effect.gen(function* () {
+      const entered = yield* Deferred.make<boolean>()
+      const muteAdapter = Layer.succeed(
+        CliAdapter,
+        CliAdapter.of({
+          run: () =>
+            Effect.gen(function* () {
+              // Signals that the run is live WITHOUT emitting — the case a
+              // finalizer cannot see, because nothing ever ends.
+              yield* Deferred.succeed(entered, true)
+              yield* Effect.never
+            }) as ReturnType<CliAdapterShape["run"]>,
+          stop: () => Effect.void
+        })
+      )
+      const base = Layer.mergeAll(
+        AgentRunner.Default,
+        ConfigService.Default,
+        SessionStore.Default,
+        TranscriptStore.Default,
+        BackgroundTaskStore.Default,
+        PlanStore.Default,
+        ContextManager.Default,
+        muteAdapter,
+        noHarnesses,
+        temp.layer
+      )
+      return yield* Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        const seen: Array<StreamEvent> = []
+        const consumer = yield* Effect.fork(
+          runner.prompt(SESSION, "hello?").pipe(Stream.runForEach((e) => Effect.sync(() => seen.push(e))))
+        )
+        // The watchdog is forked immediately before the adapter runs, so once
+        // the adapter is live the sleep is registered and the clock can jump.
+        yield* Deferred.await(entered)
+        yield* TestClock.adjust("121 seconds")
+        yield* Fiber.join(consumer).pipe(Effect.ignore)
+        return seen
+      }).pipe(Effect.provide(base))
+    }).pipe(Effect.provide(TestContext.TestContext), Effect.runPromise)
+
+    const failed = events.find((e) => e._tag === "Failed")
+    expect(failed).toBeDefined()
+    // Actionable, and NOT the bare "Stopped." — the operator did not do this.
+    expect(failed).toMatchObject({ message: expect.stringContaining("produced no output") })
+    expect(events.some((e) => e._tag === "Failed" && e.message === STOPPED_NOTE)).toBe(false)
+  })
+
+  it("leaves a slow but living turn alone", async () => {
+    const events = await Effect.gen(function* () {
+      const spoke = yield* Deferred.make<boolean>()
+      const chattyAdapter = Layer.succeed(
+        CliAdapter,
+        CliAdapter.of({
+          run: (_sessionId, _spec, ctx) =>
+            Effect.gen(function* () {
+              yield* ctx.emit({ _tag: "Assistant", text: "thinking hard" })
+              yield* Deferred.succeed(spoke, true)
+              yield* Effect.never
+            }) as ReturnType<CliAdapterShape["run"]>,
+          stop: () => Effect.void
+        })
+      )
+      const base = Layer.mergeAll(
+        AgentRunner.Default,
+        ConfigService.Default,
+        SessionStore.Default,
+        TranscriptStore.Default,
+        BackgroundTaskStore.Default,
+        PlanStore.Default,
+        ContextManager.Default,
+        chattyAdapter,
+        noHarnesses,
+        temp.layer
+      )
+      return yield* Effect.gen(function* () {
+        const runner = yield* AgentRunner
+        const seen: Array<StreamEvent> = []
+        yield* Effect.fork(
+          runner.prompt(SESSION, "hello?").pipe(Stream.runForEach((e) => Effect.sync(() => seen.push(e))))
+        )
+        yield* Deferred.await(spoke)
+        yield* TestClock.adjust("121 seconds")
+        return seen
+      }).pipe(Effect.provide(base))
+    }).pipe(Effect.provide(TestContext.TestContext), Effect.runPromise)
+
+    // One event is enough to prove the harness is alive. Killing a slow turn
+    // that is genuinely working would be far worse than the bug being fixed.
+    expect(events.some((e) => e._tag === "Failed")).toBe(false)
   })
 })
 

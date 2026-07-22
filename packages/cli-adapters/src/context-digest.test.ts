@@ -213,10 +213,27 @@ describe("lastMessageId", () => {
 describe("digestPrompt", () => {
   it("names every field the parser requires", () => {
     const p = digestPrompt("RENDERED")
-    for (const field of ["goal", "decisions", "filesTouched", "openThreads", "preferences"]) {
+    for (const field of [
+      "goal",
+      "recentWork",
+      "nextStep",
+      "decisions",
+      "filesTouched",
+      "openThreads",
+      "preferences"
+    ]) {
       expect(p).toContain(field)
     }
     expect(p).toContain("RENDERED")
+  })
+
+  // The two short-term-memory fields are the ones a model most easily answers
+  // with an activity label ("worked on tests"), which is worth nothing to the
+  // agent reading it back.
+  it("demands concrete recent work and a single next action", () => {
+    const p = digestPrompt("x")
+    expect(p).toContain("OLDEST FIRST")
+    expect(p).toContain("the ONE action")
   })
 
   // The model runs on the cheapest tier available, so the instruction states the
@@ -243,6 +260,37 @@ describe("parseDigest", () => {
     expect(digest!.decisions).toHaveLength(1)
     expect(digest!.throughMessageId).toBe("m9")
     expect(digest!.builtAt).toBe(at)
+  })
+
+  it("reads recentWork and nextStep when the model supplies them", () => {
+    const reply = JSON.stringify({
+      ...JSON.parse(good),
+      recentWork: ["ran pnpm test — 3 failures in ratelimit.test.ts", "  ", "fixed the bucket refill window"],
+      nextStep: "  re-run pnpm test  "
+    })
+    const digest = parseDigest(`\`\`\`json\n${reply}\n\`\`\``, "m9", at)
+    // Blank entries are dropped, order is preserved, both ends are trimmed.
+    expect(digest!.recentWork).toEqual([
+      "ran pnpm test — 3 failures in ratelimit.test.ts",
+      "fixed the bucket refill window"
+    ])
+    expect(digest!.nextStep).toBe("re-run pnpm test")
+  })
+
+  // These two ask for prose rather than a copy of something already in the
+  // transcript, so they are the fields a cheap model fumbles most. Fumbling one
+  // must never cost the whole summary.
+  it("degrades rather than rejecting when the short-term fields are malformed", () => {
+    const reply = JSON.stringify({ ...JSON.parse(good), recentWork: { nope: 1 }, nextStep: 42 })
+    const digest = parseDigest(`\`\`\`json\n${reply}\n\`\`\``, "m9", at)
+    expect(digest).not.toBeNull()
+    expect(digest!.recentWork).toEqual([])
+    expect(digest!.nextStep).toBe("")
+  })
+
+  it("takes a lone recentWork string as a one-item list", () => {
+    const reply = JSON.stringify({ ...JSON.parse(good), recentWork: "pinned typescript to 7" })
+    expect(parseDigest(`\`\`\`json\n${reply}\n\`\`\``, "m9", at)!.recentWork).toEqual(["pinned typescript to 7"])
   })
 
   // Small models garnish. Rather than demand obedience, tolerate the garnish.
@@ -389,6 +437,36 @@ describe("renderPrimer", () => {
     expect(primer).toContain("src/routes/billing.ts")
     expect(primer).toContain("429 test")
     expect(primer).toContain("Prefers Effect")
+  })
+
+  it("carries what was just done and the immediate next action", () => {
+    const primer = renderPrimer(
+      { ...digest, recentWork: ["ran pnpm test — 3 failures"], nextStep: "fix the refill window" },
+      []
+    )
+    expect(primer).toContain("WHAT I JUST DID")
+    expect(primer).toContain("ran pnpm test — 3 failures")
+    expect(primer).toContain("THE IMMEDIATE NEXT ACTION")
+    expect(primer).toContain("fix the refill window")
+  })
+
+  // Order is the whole point: an agent that reads the backlog before its next
+  // move re-plans from scratch, which reads to the operator as amnesia.
+  it("puts the next action ahead of the backlog", () => {
+    const primer = renderPrimer({ ...digest, nextStep: "fix the refill window" }, [])
+    expect(primer.indexOf("THE IMMEDIATE NEXT ACTION")).toBeLessThan(primer.indexOf("OTHER OPEN THREADS"))
+  })
+
+  // Digests persisted before these fields existed must still render.
+  it("omits both new sections when the digest predates them", () => {
+    const primer = renderPrimer(digest, [])
+    expect(primer).not.toContain("WHAT I JUST DID")
+    expect(primer).not.toContain("THE IMMEDIATE NEXT ACTION")
+    expect(primer).toContain("Add rate limiting")
+  })
+
+  it("omits the next action when the session reached a boundary", () => {
+    expect(renderPrimer({ ...digest, nextStep: "   " }, [])).not.toContain("THE IMMEDIATE NEXT ACTION")
   })
 
   // Told this is a briefing from a third party, models re-introduce themselves
