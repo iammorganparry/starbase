@@ -67,13 +67,13 @@ describe("SessionSidebar archived sessions", () => {
 })
 
 /**
- * A split is ONE sidebar row, drawn at one of its members' positions. Which
- * member owns that row is the whole subject here: the first version keyed on
- * `panes[0]` outright, so any list that didn't happen to contain the first pane
- * rendered no pill at all — and the split stayed on screen with nothing in the
- * sidebar pointing at it.
+ * A split is ONE sidebar row, and it must survive every way the list can shrink
+ * beneath it. An early version keyed the row on `panes[0]`, so any list that
+ * didn't happen to contain the first pane rendered no pill at all — the split
+ * stayed on screen with nothing in the sidebar pointing at it. These pin the
+ * conditions that used to break it; where the row SITS is the next block down.
  */
-describe("SessionSidebar split pill ownership", () => {
+describe("SessionSidebar split pill presence", () => {
   const SPLIT: SplitGroup = {
     id: "g:first",
     panes: [
@@ -159,13 +159,97 @@ describe("SessionSidebar split pill ownership", () => {
   })
 
   it("draws ONE pill for a split that spans two repo groups", () => {
-    // Ownership is resolved against the whole active list, not per rendered
-    // group — resolving it per group would draw the same pill in both repos.
+    // A split is a top-level thing now, resolved against the whole active list
+    // — drawing it per group would put the same pill in both repos.
     renderSidebar([
       session({ id: "first", title: "Refactor auth flow", repo: "starbase" }),
       session({ id: "second", title: "Bump the toolchain", repo: "gtm-grid" })
     ])
 
     expect(screen.getAllByTestId("split-row-g:first")).toHaveLength(1)
+  })
+})
+
+/**
+ * Where a split SITS.
+ *
+ * It used to hang inside whichever repo group its first surviving pane landed
+ * in, which was defensible while a split meant two sessions from one repo. Once
+ * you can split across repos it is a claim the data doesn't support: the pill
+ * named one repo as its home while the other repo's session showed nothing of
+ * its own. Splits belong above the repo groups, under the filters.
+ */
+describe("SessionSidebar split placement", () => {
+  const SPLIT: SplitGroup = {
+    id: "g:first",
+    panes: [
+      { sessionId: "first", ratio: 0.5 },
+      { sessionId: "second", ratio: 0.5 }
+    ],
+    focused: 0
+  }
+
+  /** Heading labels and split pills, in the order they appear in the DOM. */
+  const outline = () =>
+    Array.from(document.querySelectorAll("[data-testid^='split-row-'], [data-testid='session-sidebar'] span"))
+      .filter((el) => el.getAttribute("data-testid")?.startsWith("split-row-") || el.tagName === "SPAN")
+      .map((el) => el.getAttribute("data-testid") ?? el.textContent)
+
+  const crossRepo = [
+    session({ id: "first", title: "Refactor auth flow", repo: "trigify-app" }),
+    session({ id: "second", title: "Bump the toolchain", repo: "gtm-grid" }),
+    session({ id: "loose", title: "Loose end", repo: "trigify-app" })
+  ]
+
+  const renderSidebar = (sessions: ReadonlyArray<ReturnType<typeof session>>) =>
+    render(
+      <SessionSidebar
+        activeSessionId="first"
+        onSelect={() => {}}
+        sessions={sessions}
+        splitGroups={[SPLIT]}
+        activeGroupId="g:first"
+        defaultFilters={DEFAULT_FILTERS}
+      />
+    )
+
+  it("puts the split above every repo heading", () => {
+    renderSidebar(crossRepo)
+    const order = outline()
+    // `gtm-grid` is deliberately not asserted on: its only session is in the
+    // split, so its heading is gone — see the group-holdout test below.
+    expect(order.indexOf("split-row-g:first")).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf("trigify-app")).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf("split-row-g:first")).toBeLessThan(order.indexOf("trigify-app"))
+  })
+
+  it("labels the section and counts the splits in it", () => {
+    renderSidebar(crossRepo)
+    // Singular for one — "Splits 1" reads like a category with a stray number.
+    expect(screen.getByText("Split")).toBeDefined()
+  })
+
+  // The count badge under a repo heading has to match the rows beneath it.
+  // Leaving split members in the group inflated it: "trigify-app 2" over one row.
+  it("holds split members out of their repo groups entirely", () => {
+    renderSidebar(crossRepo)
+    expect(rowOrder()).toStrictEqual(["loose"])
+    // gtm-grid's only session is in the split, so the heading goes with it
+    // rather than sitting over an empty list.
+    expect(screen.queryByText("gtm-grid")).toBeNull()
+    expect(screen.getByText("trigify-app")).toBeDefined()
+  })
+
+  it("shows no splits section when nothing is split", () => {
+    render(
+      <SessionSidebar
+        activeSessionId="loose"
+        onSelect={() => {}}
+        sessions={[session({ id: "loose", title: "Loose end", repo: "trigify-app" })]}
+        defaultFilters={DEFAULT_FILTERS}
+      />
+    )
+    expect(screen.queryByText("Split")).toBeNull()
+    expect(screen.queryByText("Splits")).toBeNull()
   })
 })
