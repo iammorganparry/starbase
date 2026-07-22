@@ -68,6 +68,7 @@ import {
 } from "@starbase/core"
 import type {
   AdversarialReview,
+  Attachment,
   CliKind,
   ExecutionMode,
   Message,
@@ -895,7 +896,8 @@ type PlanAdversarialEnv =
  */
 export const planAdversarial = (
   sessionId: string,
-  brief: string
+  brief: string,
+  images: ReadonlyArray<Attachment> = []
 ): Stream.Stream<StreamEvent, PlanError, PlanAdversarialEnv> =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -942,7 +944,9 @@ export const planAdversarial = (
       // messages an ordinary send appends.
       yield* TranscriptStore.append(
         sessionId,
-        userMessage(`u_${sessionId}_${maxN + 1}`, brief, now, [])
+        // The attachments ride on the user turn exactly as they do for an
+        // ordinary send, so a reopened session still shows what the round saw.
+        userMessage(`u_${sessionId}_${maxN + 1}`, brief, now, images)
       ).pipe(Effect.ignore)
       const assistantId = `a_${sessionId}_${maxN + 2}`
       yield* TranscriptStore.append(sessionId, assistantMessage(assistantId, now)).pipe(
@@ -963,6 +967,7 @@ export const planAdversarial = (
           branch: session.branch,
           cwd: session.worktreePath,
           brief,
+          images,
           vendors,
           binPathFor,
           assignAgents: true,
@@ -1445,6 +1450,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Config.setNotifications": (notifications) => ConfigService.setNotifications(notifications),
   "Config.setPlanAutoRun": ({ planAutoRun }) => ConfigService.setPlanAutoRun(planAutoRun),
   "Config.setAdhdMode": ({ adhdMode }) => ConfigService.setAdhdMode(adhdMode),
+  "Config.setDefaultCli": ({ cli }) => ConfigService.setDefaultCli(cli),
   /**
    * Deliver an OS notification. Main decides whether to actually show it: it
    * owns the window's focus state, which the renderer cannot observe reliably,
@@ -1488,7 +1494,8 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Github.files": ({ sessionId }) => githubFiles(sessionId),
   "Github.diff": ({ sessionId }) => githubDiff(sessionId),
   "Github.detectPr": ({ sessionId }) => githubDetectPr(sessionId),
-  "Plan.adversarial": ({ sessionId, brief }) => planAdversarial(sessionId, brief),
+  "Plan.adversarial": ({ sessionId, brief, images }) =>
+    planAdversarial(sessionId, brief, images ?? []),
   "Plan.round": ({ sessionId }) => planRound(sessionId),
   "Plan.readiness": () => planReadiness,
   "Plan.execute": ({ sessionId, planId, executionMode }) =>

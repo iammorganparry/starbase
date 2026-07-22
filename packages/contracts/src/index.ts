@@ -519,6 +519,16 @@ export class StarbaseRpcs extends RpcGroup.make(
   }),
 
   /**
+   * Persist which harness NEW sessions start on. One standing answer, set in
+   * Settings · Providers, in place of the New Session dialog's old select.
+   */
+  Rpc.make("Config.setDefaultCli", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: Schema.Struct({ cli: CliKind })
+  }),
+
+  /**
    * Raise an OS notification for a session.
    *
    * Main owns the Electron `Notification` API, but only the RENDERER knows
@@ -615,7 +625,19 @@ export class StarbaseRpcs extends RpcGroup.make(
     success: StreamEvent,
     stream: true,
     error: PlanError,
-    payload: { sessionId: Schema.String, brief: Schema.String }
+    payload: {
+      sessionId: Schema.String,
+      brief: Schema.String,
+      /**
+       * Screenshots attached to the brief (optional; omitted → none).
+       *
+       * A brief is very often "make it look like this" — the round used to have
+       * no image channel at all, so the composer had to refuse attachments in
+       * Gigaplan mode. Every role sees them, because a critic judging a plan
+       * drawn from a screenshot it cannot see is judging the wrong thing.
+       */
+      images: Schema.optional(Schema.Array(Attachment))
+    }
   }),
 
   /**

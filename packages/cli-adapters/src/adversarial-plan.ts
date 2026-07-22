@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   CliKind,
   ModelOption,
   Plan,
@@ -282,6 +283,12 @@ export interface PlanRoundInput {
   readonly branch: string
   readonly cwd: string
   readonly brief: string
+  /**
+   * Screenshots attached to the brief. Handed to EVERY role: a proposer that
+   * cannot see the mockup plans the wrong thing, and a critic that cannot see it
+   * critiques a plan it has no basis to judge.
+   */
+  readonly images?: ReadonlyArray<Attachment>
   readonly vendors: ReadonlyArray<VendorReach>
   readonly binPathFor: (cli: CliKind) => string | null
   /** Whether to ask the round to route each step to an agent. */
@@ -379,7 +386,9 @@ const runRole = (
       branch: input.branch,
       cwd: input.cwd,
       prompt,
-      images: [],
+      // The brief's screenshots go to every role, not just the proposers — see
+      // `PlanRoundInput.images`.
+      images: input.images ?? [],
       binPath: input.binPathFor(who.cli),
       // "ask" rather than "plan": plan mode drives the harness toward
       // ExitPlanMode, which only Claude has — and this round deliberately reads

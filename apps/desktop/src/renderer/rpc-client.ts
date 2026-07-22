@@ -278,6 +278,9 @@ export const rpc = {
   /** Persist ADHD mode; resolves with the whole updated config. */
   configSetAdhdMode: (adhdMode: boolean): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setAdhdMode({ adhdMode })),
+  /** Which harness new sessions start on (Settings · Providers). */
+  configSetDefaultCli: (cli: CliKind): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setDefaultCli({ cli })),
   /**
    * Ask main to raise an OS notification. Main decides whether it actually
    * surfaces — it owns window focus and the stored prefs.
@@ -506,14 +509,15 @@ export const rpc = {
   planAdversarial: (
     sessionId: string,
     brief: string,
-    onEvent: (event: StreamEvent) => void
+    onEvent: (event: StreamEvent) => void,
+    images: ReadonlyArray<Attachment> = []
   ): (() => void) => {
     let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
     let cancelled = false
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        drainRun(client.Plan.adversarial({ sessionId, brief }), onEvent)
+        drainRun(client.Plan.adversarial({ sessionId, brief, images }), onEvent)
       )
     })
     return () => {

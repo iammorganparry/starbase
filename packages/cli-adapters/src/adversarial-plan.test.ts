@@ -457,6 +457,52 @@ describe("AdversarialPlanService", () => {
     expect(specs[0]!.model).toBe("claude-fable-5")
     expect(specs[1]!.model).toBe("gpt-5.6-sol")
   })
+
+  /**
+   * The brief is often half screenshot ("build this mockup"). The roles run
+   * headless with no other way to see one, and the critic needs the same image
+   * the proposer had — judging a plan drawn from a picture you cannot see is
+   * judging the wrong thing. The composer refused attachments in Gigaplan until
+   * this channel existed, so a regression here silently reinstates that bug from
+   * the other end: accepted in the UI, dropped before the harness.
+   */
+  it("hands the brief's images to every role", async () => {
+    const images = [
+      { id: "att_1", name: "screenshot.png", mediaType: "image/png", data: "aGk=" }
+    ]
+    const seen: Array<number> = []
+    await Effect.gen(function* () {
+      const svc = yield* AdversarialPlanService
+      yield* svc
+        .run({
+          sessionId: "s1",
+          repo: "r",
+          branch: "b",
+          cwd: "/tmp",
+          brief: "make it look like this",
+          images,
+          vendors: [ANTHROPIC, OPENAI],
+          binPathFor: () => "/bin/fake",
+          assignAgents: false,
+          routing: routingFor([ANTHROPIC, OPENAI])
+        })
+        .pipe(Stream.runDrain)
+    }).pipe(
+      Effect.provide(AdversarialPlanService.Default),
+      Effect.provide(
+        Layer.succeed(CliAdapter, {
+          run: (_id, spec, ctx) => {
+            seen.push(spec.images.length)
+            return ctx.emit({ _tag: "Assistant", text: PLAN_TEXT, agentId: undefined })
+          },
+          stop: () => Effect.void
+        })
+      ),
+      Effect.runPromise
+    )
+    expect(seen.length).toBeGreaterThan(1)
+    expect(seen.every((n) => n === 1)).toBe(true)
+  })
 })
 
 // ── Unattended questions and the stall guard ─────────────────────────────────

@@ -262,11 +262,7 @@ export function Composer({
 
   // Read dropped/pasted/picked image files into base64 attachments (capped).
   const addFiles = async (files: ReadonlyArray<File>) => {
-    // The single choke point for every route in — button, paste and drop. The
-    // button is disabled in Gigaplan, but paste and drop never touch it, so
-    // guarding only the control would still let a dragged screenshot through to
-    // a round that cannot carry it.
-    if (orchestrated) return
+    // The single choke point for every route in — button, paste and drop.
     const read = await Promise.all(
       files.map((f) => {
         // The counter is bumped as its own statement rather than inside the
@@ -455,7 +451,7 @@ export function Composer({
                 className="size-[58px]"
               />
             ))}
-            {attachments.length < MAX_ATTACHMENTS && !orchestrated && (
+            {attachments.length < MAX_ATTACHMENTS && (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -530,27 +526,18 @@ export function Composer({
           second line costs nothing but 26px of height.
         */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
-{/* Disabled in Gigaplan, not silently ignored. `Plan.adversarial` takes
-              only a brief — its payload has no images — so an attachment made
-              here would be dropped on the way to the round while still
-              rendering in the transcript, which reads as "the model saw my
-              screenshot" when it did not. Better to refuse the gesture and say
-              why than to accept it and discard it. */}
+{/* Enabled in Gigaplan too: `Plan.adversarial` now carries `images`,
+              and every role's SessionSpec gets them, so a screenshot attached
+              here really does reach the round. It was disabled while that
+              payload was brief-only — accepting an attachment the round would
+              silently drop reads as "the model saw my screenshot" when it did
+              not. The rule is the channel, not the mode. */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={paused || orchestrated}
-            /* The NAME stays constant while the tooltip explains. Letting the
-               explanation be the accessible name made this button answer to
-               "Gigaplan" — the mode chip's name — so a by-name lookup matched
-               two controls. What a control IS shouldn't change with why it's
-               unavailable. */
+            disabled={paused}
             aria-label="Attach an image"
-            title={
-              orchestrated
-                ? "Planning rounds work from the written brief — images aren't sent"
-                : "Attach an image"
-            }
+            title="Attach an image"
             className="flex flex-none items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ImagePlus size={14} />

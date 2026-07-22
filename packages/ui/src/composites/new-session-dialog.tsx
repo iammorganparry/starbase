@@ -9,6 +9,7 @@ import type {
   PrSummary,
   Repo
 } from "@starbase/core"
+import { startableClis } from "@starbase/core"
 import { useMachine } from "@xstate/react"
 import { CircleDot, GitBranch, GitPullRequest, Sparkles } from "lucide-react"
 import { cn } from "../lib/cn.js"
@@ -51,8 +52,13 @@ export interface NewSessionDialogProps {
   onToggleStar?: (repoPath: string) => void | Promise<void>
   /** Preselect this repo (by path) each time the dialog opens. */
   defaultRepoPath?: string | null
-  /** Discovered CLIs — only `available` ones are selectable harnesses. */
+  /** Discovered CLIs — `startableClis` decides which of them can run a session. */
   clis: ReadonlyArray<CliInfo>
+  /**
+   * The harness new sessions run on (Settings · Providers). Absent, or naming an
+   * uninstalled CLI, falls back to the first startable one.
+   */
+  defaultCli?: CliKind | null
   /** Load the branches for a repo (to populate the base-branch select). */
   loadBranches: (repoPath: string) => Promise<ReadonlyArray<string>>
   /** Submit — performs the real worktree creation upstream (throws on failure). */
@@ -120,6 +126,7 @@ export function NewSessionDialog({
   onToggleStar,
   defaultRepoPath,
   clis,
+  defaultCli,
   loadBranches,
   onCreate,
   loadPrs,
@@ -127,7 +134,9 @@ export function NewSessionDialog({
   loadIssues,
   onCreateFromIssue
 }: NewSessionDialogProps) {
-  const availableClis = React.useMemo(() => clis.filter((c) => c.available), [clis])
+  // `startableClis` drops `starbase` as well as the uninstalled: the
+  // orchestrator drives harnesses, it is not one you can start a session on.
+  const availableClis = React.useMemo(() => startableClis(clis), [clis])
   const canFromPr = Boolean(loadPrs && onCreateFromPr)
   const canFromIssue = Boolean(loadIssues && onCreateFromIssue)
 
@@ -137,6 +146,7 @@ export function NewSessionDialog({
     repos,
     defaultRepoPath,
     availableClis,
+    defaultCli,
     loadBranches,
     loadPrs,
     loadIssues,
@@ -167,6 +177,9 @@ export function NewSessionDialog({
     automations,
     error
   } = state.context
+
+  /** Label for the resolved harness — the dialog reports it, never picks it. */
+  const harnessLabel = availableClis.find((c) => c.kind === cli)?.label ?? cli
 
   const submitting = state.matches({ submission: "submitting" })
   const loadingBranches = state.matches({ branchLoad: "loading" })
@@ -274,31 +287,26 @@ export function NewSessionDialog({
 
             {/* No title field — the agent auto-names each session from the work. */}
 
-            {/* Harness */}
-            <div className="flex flex-col gap-1.5">
-              <Eyebrow>Harness</Eyebrow>
-              <Select
-                value={cli}
-                onValueChange={(v) => send({ type: "SET_CLI", cli: v as CliKind })}
-                disabled={availableClis.length === 0}
-              >
-                <SelectTrigger>
-                  {/* SelectValue mirrors the chosen item (logo + label), so the
-                      trigger needs no separate icon. */}
-                  <SelectValue placeholder="No harness available" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableClis.map((c) => (
-                    <SelectItem key={c.kind} value={c.kind}>
-                      <span className="flex items-center gap-2">
-                        <ProviderIcon cli={c.kind} className="text-text-bright" />
-                        {c.label}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/*
+              No harness picker. It asked the same question every time and got
+              the same answer, so the choice moved to Settings · Providers and
+              this only REPORTS the outcome. `starbase` is never offered there:
+              the orchestrator is a per-turn mode on a session, not a harness to
+              start one on.
+            */}
+            {availableClis.length === 0 ? (
+              <Callout tone="yellow">
+                No coding CLI found. Install Claude Code, Codex, Cursor or opencode, then
+                reopen this dialog.
+              </Callout>
+            ) : (
+              <span className="flex items-center gap-1.5 text-[10.5px] text-dim">
+                Runs on
+                <ProviderIcon cli={cli as CliKind} size={12} className="text-text-bright" />
+                <span className="text-muted-foreground">{harnessLabel}</span>· change the
+                default in Settings · Providers.
+              </span>
+            )}
 
             {/* Base branch (blank mode + the issue picker step). */}
             {(mode === "blank" || isIssueList) && (

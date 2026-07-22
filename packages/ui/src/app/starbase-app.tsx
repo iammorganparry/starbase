@@ -51,6 +51,13 @@ const GH_UNAVAILABLE: GhStatus = {
 
 export interface StarbaseAppProps {
   clis: ReadonlyArray<CliInfo>
+  /**
+   * The harness new sessions start on (Settings · Providers). The New Session
+   * dialog reads it instead of asking; absent falls back to the first installed.
+   */
+  defaultCli?: CliKind | null
+  /** Persist the default harness for new sessions. */
+  onSaveDefaultCli?: (cli: CliKind) => Promise<void> | void
   sessions: ReadonlyArray<Session>
   /** The signed-in user, shown in the sidebar footer account menu. */
   user?: User
@@ -227,6 +234,8 @@ const noBranches = async (): Promise<ReadonlyArray<string>> => []
  */
 export function StarbaseApp({
   clis,
+  defaultCli,
+  onSaveDefaultCli,
   sessions,
   user,
   onSignOut,
@@ -584,6 +593,8 @@ export function StarbaseApp({
               clis={clis}
               providers={providersConfig}
               onSaveProvider={onSaveProvider}
+              defaultCli={defaultCli}
+              onSaveDefaultCli={onSaveDefaultCli}
               catalog={modelCatalog}
               orchestrator={orchestrator}
               onSaveOrchestrator={onSaveOrchestrator}
@@ -642,6 +653,7 @@ export function StarbaseApp({
           onToggleStar={onToggleStar}
           defaultRepoPath={defaultRepoPath}
           clis={clis}
+          defaultCli={defaultCli}
           loadBranches={loadBranches}
           onCreate={handleCreate}
           loadPrs={loadPrs}

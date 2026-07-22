@@ -124,6 +124,10 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   // opt-in rather than a default the operator has to discover and undo.
   const adhdMode = configQuery.data?.adhdMode ?? false
   const providersConfig = configQuery.data?.providers ?? null
+  // Absent means "the first installed harness" — resolved downstream by
+  // `newSessionCli`, so a fresh install creates sessions without a visit to
+  // Settings.
+  const defaultCli = configQuery.data?.defaultCli ?? null
   const contextConfig = configQuery.data?.context ?? null
   const starredRepos = configQuery.data?.starredRepos ?? []
   const collapsedRepos = configQuery.data?.collapsedRepos ?? []
@@ -152,6 +156,10 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     })
   const saveAdhdMode = (value: boolean) =>
     rpc.configSetAdhdMode(value).then((saved) => {
+      qc.setQueryData(["config"], saved)
+    })
+  const saveDefaultCli = (cli: CliKind) =>
+    rpc.configSetDefaultCli(cli).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
   const saveProvider = (cli: CliKind, config: ProviderConfig) =>
@@ -560,6 +568,8 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSaveAdhdMode={saveAdhdMode}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
+      defaultCli={defaultCli}
+      onSaveDefaultCli={saveDefaultCli}
       contextConfig={contextConfig}
       onSaveContextConfig={saveContextConfig}
       modelCatalog={catalogQuery.data ?? []}

@@ -77,6 +77,34 @@ export const CliInfo = Schema.Struct({
 })
 export type CliInfo = Schema.Schema.Type<typeof CliInfo>
 
+/**
+ * Harnesses a session can be STARTED on — every available CLI except `starbase`.
+ *
+ * The orchestrator is excluded on purpose: it drives the other harnesses rather
+ * than being one, so "start a session on Starbase" answers a question nobody
+ * asked. Gigaplan is reached the other way round — a per-turn mode chip on a
+ * session that already runs on a real CLI.
+ */
+export const startableClis = (clis: ReadonlyArray<CliInfo>): ReadonlyArray<CliInfo> =>
+  clis.filter((c) => c.available && c.kind !== "starbase")
+
+/**
+ * Which harness a NEW session runs on: the configured default when it is still
+ * installed, else the first available one, else null (nothing to run on).
+ *
+ * Single source of truth for a choice that used to live in the New Session
+ * dialog as a select. The fallback matters — a config naming a harness the user
+ * has since uninstalled must not wedge session creation.
+ */
+export const newSessionCli = (
+  clis: ReadonlyArray<CliInfo>,
+  defaultCli?: CliKind | null
+): CliKind | null => {
+  const startable = startableClis(clis)
+  const configured = startable.find((c) => c.kind === defaultCli)
+  return (configured ?? startable[0])?.kind ?? null
+}
+
 // ── Sessions ─────────────────────────────────────────────────────────────────
 
 /** Lifecycle status of an agent session, mirrored in the sidebar pills. */
@@ -565,6 +593,19 @@ export const WorkspaceConfig = Schema.Struct({
    * harness defaults).
    */
   providers: Schema.optional(ProvidersConfig),
+  /**
+   * Which harness new sessions start on.
+   *
+   * Chosen ONCE in Settings · Providers rather than per session: the New Session
+   * dialog used to ask, and the answer was the same every time — a decision
+   * surface masquerading as a form field.
+   *
+   * Absent, or naming a harness that is not installed, means "the first
+   * available one", so a fresh install can still create sessions. Never
+   * `starbase`: the orchestrator is a per-turn MODE, not a harness you start a
+   * session on (see `newSessionCli`).
+   */
+  defaultCli: Schema.optional(CliKind),
   /** Semantic step routing; absent on legacy config means safe shadow mode. */
   gigaplanRouting: Schema.optional(GigaplanRoutingConfig),
   /**
