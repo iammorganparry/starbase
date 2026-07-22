@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs"
 import { mkdirSync } from "node:fs"
 import { FileSystem } from "@effect/platform"
+import type { GigaplanRoutingConfig } from "@starbase/core"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { AppPaths } from "./app-paths.js"
@@ -208,6 +209,33 @@ describe("ConfigService", () => {
     expect(exit._tag).toBe("Success")
     if (exit._tag === "Success") {
       expect(exit.value?.orchestrator).toStrictEqual({ cli: "codex", model: "gpt-5" })
+    }
+  })
+
+  it("persists routing and preserves it across unrelated settings writes", async () => {
+    const routing: GigaplanRoutingConfig = {
+      mode: "active",
+      overrides: [
+        {
+          taskKind: "schema",
+          routes: [
+            { cli: "codex", model: "gpt-5.6-sol" },
+            { cli: "claude", model: "opus" }
+          ]
+        }
+      ]
+    }
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setGigaplanRouting(routing)
+        yield* ConfigService.setProvider("codex", { enabled: true, defaultMode: "ask" })
+        yield* ConfigService.setLastRepoPath("/repos/widget")
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.gigaplanRouting).toStrictEqual(routing)
     }
   })
 

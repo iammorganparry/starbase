@@ -2,16 +2,24 @@ import type { PlanStepAssignee } from "@starbase/core"
 import { cn } from "../lib/cn.js"
 import { PROVIDER_LABEL, ProviderIcon } from "../components/provider-icon.js"
 
+type DisplayAssignee = Pick<PlanStepAssignee, "cli" | "model" | "reason"> & {
+  readonly evidence?: PlanStepAssignee["evidence"]
+}
+
 export function PlanAssignee({
   assignee,
   compact = false,
+  heading = "Assigned model",
+  labelPrefix = "Assigned to",
   className
 }: {
-  assignee: PlanStepAssignee
+  assignee: DisplayAssignee
   compact?: boolean
+  heading?: string
+  labelPrefix?: string
   className?: string
 }) {
-  const label = `Assigned to ${assignee.cli} ${assignee.model}`
+  const label = `${labelPrefix} ${assignee.cli} ${assignee.model}`
 
   if (compact) {
     return (
@@ -42,7 +50,7 @@ export function PlanAssignee({
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-[10px] font-semibold uppercase tracking-[0.45px] text-muted-foreground">
-          Assigned model
+          {heading}
         </div>
         <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className="truncate font-mono text-[12.5px] font-semibold text-text">

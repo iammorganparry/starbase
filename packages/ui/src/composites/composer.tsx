@@ -603,9 +603,10 @@ export function Composer({
             value={mode}
             options={modeOptions}
             onSelect={onSetMode}
-            // `max-w`, not `w`: the fixed 112px both wasted room when the pane
-            // was wide and refused to yield any when it wasn't.
-            className={cn("max-w-[112px] justify-between", accent.chip)}
+            // A stable width prevents the toolbar jumping when a mode hides the
+            // model chip (Gigaplan). Flex shrinking plus the chip's `min-w-0`
+            // still lets this yield inside a genuinely narrow pane.
+            className={cn("w-[112px] justify-between", accent.chip)}
           />
           {mcp !== undefined && mcp.total > 0 && (
             <button

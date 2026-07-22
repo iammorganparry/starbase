@@ -1,5 +1,5 @@
-import type { Plan, StreamEvent, VendorReach } from "@starbase/core"
-import { CliExecError } from "@starbase/core"
+import type { Plan, RoutingContext, StreamEvent, VendorReach } from "@starbase/core"
+import { CliExecError, GIGAPLAN_ROUTING_POLICY_VERSION } from "@starbase/core"
 import { Effect, Fiber, Layer, Stream, TestClock, TestContext } from "effect"
 import { describe, expect, it } from "vitest"
 import type { ParsedCritique } from "./adversarial-plan.js"
@@ -48,6 +48,16 @@ const ANTHROPIC = reach("anthropic", "claude", "opus", "claude-fable-5")
 const OPENAI = reach("openai", "codex", "gpt-5.6-sol")
 const MOONSHOT = reach("moonshot", "opencode", "openrouter/moonshot/kimi-k3")
 
+const routingFor = (vendors: ReadonlyArray<VendorReach>): RoutingContext => ({
+  catalog: vendors.map((vendor) => ({
+    cli: vendor.cli,
+    label: vendor.vendor,
+    models: vendor.models
+  })),
+  mode: "shadow",
+  affinityEnabled: false
+})
+
 /**
  * A fake adapter that replies with canned text per role, so the whole round runs
  * without a harness. Keyed by role because the same session drives three runs.
@@ -88,7 +98,8 @@ const runRound = (
         brief: "Add a tier column",
         vendors,
         binPathFor: () => "/usr/bin/fake",
-        assignAgents: false
+        assignAgents: false,
+        routing: routingFor(vendors)
       })
       .pipe(Stream.runCollect, Effect.map((c) => [...c]))
     const proposed = events.find((e) => e._tag === "PlanProposed")
@@ -299,9 +310,39 @@ describe("AdversarialPlanService", () => {
       revise: responseJson([{ id: "c1", status: "addressed" }])
     })
     expect(plan?.steps[0]!.challenges?.[0]?.status).toBe("addressed")
+    expect(plan?.steps[0]!.routing).toMatchObject({
+      effort: "standard",
+      risk: "medium",
+      policyVersion: GIGAPLAN_ROUTING_POLICY_VERSION
+    })
     // Each phase is surfaced as a subagent, so the existing tab UI renders it.
     const started = events.filter((e) => e._tag === "SubagentStarted")
     expect(started).toHaveLength(3)
+  })
+
+  it("resolves the revision again instead of inheriting the proposal route", async () => {
+    const revised = [
+      "```plan",
+      "summary: Add a frontend tier badge",
+      "01 Add the badge",
+      "  intent: Show the tier.",
+      "  task: frontend",
+      "  effort: quick",
+      "  risk: low",
+      "```",
+      "",
+      "```json",
+      JSON.stringify({ responses: [{ id: "c1", status: "addressed" }] }),
+      "```"
+    ].join("\n")
+    const { plan } = await runRound({
+      propose: PLAN_TEXT,
+      attack: critiqueJson([{ step: "01", title: "wrong surface", severity: "major" }]),
+      revise: revised
+    })
+
+    expect(plan?.steps[0]).toMatchObject({ taskKind: "frontend", effort: "quick", risk: "low" })
+    expect(plan?.steps[0]?.routing?.shadowDecision?.cli).toBe("claude")
   })
 
   it("degrades to an unchallenged plan when the adversary dies", async () => {
@@ -393,7 +434,8 @@ describe("AdversarialPlanService", () => {
           brief: "x",
           vendors: [ANTHROPIC, OPENAI],
           binPathFor: () => "/bin/fake",
-          assignAgents: false
+          assignAgents: false,
+          routing: routingFor([ANTHROPIC, OPENAI])
         })
         .pipe(Stream.runDrain)
     }).pipe(
@@ -523,7 +565,8 @@ describe("a role that never finishes", () => {
             brief: "Add a tier column",
             vendors: [ANTHROPIC, OPENAI],
             binPathFor: () => "/usr/bin/fake",
-            assignAgents: false
+            assignAgents: false,
+            routing: routingFor([ANTHROPIC, OPENAI])
           })
           .pipe(Stream.runCollect, Effect.map((c) => [...c]))
       )

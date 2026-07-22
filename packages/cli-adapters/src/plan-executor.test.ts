@@ -7,19 +7,20 @@ import type { CliAdapterShape } from "./adapter.js"
 import { MAX_STEP_ATTEMPTS, parseStepVerdict, PlanExecutor, STEP_TIMEOUT } from "./plan-executor.js"
 import { stepPrompt } from "./plan-executor-prompt.js"
 
-const step = (over: Partial<PlanStep> & { id: string; number: string }): PlanStep => ({
-  title: `Step ${over.number}`,
-  intent: "",
-  approach: [],
-  kind: "step",
-  condition: null,
-  parentId: null,
-  dependsOn: [],
-  blocks: [],
-  files: [],
-  guards: [],
-  ...over
-} as PlanStep)
+const step = (over: Partial<PlanStep> & { id: string; number: string }): PlanStep =>
+  ({
+    title: `Step ${over.number}`,
+    intent: "",
+    approach: [],
+    kind: "step",
+    condition: null,
+    parentId: null,
+    dependsOn: [],
+    blocks: [],
+    files: [],
+    guards: [],
+    ...over
+  }) as PlanStep
 
 const planOf = (steps: ReadonlyArray<PlanStep>): Plan =>
   ({ id: "p1", summary: "", structured: true, graph: null, steps }) as Plan
@@ -28,13 +29,27 @@ const planOf = (steps: ReadonlyArray<PlanStep>): Plan =>
 const recording = (
   onRun?: (spec: { cli: string; model: string | null; mode: string }) => Effect.Effect<void>
 ) => {
-  const ran: Array<{ cli: string; model: string | null; mode: string; prompt: string }> = []
+  const ran: Array<{
+    cli: string
+    model: string | null
+    mode: string
+    prompt: string
+  }> = []
   const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
     run: (_id, spec, ctx) =>
       Effect.gen(function* () {
-        ran.push({ cli: spec.cli, model: spec.model, mode: spec.mode, prompt: spec.prompt })
+        ran.push({
+          cli: spec.cli,
+          model: spec.model,
+          mode: spec.mode,
+          prompt: spec.prompt
+        })
         if (onRun) yield* onRun({ cli: spec.cli, model: spec.model, mode: spec.mode })
-        yield* ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+        yield* ctx.emit({
+          _tag: "Assistant",
+          text: "done",
+          agentId: undefined
+        })
       }),
     stop: () => Effect.void
   } as CliAdapterShape)
@@ -64,7 +79,10 @@ const execute = (
         binPathFor: () => "/usr/bin/fake",
         executionMode
       })
-      .pipe(Stream.runCollect, Effect.map((c) => [...c]))
+      .pipe(
+        Stream.runCollect,
+        Effect.map((c) => [...c])
+      )
   }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
 
 describe("PlanExecutor", () => {
@@ -79,7 +97,11 @@ describe("PlanExecutor", () => {
           number: "01",
           assignee: { cli: "codex", model: "gpt-5.6-sol", reason: "schema" }
         }),
-        step({ id: "b", number: "02", assignee: { cli: "claude", model: "opus", reason: "ui" } })
+        step({
+          id: "b",
+          number: "02",
+          assignee: { cli: "claude", model: "opus", reason: "ui" }
+        })
       ]),
       layer
     )
@@ -177,6 +199,181 @@ describe("PlanExecutor", () => {
     expect(prompts).toHaveLength(2)
     expect(prompts[0]).not.toMatch(/migrations table is locked/)
     expect(prompts[1]).toMatch(/migrations table is locked/)
+    expect(prompts[1]).toMatch(/inspect the current worktree and tests/i)
+  })
+
+  it("falls back after a transient provider failure before mutation", async () => {
+    const ran: Array<string> = []
+    const persisted: Array<PlanStep> = []
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: [{ cli: "claude", model: "opus" }]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, spec, ctx) => {
+        ran.push(`${spec.cli}/${spec.model}`)
+        return spec.cli === "codex"
+          ? ctx.emit({ _tag: "Failed", message: "provider temporarily unavailable" })
+          : ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await Effect.gen(function* () {
+      const executor = yield* PlanExecutor
+      return yield* executor
+        .run({
+          sessionId: "s1",
+          repo: "widget",
+          branch: "b",
+          cwd: "/tmp/wt",
+          plan: planOf([routed]),
+          available: [
+            { cli: "codex", model: "gpt-5.6-sol" },
+            { cli: "claude", model: "opus" }
+          ],
+          fallback: null,
+          binPathFor: () => null,
+          onStepUpdated: (updated) => Effect.sync(() => persisted.push(updated))
+        })
+        .pipe(Stream.runCollect, Effect.map((chunk) => [...chunk]))
+    }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
+
+    expect(ran).toStrictEqual(["codex/gpt-5.6-sol", "claude/opus"])
+    expect(events.find((event) => event._tag === "Failed")).toBeUndefined()
+    expect(persisted.at(-1)?.routing?.attempts.map((attempt) => attempt.outcome)).toStrictEqual([
+      "failed",
+      "done"
+    ])
+  })
+
+  it("stops rather than falling back after a mutation-capable tool starts", async () => {
+    const ran: Array<string> = []
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "high",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "schema profile",
+          alternatives: [{ cli: "claude", model: "opus" }]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, spec, ctx) =>
+        Effect.gen(function* () {
+          ran.push(`${spec.cli}/${spec.model}`)
+          yield* ctx.emit({ _tag: "ToolStart", id: "edit-1", name: "Edit", target: "src/a.ts" })
+          yield* ctx.emit({ _tag: "Failed", message: "provider temporarily unavailable" })
+        }),
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await execute(planOf([routed]), layer)
+    expect(ran).toStrictEqual(["codex/gpt-5.6-sol"])
+    const failed = events.find((event) => event._tag === "Failed")
+    expect(failed?._tag === "Failed" && failed.message).toMatch(/may have changed the worktree/)
+    expect(failed?._tag === "Failed" && failed.message).toMatch(/Automatic fallback stopped/)
+  })
+
+  it("does not fall back for credentials or permission failures", async () => {
+    const ran: Array<string> = []
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: [{ cli: "claude", model: "opus" }]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, spec, ctx) => {
+        ran.push(`${spec.cli}/${spec.model}`)
+        return ctx.emit({ _tag: "Failed", message: "permission denied: missing API key" })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await execute(planOf([routed]), layer)
+    expect(ran).toStrictEqual(["codex/gpt-5.6-sol"])
+    const failed = events.find((event) => event._tag === "Failed")
+    expect(failed?._tag === "Failed" && failed.message).toMatch(/permission denied/)
+  })
+
+  it("shares the three-run budget across fallback and same-route blockers", async () => {
+    let attempts = 0
+    const routed = step({
+      id: "a",
+      number: "01",
+      routing: {
+        effort: "standard",
+        risk: "medium",
+        policyVersion: "test-v1",
+        mode: "active",
+        decision: {
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          provenance: "policy-profile",
+          reason: "backend profile",
+          alternatives: [{ cli: "claude", model: "opus" }]
+        },
+        rejected: [],
+        attempts: []
+      }
+    })
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, spec, ctx) => {
+        attempts += 1
+        return spec.cli === "codex"
+          ? ctx.emit({ _tag: "Failed", message: "provider overloaded" })
+          : ctx.emit({
+              _tag: "Assistant",
+              text: '```json\n{"status":"blocked","reason":"test lock"}\n```',
+              agentId: undefined
+            })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await execute(planOf([routed]), layer)
+    expect(attempts).toBe(MAX_STEP_ATTEMPTS)
+    const failed = events.find((event) => event._tag === "Failed")
+    expect(failed?._tag === "Failed" && failed.message).toMatch(/Stuck on step 01/)
   })
 
   it("stops and says it is stuck once the attempts run out", async () => {
@@ -242,7 +439,10 @@ describe("PlanExecutor", () => {
           fallback: null,
           binPathFor: () => null
         })
-        .pipe(Stream.runCollect, Effect.map((c) => [...c]))
+        .pipe(
+          Stream.runCollect,
+          Effect.map((c) => [...c])
+        )
     }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
 
     const failed = events.find((e) => e._tag === "Failed")
@@ -273,7 +473,10 @@ describe("PlanExecutor", () => {
             fallback: null,
             binPathFor: () => null
           })
-          .pipe(Stream.runCollect, Effect.map((c) => [...c]))
+          .pipe(
+            Stream.runCollect,
+            Effect.map((c) => [...c])
+          )
       )
       for (let i = 0; i < MAX_STEP_ATTEMPTS; i++) {
         yield* Effect.yieldNow()
@@ -296,10 +499,18 @@ describe("PlanExecutor", () => {
   it("gives each step its own context rather than resuming the last one", async () => {
     // Steps may run on different models; resuming would carry one step's framing
     // into the next and defeat the point of assigning them separately.
-    let seen: { fresh?: boolean; resumeId: string | null; readOnly?: boolean } | null = null
+    let seen: {
+      fresh?: boolean
+      resumeId: string | null
+      readOnly?: boolean
+    } | null = null
     const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
       run: (_id, spec, ctx) => {
-        seen = { fresh: spec.fresh, resumeId: spec.resumeId, readOnly: spec.readOnly }
+        seen = {
+          fresh: spec.fresh,
+          resumeId: spec.resumeId,
+          readOnly: spec.readOnly
+        }
         return ctx.emit({ _tag: "Assistant", text: "ok", agentId: undefined })
       },
       stop: () => Effect.void
@@ -307,7 +518,11 @@ describe("PlanExecutor", () => {
     await execute(planOf([step({ id: "a", number: "01" })]), layer)
     // `readOnly: false` matters as much as `fresh`: this is the one agent that
     // is supposed to change the worktree.
-    expect(seen).toStrictEqual({ fresh: true, resumeId: null, readOnly: false })
+    expect(seen).toStrictEqual({
+      fresh: true,
+      resumeId: null,
+      readOnly: false
+    })
   })
 })
 
@@ -336,7 +551,8 @@ describe("stepPrompt", () => {
 })
 
 describe("parseStepVerdict", () => {
-  const json = (body: unknown) => `Changed three files.\n\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``
+  const json = (body: unknown) =>
+    `Changed three files.\n\n\`\`\`json\n${JSON.stringify(body)}\n\`\`\``
 
   it("reads a blocked verdict and its reason", () => {
     expect(parseStepVerdict(json({ status: "blocked", reason: "no credential" }))).toStrictEqual({
@@ -350,7 +566,10 @@ describe("parseStepVerdict", () => {
     // worktree and have already written to it, so re-running one that actually
     // succeeded risks applying its edits twice — a worse and far less visible
     // failure than a step that quietly did less than it claimed.
-    expect(parseStepVerdict("I finished the step.")).toStrictEqual({ status: "done", reason: null })
+    expect(parseStepVerdict("I finished the step.")).toStrictEqual({
+      status: "done",
+      reason: null
+    })
     expect(parseStepVerdict(json({ nonsense: true }))).toStrictEqual({
       status: "done",
       reason: null
@@ -397,7 +616,10 @@ describe("against the scripted adapter", () => {
           fallback: { cli: "claude", model: "opus" },
           binPathFor: () => null
         })
-        .pipe(Stream.runCollect, Effect.map((c) => [...c]))
+        .pipe(
+          Stream.runCollect,
+          Effect.map((c) => [...c])
+        )
     }).pipe(
       Effect.provide(PlanExecutor.Default),
       // Zero pacing: the cadence is the e2e's concern, not this test's.
@@ -425,8 +647,16 @@ describe("a child run's lifecycle events", () => {
     const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
       run: (_id, _spec, ctx) =>
         Effect.gen(function* () {
-          yield* ctx.emit({ _tag: "Started", sessionId: "child", model: undefined })
-          yield* ctx.emit({ _tag: "Assistant", text: "did it", agentId: undefined })
+          yield* ctx.emit({
+            _tag: "Started",
+            sessionId: "child",
+            model: undefined
+          })
+          yield* ctx.emit({
+            _tag: "Assistant",
+            text: "did it",
+            agentId: undefined
+          })
           yield* ctx.emit({ _tag: "Done", costUsd: 1, tokens: 2 })
         }),
       stop: () => Effect.void
@@ -447,6 +677,43 @@ describe("a child run's lifecycle events", () => {
       .join("\n")
     expect(said).toMatch(/Ran 2 of 2 steps/)
   })
+
+  it("treats a child Failed event as a failed attempt, never an empty done verdict", async () => {
+    let attempts = 0
+    const completed: Array<string> = []
+    const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
+      run: (_id, _spec, ctx) => {
+        attempts += 1
+        return ctx.emit({ _tag: "Failed", message: "provider unavailable" })
+      },
+      stop: () => Effect.void
+    } as CliAdapterShape)
+
+    const events = await Effect.gen(function* () {
+      const executor = yield* PlanExecutor
+      return yield* executor
+        .run({
+          sessionId: "s1",
+          repo: "widget",
+          branch: "b",
+          cwd: "/tmp/wt",
+          plan: planOf([step({ id: "a", number: "01" })]),
+          available: [{ cli: "claude", model: "opus" }],
+          fallback: { cli: "claude", model: "opus" },
+          binPathFor: () => null,
+          onStepDone: (finished) => Effect.sync(() => completed.push(finished.id))
+        })
+        .pipe(
+          Stream.runCollect,
+          Effect.map((chunk) => [...chunk])
+        )
+    }).pipe(Effect.provide(PlanExecutor.Default), Effect.provide(layer), Effect.runPromise)
+
+    expect(attempts).toBe(MAX_STEP_ATTEMPTS)
+    expect(completed).toStrictEqual([])
+    const failed = events.find((event) => event._tag === "Failed")
+    expect(failed?._tag === "Failed" && failed.message).toMatch(/provider unavailable/)
+  })
 })
 
 describe("what the run reports it spent", () => {
@@ -459,7 +726,11 @@ describe("what the run reports it spent", () => {
     const layer: Layer.Layer<CliAdapter> = Layer.succeed(CliAdapter, {
       run: (_id, _spec, ctx) =>
         Effect.gen(function* () {
-          yield* ctx.emit({ _tag: "Assistant", text: "done", agentId: undefined })
+          yield* ctx.emit({
+            _tag: "Assistant",
+            text: "done",
+            agentId: undefined
+          })
           yield* ctx.emit({ _tag: "Done", costUsd: 0.25, tokens: 1_000 })
         }),
       stop: () => Effect.void

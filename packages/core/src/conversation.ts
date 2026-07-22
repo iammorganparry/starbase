@@ -281,11 +281,82 @@ export const PlanStepAssignee = Schema.Struct({
    * "repo-model" / "prior". Absent when nothing was consulted, which is exactly
    * the phase-A case, so the UI can avoid implying evidence that doesn't exist.
    */
-  evidence: Schema.optional(
-    Schema.Struct({ level: Schema.String, observations: Schema.Number })
-  )
+  evidence: Schema.optional(Schema.Struct({ level: Schema.String, observations: Schema.Number }))
 })
 export type PlanStepAssignee = Schema.Schema.Type<typeof PlanStepAssignee>
+
+// ── Gigaplan routing ──────────────────────────────────────────────────────────
+
+/** How much reasoning budget a step should receive. */
+export const RouteEffort = Schema.Literal("quick", "standard", "deep")
+export type RouteEffort = Schema.Schema.Type<typeof RouteEffort>
+
+/** How conservatively Gigaplan should treat execution-time divergence. */
+export const RouteRisk = Schema.Literal("low", "medium", "high")
+export type RouteRisk = Schema.Schema.Type<typeof RouteRisk>
+
+/** An exact harness/model pair. Both halves must exist in the live catalogue. */
+export const RouteCandidate = Schema.Struct({
+  cli: CliKind,
+  model: Schema.String
+})
+export type RouteCandidate = Schema.Schema.Type<typeof RouteCandidate>
+
+export const RouteProvenance = Schema.Literal(
+  "user-override",
+  "runtime-ranking",
+  "planner-preference",
+  "affinity",
+  "policy-profile",
+  "system-default"
+)
+export type RouteProvenance = Schema.Schema.Type<typeof RouteProvenance>
+
+export const RouteRejection = Schema.Struct({
+  candidate: RouteCandidate,
+  provenance: RouteProvenance,
+  reason: Schema.String
+})
+export type RouteRejection = Schema.Schema.Type<typeof RouteRejection>
+
+/** The effective choice plus the live candidates that may safely follow it. */
+export const RouteDecision = Schema.Struct({
+  cli: CliKind,
+  model: Schema.String,
+  provenance: RouteProvenance,
+  reason: Schema.String,
+  alternatives: Schema.Array(RouteCandidate)
+})
+export type RouteDecision = Schema.Schema.Type<typeof RouteDecision>
+
+export const RouteAttemptOutcome = Schema.Literal("done", "blocked", "failed", "unavailable")
+export type RouteAttemptOutcome = Schema.Schema.Type<typeof RouteAttemptOutcome>
+
+/** One persisted adapter run (or execution-time availability rejection). */
+export const RouteAttempt = Schema.Struct({
+  attempt: Schema.Number,
+  candidate: RouteCandidate,
+  outcome: RouteAttemptOutcome,
+  reason: Schema.NullOr(Schema.String),
+  mutationPossible: Schema.Boolean,
+  createdAt: Schema.String
+})
+export type RouteAttempt = Schema.Schema.Type<typeof RouteAttempt>
+
+export const PlanStepRouting = Schema.Struct({
+  effort: RouteEffort,
+  risk: RouteRisk,
+  policyVersion: Schema.String,
+  mode: Schema.Literal("shadow", "active"),
+  decision: RouteDecision,
+  /** What semantic policy would choose while legacy routing remains effective. */
+  shadowDecision: Schema.optional(RouteDecision),
+  rejected: Schema.Array(RouteRejection),
+  attempts: Schema.optionalWith(Schema.Array(RouteAttempt), {
+    default: () => []
+  })
+})
+export type PlanStepRouting = Schema.Schema.Type<typeof PlanStepRouting>
 
 /** One node of the plan — an ordered step or a branch/arm. */
 export const PlanStep = Schema.Struct({
@@ -310,7 +381,9 @@ export const PlanStep = Schema.Struct({
    * (default null) so transcripts persisted before this field decode cleanly
    * instead of blanking the whole conversation.
    */
-  code: Schema.optionalWith(Schema.NullOr(PlanStepCode), { default: () => null }),
+  code: Schema.optionalWith(Schema.NullOr(PlanStepCode), {
+    default: () => null
+  }),
   /**
    * This step's own decision/logic flow (a state machine / user flow grounded in
    * the step's code), or absent/null when the step needs none. Optional so
@@ -339,6 +412,11 @@ export const PlanStep = Schema.Struct({
   origin: Schema.optional(PlanParticipant),
   /** What kind of work this step is — the key model-affinity learnings use. */
   taskKind: Schema.optional(TaskKind),
+  /** Planner-authored route inputs; defaulted by the resolver when absent. */
+  effort: Schema.optional(RouteEffort),
+  risk: Schema.optional(RouteRisk),
+  /** Availability-normalized routing decision and its audit trail. */
+  routing: Schema.optional(PlanStepRouting),
   /**
    * The adversary's objections to this step. An empty array means it was
    * examined and survived; ABSENT means no adversary ever looked, which is a
@@ -417,7 +495,9 @@ export const Attachment = Schema.Struct({
 export type Attachment = Schema.Schema.Type<typeof Attachment>
 
 /** An attached image, carried on the user's turn and shown as a thumbnail. */
-export const ImagePart = Schema.TaggedStruct("Image", { attachment: Attachment })
+export const ImagePart = Schema.TaggedStruct("Image", {
+  attachment: Attachment
+})
 export type ImagePart = Schema.Schema.Type<typeof ImagePart>
 
 export const ThinkingPart = Schema.TaggedStruct("Thinking", {
@@ -760,7 +840,10 @@ export const StreamEvent = Schema.Union(
     cli: Schema.optional(CliKind)
   }),
   /** A spawned sub-agent finished — its tab is removed (transcripts are live-only). */
-  Schema.TaggedStruct("SubagentEnded", { id: Schema.String, status: SubagentStatus }),
+  Schema.TaggedStruct("SubagentEnded", {
+    id: Schema.String,
+    status: SubagentStatus
+  }),
   /** A background task started — it will keep running after this turn ends. */
   Schema.TaggedStruct("BackgroundTaskStarted", {
     id: Schema.String,
@@ -827,7 +910,10 @@ export const StreamEvent = Schema.Union(
     tokensBefore: Schema.Number
   }),
   /** Terminal context size, or 0 when the harness cannot report it. */
-  Schema.TaggedStruct("Done", { costUsd: Schema.Number, tokens: Schema.Number }),
+  Schema.TaggedStruct("Done", {
+    costUsd: Schema.Number,
+    tokens: Schema.Number
+  }),
   Schema.TaggedStruct("Failed", { message: Schema.String })
 )
 export type StreamEvent = Schema.Schema.Type<typeof StreamEvent>
@@ -884,7 +970,9 @@ export const settleStreaming = (msg: Message): Message => {
   return {
     ...msg,
     streaming: false,
-    parts: msg.parts.map((p) => (p._tag === "Thinking" && p.streaming ? { ...p, streaming: false } : p))
+    parts: msg.parts.map((p) =>
+      p._tag === "Thinking" && p.streaming ? { ...p, streaming: false } : p
+    )
   }
 }
 
@@ -954,7 +1042,10 @@ export const markChangedSteps = (prior: Plan, next: Plan): Plan => {
     ...next,
     steps: next.steps.map((s) => {
       const before = priorByNumber.get(s.number)
-      return { ...s, changed: before === undefined || stepContent(before) !== stepContent(s) }
+      return {
+        ...s,
+        changed: before === undefined || stepContent(before) !== stepContent(s)
+      }
     })
   }
 }
@@ -977,16 +1068,26 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       const next: ThinkingPart = {
         _tag: "Thinking",
         text: continues ? last.text + e.text : e.text,
-        seconds: e.seconds ?? (last !== undefined && last._tag === "Thinking" ? last.seconds : null),
+        seconds:
+          e.seconds ?? (last !== undefined && last._tag === "Thinking" ? last.seconds : null),
         streaming: !e.done
       }
-      return { ...msg, parts: continues ? replaceLast(parts, next) : [...parts, next] }
+      return {
+        ...msg,
+        parts: continues ? replaceLast(parts, next) : [...parts, next]
+      }
     }),
 
     Match.tag("Assistant", (e) => {
       const continues = last !== undefined && last._tag === "Text"
-      const next: TextPart = { _tag: "Text", text: continues ? last.text + e.text : e.text }
-      return { ...msg, parts: continues ? replaceLast(parts, next) : [...parts, next] }
+      const next: TextPart = {
+        _tag: "Text",
+        text: continues ? last.text + e.text : e.text
+      }
+      return {
+        ...msg,
+        parts: continues ? replaceLast(parts, next) : [...parts, next]
+      }
     }),
 
     Match.tag("ToolStart", (e) => {
@@ -1047,15 +1148,18 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
     }),
 
     Match.tag("QuestionRequested", (e) => {
-      const part: QuestionPart = { _tag: "Question", request: e.request, answers: null }
+      const part: QuestionPart = {
+        _tag: "Question",
+        request: e.request,
+        answers: null
+      }
       return { ...msg, parts: [...parts, part] }
     }),
 
     Match.tag("PlanProposed", (e) => {
       // If this turn already holds a plan, the new one is a REVISION — mark which
       // steps changed vs it, so the review highlights what the feedback altered.
-      const prior =
-        [...parts].reverse().find((p): p is PlanPart => p._tag === "Plan")?.plan ?? null
+      const prior = [...parts].reverse().find((p): p is PlanPart => p._tag === "Plan")?.plan ?? null
       const plan = prior ? markChangedSteps(prior, e.plan) : e.plan
       const part: PlanPart = { _tag: "Plan", plan }
       return { ...msg, parts: [...parts, part] }
@@ -1111,7 +1215,11 @@ export const applyStreamEvent = (msg: Message, event: StreamEvent): Message => {
       ...msg,
       parts: [
         ...parts,
-        { _tag: "Context", digest: e.digest, tokensBefore: e.tokensBefore } as ContextPart
+        {
+          _tag: "Context",
+          digest: e.digest,
+          tokensBefore: e.tokensBefore
+        } as ContextPart
       ]
     })),
 
@@ -1212,10 +1320,7 @@ export const agentPath = (
  * Every descendant id beneath `rootId` (exclusive). Cycle-guarded like
  * `agentPath`, so a self-referential parent pointer can't spin.
  */
-const descendantIds = (
-  subagents: ReadonlyArray<Subagent>,
-  rootId: string
-): ReadonlySet<string> => {
+const descendantIds = (subagents: ReadonlyArray<Subagent>, rootId: string): ReadonlySet<string> => {
   const out = new Set<string>()
   const queue = [rootId]
   while (queue.length > 0) {
@@ -1332,7 +1437,6 @@ export const applySubagentEvent = (
   return subagents
 }
 
-
 /**
  * The reserved tab id for the adversarial reviewer. It is not a harness sub-agent
  * (no `Task` spawned it, so there is no tool_use id to key it by) — it's a whole
@@ -1373,8 +1477,7 @@ export const applyReviewEvent = (
     // `Done` is published by ReviewService itself once a run produces a verdict,
     // so it deliberately lands after (and overrides) any `Failed` the harness
     // emitted for the turn — a reviewer that refused still completed a review.
-    status:
-      event._tag === "Done" ? "done" : event._tag === "Failed" ? "error" : base.status,
+    status: event._tag === "Done" ? "done" : event._tag === "Failed" ? "error" : base.status,
     message: applyStreamEvent(base.message, event)
   }
 }
@@ -1400,9 +1503,7 @@ export const setQuestionAnswers = (
 })
 
 /** The first unanswered question group across a transcript, or null. */
-export const pendingQuestion = (
-  messages: ReadonlyArray<Message>
-): QuestionRequest | null => {
+export const pendingQuestion = (messages: ReadonlyArray<Message>): QuestionRequest | null => {
   for (let i = messages.length - 1; i >= 0; i--) {
     for (const part of messages[i]!.parts) {
       if (part._tag === "Question" && part.answers === null) return part.request
@@ -1448,7 +1549,10 @@ export const pendingPlan = (messages: ReadonlyArray<Message>): Plan | null => {
     const parts = messages[i]!.parts
     for (let j = parts.length - 1; j >= 0; j--) {
       const part = parts[j]!
-      if (part._tag === "Plan" && (part.plan.status === "proposed" || part.plan.status === "revising")) {
+      if (
+        part._tag === "Plan" &&
+        (part.plan.status === "proposed" || part.plan.status === "revising")
+      ) {
         return part.plan
       }
     }
@@ -1598,7 +1702,11 @@ const toolActivity = (tool: ToolCall): SessionActivity => {
   if (tool.name === "Bash" && target) {
     const command = shortCommand(target)
     if (PR_WATCH_RE.test(command)) {
-      return { kind: "monitoring", verb: "Monitoring PR", target: prRef(command) }
+      return {
+        kind: "monitoring",
+        verb: "Monitoring PR",
+        target: prRef(command)
+      }
     }
     // A watcher that isn't about a PR — say so, rather than claiming either
     // "Running" (it never returns) or "Monitoring PR" (it isn't one).
@@ -1607,10 +1715,18 @@ const toolActivity = (tool: ToolCall): SessionActivity => {
   }
   if (SUBAGENT_TOOLS.has(tool.name)) return { kind: "delegating", verb: "Delegating", target }
   if (READ_TOOLS.has(tool.name)) {
-    return { kind: "reading", verb: "Reading", target: target ? basename(target) : null }
+    return {
+      kind: "reading",
+      verb: "Reading",
+      target: target ? basename(target) : null
+    }
   }
   if (EDIT_TOOLS.has(tool.name)) {
-    return { kind: "editing", verb: "Editing", target: target ? basename(target) : null }
+    return {
+      kind: "editing",
+      verb: "Editing",
+      target: target ? basename(target) : null
+    }
   }
   if (WEB_TOOLS.has(tool.name)) return { kind: "web", verb: "Searching the web", target }
   // An unknown tool (an MCP server's, say) still beats a bare "Thinking".
@@ -1678,12 +1794,7 @@ export const activityLabel = (activity: SessionActivity): string =>
  * a while (Monitoring), yes (Needs Input), or no (Idle). Anything finer is detail
  * they didn't ask for at the price of the thing they did.
  */
-export type SessionDisplayStatus =
-  | "thinking"
-  | "running"
-  | "needs-input"
-  | "monitoring"
-  | "idle"
+export type SessionDisplayStatus = "thinking" | "running" | "needs-input" | "monitoring" | "idle"
 
 /**
  * What a session reports in the sidebar, from its live activity (when it has one)

@@ -1,6 +1,11 @@
 import type { PlanChallenge } from "@starbase/core"
 import { describe, expect, it } from "vitest"
-import { critiquePrompt, proposalPrompt, revisionPrompt } from "./adversarial-plan-prompt.js"
+import {
+  critiquePrompt,
+  planAsText,
+  proposalPrompt,
+  revisionPrompt
+} from "./adversarial-plan-prompt.js"
 import { parsePlan } from "./plan-parse.js"
 
 const AGENTS = [
@@ -135,6 +140,64 @@ describe("proposalPrompt", () => {
   it("omits the assignee contract when routing is not wanted", () => {
     const prompt = proposalPrompt({ brief: "Add auth", agents: AGENTS, assignAgents: false })
     expect(prompt).not.toContain("agent:")
+  })
+})
+
+describe("planAsText", () => {
+  it("appends resolver-owned provenance for the critic", () => {
+    const text = planAsText({
+      id: "p1",
+      summary: "Route it",
+      comments: [],
+      status: "proposed",
+      structured: true,
+      raw: "```plan\nsummary: Route it\n01 Work\n```",
+      steps: [
+        {
+          id: "s1",
+          number: "01",
+          title: "Work",
+          intent: "work",
+          approach: [],
+          kind: "step",
+          condition: null,
+          parentId: null,
+          dependsOn: [],
+          blocks: [],
+          files: [],
+          guards: [],
+          code: null,
+          diff: null,
+          status: "proposed",
+          flagged: false,
+          routing: {
+            effort: "standard",
+            risk: "medium",
+            policyVersion: "test-v1",
+            mode: "shadow",
+            decision: {
+              cli: "claude",
+              model: "sonnet",
+              provenance: "planner-preference",
+              reason: "preferred",
+              alternatives: [{ cli: "codex", model: "gpt-5" }]
+            },
+            shadowDecision: {
+              cli: "codex",
+              model: "gpt-5",
+              provenance: "policy-profile",
+              reason: "profile",
+              alternatives: []
+            },
+            rejected: [],
+            attempts: []
+          }
+        }
+      ]
+    })
+
+    expect(text).toMatch(/Generated routing appendix/)
+    expect(text).toMatch(/claude\/sonnet \(planner-preference; test-v1; shadow codex\/gpt-5\)/)
   })
 })
 

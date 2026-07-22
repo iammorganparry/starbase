@@ -11,6 +11,8 @@ import type {
   PlanStep,
   PlanStepAssignee,
   PlanStepCode,
+  RouteEffort,
+  RouteRisk,
   TaskKind
 } from "@starbase/core"
 import { CLI_KINDS, TASK_KINDS } from "@starbase/core"
@@ -349,6 +351,20 @@ const parseBlock = (block: string): { summary: string; steps: PlanStep[] } => {
             const kind = v.trim().toLowerCase()
             if ((TASK_KINDS as ReadonlyArray<string>).includes(kind)) {
               s.taskKind = kind as TaskKind
+            }
+            break
+          }
+          case "effort": {
+            const effort = v.trim().toLowerCase()
+            if (effort === "quick" || effort === "standard" || effort === "deep") {
+              s.effort = effort satisfies RouteEffort
+            }
+            break
+          }
+          case "risk": {
+            const risk = v.trim().toLowerCase()
+            if (risk === "low" || risk === "medium" || risk === "high") {
+              s.risk = risk satisfies RouteRisk
             }
             break
           }

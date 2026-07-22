@@ -1,6 +1,7 @@
 import type {
   CliKind,
   ContextConfig,
+  GigaplanRoutingConfig,
   GitConfig,
   GithubConfig,
   NotificationsConfig,
@@ -62,6 +63,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             ...(existing?.collapsedRepos ? { collapsedRepos: existing.collapsedRepos } : {}),
             ...(existing?.lastRepoPath ? { lastRepoPath: existing.lastRepoPath } : {}),
             ...(existing?.providers ? { providers: existing.providers } : {}),
+            ...(existing?.gigaplanRouting ? { gigaplanRouting: existing.gigaplanRouting } : {}),
             ...(existing?.orchestrator ? { orchestrator: existing.orchestrator } : {}),
             ...(existing?.notifications ? { notifications: existing.notifications } : {}),
             // Booleans are checked against `undefined`, not truthiness — a saved
@@ -105,6 +107,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
       const setOrchestrator = (cli: CliKind, model: string) =>
         patch({ orchestrator: { cli, model } })
 
+      const setGigaplanRouting = (gigaplanRouting: GigaplanRoutingConfig) =>
+        patch({ gigaplanRouting })
+
       const setProvider = (cli: CliKind, provider: ProviderConfig) =>
         Effect.gen(function* () {
           const existing = yield* get()
@@ -143,7 +148,8 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setLastRepoPath,
         setContext,
         setProvider,
-        setOrchestrator
+        setOrchestrator,
+        setGigaplanRouting
       }
     }
   }

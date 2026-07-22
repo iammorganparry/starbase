@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   AppPaths,
+  RankingService,
   CliAdapter,
   ConfigService,
   DiscoveryService,
@@ -19,10 +20,11 @@ import {
   TranscriptStore,
   SkillsService,
   TerminalService,
+  UsageService,
   WorkspaceService
 } from "@starbase/cli-adapters"
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
-import type { Plan, StreamEvent } from "@starbase/core"
+import type { CliKind, Plan, RoutingRankingSnapshot, StreamEvent, Usage } from "@starbase/core"
 import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
 import type { CommandExecutor } from "@effect/platform"
@@ -40,6 +42,7 @@ import {
   mcpStatus,
   modelsCatalog,
   modelsList,
+  providerCanRoute,
   reviewGet,
   reviewMarkRouted,
   reviewReconcile,
@@ -75,6 +78,35 @@ describe("RPC handlers", () => {
 
   const fakeDialog = (chosen: string | null) =>
     Layer.succeed(DialogService, { chooseDirectory: () => Effect.succeed(chosen) })
+
+  describe("Gigaplan provider eligibility", () => {
+    const enabled = undefined
+
+    it("rejects a conclusively unauthenticated metered provider", () => {
+      expect(providerCanRoute("codex", enabled, {}, false, false, false)).toBe(false)
+    })
+
+    it("accepts subscription auth, API keys, and indeterminate probes", () => {
+      expect(providerCanRoute("codex", enabled, {}, true, false, false)).toBe(true)
+      expect(
+        providerCanRoute("codex", enabled, { OPENAI_API_KEY: "sk-test" }, false, false, false)
+      ).toBe(true)
+      expect(providerCanRoute("codex", enabled, {}, false, true, false)).toBe(true)
+    })
+
+    it("keeps an explicitly disabled provider out even in scripted mode", () => {
+      expect(
+        providerCanRoute(
+          "codex",
+          { codex: { enabled: false, defaultMode: "accept-edits" } },
+          {},
+          true,
+          false,
+          true
+        )
+      ).toBe(false)
+    })
+  })
 
   describe("Config.get", () => {
     it("folds a malformed config to null (renderer shows first-run setup)", async () => {
@@ -990,7 +1022,20 @@ describe("RPC handlers", () => {
 describe("Gigaplan round persistence", () => {
   let dir: string
   let root: string
+  let capturedAvailable: ReadonlyArray<{ readonly cli: CliKind; readonly model: string }> = []
+  let capturedRanking: RoutingRankingSnapshot | null | undefined
+  let capturedUsage: Usage | null | undefined
+  let capturedVendors: ReadonlyArray<{ readonly vendor: string }> = []
+  let currentUsage: Usage
+  let previousAnthropicKey: string | undefined
   beforeEach(() => {
+    capturedAvailable = []
+    capturedRanking = undefined
+    capturedUsage = undefined
+    capturedVendors = []
+    currentUsage = HEALTHY_USAGE
+    previousAnthropicKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = "e2e-test-key"
     dir = mkdtempSync(join(tmpdir(), "starbase-round-"))
     root = join(dir, "starbase")
     mkdirSync(root, { recursive: true })
@@ -1014,9 +1059,33 @@ describe("Gigaplan round persistence", () => {
       ])
     )
   })
-  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => {
+    if (previousAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = previousAnthropicKey
+    rmSync(dir, { recursive: true, force: true })
+  })
 
   const SESSION = "s_round"
+  const RANKING: RoutingRankingSnapshot = {
+    source: "OpenRouter Rankings",
+    windowDays: 30,
+    fetchedAt: "2026-07-22T00:00:00.000Z",
+    models: [{ model: "anthropic/claude-sonnet-5", scores: { backend: 0.4 } }]
+  }
+  const HEALTHY_USAGE: Usage = {
+    fetchedAt: "2026-07-22T00:00:00.000Z",
+    providers: [
+      {
+        cli: "claude",
+        name: "Claude",
+        plan: "Max",
+        available: true,
+        windows: [
+          { label: "Weekly · all models", resetsAt: null, utilization: 20, status: "ok" }
+        ]
+      }
+    ]
+  }
 
   /**
    * Everything `planAdversarial` touches, against a real temp root so the
@@ -1031,12 +1100,30 @@ describe("Gigaplan round persistence", () => {
       TranscriptStore.Default,
       PlanRoundStore.Default,
       SessionStore.Default,
+      Layer.succeed(
+        RankingService,
+        new RankingService({ latest: Effect.succeed(RANKING) })
+      ),
+      Layer.succeed(
+        UsageService,
+        new UsageService({ get: () => Effect.succeed(currentUsage) })
+      ),
       Layer.succeed(DiscoveryService, new DiscoveryService({ list: () => Effect.succeed([]) })),
       Layer.succeed(
         ModelsService,
         new ModelsService({
           list: () => Effect.succeed([]),
-          catalog: () => Effect.succeed([])
+          catalog: () =>
+            Effect.succeed([
+              {
+                cli: "claude",
+                label: "Claude Code",
+                models: [
+                  { id: "opus", label: "Opus" },
+                  { id: "sonnet", label: "Sonnet" }
+                ]
+              }
+            ])
         })
       ),
       fakeCommandExecutor(() => ({ exitCode: 0, stdout: "" })),
@@ -1079,7 +1166,25 @@ describe("Gigaplan round persistence", () => {
         code: null,
         diff: null,
         status: "proposed",
-        flagged: false
+        flagged: false,
+        taskKind: "backend",
+        effort: "standard",
+        risk: "medium",
+        routing: {
+          effort: "standard",
+          risk: "medium",
+          policyVersion: "test-v1",
+          mode: "active",
+          decision: {
+            cli: "claude",
+            model: "sonnet",
+            provenance: "policy-profile",
+            reason: "backend profile",
+            alternatives: [{ cli: "claude", model: "opus" }]
+          },
+          rejected: [],
+          attempts: []
+        }
       }
     ],
     comments: [],
@@ -1095,15 +1200,40 @@ describe("Gigaplan round persistence", () => {
     new PlanExecutor({
       run: (input: {
         plan: Plan
+        available: ReadonlyArray<{ readonly cli: CliKind; readonly model: string }>
         onStepDone?: (step: Plan["steps"][number]) => Effect.Effect<void>
+        onStepUpdated?: (step: Plan["steps"][number]) => Effect.Effect<void>
       }) =>
         Stream.unwrap(
           Effect.gen(function* () {
+            capturedAvailable = input.available
             // A real executor reports each finished step; the fake does too, or
             // the wiring under test is never exercised.
             const first = input.plan.steps[0]
-            if (first !== undefined && input.onStepDone !== undefined) {
-              yield* input.onStepDone(first)
+            if (first !== undefined) {
+              const updated: Plan["steps"][number] = first.routing
+                ? {
+                    ...first,
+                    routing: {
+                      ...first.routing,
+                      attempts: [
+                        {
+                          attempt: 1,
+                          candidate: {
+                            cli: first.routing.decision.cli,
+                            model: first.routing.decision.model
+                          },
+                          outcome: "done",
+                          reason: null,
+                          mutationPossible: true,
+                          createdAt: "2026-07-22T00:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                : first
+              if (input.onStepUpdated !== undefined) yield* input.onStepUpdated(updated)
+              if (input.onStepDone !== undefined) yield* input.onStepDone(updated)
             }
             return Stream.fromIterable([
               { _tag: "Assistant", text: "ran step 01" } as unknown as StreamEvent,
@@ -1119,11 +1249,18 @@ describe("Gigaplan round persistence", () => {
   const fakeService = Layer.succeed(
     AdversarialPlanService,
     new AdversarialPlanService({
-      run: () =>
-        Stream.fromIterable([
+      run: (input: {
+        vendors: ReadonlyArray<{ readonly vendor: string }>
+        routing: { ranking?: RoutingRankingSnapshot | null; usage?: Usage | null }
+      }) => {
+        capturedRanking = input.routing.ranking
+        capturedUsage = input.routing.usage
+        capturedVendors = input.vendors
+        return Stream.fromIterable([
           { _tag: "PlanProposed", plan: PLAN } as StreamEvent,
           { _tag: "Done", costUsd: 0, tokens: 0, sessionId: SESSION } as unknown as StreamEvent
         ])
+      }
     } as unknown as ConstructorParameters<typeof AdversarialPlanService>[0])
   )
 
@@ -1149,6 +1286,47 @@ describe("Gigaplan round persistence", () => {
     }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
 
     expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
+  })
+
+  it("injects the cached OpenRouter ranking snapshot into the pure route context", async () => {
+    await planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(
+      Stream.runDrain,
+      Effect.provide(roundLayer(root)),
+      Effect.runPromise
+    )
+    expect(capturedRanking).toBe(RANKING)
+  })
+
+  it("injects the fresh local usage snapshot into the pure route context", async () => {
+    await planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(
+      Stream.runDrain,
+      Effect.provide(roundLayer(root)),
+      Effect.runPromise
+    )
+    expect(capturedUsage).toBe(HEALTHY_USAGE)
+  })
+
+  it("does not assign a planning role to a provider already at its limit", async () => {
+    currentUsage = {
+      fetchedAt: "2026-07-22T01:00:00.000Z",
+      providers: [
+        {
+          cli: "claude",
+          name: "Claude",
+          plan: "Max",
+          available: true,
+          windows: [
+            { label: "Weekly · all models", resetsAt: null, utilization: 100, status: "limited" }
+          ]
+        }
+      ]
+    }
+    await planAdversarial(SESSION, "Add rate limiting to refunds.").pipe(
+      Stream.runDrain,
+      Effect.provide(roundLayer(root)),
+      Effect.runPromise
+    )
+    expect(capturedVendors).toStrictEqual([])
   })
 
   /**
@@ -1177,6 +1355,66 @@ describe("Gigaplan round persistence", () => {
     }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
 
     expect(status).toStrictEqual(["approved"])
+  })
+
+  it("passes every provider model to execution and persists route attempts", async () => {
+    const stored = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part._tag === "Plan" && part.plan.id === PLAN.id ? [part.plan] : []
+        )
+      )[0]
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
+
+    expect(capturedAvailable).toStrictEqual([
+      { cli: "claude", model: "opus" },
+      { cli: "claude", model: "sonnet" }
+    ])
+    expect(stored?.steps[0]?.routing?.attempts).toHaveLength(1)
+    expect(stored?.steps[0]?.routing?.attempts[0]?.outcome).toBe("done")
+  })
+
+  it("revalidates local limits immediately before execution", async () => {
+    currentUsage = {
+      fetchedAt: "2026-07-22T01:00:00.000Z",
+      providers: [
+        {
+          cli: "claude",
+          name: "Claude",
+          plan: "Max",
+          available: true,
+          windows: [
+            {
+              label: "Weekly · all models",
+              resetsAt: "2026-07-23T00:00:00.000Z",
+              utilization: 100,
+              status: "limited"
+            }
+          ]
+        }
+      ]
+    }
+    await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `a_${SESSION}_1`,
+        role: "assistant",
+        parts: [{ _tag: "Plan", plan: PLAN }],
+        streaming: false,
+        createdAt: "2026-07-19T00:00:00.000Z"
+      })
+      yield* planExecute(SESSION, PLAN.id).pipe(Stream.runDrain)
+    }).pipe(Effect.provide(execLayer(root)), Effect.runPromise)
+
+    expect(capturedAvailable).toStrictEqual([])
   })
 
   it("persists the execution's own turns, so the run survives a reopen", async () => {

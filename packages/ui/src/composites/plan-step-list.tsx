@@ -109,7 +109,15 @@ function Row({
       >
         {step.title}
       </span>
-      {step.assignee && <PlanAssignee assignee={step.assignee} compact />}
+      {step.routing ? (
+        <PlanAssignee
+          assignee={step.routing.decision}
+          compact
+          labelPrefix="Will run on"
+        />
+      ) : step.assignee ? (
+        <PlanAssignee assignee={step.assignee} compact />
+      ) : null}
       {step.condition && (
         <span className="flex-none font-mono text-[9.5px] text-muted-foreground">{step.condition}</span>
       )}

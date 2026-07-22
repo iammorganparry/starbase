@@ -355,6 +355,16 @@ describe("parsePlan — fidelity of what the agent wrote", () => {
     expect(s.blocks).toStrictEqual([])
   })
 
+  it("parses the closed routing inputs and ignores malformed values", () => {
+    const routed = step("  task: schema\n  effort: deep\n  risk: high")
+    expect(routed).toMatchObject({ taskKind: "schema", effort: "deep", risk: "high" })
+
+    const malformed = step("  task: magic\n  effort: enormous\n  risk: catastrophic")
+    expect(malformed.taskKind).toBeUndefined()
+    expect(malformed.effort).toBeUndefined()
+    expect(malformed.risk).toBeUndefined()
+  })
+
   it("keeps a comma in a file path", () => {
     const s = step("  files: M packages/cli-adapters/src/discovery.ts +14 -1")
     expect(s.files).toStrictEqual([

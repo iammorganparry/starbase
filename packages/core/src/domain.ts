@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { BUDGET_RANGE, DEFAULT_BUDGET_TOKENS } from "./context.js"
+import { TaskKind } from "./task-kind.js"
 
 /**
  * Domain schemas for Starbase. These are Effect `Schema`s so they can be reused
@@ -473,6 +474,31 @@ export const ProvidersConfig = Schema.partial(
 )
 export type ProvidersConfig = Schema.Schema.Type<typeof ProvidersConfig>
 
+/** An ordered exact route in a workspace's Gigaplan policy. */
+export const GigaplanRouteConfigCandidate = Schema.Struct({
+  cli: CliKind,
+  model: Schema.String
+})
+export type GigaplanRouteConfigCandidate = Schema.Schema.Type<
+  typeof GigaplanRouteConfigCandidate
+>
+
+export const GigaplanRoutingConfig = Schema.Struct({
+  mode: Schema.Literal("shadow", "active"),
+  overrides: Schema.Array(
+    Schema.Struct({
+      taskKind: TaskKind,
+      routes: Schema.Array(GigaplanRouteConfigCandidate)
+    })
+  )
+})
+export type GigaplanRoutingConfig = Schema.Schema.Type<typeof GigaplanRoutingConfig>
+
+export const GIGAPLAN_ROUTING_DEFAULT: GigaplanRoutingConfig = {
+  mode: "shadow",
+  overrides: []
+}
+
 /**
  * The global auto-compaction levers, persisted at `WorkspaceConfig.context`.
  *
@@ -541,6 +567,8 @@ export const WorkspaceConfig = Schema.Struct({
    * harness defaults).
    */
   providers: Schema.optional(ProvidersConfig),
+  /** Semantic step routing; absent on legacy config means safe shadow mode. */
+  gigaplanRouting: Schema.optional(GigaplanRoutingConfig),
   /**
    * Whether Starbase may learn from finished work. Absent on older configs, and
    * absent means OFF — the safe direction for anything that reads your history.

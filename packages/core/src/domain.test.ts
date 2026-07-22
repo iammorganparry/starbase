@@ -52,6 +52,28 @@ describe("WorkspaceConfig", () => {
     )
     expect(roundTripped).toStrictEqual(config)
   })
+
+  it("accepts routing config while legacy absence remains valid", () => {
+    const configured = decode(WorkspaceConfig, {
+      reposDir: "/repos",
+      createdAt: "2026-07-22T00:00:00.000Z",
+      gigaplanRouting: {
+        mode: "shadow",
+        overrides: [
+          { taskKind: "frontend", routes: [{ cli: "claude", model: "opus" }] }
+        ]
+      }
+    })
+    expect(Either.isRight(configured)).toBe(true)
+    expect(
+      Either.isRight(
+        decode(WorkspaceConfig, {
+          reposDir: "/repos",
+          createdAt: "2026-07-22T00:00:00.000Z"
+        })
+      )
+    ).toBe(true)
+  })
 })
 
 describe("GithubConfig", () => {

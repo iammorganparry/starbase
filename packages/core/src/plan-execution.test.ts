@@ -2,19 +2,20 @@ import type { Plan, PlanStep } from "./conversation.js"
 import { describe, expect, it } from "vitest"
 import { executionOrder, resolveRunner } from "./plan-execution.js"
 
-const step = (over: Partial<PlanStep> & { id: string; number: string }): PlanStep => ({
-  title: `Step ${over.number}`,
-  intent: "",
-  approach: [],
-  kind: "step",
-  condition: null,
-  parentId: null,
-  dependsOn: [],
-  blocks: [],
-  files: [],
-  guards: [],
-  ...over
-} as PlanStep)
+const step = (over: Partial<PlanStep> & { id: string; number: string }): PlanStep =>
+  ({
+    title: `Step ${over.number}`,
+    intent: "",
+    approach: [],
+    kind: "step",
+    condition: null,
+    parentId: null,
+    dependsOn: [],
+    blocks: [],
+    files: [],
+    guards: [],
+    ...over
+  }) as PlanStep
 
 const planOf = (steps: ReadonlyArray<PlanStep>): Plan =>
   ({ id: "p1", summary: "", structured: true, graph: null, steps }) as Plan
@@ -56,7 +57,12 @@ describe("executionOrder", () => {
     // of executing the right one; it is actively wrong.
     const plan = planOf([
       step({ id: "a", number: "01" }),
-      step({ id: "b", number: "02", kind: "branch", condition: "token expired?" }),
+      step({
+        id: "b",
+        number: "02",
+        kind: "branch",
+        condition: "token expired?"
+      }),
       step({ id: "c", number: "2a", kind: "branch-arm", parentId: "b" })
     ])
     const out = executionOrder(plan)
@@ -134,18 +140,34 @@ describe("resolveRunner", () => {
       number: "01",
       assignee: { cli: "codex", model: "gpt-5.6-sol", reason: "schema work" }
     })
-    expect(resolveRunner(s, available, null)).toStrictEqual({ cli: "codex", model: "gpt-5.6-sol" })
+    expect(resolveRunner(s, available, null)).toStrictEqual({
+      cli: "codex",
+      model: "gpt-5.6-sol"
+    })
   })
 
-  it("keeps the assigned harness even when its model id is unknown here", () => {
-    // The lab is the substantive half of the choice; a stale model id is a far
-    // smaller divergence than running on a different vendor entirely.
+  it("never passes a stale assigned model to a harness", () => {
     const s = step({
       id: "a",
       number: "01",
       assignee: { cli: "codex", model: "gpt-6-unreleased", reason: "r" }
     })
-    expect(resolveRunner(s, available, null)?.cli).toBe("codex")
+    expect(resolveRunner(s, available, null)).toStrictEqual({
+      cli: "claude",
+      model: "opus"
+    })
+  })
+
+  it("uses a live fallback when the assigned model is stale", () => {
+    const s = step({
+      id: "a",
+      number: "01",
+      assignee: { cli: "codex", model: "gpt-6-unreleased", reason: "r" }
+    })
+    expect(resolveRunner(s, available, { cli: "codex", model: "gpt-5.6-sol" })).toStrictEqual({
+      cli: "codex",
+      model: "gpt-5.6-sol"
+    })
   })
 
   it("falls back when the assigned harness is not installed here", () => {
@@ -183,7 +205,12 @@ describe("resolveRunner", () => {
     // uninstalled orchestrator sent the step to a harness with no binary, which
     // fails three times and reports "stuck after 3 attempts" — hiding the real
     // and actionable cause, which is that nothing here can run it.
-    const step = { id: "s1", number: "01", title: "t", assignee: undefined } as unknown as PlanStep
+    const step = {
+      id: "s1",
+      number: "01",
+      title: "t",
+      assignee: undefined
+    } as unknown as PlanStep
     const usable = [{ cli: "codex" as const, model: "gpt-5" }]
     expect(resolveRunner(step, usable, { cli: "claude", model: "opus" })).toStrictEqual({
       cli: "codex",
@@ -192,7 +219,12 @@ describe("resolveRunner", () => {
   })
 
   it("still uses the fallback when it IS installed", () => {
-    const step = { id: "s1", number: "01", title: "t", assignee: undefined } as unknown as PlanStep
+    const step = {
+      id: "s1",
+      number: "01",
+      title: "t",
+      assignee: undefined
+    } as unknown as PlanStep
     const usable = [
       { cli: "codex" as const, model: "gpt-5" },
       { cli: "claude" as const, model: "opus" }

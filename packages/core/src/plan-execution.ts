@@ -149,11 +149,14 @@ export const resolveRunner = (
   const usable = available.filter((a) => a.cli !== "starbase")
   const assignee: PlanStepAssignee | undefined = step.assignee
   if (assignee !== undefined && assignee.cli !== "starbase") {
-    const exact = usable.find((a) => a.cli === assignee.cli)
-    // Honour the harness even when the exact model isn't in the catalogue: the
-    // lab is the substantive half of the choice, and a stale model id is a far
-    // smaller divergence than running on a different vendor entirely.
-    if (exact !== undefined) return { cli: assignee.cli, model: assignee.model }
+    const exact = usable.find(
+      (candidate) => candidate.cli === assignee.cli && candidate.model === assignee.model
+    )
+    // A reviewed model id may have disappeared since planning. Never hand a
+    // stale id to the harness: the caller can use a live fallback or report that
+    // no route remains, but it must not turn catalogue drift into three failed
+    // process launches.
+    if (exact !== undefined) return exact
   }
   // The fallback must clear the SAME bar as an assignee: installed here. It
   // used to be returned on the `starbase` check alone, so on a Codex-only host

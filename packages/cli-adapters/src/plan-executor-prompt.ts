@@ -85,6 +85,10 @@ export const stepPrompt = (input: {
           // way, which turns three attempts into one attempt billed three times.
           asData("A previous attempt at this step was blocked by", input.previousBlocker),
           "",
+          "Before changing anything, inspect the current worktree and tests. The previous",
+          "attempt may have completed some safe setup even though it did not finish, so",
+          "continue from the state that exists instead of blindly repeating its actions.",
+          "",
           "Work around it if you can. If it is genuinely insurmountable, say so",
           "in the verdict rather than pretending the step is done."
         ]

@@ -22,6 +22,7 @@ import type {
   ExecutionMode,
   GateDecision,
   GhStatus,
+  GigaplanRoutingConfig,
   GitConfig,
   NotificationKind,
   NotificationsConfig,
@@ -297,6 +298,8 @@ export const rpc = {
   /** Which harness+model Gigaplan itself runs on. */
   configSetOrchestrator: (cli: CliKind, model: string): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setOrchestrator({ cli, model })),
+  configSetGigaplanRouting: (routing: GigaplanRoutingConfig): Promise<WorkspaceConfig> =>
+    run((c) => c.Config.setGigaplanRouting({ routing })),
   configSetProvider: (cli: CliKind, provider: ProviderConfig): Promise<WorkspaceConfig> =>
     run((c) => c.Config.setProvider({ cli, provider })),
   githubPr: (sessionId: string): Promise<PullRequest | null> =>
