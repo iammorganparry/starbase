@@ -619,9 +619,8 @@ export function Composer({
             options={modeOptions}
             onSelect={onSetMode}
             appearance="quiet"
-            // A stable width prevents the toolbar jumping when a mode hides the
-            // model chip (Gigaplan). Flex shrinking plus the chip's `min-w-0`
-            // still lets this yield inside a genuinely narrow pane.
+            // Quiet chrome sizes to its current label instead of reserving
+            // permanent toolbar space; cap long modes inside narrow panes.
             className={cn("max-w-[104px]", accent.chip)}
           />
           <ChipMenu
