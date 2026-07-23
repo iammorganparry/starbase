@@ -52,15 +52,23 @@ const spec = (step: PlanStep): string =>
     .filter((part) => part.length > 0)
     .join("\n")
 
+const originalContext = (context?: string): ReadonlyArray<string> =>
+  context?.trim()
+    ? ["", asData("The original task and conversation decisions", context.trim())]
+    : []
+
 export const stepPrompt = (input: {
   readonly plan: Plan
   readonly step: PlanStep
+  /** The originating task and decisions from the parent conversation. */
+  readonly context?: string
   /** What stopped the previous attempt, when this is a retry. */
   readonly previousBlocker?: string | null
 }): string =>
   [
     "You are implementing ONE step of a plan that has already been reviewed and",
     "approved. Do that step, completely, and stop.",
+    ...originalContext(input.context),
     "",
     asData("The plan, for context — the arrow marks your step", outline(input.plan, input.step)),
     "",

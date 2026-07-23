@@ -44,4 +44,10 @@ describe("Composer attachments in Gigaplan", () => {
     const attach = screen.getByTitle("Attach an image")
     expect((attach as HTMLButtonElement).disabled).toBe(false)
   })
+
+  it("labels Codex ask mode by its safe read-only behaviour", () => {
+    render(<Composer cli="codex" mode="ask" />)
+    expect(screen.getByText("read only")).toBeTruthy()
+    expect(screen.queryByText("ask")).toBe(null)
+  })
 })

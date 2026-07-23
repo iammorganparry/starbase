@@ -49,6 +49,7 @@ import {
   eligibleRoutingCatalog,
   githubDetectPr,
   gigaplanBriefFromTranscript,
+  planExecutionContextFromTranscript,
   githubSubmitReview,
   githubPr,
   mcpList,
@@ -171,6 +172,64 @@ describe("Gigaplan handoff brief", () => {
       "Create or update the implementation plan from this reviewed Gigaplan intake.\n\n".length +
         60_000
     )
+  })
+})
+
+describe("Plan execution context", () => {
+  it("carries the originating task and decisions, but not synthetic handoff turns", () => {
+    const messages = [
+      {
+        id: "u1",
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: "Preserve the current filters." }]
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        source: "gigaplan-intake",
+        parts: [
+          {
+            _tag: "Question",
+            request: {
+              id: "q1",
+              questions: [
+                {
+                  question: "Which export?",
+                  header: "Export",
+                  multiSelect: false,
+                  options: [{ label: "CSV", description: "Flat file" }]
+                }
+              ]
+            },
+            answers: [{ selected: ["CSV"], other: null }]
+          }
+        ]
+      },
+      {
+        id: "u2",
+        role: "user",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Text", text: "Create a plan from this Gigaplan conversation." }]
+      },
+      {
+        id: "plan-message",
+        role: "assistant",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Plan", plan: { raw: "summary: export" } }]
+      },
+      {
+        id: "later",
+        role: "user",
+        parts: [{ _tag: "Text", text: "This happened after the plan." }]
+      }
+    ] as unknown as ReadonlyArray<Message>
+
+    const context = planExecutionContextFromTranscript(messages, "plan-message")
+    expect(context).toContain("OPERATOR\nPreserve the current filters.")
+    expect(context).toContain("ANSWER: CSV")
+    expect(context).not.toContain("Create a plan from this Gigaplan conversation.")
+    expect(context).not.toContain("This happened after the plan.")
   })
 })
 

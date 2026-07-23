@@ -2,6 +2,7 @@ import type { PermissionMode, ReasoningEffort, StreamEvent } from "@starbase/cor
 import { CliExecError, resumePlanPrompt } from "@starbase/core"
 import type {
   ApprovalMode,
+  Input,
   ModelReasoningEffort,
   SandboxMode,
   ThreadEvent
@@ -16,6 +17,7 @@ import { worktreeEnv } from "./worktree-env.js"
 import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { readCodexContextUsage } from "./codex-app-server.js"
 import type { CodexContextUsage } from "./codex-app-server.js"
+import { stageCodexInput } from "./codex-input.js"
 
 /**
  * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
@@ -30,9 +32,9 @@ import type { CodexContextUsage } from "./codex-app-server.js"
 
 /**
  * Map our HITL mode onto Codex's sandbox + approval policy. Approval stays
- * `never` (there is no interactive callback in exec mode); the mode instead
- * widens the sandbox — `auto` gets full access, otherwise edits/commands are
- * confined to the workspace.
+ * `never` because exec mode has no interactive callback. `ask` therefore
+ * degrades safely to read-only: silently granting workspace writes would violate
+ * the operator's consent, while Codex cannot surface an approval request here.
  *
  * `readOnly` overrides the mode entirely. It has to be enforced HERE, in the
  * sandbox, because this adapter never calls `ctx.canUseTool` — so a caller that
@@ -65,6 +67,8 @@ export const mapCodexPolicy = (
     ? { sandboxMode: "read-only", approvalPolicy: "never" }
     : mode === "auto" && !unattended
       ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
+      : mode === "ask"
+        ? { sandboxMode: "read-only", approvalPolicy: "never" }
       : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
 /** Map the composer's semantic strength onto Codex's native thread option. */
@@ -215,9 +219,59 @@ export const agentReply = (event: ThreadEvent): string | null =>
     : null
 
 /** Fold one Codex `ThreadEvent` into our normalized `StreamEvent`s. */
+type CodexItem = Extract<ThreadEvent, { type: "item.started" }>["item"]
+
+const todoOutput = (item: Extract<CodexItem, { type: "todo_list" }>): string =>
+  item.items
+    .map((todo) => `${todo.completed ? "[x]" : "[ ]"} ${todo.text}`)
+    .join("\n")
+
+const toolStart = (item: CodexItem): StreamEvent | null => {
+  switch (item.type) {
+    case "command_execution":
+      return { _tag: "ToolStart", id: item.id, name: "Bash", target: item.command }
+    case "file_change":
+      return {
+        _tag: "ToolStart",
+        id: item.id,
+        name: "Edit",
+        target: item.changes[0]?.path ?? null
+      }
+    case "web_search":
+      return { _tag: "ToolStart", id: item.id, name: "WebSearch", target: item.query }
+    case "mcp_tool_call":
+      return { _tag: "ToolStart", id: item.id, name: item.tool, target: item.server }
+    case "todo_list":
+      return { _tag: "ToolStart", id: item.id, name: "Todo", target: null }
+    default:
+      return null
+  }
+}
+
+const ensureToolStart = (
+  item: CodexItem,
+  startedTools: Set<string>
+): ReadonlyArray<StreamEvent> => {
+  const start = toolStart(item)
+  if (start === null || startedTools.has(item.id)) return []
+  startedTools.add(item.id)
+  return [start]
+}
+
+const mcpOutput = (
+  item: Extract<CodexItem, { type: "mcp_tool_call" }>
+): string | undefined => {
+  if (item.error !== undefined) return capOutput(item.error.message)
+  if (item.result === undefined) return
+  const value = item.result.structured_content ?? item.result.content
+  const rendered = typeof value === "string" ? value : JSON.stringify(value)
+  return rendered === undefined || rendered.length === 0 ? undefined : capOutput(rendered)
+}
+
 export const codexEventToStreamEvents = (
   event: ThreadEvent,
-  sessionId: string
+  sessionId: string,
+  startedTools: Set<string> = new Set()
 ): ReadonlyArray<StreamEvent> => {
   switch (event.type) {
     case "thread.started":
@@ -227,16 +281,7 @@ export const codexEventToStreamEvents = (
       return [{ _tag: "Started", sessionId: event.thread_id || sessionId }]
 
     case "item.started": {
-      const it = event.item
-      if (it.type === "command_execution")
-        return [{ _tag: "ToolStart", id: it.id, name: "Bash", target: it.command }]
-      if (it.type === "file_change")
-        return [{ _tag: "ToolStart", id: it.id, name: "Edit", target: it.changes[0]?.path ?? null }]
-      if (it.type === "web_search")
-        return [{ _tag: "ToolStart", id: it.id, name: "WebSearch", target: it.query }]
-      if (it.type === "mcp_tool_call")
-        return [{ _tag: "ToolStart", id: it.id, name: it.tool, target: it.server }]
-      return []
+      return ensureToolStart(event.item, startedTools)
     }
 
     // When codex emits a mid-run update, it reprints the command's aggregated
@@ -252,8 +297,19 @@ export const codexEventToStreamEvents = (
     // `ToolEnd.output` below. Either way no output is lost.
     case "item.updated": {
       const it = event.item
-      if (it.type !== "command_execution" || it.aggregated_output.length === 0) return []
-      return [{ _tag: "ToolDelta", id: it.id, output: capOutput(it.aggregated_output) }]
+      if (it.type === "command_execution" && it.aggregated_output.length > 0) {
+        return [
+          ...ensureToolStart(it, startedTools),
+          { _tag: "ToolDelta", id: it.id, output: capOutput(it.aggregated_output) }
+        ]
+      }
+      if (it.type === "todo_list") {
+        return [
+          ...ensureToolStart(it, startedTools),
+          { _tag: "ToolDelta", id: it.id, output: todoOutput(it) }
+        ]
+      }
+      return []
     }
 
     case "item.completed": {
@@ -271,6 +327,7 @@ export const codexEventToStreamEvents = (
           // live view built up from the deltas above.
           const output = it.aggregated_output.length > 0 ? capOutput(it.aggregated_output) : undefined
           return [
+            ...ensureToolStart(it, startedTools),
             {
               _tag: "ToolEnd",
               id: it.id,
@@ -284,6 +341,7 @@ export const codexEventToStreamEvents = (
         }
         case "file_change":
           return [
+            ...ensureToolStart(it, startedTools),
             {
               _tag: "ToolEnd",
               id: it.id,
@@ -294,16 +352,36 @@ export const codexEventToStreamEvents = (
             }
           ]
         case "web_search":
-          return [{ _tag: "ToolEnd", id: it.id, status: "success", meta: null, diff: null, preview: null }]
-        case "mcp_tool_call":
           return [
+            ...ensureToolStart(it, startedTools),
+            { _tag: "ToolEnd", id: it.id, status: "success", meta: null, diff: null, preview: null }
+          ]
+        case "mcp_tool_call": {
+          const output = mcpOutput(it)
+          return [
+            ...ensureToolStart(it, startedTools),
             {
               _tag: "ToolEnd",
               id: it.id,
               status: it.status === "failed" ? "error" : "success",
               meta: null,
               diff: null,
-              preview: null
+              preview: null,
+              ...(output !== undefined ? { output } : {})
+            }
+          ]
+        }
+        case "todo_list":
+          return [
+            ...ensureToolStart(it, startedTools),
+            {
+              _tag: "ToolEnd",
+              id: it.id,
+              status: "success",
+              meta: `${it.items.filter((todo) => todo.completed).length}/${it.items.length} done`,
+              diff: null,
+              preview: null,
+              output: todoOutput(it)
             }
           ]
         case "error":
@@ -363,6 +441,8 @@ export const runCodex = (
             hasSubscriptionAuth("codex")
           )
         })
+        const staged = await stageCodexInput(spec.prompt, spec.images)
+        try {
         const threadOptions = {
           // See `requireWorktree`: inheriting the app's cwd would run this
           // session against an unrelated repository.
@@ -407,12 +487,16 @@ export const runCodex = (
         // Plan mode rides the same loop for the same reason, and it is why the
         // loop was worth generalising: a proposed plan is answered by the
         // operator, and their verdict can only reach Codex as another prompt.
-        let turnPrompt = spec.prompt
-        let round = 0
+        let turnPrompt: Input = staged.input
+        let questionRound = 0
         let planRound = 0
         for (;;) {
           let followUp: string | null = null
           let completedUsage: CodexTurnUsage | null = null
+          // Codex item ids are scoped to one CLI turn and may restart at item_0
+          // on a follow-up. Reusing this set across turns would attach a later
+          // completion to an earlier turn's card instead of starting a new one.
+          const startedTools = new Set<string>()
           const { events } = await thread.runStreamed(turnPrompt, { signal: abort.signal })
           for await (const event of events) {
             if (event.type === "thread.started" && event.thread_id) {
@@ -439,7 +523,9 @@ export const runCodex = (
             const reply = followUp === null ? agentReply(event) : null
 
             const asked =
-              reply !== null && round < MAX_QUESTION_ROUNDS ? parseQuestionBlock(reply) : null
+              reply !== null && questionRound < MAX_QUESTION_ROUNDS
+                ? parseQuestionBlock(reply)
+                : null
             if (asked !== null) {
               // Emit the prose around the block, but never the block itself —
               // raw JSON in the transcript reads as the agent malfunctioning.
@@ -447,8 +533,12 @@ export const runCodex = (
                 await runP(ctx.emit({ _tag: "Assistant", text: asked.stripped }))
               }
               const answers = await runP(
-                ctx.askQuestion({ id: `q_${sessionId}_${round}`, questions: asked.questions })
+                ctx.askQuestion({
+                  id: `q_${sessionId}_${questionRound}`,
+                  questions: asked.questions
+                })
               )
+              questionRound += 1
               followUp = formatQuestionAnswers(asked.questions, answers)
               continue
             }
@@ -493,7 +583,7 @@ export const runCodex = (
               // what rejection means. `Done` is emitted normally below.
               continue
             }
-            for (const se of codexEventToStreamEvents(event, sessionId)) {
+            for (const se of codexEventToStreamEvents(event, sessionId, startedTools)) {
               await runP(ctx.emit(se))
             }
           }
@@ -523,7 +613,9 @@ export const runCodex = (
           }
           if (followUp === null) break
           turnPrompt = followUp
-          round += 1
+        }
+        } finally {
+          await staged.cleanup()
         }
       },
       catch: (cause) =>

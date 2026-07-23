@@ -851,6 +851,7 @@ export const planExecute = (
           branch: session.branch,
           cwd: session.worktreePath,
           plan,
+          context: planExecutionContextFromTranscript(messages, located.messageId),
           available,
           unavailable,
           // The orchestrator's own model backs any step the plan left unassigned —
@@ -965,6 +966,41 @@ export const gigaplanBriefFromTranscript = (messages: ReadonlyArray<Message>): s
   return bounded.length === 0
     ? ""
     : `Create or update the implementation plan from this reviewed Gigaplan intake.\n\n${bounded}`
+}
+
+/**
+ * Carry the task that produced a plan into its fresh execution sessions.
+ *
+ * Plan steps deliberately run with `resumeId: null`, and Codex receives no
+ * parent-thread messages in that case. Keep only human-visible text and answered
+ * questions, stop at the plan artifact, and exclude Gigaplan's synthetic handoff
+ * turns. The approved plan itself is supplied separately by `stepPrompt`.
+ */
+export const planExecutionContextFromTranscript = (
+  messages: ReadonlyArray<Message>,
+  planMessageId: string
+): string => {
+  const planIndex = messages.findIndex((message) => message.id === planMessageId)
+  const beforePlan = planIndex < 0 ? messages : messages.slice(0, planIndex)
+  const turns = beforePlan.flatMap((message) => {
+    if (message.source === "gigaplan-handoff") return []
+    const parts = message.parts.flatMap((part): ReadonlyArray<string> => {
+      if (part._tag === "Text" && part.text.trim().length > 0) return [part.text.trim()]
+      if (part._tag !== "Question") return []
+      return part.request.questions.map((question, index) => {
+        const answer = part.answers?.[index]
+        const response = answer
+          ? [...answer.selected, ...(answer.other ? [answer.other] : [])].join(", ")
+          : "Unanswered"
+        return `QUESTION: ${question.question}\nANSWER: ${response}`
+      })
+    })
+    if (parts.length === 0) return []
+    return [
+      `${message.role === "user" ? "OPERATOR" : "ASSISTANT"}\n${parts.join("\n\n")}`
+    ]
+  })
+  return boundGigaplanIntake(turns)
 }
 
 const gigaplanImagesFromTranscript = (

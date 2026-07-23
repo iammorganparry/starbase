@@ -54,7 +54,12 @@ const CLI_SPECS: Record<CliKind, CliSpec> = {
     label: "Codex CLI",
     contextReporting: true,
     bins: ["codex"],
-    candidates: ["~/.local/bin/codex", "/opt/homebrew/bin/codex"]
+    candidates: ["~/.local/bin/codex", "/opt/homebrew/bin/codex"],
+    // The TypeScript SDK is pinned to the 0.144 JSONL protocol. Driving an older
+    // external binary through that newer SDK silently changes event shapes and
+    // command-line flags underneath the adapter.
+    minVersion: [0, 144],
+    upgradeWith: "npm install -g @openai/codex@latest"
   },
   cursor: {
     label: "Cursor Agent",

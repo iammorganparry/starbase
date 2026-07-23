@@ -39,6 +39,12 @@ export interface StepRunInput {
   readonly branch: string
   readonly cwd: string
   readonly plan: Plan
+  /**
+   * Bounded text-only context from the conversation that produced the plan.
+   * Every step starts a fresh harness session, so this is its only access to the
+   * original request and decisions that the structured plan may only summarize.
+   */
+  readonly context?: string
   /** Harness+model pairs this host can actually run. */
   readonly available: ReadonlyArray<{
     readonly cli: CliKind
@@ -170,7 +176,12 @@ const runStep = (
       repo: input.repo,
       branch: input.branch,
       cwd: input.cwd,
-      prompt: stepPrompt({ plan: input.plan, step, previousBlocker }),
+      prompt: stepPrompt({
+        plan: input.plan,
+        step,
+        context: input.context,
+        previousBlocker
+      }),
       images: [],
       binPath: input.binPathFor(runner.cli),
       mode: input.executionMode ?? "accept-edits",

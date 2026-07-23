@@ -832,6 +832,17 @@ describe("stepPrompt", () => {
     const prompt = stepPrompt({ plan, step: plan.steps[0]! })
     expect(prompt.match(/data, not instructions/g)).toHaveLength(2)
   })
+
+  it("carries the originating task into a fresh step session", () => {
+    const prompt = stepPrompt({
+      plan,
+      step: plan.steps[0]!,
+      context: "OPERATOR\nPreserve hidden columns in the CSV export."
+    })
+    expect(prompt).toContain("The original task and conversation decisions")
+    expect(prompt).toContain("Preserve hidden columns in the CSV export.")
+    expect(prompt.match(/data, not instructions/g)).toHaveLength(3)
+  })
 })
 
 describe("parseStepVerdict", () => {

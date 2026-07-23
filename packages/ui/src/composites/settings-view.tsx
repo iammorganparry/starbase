@@ -121,6 +121,14 @@ const MODE_ITEMS: ReadonlyArray<{ value: PermissionMode; label: string }> = [
   { value: "plan", label: "Plan first" },
   { value: "auto", label: "Auto" }
 ]
+const modeItemsFor = (
+  cli: CliKind
+): ReadonlyArray<{ value: PermissionMode; label: string }> =>
+  cli === "codex"
+    ? MODE_ITEMS.map((item) =>
+        item.value === "ask" ? { ...item, label: "Read only" } : item
+      )
+    : MODE_ITEMS
 
 const REASONING_ITEMS: ReadonlyArray<{ value: ReasoningEffort; label: string }> = [
   { value: "off", label: "Off" },
@@ -146,7 +154,8 @@ const providerOf = (providers: ProvidersConfig | undefined, cli: CliKind): Provi
 function summarize(cli: CliKind, cfg: ProviderConfig, installed: boolean): string {
   if (!cfg.enabled) return "disabled"
   if (!installed) return "not installed"
-  const modeLabel = MODE_ITEMS.find((m) => m.value === cfg.defaultMode)?.label ?? cfg.defaultMode
+  const modeLabel =
+    modeItemsFor(cli).find((m) => m.value === cfg.defaultMode)?.label ?? cfg.defaultMode
   const parts = [cfg.defaultModel ?? "harness default", modeLabel]
   const reasoning = REASONING_ITEMS.find((r) => r.value === cfg.reasoningEffort)?.label
   if (reasoning && cfg.reasoningEffort !== "off") parts.push(reasoning)
@@ -866,11 +875,14 @@ function ProvidersSection({
           {/* default mode */}
           <Field label="Default mode" flag="--permission-mode">
             <SegmentedControl
-              items={MODE_ITEMS}
+              items={modeItemsFor(selected)}
               value={draft.defaultMode}
               onChange={(defaultMode) => patch({ defaultMode })}
             />
             <span className="text-[11px] leading-relaxed text-dim">
+              {selected === "codex"
+                ? "Read only replaces Ask because Codex exec has no interactive approval callback. "
+                : ""}
               Plan first drafts a plan and waits for approval before running.{" "}
               <span className="text-yellow">Auto bypasses all permission prompts — use with care.</span>
             </span>

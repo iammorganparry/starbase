@@ -1,4 +1,4 @@
-import type { Plan, StreamEvent } from "@starbase/core"
+import type { Plan, QuestionRequest, StreamEvent } from "@starbase/core"
 import { Effect } from "effect"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { AgentContext, PlanDecision as PlanDecisionType, SessionSpec } from "./adapter.js"
@@ -102,6 +102,24 @@ const PLAN_TEXT = [
   "```"
 ].join("\n")
 
+const QUESTION_TEXT = [
+  "```question",
+  JSON.stringify({
+    questions: [
+      {
+        question: "Which database?",
+        header: "Database",
+        multiSelect: false,
+        options: [
+          { label: "Postgres", description: "Use the existing service." },
+          { label: "SQLite", description: "Add a local store." }
+        ]
+      }
+    ]
+  }),
+  "```"
+].join("\n")
+
 const agentMessage = (text: string) => ({
   type: "item.completed",
   item: { id: "m1", type: "agent_message", text }
@@ -116,6 +134,7 @@ const spec = (over: Partial<SessionSpec> = {}): SessionSpec =>
     branch: "b",
     cwd: process.cwd(),
     prompt: "plan the tier column",
+    images: [],
     binPath: "/usr/bin/codex",
     mode: "plan",
     model: null,
@@ -125,11 +144,16 @@ const spec = (over: Partial<SessionSpec> = {}): SessionSpec =>
 const harness = (decisions: ReadonlyArray<PlanDecisionType>) => {
   const emitted: StreamEvent[] = []
   const proposed: Plan[] = []
+  const questions: string[] = []
   let n = 0
   const ctx: AgentContext = {
     emit: (event: StreamEvent) => Effect.sync(() => void emitted.push(event)),
     canUseTool: () => Effect.succeed({ behavior: "allow" as const }),
-    askQuestion: () => Effect.succeed([]),
+    askQuestion: (request: QuestionRequest) =>
+      Effect.sync(() => {
+        questions.push(request.id)
+        return [{ selected: ["Postgres"], other: null }]
+      }),
     proposePlan: (plan: Plan) =>
       Effect.sync(() => {
         proposed.push(plan)
@@ -137,7 +161,7 @@ const harness = (decisions: ReadonlyArray<PlanDecisionType>) => {
       }),
     registerBackgroundStop: () => Effect.void
   } as unknown as AgentContext
-  return { ctx, emitted, proposed }
+  return { ctx, emitted, proposed, questions }
 }
 
 beforeEach(() => {
@@ -281,5 +305,23 @@ describe("the Codex plan loop", () => {
 
     expect(proposed).toHaveLength(6)
     expect(emitted.some((e) => e._tag === "Assistant" && "text" in e && e.text.includes("```plan"))).toBe(true)
+  })
+
+  it("keeps the question budget independent from plan revisions", async () => {
+    const revise = PlanDecision.Revise({ feedback: "revise again" })
+    sdk.state.script = [
+      [{ type: "thread.started", thread_id: "t1" }, agentMessage(PLAN_TEXT), turnDone],
+      [agentMessage(PLAN_TEXT), turnDone],
+      [agentMessage(PLAN_TEXT), turnDone],
+      [agentMessage(PLAN_TEXT), turnDone],
+      [agentMessage(QUESTION_TEXT), turnDone],
+      [agentMessage("Done."), turnDone]
+    ]
+    const { ctx, questions } = harness([revise, revise, revise, revise])
+
+    await Effect.runPromise(runCodex("s1", spec(), ctx, new Map()))
+
+    expect(questions).toStrictEqual(["q_s1_0"])
+    expect(sdk.state.runs[5]!.prompt).toContain("Database: Postgres")
   })
 })

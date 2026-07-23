@@ -47,6 +47,12 @@ const MODE_OPTIONS: ReadonlyArray<ChipOption<PermissionMode>> = [
   { value: "accept-edits", label: "accept edits" },
   { value: "auto", label: "auto" }
 ]
+const modeOptionsFor = (cli: CliKind | undefined): ReadonlyArray<ChipOption<PermissionMode>> =>
+  cli === "codex"
+    ? MODE_OPTIONS.map((option) =>
+        option.value === "ask" ? { ...option, label: "read only" } : option
+      )
+    : MODE_OPTIONS
 /**
  * Gigaplan — the orchestrated mode.
  *
@@ -207,7 +213,7 @@ export function Composer({
    */
   const orchestrated = mode === "gigaplan"
   const modeOptions = [
-    ...MODE_OPTIONS,
+    ...modeOptionsFor(cli),
     ...(allowPlan ? [PLAN_OPTION] : []),
     ...(adversarialPlanning?.ready === true ? [GIGAPLAN_OPTION] : [])
   ]

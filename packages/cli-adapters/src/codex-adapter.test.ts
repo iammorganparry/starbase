@@ -1,3 +1,4 @@
+import { applyStreamEvent, assistantMessage } from "@starbase/core"
 import type { ThreadEvent } from "@openai/codex-sdk"
 import { describe, expect, it } from "vitest"
 import {
@@ -30,10 +31,10 @@ describe("mapCodexReasoning", () => {
 })
 
 describe("mapCodexPolicy", () => {
-  it("gives auto full access, other modes workspace-write (approval never — no callback)", () => {
+  it("gives auto full access, accept-edits workspace writes, and ask safe read-only", () => {
     expect(mapCodexPolicy("auto")).toStrictEqual({ sandboxMode: "danger-full-access", approvalPolicy: "never" })
     expect(mapCodexPolicy("accept-edits")).toStrictEqual({ sandboxMode: "workspace-write", approvalPolicy: "never" })
-    expect(mapCodexPolicy("ask")).toStrictEqual({ sandboxMode: "workspace-write", approvalPolicy: "never" })
+    expect(mapCodexPolicy("ask")).toStrictEqual({ sandboxMode: "read-only", approvalPolicy: "never" })
   })
 
   /**
@@ -136,15 +137,18 @@ describe("codexEventToStreamEvents", () => {
   })
 
   it("maps a command execution start/complete to a Bash tool card", () => {
+    const startedTools = new Set<string>()
     const start = codexEventToStreamEvents(
       ev({ type: "item.started", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "", status: "in_progress" } }),
-      "s1"
+      "s1",
+      startedTools
     )
     expect(start).toStrictEqual([{ _tag: "ToolStart", id: "c1", name: "Bash", target: "npm test" }])
 
     const end = codexEventToStreamEvents(
       ev({ type: "item.completed", item: { id: "c1", type: "command_execution", command: "npm test", aggregated_output: "ok", exit_code: 0, status: "completed" } }),
-      "s1"
+      "s1",
+      startedTools
     )
     // codex keeps a command's output in `aggregated_output`; surface it as the
     // card's authoritative output (the bash widgets read it), not a dropped field.
@@ -158,7 +162,10 @@ describe("codexEventToStreamEvents", () => {
       ev({ type: "item.completed", item: { id: "c2", type: "command_execution", command: "true", aggregated_output: "", exit_code: 0, status: "completed" } }),
       "s1"
     )
-    expect(end).toStrictEqual([{ _tag: "ToolEnd", id: "c2", status: "success", meta: "exit 0", diff: null, preview: null }])
+    expect(end).toStrictEqual([
+      { _tag: "ToolStart", id: "c2", name: "Bash", target: "true" },
+      { _tag: "ToolEnd", id: "c2", status: "success", meta: "exit 0", diff: null, preview: null }
+    ])
   })
 
   it("streams a running command's aggregated output as a ToolDelta on item.updated", () => {
@@ -168,7 +175,10 @@ describe("codexEventToStreamEvents", () => {
     )
     // Same id as the ToolStart, so it folds onto that running card. Cumulative
     // snapshot, capped the same way as final output.
-    expect(tick).toStrictEqual([{ _tag: "ToolDelta", id: "c1", output: "RUN  v2\n ✓ a\n" }])
+    expect(tick).toStrictEqual([
+      { _tag: "ToolStart", id: "c1", name: "Bash", target: "npm test" },
+      { _tag: "ToolDelta", id: "c1", output: "RUN  v2\n ✓ a\n" }
+    ])
   })
 
   it("does not emit a ToolDelta before a running command has printed anything", () => {
@@ -188,7 +198,85 @@ describe("codexEventToStreamEvents", () => {
       }),
       "s1"
     )
-    expect(end).toStrictEqual([{ _tag: "ToolEnd", id: "f1", status: "success", meta: "2 files", diff: null, preview: null }])
+    expect(end).toStrictEqual([
+      { _tag: "ToolStart", id: "f1", name: "Edit", target: "src/a.ts" },
+      { _tag: "ToolEnd", id: "f1", status: "success", meta: "2 files", diff: null, preview: null }
+    ])
+  })
+
+  it("produces a settled edit card when Codex emits only file_change completion", () => {
+    const events = codexEventToStreamEvents(
+      ev({
+        type: "item.completed",
+        item: {
+          id: "f1",
+          type: "file_change",
+          changes: [{ path: "src/a.ts", kind: "update" }],
+          status: "completed"
+        }
+      }),
+      "s1"
+    )
+    const message = events.reduce(
+      (current, event) => applyStreamEvent(current, event),
+      assistantMessage("a1", "2026-07-23T00:00:00.000Z")
+    )
+    expect(message.parts).toMatchObject([
+      {
+        _tag: "Tool",
+        tool: { id: "f1", name: "Edit", target: "src/a.ts", status: "success" }
+      }
+    ])
+  })
+
+  it("preserves MCP failures and Codex todo-list progress", () => {
+    const failed = codexEventToStreamEvents(
+      ev({
+        type: "item.completed",
+        item: {
+          id: "mcp1",
+          type: "mcp_tool_call",
+          server: "github",
+          tool: "create_issue",
+          arguments: {},
+          error: { message: "permission denied" },
+          status: "failed"
+        }
+      }),
+      "s1"
+    )
+    expect(failed.at(-1)).toMatchObject({
+      _tag: "ToolEnd",
+      status: "error",
+      output: "permission denied"
+    })
+
+    const todo = codexEventToStreamEvents(
+      ev({
+        type: "item.completed",
+        item: {
+          id: "todo1",
+          type: "todo_list",
+          items: [
+            { text: "Inspect", completed: true },
+            { text: "Fix", completed: false }
+          ]
+        }
+      }),
+      "s1"
+    )
+    expect(todo).toStrictEqual([
+      { _tag: "ToolStart", id: "todo1", name: "Todo", target: null },
+      {
+        _tag: "ToolEnd",
+        id: "todo1",
+        status: "success",
+        meta: "1/2 done",
+        diff: null,
+        preview: null,
+        output: "[x] Inspect\n[ ] Fix"
+      }
+    ])
   })
 
   it("maps agent_message and reasoning completions to Assistant / Thinking", () => {
@@ -336,8 +424,8 @@ describe("mapCodexPolicy — unattended", () => {
     expect(mapCodexPolicy("auto", true, true).sandboxMode).toBe("read-only")
   })
 
-  it("leaves the ordinary modes alone", () => {
+  it("keeps accept-edits writable and ask safely read-only", () => {
     expect(mapCodexPolicy("accept-edits", false, true).sandboxMode).toBe("workspace-write")
-    expect(mapCodexPolicy("ask", false, false).sandboxMode).toBe("workspace-write")
+    expect(mapCodexPolicy("ask", false, false).sandboxMode).toBe("read-only")
   })
 })

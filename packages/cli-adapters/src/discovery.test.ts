@@ -164,10 +164,9 @@ describe("DiscoveryService.list", () => {
   })
 
   /**
-   * opencode is the only CLI carrying a `minVersion`. The 1.0.x line can't be
-   * driven the way the adapter expects (no `--auto`/`--fork`/`--variant`, and it
-   * predates the SQLite session store), so it must read as unavailable — but
-   * *with a note*, or a too-old binary is indistinguishable from a missing one.
+   * Version-gated CLIs must read as unavailable with an actionable note, not as
+   * missing. Codex's gate protects the SDK JSONL protocol; opencode's protects
+   * the command and persistence interfaces its adapter requires.
    */
   const opencodeAt = (version: string) =>
     run((command, args) => {
@@ -200,6 +199,36 @@ describe("DiscoveryService.list", () => {
     expect(opencode?.note).toContain("1.0.220")
     expect(opencode?.note).toContain("1.18")
     expect(opencode?.note).toContain("opencode upgrade")
+  })
+
+  const codexAt = (version: string) =>
+    run((command, args) => {
+      if (command === "which" || command === "where") {
+        return args[0] === "codex" ? { stdout: "/opt/homebrew/bin/codex" } : { stdout: "" }
+      }
+      if (args.includes("--version") && basename(command) === "codex") {
+        return { stdout: `codex-cli ${version}` }
+      }
+      return { stdout: "" }
+    })
+
+  it("requires the Codex CLI line matching the pinned SDK protocol", async () => {
+    const old = await codexAt("0.134.0")
+    expect(old._tag).toBe("Success")
+    if (old._tag !== "Success") return
+    expect(old.value.find((cli) => cli.kind === "codex")).toMatchObject({
+      available: false,
+      binPath: null
+    })
+    expect(old.value.find((cli) => cli.kind === "codex")?.note).toContain("0.144")
+
+    const current = await codexAt("0.144.1")
+    expect(current._tag).toBe("Success")
+    if (current._tag !== "Success") return
+    expect(current.value.find((cli) => cli.kind === "codex")).toMatchObject({
+      available: true,
+      binPath: "/opt/homebrew/bin/codex"
+    })
   })
 })
 
