@@ -1012,8 +1012,8 @@ export const planAdversarial = (
       // messages an ordinary send appends.
       yield* TranscriptStore.append(
         sessionId,
-        // The attachments ride on the user turn exactly as they do for an
-        // ordinary send, so a reopened session still shows what the round saw.
+        // Fresh attachments ride on the handoff turn, but transcript-derived
+        // fallback images are already durable and must not be appended again.
         userMessage(
           `u_${sessionId}_${maxN + 1}`,
           explicitBrief.length > 0
@@ -1022,7 +1022,7 @@ export const planAdversarial = (
               ? "Update the plan from this Gigaplan conversation."
               : "Create a plan from this Gigaplan conversation.",
           now,
-          roundImages
+          images
         )
       ).pipe(Effect.ignore)
       const assistantId = `a_${sessionId}_${maxN + 2}`

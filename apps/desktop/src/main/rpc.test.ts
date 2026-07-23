@@ -26,6 +26,7 @@ import {
 } from "@starbase/cli-adapters"
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
 import type {
+  Attachment,
   CliKind,
   Message,
   Plan,
@@ -1179,6 +1180,7 @@ describe("Gigaplan round persistence", () => {
   let capturedRanking: RoutingRankingSnapshot | null | undefined
   let capturedUsage: Usage | null | undefined
   let capturedVendors: ReadonlyArray<{ readonly vendor: string }> = []
+  let capturedImages: ReadonlyArray<Attachment> = []
   let currentUsage: Usage
   let rankingReads = 0
   let previousAnthropicKey: string | undefined
@@ -1188,6 +1190,7 @@ describe("Gigaplan round persistence", () => {
     capturedRanking = undefined
     capturedUsage = undefined
     capturedVendors = []
+    capturedImages = []
     currentUsage = HEALTHY_USAGE
     rankingReads = 0
     previousAnthropicKey = process.env.ANTHROPIC_API_KEY
@@ -1417,9 +1420,11 @@ describe("Gigaplan round persistence", () => {
     AdversarialPlanService,
     new AdversarialPlanService({
       run: (input: {
+        images: ReadonlyArray<Attachment>
         vendors: ReadonlyArray<{ readonly vendor: string }>
         routing: { ranking?: RoutingRankingSnapshot | null; usage?: Usage | null }
       }) => {
+        capturedImages = input.images
         capturedRanking = input.routing.ranking
         capturedUsage = input.routing.usage
         capturedVendors = input.vendors
@@ -1453,6 +1458,35 @@ describe("Gigaplan round persistence", () => {
     }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
 
     expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
+  })
+
+  it("reuses historical images for the round without duplicating them in the transcript", async () => {
+    const image: Attachment = {
+      id: "mockup",
+      name: "mockup.png",
+      mediaType: "image/png",
+      data: "aGk="
+    }
+    const storedImageIds = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `u_${SESSION}_1`,
+        role: "user",
+        parts: [
+          { _tag: "Text", text: "Match this mockup." },
+          { _tag: "Image", attachment: image }
+        ],
+        streaming: false,
+        createdAt: "2026-07-22T00:00:00.000Z"
+      })
+      yield* planAdversarial(SESSION).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.flatMap((message) =>
+        message.parts.flatMap((part) => (part._tag === "Image" ? [part.attachment.id] : []))
+      )
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(capturedImages.map((image) => image.id)).toStrictEqual(["mockup"])
+    expect(storedImageIds).toStrictEqual(["mockup"])
   })
 
   it("does not request OpenRouter rankings in the default shadow mode", async () => {
