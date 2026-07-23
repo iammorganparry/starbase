@@ -593,6 +593,42 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           return { digest: state.digest, tokensBefore }
         })
 
+      /**
+       * Consume a digest, waiting when its background build is already running.
+       *
+       * The ordinary path remains instant: idle and ready states return on the
+       * first inspection. Waiting matters after a context-overflow failure,
+       * where the recovery digest starts at turn end and an immediate retry
+       * would otherwise resume the same full harness thread before that digest
+       * became ready.
+       */
+      const applyWhenReady = (
+        sessionId: string
+      ): Effect.Effect<
+        { digest: ContextDigest; tokensBefore: number } | null,
+        never,
+        | SessionStore
+        | TranscriptStore
+        | BackgroundTaskStore
+        | FileSystem.FileSystem
+        | Path.Path
+        | AppPaths
+      > =>
+        Effect.gen(function* () {
+          for (;;) {
+            const state = yield* stateOf(sessionId)
+            if (state.status === "ready") return yield* applyIfReady(sessionId)
+            if (state.status !== "preparing") return null
+            yield* Effect.sleep("100 millis")
+          }
+        }).pipe(
+          // The digest run itself is bounded at 90s. This outer guard covers
+          // setup/teardown too and prevents a broken background path from
+          // parking the operator's next turn forever.
+          Effect.timeout("95 seconds"),
+          Effect.orElseSucceed(() => null)
+        )
+
       /** Cancel a session's in-flight digest and forget it (stop / delete). */
       const cancel = (sessionId: string): Effect.Effect<void> =>
         Effect.gen(function* () {
@@ -645,7 +681,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           }
         })
 
-      return { observe, settle, applyIfReady, compactNow, cancel, snapshot }
+      return { observe, settle, applyIfReady, applyWhenReady, compactNow, cancel, snapshot }
     })
   }
 ) {}

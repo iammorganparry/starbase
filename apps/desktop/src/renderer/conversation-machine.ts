@@ -402,8 +402,8 @@ export const conversationMachine = setup({
         adversarialBrief: null,
         executePlanId: null,
         executePlanMode: null,
-        // Reset the live analytics for the new run.
-        tokens: 0,
+        // Context occupancy belongs to the resumed harness conversation, not to
+        // one run. Keep the last reading visible until Usage replaces it.
         runStartedAt: Date.now(),
         lastOutcome: null,
         messages: [
@@ -440,7 +440,6 @@ export const conversationMachine = setup({
         // A fresh run (the plan re-drive) starts with no sub-agents carried over.
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
-        tokens: 0,
         runStartedAt: Date.now(),
         lastOutcome: null,
         messages: [
@@ -495,7 +494,6 @@ export const conversationMachine = setup({
         adversarialBrief: null,
         executePlanId: null,
         executePlanMode: null,
-        tokens: 0,
         runStartedAt: Date.now(),
         lastOutcome: null,
         messages: [
@@ -669,7 +667,6 @@ export const conversationMachine = setup({
         pendingImages: [],
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
-        tokens: 0,
         runStartedAt: Date.now(),
         lastOutcome: null,
         // The same two turns every other run kind appends, and for the same
@@ -775,7 +772,6 @@ export const conversationMachine = setup({
         resumePlanId: null,
         executePlanId: null,
         executePlanMode: null,
-        tokens: 0,
         runStartedAt: Date.now(),
         lastOutcome: null,
         // The same two turns a normal send appends, and for the same reason:
