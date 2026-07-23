@@ -115,6 +115,15 @@ describe("Settings → Context", () => {
     expect(screen.getByText("170k of 200k")).toBeDefined()
   })
 
+  it("falls back to the harness default when the configured model is empty", () => {
+    open({
+      providers: {
+        claude: { enabled: true, defaultMode: "accept-edits", defaultModel: "" }
+      }
+    })
+    expect(screen.getByText("500k of 1M")).toBeDefined()
+  })
+
   it("names harnesses that cannot be measured instead of hiding them", () => {
     open()
     expect(screen.getByText("Cursor Agent")).toBeDefined()
