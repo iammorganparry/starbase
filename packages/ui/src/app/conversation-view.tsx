@@ -58,12 +58,18 @@ const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
 
 const hasGigaplanIntake = (messages: ReadonlyArray<Message>): boolean =>
   messages.some((message) =>
+    message.source === "gigaplan-intake" &&
     message.parts.some(
       (part) =>
         (part._tag === "Text" && part.text.trim().length > 0) ||
-        part._tag === "Question" ||
-        part._tag === "Plan"
+        part._tag === "Question"
     )
+  )
+
+const hasGigaplanPlan = (messages: ReadonlyArray<Message>): boolean =>
+  messages.some(
+    (message) =>
+      message.source === "gigaplan-handoff" && message.parts.some((part) => part._tag === "Plan")
   )
 
 export interface ConversationViewProps {
@@ -486,7 +492,7 @@ export function ConversationView({
                 adversarialPlanning={adversarialPlanning}
                 onHandoffPlan={onHandoffPlan}
                 hasGigaplanIntake={hasGigaplanIntake(messages)}
-                hasPlan={plan !== null}
+                hasPlan={plan !== null && hasGigaplanPlan(messages)}
                 allowPlan={supportsPlanMode(cli)}
                 mcp={mcp}
                 onOpenMcp={onOpenMcp}

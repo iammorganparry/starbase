@@ -1110,7 +1110,10 @@ describe("AgentRunner resume across restarts", () => {
         yield* runner
           .prompt(SESSION, "Also export CSV", [], "orchestrator")
           .pipe(Stream.runDrain)
-        return yield* SessionStore.get(SESSION)
+        return {
+          session: yield* SessionStore.get(SESSION),
+          transcript: yield* TranscriptStore.list(SESSION)
+        }
       }).pipe(Effect.provide(base))
     )
 
@@ -1125,8 +1128,16 @@ describe("AgentRunner resume across restarts", () => {
     expect(specs[1]).toMatchObject({ resumeId: "normal-before", readOnly: undefined })
     expect(specs[2]).toMatchObject({ resumeId: "gigaplan-1", readOnly: true })
     expect(specs[2]!.prompt).toContain("Also export CSV")
-    expect(persisted.resumeId).toBe("normal-after")
-    expect(persisted.gigaplanResumeId).toBe("gigaplan-2")
+    expect(persisted.session?.resumeId).toBe("normal-after")
+    expect(persisted.session?.gigaplanResumeId).toBe("gigaplan-2")
+    expect(persisted.transcript.map((message) => message.source)).toStrictEqual([
+      "gigaplan-intake",
+      "gigaplan-intake",
+      undefined,
+      undefined,
+      "gigaplan-intake",
+      "gigaplan-intake"
+    ])
   })
 })
 

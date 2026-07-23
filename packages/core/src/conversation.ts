@@ -22,6 +22,10 @@ export { RouteCandidate }
 export const MessageRole = Schema.Literal("user", "assistant")
 export type MessageRole = Schema.Schema.Type<typeof MessageRole>
 
+/** Durable source for turns that belong to Gigaplan rather than the working chat. */
+export const GigaplanMessageSource = Schema.Literal("gigaplan-intake", "gigaplan-handoff")
+export type GigaplanMessageSource = Schema.Schema.Type<typeof GigaplanMessageSource>
+
 /** Lifecycle of a single tool invocation, mirrored by the tool card's styling. */
 export const ToolStatus = Schema.Literal("running", "success", "error")
 export type ToolStatus = Schema.Schema.Type<typeof ToolStatus>
@@ -625,6 +629,8 @@ export type ContentPart = Schema.Schema.Type<typeof ContentPart>
 export const Message = Schema.Struct({
   id: Schema.String,
   role: MessageRole,
+  /** Omitted for ordinary session turns and legacy transcripts. */
+  source: Schema.optional(GigaplanMessageSource),
   parts: Schema.Array(ContentPart),
   /** True while the agent is still producing this turn. */
   streaming: Schema.Boolean,
@@ -931,10 +937,12 @@ export const userMessage = (
   id: string,
   text: string,
   createdAt: string,
-  images: ReadonlyArray<Attachment> = []
+  images: ReadonlyArray<Attachment> = [],
+  source?: GigaplanMessageSource
 ): Message => ({
   id,
   role: "user",
+  ...(source === undefined ? {} : { source }),
   parts: [
     ...images.map((attachment) => ({ _tag: "Image" as const, attachment })),
     ...(text.length > 0 ? [{ _tag: "Text" as const, text }] : [])
@@ -944,9 +952,14 @@ export const userMessage = (
 })
 
 /** A fresh, empty assistant turn to be filled by streaming events. */
-export const assistantMessage = (id: string, createdAt: string): Message => ({
+export const assistantMessage = (
+  id: string,
+  createdAt: string,
+  source?: GigaplanMessageSource
+): Message => ({
   id,
   role: "assistant",
+  ...(source === undefined ? {} : { source }),
   parts: [],
   streaming: true,
   createdAt

@@ -61,6 +61,9 @@ type AgentTarget = "session" | "orchestrator"
 const agentTargetFor = (mode: PermissionMode): AgentTarget =>
   mode === "gigaplan" ? "orchestrator" : "session"
 
+const messageSourceFor = (target: AgentTarget) =>
+  target === "orchestrator" ? ("gigaplan-intake" as const) : undefined
+
 export interface ConversationContext {
   readonly session: Session
   readonly messages: ReadonlyArray<Message>
@@ -387,10 +390,11 @@ export const conversationMachine = setup({
       const images = event.images ?? []
       const now = new Date().toISOString()
       const id = stamp()
+      const target = agentTargetFor(context.mode)
       return {
         pendingText: text,
         pendingImages: images,
-        agentTarget: agentTargetFor(context.mode),
+        agentTarget: target,
         // A fresh turn starts with no sub-agents (any from a prior turn are gone).
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
@@ -404,8 +408,8 @@ export const conversationMachine = setup({
         lastOutcome: null,
         messages: [
           ...context.messages,
-          userMessage(`u_local_${id}`, text, now, images),
-          assistantMessage(`a_local_${id}`, now)
+          userMessage(`u_local_${id}`, text, now, images, messageSourceFor(target)),
+          assistantMessage(`a_local_${id}`, now, messageSourceFor(target))
         ]
       }
     }),
@@ -496,8 +500,8 @@ export const conversationMachine = setup({
         lastOutcome: null,
         messages: [
           ...context.messages,
-          userMessage(`u_local_${id}`, next.text, now, next.images),
-          assistantMessage(`a_local_${id}`, now)
+          userMessage(`u_local_${id}`, next.text, now, next.images, messageSourceFor(next.target)),
+          assistantMessage(`a_local_${id}`, now, messageSourceFor(next.target))
         ]
       }
     }),

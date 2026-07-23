@@ -840,9 +840,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             }, 0)
           yield* Ref.update(counter, (c) => Math.max(c, priorMax))
           const un = yield* nextId
-          yield* TranscriptStore.append(sessionId, userMessage(`u_${sessionId}_${un}`, text, now, images))
+          const source = orchestrating ? ("gigaplan-intake" as const) : undefined
+          yield* TranscriptStore.append(
+            sessionId,
+            userMessage(`u_${sessionId}_${un}`, text, now, images, source)
+          )
           const an = yield* nextId
-          const acc = yield* Ref.make(assistantMessage(`a_${sessionId}_${an}`, now))
+          const acc = yield* Ref.make(assistantMessage(`a_${sessionId}_${an}`, now, source))
           yield* TranscriptStore.append(sessionId, yield* Ref.get(acc))
 
           const out = yield* Mailbox.make<StreamEvent>()

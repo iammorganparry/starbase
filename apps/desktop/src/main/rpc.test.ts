@@ -71,14 +71,26 @@ import {
 } from "./rpc.js"
 
 describe("Gigaplan handoff brief", () => {
-  it("includes the whole intake, structured answers, and active plan", () => {
+  it("includes only Gigaplan intake and the newest Gigaplan plan", () => {
     const messages = [
       {
         role: "user",
+        source: undefined,
+        parts: [{ _tag: "Text", text: "Unrelated normal coding turn." }]
+      },
+      {
+        role: "assistant",
+        source: undefined,
+        parts: [{ _tag: "Plan", plan: { raw: "summary: Unrelated working plan" } }]
+      },
+      {
+        role: "user",
+        source: "gigaplan-intake",
         parts: [{ _tag: "Text", text: "Preserve the current filters." }]
       },
       {
         role: "assistant",
+        source: "gigaplan-intake",
         parts: [
           {
             _tag: "Question",
@@ -94,35 +106,57 @@ describe("Gigaplan handoff brief", () => {
               ]
             },
             answers: [{ selected: ["CSV"], other: null }]
-          },
-          { _tag: "Plan", plan: { raw: "summary: Existing plan" } }
+          }
         ]
       },
       {
         role: "user",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Text", text: "Create a plan from this Gigaplan conversation." }]
+      },
+      {
+        role: "assistant",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Plan", plan: { raw: "summary: Older Gigaplan plan" } }]
+      },
+      {
+        role: "user",
+        source: "gigaplan-intake",
         parts: [{ _tag: "Text", text: "Also include hidden columns." }]
+      },
+      {
+        role: "assistant",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Plan", plan: { raw: "summary: Current Gigaplan plan" } }]
       }
     ] as unknown as ReadonlyArray<Message>
 
     const brief = gigaplanBriefFromTranscript(messages)
     expect(brief).toContain("Preserve the current filters.")
     expect(brief).toContain("ANSWER: CSV")
-    expect(brief).toContain("ACTIVE PLAN")
     expect(brief).toContain("Also include hidden columns.")
+    expect(brief).toContain("ACTIVE PLAN\nsummary: Current Gigaplan plan")
+    expect(brief).not.toContain("Unrelated normal coding turn.")
+    expect(brief).not.toContain("Unrelated working plan")
+    expect(brief).not.toContain("Create a plan from this Gigaplan conversation.")
+    expect(brief).not.toContain("Older Gigaplan plan")
   })
 
   it("drops whole oldest turns and labels a truncated intake", () => {
     const messages = [
       {
         role: "user",
+        source: "gigaplan-intake",
         parts: [{ _tag: "Text", text: `OLDER TURN ${"a".repeat(25_000)}` }]
       },
       {
         role: "assistant",
+        source: "gigaplan-intake",
         parts: [{ _tag: "Text", text: `MIDDLE TURN ${"b".repeat(25_000)}` }]
       },
       {
         role: "user",
+        source: "gigaplan-intake",
         parts: [{ _tag: "Text", text: `LATEST TURN ${"c".repeat(20_000)}` }]
       }
     ] as unknown as ReadonlyArray<Message>
@@ -1526,6 +1560,7 @@ describe("Gigaplan round persistence", () => {
       yield* TranscriptStore.append(SESSION, {
         id: `u_${SESSION}_1`,
         role: "user",
+        source: "gigaplan-intake",
         parts: [{ _tag: "Text", text: "Add rate limiting to refunds." }],
         streaming: false,
         createdAt: "2026-07-22T00:00:00.000Z"
@@ -1558,6 +1593,7 @@ describe("Gigaplan round persistence", () => {
       yield* TranscriptStore.append(SESSION, {
         id: `u_${SESSION}_1`,
         role: "user",
+        source: "gigaplan-intake",
         parts: [
           { _tag: "Text", text: "Match this mockup." },
           { _tag: "Image", attachment: image }

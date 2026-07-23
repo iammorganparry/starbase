@@ -8,6 +8,7 @@ afterEach(cleanup)
 const intake: Message = {
   id: "u_1",
   role: "user",
+  source: "gigaplan-intake",
   parts: [{ _tag: "Text", text: "Preserve the active filters." }],
   streaming: false,
   createdAt: "2026-07-23T12:00:00.000Z"

@@ -923,12 +923,24 @@ const boundGigaplanIntake = (turns: ReadonlyArray<string>): string => {
   return [EARLIER_INTAKE_TRUNCATED, ...retained].join("\n\n")
 }
 
-/** Build the planner handoff from the durable Gigaplan intake, not one message. */
+const latestGigaplanPlan = (messages: ReadonlyArray<Message>): Plan | null => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.source !== "gigaplan-handoff") continue
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = message.parts[partIndex]
+      if (part?._tag === "Plan") return part.plan
+    }
+  }
+  return null
+}
+
+/** Build the planner handoff from durable Gigaplan intake, never the working chat. */
 export const gigaplanBriefFromTranscript = (messages: ReadonlyArray<Message>): string => {
   const turns = messages.flatMap((message) => {
+    if (message.source !== "gigaplan-intake") return []
     const parts = message.parts.flatMap((part): ReadonlyArray<string> => {
       if (part._tag === "Text" && part.text.trim().length > 0) return [part.text.trim()]
-      if (part._tag === "Plan") return [`ACTIVE PLAN\n${part.plan.raw.trim()}`]
       if (part._tag !== "Question") return []
       return part.request.questions.map((question, index) => {
         const answer = part.answers?.[index]
@@ -942,6 +954,10 @@ export const gigaplanBriefFromTranscript = (messages: ReadonlyArray<Message>): s
       ? []
       : [`${message.role === "user" ? "OPERATOR" : "ORCHESTRATOR"}\n${parts.join("\n\n")}`]
   })
+  const activePlan = latestGigaplanPlan(messages)
+  if (activePlan !== null && activePlan.raw.trim().length > 0) {
+    turns.push(`ACTIVE PLAN\n${activePlan.raw.trim()}`)
+  }
   // Keep the newest context when an intake has become very long. The active
   // harness thread still holds the full discussion; the round needs a bounded
   // brief that does not crowd out its repository inspection.
@@ -956,6 +972,10 @@ const gigaplanImagesFromTranscript = (
 ): ReadonlyArray<Attachment> => {
   const seen = new Set<string>()
   return messages
+    .filter(
+      (message) =>
+        message.source === "gigaplan-intake" || message.source === "gigaplan-handoff"
+    )
     .flatMap((message) =>
       message.parts.flatMap((part) => (part._tag === "Image" ? [part.attachment] : []))
     )
@@ -1042,15 +1062,19 @@ export const planAdversarial = (
           `u_${sessionId}_${maxN + 1}`,
           explicitBrief.length > 0
             ? explicitBrief
-            : latestPlan(prior) !== null
+            : latestGigaplanPlan(prior) !== null
               ? "Update the plan from this Gigaplan conversation."
               : "Create a plan from this Gigaplan conversation.",
           now,
-          images
+          images,
+          "gigaplan-handoff"
         )
       ).pipe(Effect.ignore)
       const assistantId = `a_${sessionId}_${maxN + 2}`
-      yield* TranscriptStore.append(sessionId, assistantMessage(assistantId, now)).pipe(
+      yield* TranscriptStore.append(
+        sessionId,
+        assistantMessage(assistantId, now, "gigaplan-handoff")
+      ).pipe(
         Effect.ignore
       )
       const persist = (event: StreamEvent) =>

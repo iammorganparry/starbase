@@ -973,6 +973,8 @@ describe("conversationMachine — adversarial planning", () => {
       text: "The export must preserve filters",
       options: { target: "orchestrator" }
     })
+    expect(actor.getSnapshot().context.messages.at(-2)?.source).toBe("gigaplan-intake")
+    expect(actor.getSnapshot().context.messages.at(-1)?.source).toBe("gigaplan-intake")
 
     emit({ _tag: "Done", costUsd: 0, tokens: 0 })
     await waitFor(actor, (s) => s.matches(idle))
