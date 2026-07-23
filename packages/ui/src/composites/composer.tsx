@@ -103,6 +103,7 @@ export function Composer({
   allowPlan = false,
   adversarialPlanning,
   onHandoffPlan,
+  hasGigaplanIntake = false,
   hasPlan = false,
   mcp,
   onOpenMcp,
@@ -162,6 +163,8 @@ export function Composer({
   adversarialPlanning?: { readonly ready: boolean; readonly reason: string | null }
   /** Explicitly hand the durable Gigaplan intake conversation to planning. */
   onHandoffPlan?: () => void
+  /** Whether the transcript contains context the planners can consume. */
+  hasGigaplanIntake?: boolean
   /** Whether that handoff updates an existing plan rather than creating one. */
   hasPlan?: boolean
   /**
@@ -665,10 +668,12 @@ export function Composer({
               variant="ghost"
               size="sm"
               className="min-h-10 gap-1.5 px-2"
-              disabled={busy || adversarialPlanning?.ready !== true}
+              disabled={busy || !hasGigaplanIntake || adversarialPlanning?.ready !== true}
               title={
                 adversarialPlanning?.ready === false
                   ? (adversarialPlanning.reason ?? undefined)
+                  : !hasGigaplanIntake
+                    ? "Send a Gigaplan message before creating a plan."
                   : undefined
               }
               onClick={onHandoffPlan}

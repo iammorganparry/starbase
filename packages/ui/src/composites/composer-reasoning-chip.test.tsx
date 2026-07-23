@@ -39,6 +39,7 @@ describe("Composer thinking strength", () => {
     const { rerender } = render(
       <Composer
         mode="gigaplan"
+        hasGigaplanIntake
         adversarialPlanning={{ ready: true, reason: null }}
         onHandoffPlan={onHandoffPlan}
       />
@@ -49,6 +50,7 @@ describe("Composer thinking strength", () => {
     rerender(
       <Composer
         mode="gigaplan"
+        hasGigaplanIntake
         hasPlan
         adversarialPlanning={{ ready: true, reason: null }}
         onHandoffPlan={onHandoffPlan}

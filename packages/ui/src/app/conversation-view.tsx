@@ -56,6 +56,16 @@ const MODE_CYCLE: ReadonlyArray<PermissionMode> = ["ask", "accept-edits", "auto"
 const cycleFor = (cli: CliKind): ReadonlyArray<PermissionMode> =>
   supportsPlanMode(cli) ? [...MODE_CYCLE, "plan"] : MODE_CYCLE
 
+const hasGigaplanIntake = (messages: ReadonlyArray<Message>): boolean =>
+  messages.some((message) =>
+    message.parts.some(
+      (part) =>
+        (part._tag === "Text" && part.text.trim().length > 0) ||
+        part._tag === "Question" ||
+        part._tag === "Plan"
+    )
+  )
+
 export interface ConversationViewProps {
   messages: ReadonlyArray<Message>
   mode: PermissionMode
@@ -475,6 +485,7 @@ export function ConversationView({
                 onSetReasoning={onSetReasoning}
                 adversarialPlanning={adversarialPlanning}
                 onHandoffPlan={onHandoffPlan}
+                hasGigaplanIntake={hasGigaplanIntake(messages)}
                 hasPlan={plan !== null}
                 allowPlan={supportsPlanMode(cli)}
                 mcp={mcp}
