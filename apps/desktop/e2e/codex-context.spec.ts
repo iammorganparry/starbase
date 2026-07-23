@@ -59,3 +59,41 @@ test("shows live Codex context and compacts an overloaded resume before the turn
   expect(calls.indexOf("thread/resume")).toBeLessThan(calls.indexOf("thread/compact/start"))
   expect(calls.indexOf("thread/compact/start")).toBeLessThan(calls.indexOf("turn/start"))
 })
+
+test("compacts a large legacy Codex resume when persisted occupancy is unknown", async ({
+  launchApp
+}) => {
+  const sessions = seededSessions({ repoPath: "" }).map((session) => ({
+    ...session,
+    contextTokens: 0
+  }))
+  const { window, codexCalls } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: ({ repoPath }) => sessions.map((session) => ({ ...session, worktreePath: repoPath })),
+    transcripts: {
+      s_codex_context: [
+        {
+          id: "u_legacy",
+          role: "user",
+          streaming: false,
+          createdAt: "2026-07-20T00:00:00.000Z",
+          parts: [{ _tag: "Text", text: `Continue this legacy session.\n${"x".repeat(510_000)}` }]
+        }
+      ]
+    },
+    scriptedAgent: false
+  })
+
+  const composer = window.getByPlaceholder("Message Codex…")
+  await expect(composer).toBeVisible()
+  await composer.fill("Continue the implementation.")
+  await composer.press("Enter")
+
+  await expect(window.getByText("Context compacted")).toBeVisible({ timeout: 20_000 })
+  await expect(window.getByText("Codex E2E complete.")).toBeVisible({ timeout: 20_000 })
+
+  const calls = codexCalls()
+  expect(calls.filter((method) => method === "turn/start")).toHaveLength(2)
+  expect(calls).not.toContain("thread/resume")
+})

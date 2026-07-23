@@ -1037,6 +1037,78 @@ describe("ContextManager.compactNow", () => {
   })
 })
 
+describe("ContextManager.prepareUnknownCodexResume", () => {
+  it("compacts a large legacy Codex resume before reusing its thread", async () => {
+    const rec = recorder()
+    const digest = await run(
+      Effect.gen(function* () {
+        yield* seed({
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          resumeId: "legacy-thread",
+          contextTokens: 0
+        })
+        yield* TranscriptStore.append(SESSION, {
+          id: "m3",
+          role: "assistant",
+          parts: [{ _tag: "Text", text: "x".repeat(510_000) }],
+          streaming: false,
+          createdAt: new Date().toISOString()
+        })
+        yield* ContextManager.prepareUnknownCodexResume(SESSION)
+        return yield* ContextManager.applyWhenReady(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec, "delay")
+    )
+    expect(rec.runs.count).toBe(1)
+    expect(digest).not.toBeNull()
+  })
+
+  it("does not compact a small unknown Codex resume", async () => {
+    const rec = recorder()
+    await run(
+      Effect.gen(function* () {
+        yield* seed({
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          resumeId: "legacy-thread",
+          contextTokens: 0
+        })
+        yield* ContextManager.prepareUnknownCodexResume(SESSION)
+        yield* settle()
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(rec.runs.count).toBe(0)
+  })
+
+  it("respects an auto-compaction opt-out", async () => {
+    const rec = recorder()
+    await run(
+      Effect.gen(function* () {
+        yield* seed({
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          resumeId: "legacy-thread",
+          contextTokens: 0
+        })
+        yield* TranscriptStore.append(SESSION, {
+          id: "m3",
+          role: "assistant",
+          parts: [{ _tag: "Text", text: "x".repeat(510_000) }],
+          streaming: false,
+          createdAt: new Date().toISOString()
+        })
+        yield* ConfigService.setContext({ auto: false, budgetTokens: 500_000 })
+        yield* ContextManager.prepareUnknownCodexResume(SESSION)
+        yield* settle()
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(rec.runs.count).toBe(0)
+  })
+})
+
 describe("ContextManager.cancel", () => {
   it("interrupts an in-flight digest so a stopped session stops summarising", async () => {
     const rec = recorder()
