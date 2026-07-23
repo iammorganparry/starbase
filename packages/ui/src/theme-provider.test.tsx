@@ -3,7 +3,12 @@ import { CSS_VAR_BY_TOKEN } from "@starbase/core"
 import type { ThemeTokens } from "@starbase/core"
 import { BUILTIN_THEMES, toTokens } from "@starbase/themes"
 import { afterEach, describe, expect, it } from "vitest"
-import { ThemeProvider, themeCssText, useThemeTokens } from "./theme-provider.js"
+import {
+  ThemeProvider,
+  themeCssText,
+  useThemeCatalog,
+  useThemeTokens
+} from "./theme-provider.js"
 
 afterEach(() => {
   cleanup()
@@ -175,5 +180,29 @@ describe("useThemeTokens", () => {
    */
   it("refuses to guess outside a provider", () => {
     expect(() => render(<Probe />)).toThrow(/ThemeProvider/)
+  })
+})
+
+describe("useThemeCatalog", () => {
+  function Probe() {
+    const { activeId, catalog } = useThemeCatalog()
+    return <span>{`${activeId}:${catalog?.skipped[0]?.message}`}</span>
+  }
+
+  it("hands settings the active id and skipped files from the provider", () => {
+    render(
+      <ThemeProvider
+        tokens={oneDark}
+        activeId="mine"
+        catalog={{
+          themes: [],
+          skipped: [{ path: "/themes/broken.json", message: "type is missing" }]
+        }}
+      >
+        <Probe />
+      </ThemeProvider>
+    )
+
+    expect(screen.getByText("mine:type is missing")).toBeTruthy()
   })
 })
