@@ -56,6 +56,11 @@ import { publishSessionUpdate } from "./session-updates.js"
 const isExecutionMode = (mode: PermissionMode): mode is ExecutionMode =>
   mode !== "plan" && mode !== "gigaplan"
 
+type AgentTarget = "session" | "orchestrator"
+
+const agentTargetFor = (mode: PermissionMode): AgentTarget =>
+  mode === "gigaplan" ? "orchestrator" : "session"
+
 export interface ConversationContext {
   readonly session: Session
   readonly messages: ReadonlyArray<Message>
@@ -78,7 +83,7 @@ export interface ConversationContext {
   /** Images attached to the turn currently running (sent to the harness). */
   readonly pendingImages: ReadonlyArray<Attachment>
   /** Harness target for the pending turn; Gigaplan intake has its own thread. */
-  readonly agentTarget: "session" | "orchestrator"
+  readonly agentTarget: AgentTarget
   /** Semantic thinking strength for the next and subsequent turns. */
   readonly reasoningEffort?: ReasoningEffort
   /**
@@ -161,10 +166,11 @@ export interface ConversationContext {
   readonly reviewStartedAt: number | null
 }
 
-/** A prompt held in the queue while the agent is busy (text + any attachments). */
+/** A prompt held while busy, including the harness target chosen when it was sent. */
 export interface QueuedMessage {
   readonly text: string
   readonly images: ReadonlyArray<Attachment>
+  readonly target: AgentTarget
 }
 
 type ConversationEvent =
@@ -385,7 +391,7 @@ export const conversationMachine = setup({
       return {
         pendingText: text,
         pendingImages: images,
-        agentTarget: context.mode === "gigaplan" ? "orchestrator" : "session",
+        agentTarget: agentTargetFor(context.mode),
         // A fresh turn starts with no sub-agents (any from a prior turn are gone).
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
@@ -448,7 +454,9 @@ export const conversationMachine = setup({
       const text = event.text.trim()
       const images = event.images ?? []
       if (text.length === 0 && images.length === 0) return {}
-      return { queued: [...context.queued, { text, images }] }
+      return {
+        queued: [...context.queued, { text, images, target: agentTargetFor(context.mode) }]
+      }
     }),
     // Drop a still-pending queued message before it's sent.
     removeQueued: assign(({ context, event }) => {
@@ -477,7 +485,7 @@ export const conversationMachine = setup({
         queued: rest,
         pendingText: next.text,
         pendingImages: next.images,
-        agentTarget: context.mode === "gigaplan" ? "orchestrator" : "session",
+        agentTarget: next.target,
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         resumePlanId: null,

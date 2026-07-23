@@ -230,7 +230,9 @@ describe("conversationMachine — queue while busy", () => {
 
     // Sent while the agent is busy → queued, not dispatched.
     actor.send({ type: "SEND", text: "second" })
-    expect(actor.getSnapshot().context.queued).toEqual([{ text: "second", images: [] }])
+    expect(actor.getSnapshot().context.queued).toEqual([
+      { text: "second", images: [], target: "session" }
+    ])
     expect(h.agentRunCalls).toHaveLength(1)
 
     // Finishing the turn drains the queue: refresh diff, then start the queued turn.
@@ -238,6 +240,33 @@ describe("conversationMachine — queue while busy", () => {
     await waitFor(actor, () => h.agentRunCalls.length === 2, { timeout: 3000 })
     expect(h.agentRunCalls[1]!.text).toBe("second")
     expect(actor.getSnapshot().context.queued).toEqual([])
+    actor.stop()
+  })
+
+  it("keeps each queued message on the target selected when it was sent", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "first" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    actor.send({ type: "SEND", text: "working turn" })
+    actor.send({ type: "SET_MODE", mode: "gigaplan" })
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, () => h.agentRunCalls.length === 2, { timeout: 3000 })
+    expect(h.agentRunCalls[1]).toMatchObject({
+      text: "working turn",
+      options: { target: "session" }
+    })
+
+    actor.send({ type: "SEND", text: "intake turn" })
+    actor.send({ type: "SET_MODE", mode: "accept-edits" })
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, () => h.agentRunCalls.length === 3, { timeout: 3000 })
+    expect(h.agentRunCalls[2]).toMatchObject({
+      text: "intake turn",
+      options: { target: "orchestrator" }
+    })
     actor.stop()
   })
 
@@ -317,7 +346,9 @@ describe("conversationMachine — nothing gates the transcript on a CLI probe", 
     actor.send({ type: "SEND", text: "typed on open" })
     // Held, not dispatched — there's no transcript to append it to yet.
     expect(h.agentRunCalls).toHaveLength(0)
-    expect(actor.getSnapshot().context.queued).toEqual([{ text: "typed on open", images: [] }])
+    expect(actor.getSnapshot().context.queued).toEqual([
+      { text: "typed on open", images: [], target: "session" }
+    ])
 
     release()
     await waitFor(actor, (s) => s.matches("running"), { timeout: 3000 })
