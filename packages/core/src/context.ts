@@ -64,16 +64,36 @@ const WINDOW_PREFIXES: Partial<Record<CliKind, ReadonlyArray<readonly [string, n
     // 85% of 1M is 850k, deep into the rot. The budget wins here, by design.
     ["claude-fable", 1_000_000],
     ["fable", 1_000_000],
-    // Current Claude Code aliases resolve to 1M-window models. Reading one as
-    // 200k is not harmless: it puts `triggerAt` at 170k, so a session the harness
-    // is happy to run at 500k sits permanently on "compacting soon" and reseeds
-    // every turn. Explicit legacy prefixes below keep known older models safe.
+    // Bare `opus` and `sonnet` are current Claude Code routes. Release-numbered
+    // ids are persisted though, and over-estimating one is unrecoverable because
+    // `reconcileWindow` only raises a proven-too-low guess. Longest-prefix wins,
+    // so every legacy release family below must beat these current aliases.
+    ["opus-4-5", 1_000_000],
+    ["opus-4.5", 1_000_000],
+    ["opus-4-8", 1_000_000],
+    ["opus-4.8", 1_000_000],
+    ["opus-5", 1_000_000],
+    ["sonnet-4-5", 1_000_000],
+    ["sonnet-4.5", 1_000_000],
+    ["sonnet-5", 1_000_000],
+    // Older Claude generations and the 4.0/4.1 release line are 200k. Some
+    // harnesses omit `claude-` from the id, so both shapes have explicit floors.
+    ["claude-3", 200_000],
+    ["opus-4", 200_000],
+    ["opus-3", 200_000],
+    ["sonnet-4", 200_000],
+    ["sonnet-3", 200_000],
+    ["3-7-sonnet", 200_000],
+    ["3-5-sonnet", 200_000],
+    ["3-sonnet", 200_000],
     ["opus-4-1", 200_000],
     ["opus-4.1", 200_000],
     ["opus-4-20250514", 200_000],
     ["opus", 1_000_000],
     ["sonnet", 1_000_000],
-    ["haiku", 1_000_000]
+    // No Haiku 1M model is established here. A low guess compacts early; a high
+    // one can run into the harness ceiling without any way to reconcile down.
+    ["haiku", 200_000]
   ],
   // The gpt-5 family's INPUT window, which is the number that matters for
   // context occupancy (the larger "total" figure includes output).

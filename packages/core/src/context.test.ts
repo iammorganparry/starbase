@@ -24,11 +24,10 @@ import {
  */
 
 describe("contextWindowFor", () => {
-  it("reads a 1M window for current Claude Code aliases", () => {
+  it("reads a 1M window for current Claude Code Opus and Sonnet aliases", () => {
     expect(contextWindowFor("claude", "claude-fable-5")).toBe(1_000_000)
     expect(contextWindowFor("claude", "opus")).toBe(1_000_000)
     expect(contextWindowFor("claude", "sonnet")).toBe(1_000_000)
-    expect(contextWindowFor("claude", "haiku")).toBe(1_000_000)
   })
 
   // Harness model ids are unstable — `sonnet`, `claude-sonnet-4-5` and
@@ -58,11 +57,26 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("claude", "claude-opus-4-5-20251101")).toBe(1_000_000)
   })
 
-  // Known legacy Opus ids stay conservative even though the current `opus`
-  // alias now resolves to a 1M-window model.
-  it("keeps explicit legacy Opus ids at 200k", () => {
-    expect(contextWindowFor("claude", "claude-opus-4-1")).toBe(200_000)
-    expect(contextWindowFor("claude", "claude-opus-4-20250514")).toBe(200_000)
+  // Any 1M over-estimate can never reconcile down, so known historic release
+  // families must all beat the current bare aliases by longest prefix.
+  it("keeps historic Claude release ids at 200k", () => {
+    for (const model of [
+      "claude-opus-4-0",
+      "claude-opus-4-1",
+      "claude-opus-4-20250514",
+      "claude-opus-3-20240229",
+      "claude-sonnet-4-20250514",
+      "claude-sonnet-3-7-20250219",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022"
+    ]) {
+      expect(contextWindowFor("claude", model)).toBe(200_000)
+    }
+  })
+
+  it("keeps Haiku at the conservative floor without a known 1M release", () => {
+    expect(contextWindowFor("claude", "haiku")).toBe(200_000)
+    expect(contextWindowFor("claude", "claude-haiku-4-5")).toBe(200_000)
   })
 
   it("falls back to the harness floor for an unrecognised model", () => {
