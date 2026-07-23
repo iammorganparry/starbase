@@ -134,7 +134,9 @@ const seed = (over: Partial<Session> = {}) =>
       tokens: 0,
       updatedAt: now,
       worktreePath: temp.root,
-      model: "sonnet",
+      // A known 200k legacy model keeps the manager's timing scenarios compact;
+      // current 1M aliases are covered explicitly below.
+      model: "claude-opus-4-1",
       ...over
     }
     // Write straight to the store's file: `SessionStore.create` would fork a real
@@ -268,7 +270,7 @@ describe("ContextManager.observe", () => {
     expect(rec.runs.count).toBe(0)
   })
 
-  // A 200k Claude triggers at its safety margin (170k), not the 300k budget.
+  // A 200k model triggers at its safety margin (170k), not the 500k budget.
   it("prepares a digest once the working set crosses the trigger", async () => {
     const rec = recorder()
     const digest = await run(
@@ -694,17 +696,17 @@ describe("life after a compaction", () => {
  * holding.
  *
  * The model-id table is a guess, and a wrong guess in the low direction is not
- * the harmless conservatism it was written to be: a 1M Opus read as 200k puts
- * `triggerAt` at 170k, so the meter reads "compacting soon" at 213k and the
- * session reseeds itself every turn while the harness is entirely comfortable.
+ * harmless conservatism: a 1M session read as 200k puts `triggerAt` at 170k, so
+ * the meter reads "compacting soon" at 213k and reseeds every turn while the
+ * harness is entirely comfortable.
  */
 describe("window correction", () => {
   it("stops trusting a table guess the session has already exceeded", async () => {
     const rec = recorder()
     const snap = await run(
       Effect.gen(function* () {
-        // `opus` alone still reads as 200k from the table…
-        yield* seed({ model: "opus" })
+        // An unknown model falls back to 200k from the table…
+        yield* seed({ model: "some-new-tier" })
         // …but a session cannot hold 598k inside a 200k window.
         yield* ContextManager.observe(SESSION, 598_000, null)
         return yield* ContextManager.snapshot(SESSION)
@@ -712,15 +714,15 @@ describe("window correction", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(598_000)
-    // 170k before, which is why a comfortable session compacted every turn.
-    expect(snap.triggerAt).toBe(400_000)
+    // The corrected window can use the 500k quality cap.
+    expect(snap.triggerAt).toBe(500_000)
   })
 
   it("keeps the corrected window after the reading falls back", async () => {
     const rec = recorder()
     const snap = await run(
       Effect.gen(function* () {
-        yield* seed({ model: "opus" })
+        yield* seed({ model: "some-new-tier" })
         yield* ContextManager.observe(SESSION, 598_000, null)
         // A compaction (or simply a smaller turn) shrinks the working set. The
         // CEILING did not move.
@@ -1000,37 +1002,34 @@ describe("ContextManager.snapshot", () => {
 
   // The headline property, visible in the UI: a 1M model fills its meter against
   // the quality budget, not against 1M.
-  it("measures a 1M-window model against the budget", async () => {
+  it("measures a current 1M Claude alias against the budget", async () => {
     const rec = recorder()
     const snap = await run(
       Effect.gen(function* () {
-        yield* seed({ model: "claude-fable-5" })
+        yield* seed({ model: "sonnet" })
         yield* turnEnd(100_000)
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(1_000_000)
-    expect(snap.triggerAt).toBe(400_000)
+    expect(snap.triggerAt).toBe(500_000)
   })
 
-  // The regression this whole change exists for: a model whose real ceiling the
-  // prefix table under-reports must be measured against what the HARNESS says,
-  // not against the guess. `claude-opus-4-8` matches the `opus → 200k` row, so
-  // the guess alone would trigger at 170k and compact a session that is barely
-  // half full.
+  // A model whose table fallback is too low must be measured against what the
+  // HARNESS says, not against the guess.
   it("prefers the window the harness reported over the guessed table", async () => {
     const rec = recorder()
     const snap = await run(
       Effect.gen(function* () {
-        yield* seed({ model: "claude-opus-4-8" })
+        yield* seed({ model: "some-new-tier" })
         yield* turnEnd(250_000, 1_000_000)
         return yield* ContextManager.snapshot(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(1_000_000)
-    expect(snap.triggerAt).toBe(400_000)
+    expect(snap.triggerAt).toBe(500_000)
     expect(snap.phase).toBe("idle")
     expect(rec.runs.count).toBe(0)
   })

@@ -157,9 +157,10 @@ test("exposes the token levers in Settings", async ({ launchApp }) => {
   await window.getByRole("button", { name: /Context/ }).click()
 
   // The budget, and — the part that makes it meaningful — what it means per
-  // harness. A 200k Claude compacts at its safety margin, not at the budget.
-  await expect(window.getByText("300k tokens")).toBeVisible()
-  await expect(window.getByText("170k of 200k")).toBeVisible()
+  // harness. Claude's current default is a 1M-window model, so the new 500k
+  // quality budget binds before the model's safety margin.
+  await expect(window.getByText("500k tokens")).toBeVisible()
+  await expect(window.getByText("500k of 1M")).toBeVisible()
 
   // The cost answer, stated rather than implied.
   await expect(window.getByText(/no API key/)).toBeVisible()

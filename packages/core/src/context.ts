@@ -23,23 +23,22 @@ import type { CliKind } from "./domain.js"
  * opposite — it would let a 1M model run to 650k before acting, which is exactly
  * the failure this exists to prevent.
  */
-export const DEFAULT_BUDGET_TOKENS = 400_000
+export const DEFAULT_BUDGET_TOKENS = 500_000
 
 /**
  * The band the budget may be tuned within, enforced by schema and by clamp.
  *
- * Raised from 400k after watching real sessions: on a 1M-window Opus the app was
- * compacting a session that was working perfectly well at 213k, and sessions
- * routinely ran to 450–600k of occupancy with no sign of the rot this band was
- * drawn to avoid. The quality argument above still holds — it is why the ceiling
- * is 500k and not "the window" — but the floor of the degradation band sits
- * higher on the current generation of models than it did when this was written.
+ * Current 1M-window models routinely hold 450–600k of occupancy with no sign of
+ * the rot this band was drawn to avoid. The quality argument above still holds —
+ * it is why the ceiling is 500k and not "the window" — but the floor of the
+ * degradation band sits higher on the current generation of models than it did
+ * when this was written.
  */
 export const BUDGET_RANGE = { min: 256_000, max: 500_000 } as const
 
 /**
  * The window is a BACKSTOP, not the trigger. A model whose ceiling sits below
- * the budget (a 200k Claude) must still compact before it hits that ceiling, so
+ * the budget (a legacy 200k Claude) must still compact before it hits that ceiling, so
  * the effective trigger is `min(budget, window × SAFETY_RATIO)`.
  *
  * 0.85 leaves room for one more full turn plus the harness's own preamble. It is
@@ -65,18 +64,35 @@ const WINDOW_PREFIXES: Partial<Record<CliKind, ReadonlyArray<readonly [string, n
     // 85% of 1M is 850k, deep into the rot. The budget wins here, by design.
     ["claude-fable", 1_000_000],
     ["fable", 1_000_000],
-    // Opus from 4.5 onward carries a 1M window, and reading it as 200k is not a
-    // harmless under-estimate: it puts `triggerAt` at 170k, so a session that the
-    // harness is perfectly happy to run at 500k sat permanently on "compacting
-    // soon" and compacted every turn. Longest-prefix-wins keeps the bare `opus`
-    // entry below as the conservative floor for older ids (4.0, 4.1).
+    // Bare `opus` and `sonnet` are current Claude Code routes. Release-numbered
+    // ids are persisted though, and over-estimating one is unrecoverable because
+    // `reconcileWindow` only raises a proven-too-low guess. Longest-prefix wins,
+    // so every legacy release family below must beat these current aliases.
     ["opus-4-5", 1_000_000],
     ["opus-4.5", 1_000_000],
     ["opus-4-8", 1_000_000],
     ["opus-4.8", 1_000_000],
     ["opus-5", 1_000_000],
-    ["opus", 200_000],
-    ["sonnet", 200_000],
+    ["sonnet-4-5", 1_000_000],
+    ["sonnet-4.5", 1_000_000],
+    ["sonnet-5", 1_000_000],
+    // Older Claude generations and the 4.0/4.1 release line are 200k. Some
+    // harnesses omit `claude-` from the id, so both shapes have explicit floors.
+    ["claude-3", 200_000],
+    ["opus-4", 200_000],
+    ["opus-3", 200_000],
+    ["sonnet-4", 200_000],
+    ["sonnet-3", 200_000],
+    ["3-7-sonnet", 200_000],
+    ["3-5-sonnet", 200_000],
+    ["3-sonnet", 200_000],
+    ["opus-4-1", 200_000],
+    ["opus-4.1", 200_000],
+    ["opus-4-20250514", 200_000],
+    ["opus", 1_000_000],
+    ["sonnet", 1_000_000],
+    // No Haiku 1M model is established here. A low guess compacts early; a high
+    // one can run into the harness ceiling without any way to reconcile down.
     ["haiku", 200_000]
   ],
   // The gpt-5 family's INPUT window, which is the number that matters for

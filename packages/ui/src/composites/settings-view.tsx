@@ -28,6 +28,7 @@ import {
   DEFAULT_REVIEW_MODEL,
   NOTIFICATIONS_DEFAULT,
   contextWindowFor,
+  defaultModel,
   digestModelFor,
   newSessionCli,
   reviewModelFor,
@@ -1136,8 +1137,9 @@ function ContextSection({
         <div className="rounded-lg border border-line bg-sunken p-3">
           <Eyebrow>Compacts at</Eyebrow>
           <p className="mb-2 mt-1 text-[11px] leading-[1.5] text-muted-foreground">
-            A model whose window is smaller than the budget compacts earlier, so it
-            never reaches its own hard limit.
+            These figures apply to each harness&apos;s default model. A model whose
+            window is smaller than the budget compacts earlier, so it never reaches
+            its own hard limit.
           </p>
           <div className="space-y-1">
             {measurable.map((cli) => (
@@ -1145,7 +1147,8 @@ function ContextSection({
                 <span className="text-[12px] text-text-body">{cli.label}</span>
                 <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                   {(() => {
-                    const w = contextWindowFor(cli.kind, null, providers?.[cli.kind]?.contextWindow)
+                    const model = providers?.[cli.kind]?.defaultModel || defaultModel(cli.kind)
+                    const w = contextWindowFor(cli.kind, model, providers?.[cli.kind]?.contextWindow)
                     return w === null
                       ? "set a window below"
                       : `${fmtK(triggerAt(w, draft.budgetTokens))} of ${fmtK(w)}`

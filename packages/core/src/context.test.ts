@@ -24,18 +24,17 @@ import {
  */
 
 describe("contextWindowFor", () => {
-  it("reads a 1M window for Fable and 200k for the standard Claude tiers", () => {
+  it("reads a 1M window for current Claude Code Opus and Sonnet aliases", () => {
     expect(contextWindowFor("claude", "claude-fable-5")).toBe(1_000_000)
-    expect(contextWindowFor("claude", "opus")).toBe(200_000)
-    expect(contextWindowFor("claude", "sonnet")).toBe(200_000)
-    expect(contextWindowFor("claude", "haiku")).toBe(200_000)
+    expect(contextWindowFor("claude", "opus")).toBe(1_000_000)
+    expect(contextWindowFor("claude", "sonnet")).toBe(1_000_000)
   })
 
   // Harness model ids are unstable — `sonnet`, `claude-sonnet-4-5` and
   // `claude-sonnet-4-5-20250929` are all one model. Prefix matching is what
   // keeps the table from going stale every time a provider stamps a date on.
   it("matches a dated, fully-qualified model id", () => {
-    expect(contextWindowFor("claude", "claude-sonnet-4-5-20250929")).toBe(200_000)
+    expect(contextWindowFor("claude", "claude-sonnet-4-5-20250929")).toBe(1_000_000)
     expect(contextWindowFor("codex", "gpt-5.6-sol")).toBe(272_000)
   })
 
@@ -58,10 +57,26 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("claude", "claude-opus-4-5-20251101")).toBe(1_000_000)
   })
 
-  // Older Opus really is 200k, and the bare prefix is what keeps it honest.
-  it("still reads 200k for an Opus id with no version", () => {
-    expect(contextWindowFor("claude", "opus")).toBe(200_000)
-    expect(contextWindowFor("claude", "claude-opus-4-1")).toBe(200_000)
+  // Any 1M over-estimate can never reconcile down, so known historic release
+  // families must all beat the current bare aliases by longest prefix.
+  it("keeps historic Claude release ids at 200k", () => {
+    for (const model of [
+      "claude-opus-4-0",
+      "claude-opus-4-1",
+      "claude-opus-4-20250514",
+      "claude-opus-3-20240229",
+      "claude-sonnet-4-20250514",
+      "claude-sonnet-3-7-20250219",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022"
+    ]) {
+      expect(contextWindowFor("claude", model)).toBe(200_000)
+    }
+  })
+
+  it("keeps Haiku at the conservative floor without a known 1M release", () => {
+    expect(contextWindowFor("claude", "haiku")).toBe(200_000)
+    expect(contextWindowFor("claude", "claude-haiku-4-5")).toBe(200_000)
   })
 
   it("falls back to the harness floor for an unrecognised model", () => {
@@ -84,9 +99,9 @@ describe("contextWindowFor", () => {
   })
 
   it("ignores a nonsensical override rather than trusting it", () => {
-    expect(contextWindowFor("claude", "sonnet", 0)).toBe(200_000)
-    expect(contextWindowFor("claude", "sonnet", -5)).toBe(200_000)
-    expect(contextWindowFor("claude", "sonnet", null)).toBe(200_000)
+    expect(contextWindowFor("claude", "sonnet", 0)).toBe(1_000_000)
+    expect(contextWindowFor("claude", "sonnet", -5)).toBe(1_000_000)
+    expect(contextWindowFor("claude", "sonnet", null)).toBe(1_000_000)
   })
 })
 
@@ -102,10 +117,10 @@ describe("triggerAt", () => {
   // The headline property. 85% of 1M is 850k — deep into the rot the feature
   // exists to avoid. The budget has to win.
   it("triggers a 1M-window model at the budget, not at 850k", () => {
-    expect(triggerAt(1_000_000, DEFAULT_BUDGET_TOKENS)).toBe(400_000)
+    expect(triggerAt(1_000_000, DEFAULT_BUDGET_TOKENS)).toBe(500_000)
   })
 
-  // The mirror property. A 200k model can't reach a 300k budget, so the safety
+  // The mirror property. A 200k model can't reach a 500k budget, so the safety
   // margin has to win or it would never compact at all and simply hard-fail.
   it("triggers a 200k-window model at its safety margin, not at the budget", () => {
     expect(triggerAt(200_000, DEFAULT_BUDGET_TOKENS)).toBe(170_000)
@@ -113,6 +128,10 @@ describe("triggerAt", () => {
 
   it("triggers a 272k Codex window at its safety margin", () => {
     expect(triggerAt(272_000, DEFAULT_BUDGET_TOKENS)).toBe(231_200)
+  })
+
+  it("keeps a 256k window below its safety margin", () => {
+    expect(triggerAt(256_000, DEFAULT_BUDGET_TOKENS)).toBe(217_600)
   })
 
   it("clamps an out-of-band budget before comparing", () => {
@@ -164,19 +183,19 @@ describe("contextPhase", () => {
   })
 
   it("prepares once the working set crosses the budget", () => {
-    expect(contextPhase({ ...base, tokens: 410_000 })).toBe("prepare")
+    expect(contextPhase({ ...base, tokens: 510_000 })).toBe("prepare")
   })
 
   it("swaps once a digest is ready and we are still over", () => {
-    expect(contextPhase({ ...base, tokens: 410_000, digestReady: true })).toBe("swap")
+    expect(contextPhase({ ...base, tokens: 510_000, digestReady: true })).toBe("swap")
   })
 
-  // 410k is only 41% of a 1M window. A percentage rule would call this idle and
-  // let the session rot for another 240k tokens. This is the bug being designed
+  // 510k is only 51% of a 1M window. A percentage rule would call this idle and
+  // let the session rot for another 340k tokens. This is the bug being designed
   // away, so it gets its own test.
-  it("acts at 41% of a 1M window because the band, not the window, is the limit", () => {
-    expect(contextPhase({ ...base, tokens: 410_000 })).toBe("prepare")
-    expect(410_000 / 1_000_000).toBeLessThan(0.45)
+  it("acts at 51% of a 1M window because the band, not the window, is the limit", () => {
+    expect(contextPhase({ ...base, tokens: 510_000 })).toBe("prepare")
+    expect(510_000 / 1_000_000).toBeLessThan(0.55)
   })
 
   it("never escalates past unknown when auto-compaction is off", () => {
