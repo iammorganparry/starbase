@@ -94,6 +94,7 @@ describe("Settings → Context", () => {
    */
   it("translates the budget into a per-harness trigger point", () => {
     open()
+    expect(screen.getByText(/apply to each harness's default model/)).toBeDefined()
     expect(screen.getByText("500k of 1M")).toBeDefined()
     expect(screen.getByText("231k of 272k")).toBeDefined()
   })

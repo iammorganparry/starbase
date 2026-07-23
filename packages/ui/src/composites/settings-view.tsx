@@ -1137,8 +1137,9 @@ function ContextSection({
         <div className="rounded-lg border border-line bg-sunken p-3">
           <Eyebrow>Compacts at</Eyebrow>
           <p className="mb-2 mt-1 text-[11px] leading-[1.5] text-muted-foreground">
-            A model whose window is smaller than the budget compacts earlier, so it
-            never reaches its own hard limit.
+            These figures apply to each harness&apos;s default model. A model whose
+            window is smaller than the budget compacts earlier, so it never reaches
+            its own hard limit.
           </p>
           <div className="space-y-1">
             {measurable.map((cli) => (
