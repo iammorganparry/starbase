@@ -4,6 +4,10 @@ import type { ApprovalMode, SandboxMode, ThreadEvent } from "@openai/codex-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
+import {
+  readCodexContextUsage,
+  type CodexContextUsage
+} from "./codex-app-server.js"
 import { hasPlanBlock, parsePlan } from "./plan-parse.js"
 import { formatQuestionAnswers, parseQuestionBlock } from "./question-prompt.js"
 import { requireWorktree } from "./cwd.js"
@@ -61,28 +65,22 @@ export const mapCodexPolicy = (
       : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
 /**
- * Tokens occupying Codex's context window after a completed turn.
+ * Tokens spent by a completed Codex turn.
  *
- * A Codex turn resends the whole thread, so the turn's `input_tokens` IS the
- * conversation as the model saw it; adding the reply gives the size the next
- * turn inherits. That makes this the direct analogue of Claude's
- * `contextTokens`, despite arriving through a completely different event.
+ * The SDK aggregates these totals across every model request made during the
+ * turn. That makes input + output useful spend accounting, but not resident
+ * context: royal-liskov reported 2,979,284 here while only 193,496 tokens
+ * occupied its 258,400-token model window.
  *
  * The two subset fields are deliberately NOT added:
  *  - `cached_input_tokens` is part of `input_tokens` (codex itself derives
  *    non-cached input by subtracting it), and
  *  - `reasoning_output_tokens` is part of `output_tokens`.
- * Summing all four double-counts both, inflating the reading by roughly the
- * cache-hit rate — which on a long, heavily-cached session is most of it. That
- * error is in the "compact far too early" direction, so it would have looked
- * like a working feature while quietly halving everyone's usable context.
- *
- * This replaces a hard-coded `0`. The old comment was right that a turn TOTAL
- * mislabelled as context is worse than no number — but `input + output` is not
- * a turn total, it is the context, and without it Codex sessions could never
- * participate in auto-compaction at all.
+ * Summing all four double-counts both and inflates spend by roughly the cache
+ * hit rate. Resident context comes separately from the app-server's
+ * `thread/tokenUsage/updated` notification.
  */
-export const codexContextTokens = (usage: {
+export const codexTurnTokens = (usage: {
   readonly input_tokens?: number
   readonly output_tokens?: number
   /** Subset of `input_tokens` — accepted so the real payload type-checks, never summed. */
@@ -92,6 +90,28 @@ export const codexContextTokens = (usage: {
 }): number => {
   const num = (v: number | undefined): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0)
   return num(usage?.input_tokens) + num(usage?.output_tokens)
+}
+
+type CodexTurnUsage = Extract<ThreadEvent, { type: "turn.completed" }>["usage"]
+
+/**
+ * Complete one streamed SDK round without conflating cumulative spend with
+ * resident context. A queued follow-up refreshes occupancy but does not settle
+ * the operator-facing turn.
+ */
+export const codexCompletionEvents = (
+  usage: CodexTurnUsage,
+  context: CodexContextUsage | null,
+  settle: boolean
+): ReadonlyArray<StreamEvent> => {
+  const events: Array<StreamEvent> = []
+  if (context !== null) {
+    events.push({ _tag: "Usage", tokens: context.tokens, window: context.window })
+  }
+  if (settle) {
+    events.push({ _tag: "Done", costUsd: 0, tokens: codexTurnTokens(usage) })
+  }
+  return events
 }
 
 /**
@@ -270,13 +290,8 @@ export const codexEventToStreamEvents = (
       }
     }
 
-    case "turn.completed": {
-      const tokens = codexContextTokens(event.usage)
-      return [
-        { _tag: "Usage", tokens },
-        { _tag: "Done", costUsd: 0, tokens }
-      ]
-    }
+    case "turn.completed":
+      return codexCompletionEvents(event.usage, null, true)
 
     case "turn.failed":
       return [{ _tag: "Failed", message: event.error.message }]
@@ -371,11 +386,16 @@ export const runCodex = (
         let planRound = 0
         for (;;) {
           let followUp: string | null = null
+          let completedUsage: CodexTurnUsage | null = null
           const { events } = await thread.runStreamed(turnPrompt, { signal: abort.signal })
           for await (const event of events) {
             if (event.type === "thread.started" && event.thread_id) {
               threadId = event.thread_id
               rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
+            }
+            if (event.type === "turn.completed") {
+              completedUsage = event.usage
+              continue
             }
             // Both of Codex's out-of-band channels — questions and plans — are
             // fenced blocks in an ordinary reply, because there is no tool to
@@ -444,12 +464,24 @@ export const runCodex = (
               continue
             }
             for (const se of codexEventToStreamEvents(event, sessionId)) {
-              // Hold this Codex turn's terminal event while another is queued to
-              // carry the answers: the operator asked one question and is owed
-              // one continuous reply, not a turn that "finished" the instant it
-              // asked and settled the message out from under the answer.
-              if (followUp !== null && se._tag === "Done") continue
               await runP(ctx.emit(se))
+            }
+          }
+          if (completedUsage !== null) {
+            // Probe after the SDK stream closes so Codex has flushed the latest
+            // thread state. A failed optional probe emits no Usage, preserving
+            // ContextManager's last authoritative reading. Usage precedes Done
+            // so compaction sees the fresh occupancy when the turn settles.
+            const context =
+              threadId === null
+                ? null
+                : await readCodexContextUsage(spec.binPath, threadId)
+            for (const event of codexCompletionEvents(
+              completedUsage,
+              context,
+              followUp === null
+            )) {
+              await runP(ctx.emit(event))
             }
           }
           if (followUp === null) break

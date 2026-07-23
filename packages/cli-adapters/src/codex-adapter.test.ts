@@ -2,8 +2,9 @@ import type { ThreadEvent } from "@openai/codex-sdk"
 import { describe, expect, it } from "vitest"
 import {
   agentReply,
-  codexContextTokens,
+  codexCompletionEvents,
   codexEventToStreamEvents,
+  codexTurnTokens,
   mapCodexPolicy,
   rememberThread,
   threadIdFor
@@ -188,23 +189,45 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([{ _tag: "Thinking", text: "planning", seconds: null, done: true }])
   })
 
-  // A Codex turn resends the whole thread, so the turn's `input_tokens` IS the
-  // conversation as the model saw it; adding the reply gives what the next turn
-  // inherits. Without this, Codex sessions could never take part in
-  // auto-compaction — the reading was hard-coded to 0.
-  it("reports context occupancy from turn.completed", () => {
+  it("does not treat cumulative Codex spend as resident context", () => {
     expect(
       codexEventToStreamEvents(
-        ev({ type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 10 } }),
+        ev({
+          type: "turn.completed",
+          usage: {
+            input_tokens: 2_961_789,
+            cached_input_tokens: 2_758_656,
+            output_tokens: 17_495,
+            reasoning_output_tokens: 10_295
+          }
+        }),
         "s1"
       )
-    ).toStrictEqual([
-      { _tag: "Usage", tokens: 140 },
-      { _tag: "Done", costUsd: 0, tokens: 140 }
-    ])
+    ).toStrictEqual([{ _tag: "Done", costUsd: 0, tokens: 2_979_284 }])
     expect(
       codexEventToStreamEvents(ev({ type: "turn.failed", error: { message: "boom" } }), "s1")
     ).toStrictEqual([{ _tag: "Failed", message: "boom" }])
+  })
+
+  it("emits authoritative occupancy independently from turn spend", () => {
+    const usage = {
+      input_tokens: 2_961_789,
+      cached_input_tokens: 2_758_656,
+      output_tokens: 17_495,
+      reasoning_output_tokens: 10_295
+    }
+    const context = { tokens: 193_496, window: 258_400 }
+
+    expect(codexCompletionEvents(usage, context, true)).toStrictEqual([
+      { _tag: "Usage", tokens: 193_496, window: 258_400 },
+      { _tag: "Done", costUsd: 0, tokens: 2_979_284 }
+    ])
+    expect(codexCompletionEvents(usage, context, false)).toStrictEqual([
+      { _tag: "Usage", tokens: 193_496, window: 258_400 }
+    ])
+    expect(codexCompletionEvents(usage, null, true)).toStrictEqual([
+      { _tag: "Done", costUsd: 0, tokens: 2_979_284 }
+    ])
   })
 
   /**
@@ -244,7 +267,7 @@ describe("codexEventToStreamEvents", () => {
     })
   })
 
-  describe("codexContextTokens", () => {
+  describe("codexTurnTokens", () => {
     // The subset trap. `cached_input_tokens` is part of `input_tokens` (codex
     // derives non-cached input by subtracting it) and `reasoning_output_tokens`
     // is part of `output_tokens`. Summing all four double-counts both — and on a
@@ -252,13 +275,13 @@ describe("codexEventToStreamEvents", () => {
     // would run to nearly double reality and compact at half the real budget.
     it("excludes cached input, which is a subset of input_tokens", () => {
       expect(
-        codexContextTokens({ input_tokens: 100_000, cached_input_tokens: 90_000, output_tokens: 2_000 })
+        codexTurnTokens({ input_tokens: 100_000, cached_input_tokens: 90_000, output_tokens: 2_000 })
       ).toBe(102_000)
     })
 
     it("excludes reasoning output, which is a subset of output_tokens", () => {
       expect(
-        codexContextTokens({ input_tokens: 1_000, output_tokens: 500, reasoning_output_tokens: 400 })
+        codexTurnTokens({ input_tokens: 1_000, output_tokens: 500, reasoning_output_tokens: 400 })
       ).toBe(1_500)
     })
 
@@ -266,10 +289,10 @@ describe("codexEventToStreamEvents", () => {
     // treats as idle — rather than NaN, which would poison every comparison
     // downstream and silently disable compaction for the session.
     it("degrades to zero on a missing or malformed payload", () => {
-      expect(codexContextTokens({})).toBe(0)
-      expect(codexContextTokens({ input_tokens: Number.NaN, output_tokens: 5 })).toBe(5)
-      expect(codexContextTokens({ input_tokens: -10, output_tokens: 5 })).toBe(5)
-      expect(codexContextTokens(undefined as never)).toBe(0)
+      expect(codexTurnTokens({})).toBe(0)
+      expect(codexTurnTokens({ input_tokens: Number.NaN, output_tokens: 5 })).toBe(5)
+      expect(codexTurnTokens({ input_tokens: -10, output_tokens: 5 })).toBe(5)
+      expect(codexTurnTokens(undefined as never)).toBe(0)
     })
   })
 
