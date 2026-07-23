@@ -262,6 +262,14 @@ describe("ThemeService", () => {
       expect(existsSync(join(temp.root, "config.json"))).toBe(false)
     })
 
+    it("refuses an absolute path as a theme id", async () => {
+      const outside = join(temp.root, "outside")
+      const exit = await provided(ThemeService.save(outside, VALID_THEME as never))
+
+      expect(failureOf(exit)?._tag).toBe("ThemeError")
+      expect(existsSync(`${outside}.json`)).toBe(false)
+    })
+
     it("refuses to delete outside the themes directory", async () => {
       mkdirSync(temp.root, { recursive: true })
       const sessionsFile = join(temp.root, "sessions.json")
