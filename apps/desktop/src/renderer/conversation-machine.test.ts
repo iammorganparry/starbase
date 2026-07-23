@@ -999,14 +999,14 @@ describe("conversationMachine — adversarial planning", () => {
     })
   })
 
-  it("routes the round through the planning RPC, not a normal turn", async () => {
+  it("routes a handoff through the planning RPC, not a normal turn", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
 
-    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: "Add a tier column" }])
+    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: undefined }])
     // Crucially NOT an Agent.run — a planning round is not a turn.
     expect(h.agentRunCalls).toEqual([])
   })
@@ -1018,7 +1018,7 @@ describe("conversationMachine — adversarial planning", () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     expect(actor.getSnapshot().matches(idle)).toBe(true)
     expect(h.planCalls).toEqual([])
   })
@@ -1033,12 +1033,12 @@ describe("conversationMachine — adversarial planning", () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "x" })
+    actor.send({ type: "HANDOFF_PLAN" })
     expect(h.planCalls).toEqual([])
 
     release()
     await waitFor(actor, (s) => s.context.planReadiness !== null)
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "x" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
     expect(h.planCalls).toHaveLength(1)
   })
@@ -1047,7 +1047,7 @@ describe("conversationMachine — adversarial planning", () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
 
     emit({
@@ -1068,11 +1068,11 @@ describe("conversationMachine — adversarial planning", () => {
     expect(plans).toHaveLength(1)
   })
 
-  it("clears the brief so the next normal turn is not another round", async () => {
+  it("clears handoff state so the next normal turn is not another round", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
     emit({ _tag: "Done", costUsd: 0, tokens: 0 })
     await waitFor(actor, (s) => s.matches(idle))
@@ -1125,7 +1125,7 @@ describe("conversationMachine — approving a plan after the mode changed", () =
   } as unknown as Plan
 
   const seed = (actor: ReturnType<typeof start>, plan: Plan) => {
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "b" })
+    actor.send({ type: "HANDOFF_PLAN" })
     h.streamCb?.({ _tag: "PlanProposed", plan })
     h.streamCb?.({ _tag: "Done", costUsd: 0, tokens: 0 })
   }

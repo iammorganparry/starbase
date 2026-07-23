@@ -187,7 +187,6 @@ type ConversationEvent =
   | { type: "SKILLS_LOADED"; skills: ReadonlyArray<Skill> }
   | { type: "CATALOG_LOADED"; catalog: ReadonlyArray<ProviderModels> }
   | { type: "READINESS_LOADED"; readiness: PlanningReadiness }
-  | { type: "PLAN_ADVERSARIALLY"; brief: string }
   | { type: "HANDOFF_PLAN" }
   | { type: "REVIEW_EVENT"; event: StreamEvent }
   | { type: "COMMENT_PLAN_STEP"; planId: string; stepId: string; body: string }
@@ -753,21 +752,17 @@ export const conversationMachine = setup({
      * machinery — stop, streaming, sub-agent tabs — rather than duplicating it.
      */
     beginAdversarial: assign(({ context, event }) => {
-      if (event.type !== "HANDOFF_PLAN" && event.type !== "PLAN_ADVERSARIALLY") return {}
-      const explicitBrief =
-        event.type === "PLAN_ADVERSARIALLY" ? event.brief.trim() : null
-      if (explicitBrief !== null && explicitBrief.length === 0) return {}
+      if (event.type !== "HANDOFF_PLAN") return {}
       // Empty is an intentional sentinel: main derives the brief and screenshots
       // from the durable Gigaplan intake transcript.
-      const brief = explicitBrief ?? ""
       // Main owns the persisted Create/Update wording from the durable
       // transcript. This local turn only gives streamed events somewhere to
       // land, so keep it neutral rather than guessing from optimistic state.
-      const label = explicitBrief ?? "Hand off this Gigaplan conversation to planning."
+      const label = "Hand off this Gigaplan conversation to planning."
       const now = new Date().toISOString()
       const id = stamp()
       return {
-        adversarialBrief: brief,
+        adversarialBrief: "",
         agentTarget: "session" as const,
         pendingText: "",
         pendingImages: [],
@@ -1031,11 +1026,6 @@ export const conversationMachine = setup({
         // trusted from the UI: the entry is disabled without two vendors, but a
         // stale readiness or a keyboard path must not start a round that the
         // service would only refuse.
-        PLAN_ADVERSARIALLY: {
-          guard: "canPlanAdversarially",
-          target: "running",
-          actions: "beginAdversarial"
-        },
         HANDOFF_PLAN: {
           guard: "canPlanAdversarially",
           target: "running",
