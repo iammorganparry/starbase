@@ -23,7 +23,7 @@ export function DiffPeek({ preview, className }: { preview: string; className?: 
             key={i}
             className={cn(
               "flex px-3",
-              added && "bg-green/[0.13]",
+              added && "bg-diff-add",
               removed && "bg-red/[0.13]"
             )}
           >

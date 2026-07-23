@@ -200,7 +200,7 @@ function DiffLine({
 }) {
   const add = row.type === "add"
   const del = row.type === "del"
-  const bg = selected ? "bg-blue/[0.08]" : add ? "bg-green/[0.13]" : del ? "bg-red/[0.12]" : ""
+  const bg = selected ? "bg-blue/[0.08]" : add ? "bg-diff-add" : del ? "bg-diff-del" : ""
   // The SIGN is green/red. The code is not.
   //
   // Painting the whole line one flat colour spends the only channel that says
@@ -212,9 +212,9 @@ function DiffLine({
   const gutter = selected
     ? "text-blue"
     : add
-      ? "text-[#4e6b45]"
+      ? "text-diff-add-fg"
       : del
-        ? "text-[#6b4a4e]"
+        ? "text-diff-del-fg"
         : "text-line-strong"
   const sign = add ? "+ " : del ? "- " : "  "
 

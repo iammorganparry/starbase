@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { BUDGET_RANGE, DEFAULT_BUDGET_TOKENS } from "./context.js"
 import { TaskKind } from "./task-kind.js"
+import { ThemeConfig } from "./theme.js"
 
 /**
  * Domain schemas for Starbase. These are Effect `Schema`s so they can be reused
@@ -648,7 +649,17 @@ export const WorkspaceConfig = Schema.Struct({
    * prefix (the same channel as the compaction primer), so it applies to every
    * harness rather than only the one with a matching skill installed.
    */
-  adhdMode: Schema.optional(Schema.Boolean)
+  adhdMode: Schema.optional(Schema.Boolean),
+  /**
+   * The active colour theme, plus any per-key overrides on top of it.
+   *
+   * Absent means `DEFAULT_THEME_ID` (One Dark Pro) — which is also what every
+   * config written before theming existed means, so upgrading users see exactly
+   * the app they had. Only the CHOICE lives here; the themes themselves are
+   * bundled presets or files under `~/starbase/themes`, because a theme is
+   * kilobytes of colour table and `config.json` is read on every settings save.
+   */
+  theme: Schema.optional(ThemeConfig)
 })
 export type WorkspaceConfig = Schema.Schema.Type<typeof WorkspaceConfig>
 

@@ -28,7 +28,7 @@ export function ThoughtBlock({
         type="button"
         disabled={!collapsible}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 border-b border-[#23262d] px-[11px] py-[7px] text-left"
+        className="flex w-full items-center gap-2 border-b border-hairline px-[11px] py-[7px] text-left"
       >
         <span className={cn("text-[11px] text-purple", streaming && "animate-pulse-dot")}>✦</span>
         <span className="flex-1 text-[11.5px] text-text">{label}</span>

@@ -19,7 +19,7 @@ export function Skeleton({ className }: { className?: string }) {
     <span
       className={cn(
         "block h-5 rounded-md [background-size:220px_100%] [animation:var(--animate-shine)]",
-        "bg-[linear-gradient(90deg,rgba(255,255,255,.02),rgba(255,255,255,.07),rgba(255,255,255,.02))]",
+        "bg-[linear-gradient(90deg,transparent,var(--sb-hover),transparent)]",
         className
       )}
     />

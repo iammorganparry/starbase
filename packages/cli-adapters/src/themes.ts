@@ -1,0 +1,415 @@
+/**
+ * Owns `~/starbase/themes` — the stateful half of theming.
+ *
+ * `@starbase/themes` is pure: presets, the fold to `ThemeTokens`, colour maths.
+ * This service is everything that touches disk: enumerating what is installed,
+ * writing an edit, deleting a copy, and noticing when someone edits a file
+ * outside the app.
+ *
+ * ## Listing never fails
+ *
+ * `list()` returns a `ThemeCatalog` with a `skipped` array rather than an error
+ * channel. One malformed file in the themes directory must not empty the
+ * picker: the operator needs to keep switching themes AND to be told which file
+ * is broken, and an error channel can only do the second. Everything that
+ * mutates — `save`, `delete`, `duplicate`, `importJson` — does use `ThemeError`,
+ * because there the failure is about one named thing the user just asked for.
+ *
+ * ## User themes shadow built-ins
+ *
+ * A file at `~/starbase/themes/monokai.json` wins over the bundled Monokai.
+ * That is the escape hatch for "I like this theme but its sidebar is wrong" for
+ * people who would rather edit a file than use the colour picker, and it means
+ * a built-in can be corrected locally without waiting for a release. Built-ins
+ * themselves stay immutable — `save` and `delete` refuse their ids, so the
+ * bundled copy is always there to fall back to.
+ */
+import { FileSystem, Path } from "@effect/platform"
+import type { ThemeCatalog, ThemeLoadFailure, ThemeSummary, VsCodeTheme } from "@starbase/core"
+import {
+  DEFAULT_THEME_ID,
+  ThemeError,
+  VsCodeTheme as VsCodeThemeSchema,
+  normalizeThemeKind,
+  themeIdFromName
+} from "@starbase/core"
+import { BUILTIN_THEMES, BUILTIN_THEME_IDS, findBuiltinTheme, toTokens } from "@starbase/themes"
+import { Effect, ParseResult, Schema, Stream } from "effect"
+import { ArrayFormatter } from "effect/ParseResult"
+import { AppPaths } from "./app-paths.js"
+
+type ThemeEnv = FileSystem.FileSystem | Path.Path | AppPaths
+
+/**
+ * How long to wait after a filesystem event before re-reading the directory.
+ *
+ * Editors do not write a file once. Save in VS Code and you get a rename, a
+ * write and a chmod within a few milliseconds; some editors write to a temp
+ * file and swap. Without a debounce the app repaints three times per save, and
+ * at least one of those reads catches the file mid-write and reports it as
+ * malformed — so the user sees their own valid theme flash an error at them
+ * every time they hit save.
+ */
+const WATCH_DEBOUNCE_MS = 150
+
+const summaryOf = (
+  id: string,
+  theme: VsCodeTheme,
+  source: "builtin" | "user",
+  path?: string
+): ThemeSummary => ({
+  id,
+  name: theme.name,
+  kind: normalizeThemeKind(theme.type),
+  source,
+  ...(path ? { path } : {}),
+  tokens: toTokens(theme)
+})
+
+export class ThemeService extends Effect.Service<ThemeService>()("@starbase/ThemeService", {
+  accessors: true,
+  sync: () => {
+    const themesDir = Effect.gen(function* () {
+      const paths = yield* AppPaths
+      return paths.themesDir
+    })
+
+    const fileFor = (id: string): Effect.Effect<string, never, Path.Path | AppPaths> =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path
+        return path.join(yield* themesDir, `${id}.json`)
+      })
+
+    /**
+     * Every `.json` under the themes dir, decoded.
+     *
+     * A missing directory is not an error — it is the normal state until the
+     * first duplicate or import, and creating it eagerly on every list would
+     * mean the app writes to disk just for opening a settings tab.
+     */
+    const readUserThemes = (): Effect.Effect<
+      { themes: ReadonlyArray<ThemeSummary>; skipped: ReadonlyArray<ThemeLoadFailure> },
+      never,
+      ThemeEnv
+    > =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const dir = yield* themesDir
+
+        const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
+        if (!exists) return { themes: [], skipped: [] }
+
+        const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [] as Array<string>))
+        const themes: Array<ThemeSummary> = []
+        const skipped: Array<ThemeLoadFailure> = []
+
+        for (const entry of entries) {
+          if (!entry.endsWith(".json")) continue
+          const file = path.join(dir, entry)
+          const id = entry.slice(0, -".json".length)
+
+          const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => null))
+          if (raw === null) {
+            skipped.push({ path: file, message: "Could not be read" })
+            continue
+          }
+
+          const decoded = yield* Schema.decodeUnknown(Schema.parseJson(VsCodeThemeSchema))(raw).pipe(
+            Effect.either
+          )
+          if (decoded._tag === "Left") {
+            skipped.push({ path: file, message: describeDecodeFailure(decoded.left) })
+            continue
+          }
+
+          // The fold can itself reject a theme whose colours are unparseable in
+          // a way the schema allows, so it is inside the guarded region too — a
+          // thrown mapper must degrade to "this one file is skipped", not to a
+          // settings screen that renders nothing.
+          const summary = yield* Effect.try(() => summaryOf(id, decoded.right, "user", file)).pipe(
+            Effect.either
+          )
+          if (summary._tag === "Left") {
+            skipped.push({ path: file, message: "Colours could not be resolved" })
+            continue
+          }
+          themes.push(summary.right)
+        }
+
+        return { themes, skipped }
+      })
+
+    /**
+     * Everything installed: the bundled presets, then user files, with a user
+     * file replacing a built-in of the same id IN PLACE.
+     *
+     * In place, not appended, because the presets are ordered deliberately (see
+     * `BUILTIN_THEMES`) and a locally-corrected Monokai should stay where
+     * Monokai was rather than jumping to the end of the grid.
+     */
+    const list = (): Effect.Effect<ThemeCatalog, never, ThemeEnv> =>
+      Effect.gen(function* () {
+        const { themes: userThemes, skipped } = yield* readUserThemes()
+        const byId = new Map(userThemes.map((t) => [t.id, t]))
+
+        const merged: Array<ThemeSummary> = []
+        for (const builtin of BUILTIN_THEMES) {
+          const shadowing = byId.get(builtin.id)
+          if (shadowing) {
+            merged.push(shadowing)
+            byId.delete(builtin.id)
+          } else {
+            merged.push(summaryOf(builtin.id, builtin.theme, "builtin"))
+          }
+        }
+        // Whatever is left is genuinely new, and goes after the presets.
+        merged.push(...byId.values())
+
+        return { themes: merged, skipped }
+      })
+
+    /** The raw theme file for `id`, user copy first. Null when unknown. */
+    const get = (id: string): Effect.Effect<VsCodeTheme | null, never, ThemeEnv> =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const file = yield* fileFor(id)
+        const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => null))
+        if (raw !== null) {
+          const decoded = yield* Schema.decodeUnknown(Schema.parseJson(VsCodeThemeSchema))(raw).pipe(
+            Effect.orElseSucceed(() => null)
+          )
+          if (decoded) return decoded
+        }
+        return findBuiltinTheme(id)?.theme ?? null
+      })
+
+    /**
+     * Resolve the theme to actually render, given a possibly-stale config.
+     *
+     * Always succeeds. The active id can name a theme the user has since
+     * deleted, or a file that has become malformed, and neither is a reason to
+     * launch into an unstyled window — so both fall back to One Dark Pro, which
+     * is bundled and therefore always resolvable.
+     */
+    const resolve = (
+      id: string | undefined
+    ): Effect.Effect<{ id: string; theme: VsCodeTheme; fellBack: boolean }, never, ThemeEnv> =>
+      Effect.gen(function* () {
+        const wanted = id ?? DEFAULT_THEME_ID
+        const found = yield* get(wanted)
+        if (found) return { id: wanted, theme: found, fellBack: false }
+
+        const fallback = findBuiltinTheme(DEFAULT_THEME_ID)!
+        return { id: fallback.id, theme: fallback.theme, fellBack: wanted !== DEFAULT_THEME_ID }
+      })
+
+    /**
+     * Write a user theme. Refuses built-in ids.
+     *
+     * Serialised with two-space indent rather than minified because the file is
+     * meant to be hand-edited — that is half the point of it being a file — and
+     * a 900-key colour table on one line is not.
+     */
+    const save = (id: string, theme: VsCodeTheme): Effect.Effect<ThemeSummary, ThemeError, ThemeEnv> =>
+      Effect.gen(function* () {
+        if (BUILTIN_THEME_IDS.includes(id)) {
+          return yield* Effect.fail(
+            new ThemeError({
+              message: `"${theme.name}" is a built-in theme. Duplicate it before editing.`,
+              themeId: id
+            })
+          )
+        }
+
+        const fs = yield* FileSystem.FileSystem
+        const dir = yield* themesDir
+        const file = yield* fileFor(id)
+
+        const encoded = yield* Schema.encode(VsCodeThemeSchema)(theme).pipe(
+          Effect.mapError(
+            (cause) => new ThemeError({ message: "Theme is not valid", themeId: id, cause })
+          )
+        )
+
+        yield* fs
+          .makeDirectory(dir, { recursive: true })
+          .pipe(
+            Effect.mapError(
+              (cause) => new ThemeError({ message: "Could not create ~/starbase/themes", themeId: id, cause })
+            )
+          )
+        yield* fs
+          .writeFileString(file, `${JSON.stringify(encoded, null, 2)}\n`)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ThemeError({ message: "Could not write the theme file", themeId: id, cause })
+            )
+          )
+
+        return summaryOf(id, theme, "user", file)
+      })
+
+    /** Remove a user theme. Refuses built-ins; a missing file is not an error. */
+    const remove = (id: string): Effect.Effect<void, ThemeError, ThemeEnv> =>
+      Effect.gen(function* () {
+        if (BUILTIN_THEME_IDS.includes(id)) {
+          return yield* Effect.fail(
+            new ThemeError({ message: "Built-in themes cannot be deleted.", themeId: id })
+          )
+        }
+        const fs = yield* FileSystem.FileSystem
+        const file = yield* fileFor(id)
+        // Already gone is the outcome the caller asked for.
+        yield* fs.remove(file).pipe(Effect.orElseSucceed(() => undefined))
+      })
+
+    /**
+     * Copy any theme — built-in or user — to a new, editable user theme.
+     *
+     * This is the ONLY path from "I like this but…" to an editable file, since
+     * built-ins refuse writes. The id is derived from the new name and then
+     * uniquified, so the file at `~/starbase/themes/<id>.json` is guessable
+     * from the picker rather than being a random string.
+     */
+    const duplicate = (
+      id: string,
+      name?: string
+    ): Effect.Effect<ThemeSummary, ThemeError, ThemeEnv> =>
+      Effect.gen(function* () {
+        const source = yield* get(id)
+        if (!source) {
+          return yield* Effect.fail(
+            new ThemeError({ message: "That theme no longer exists.", themeId: id })
+          )
+        }
+
+        const newName = name ?? `${source.name} (Copy)`
+        const taken = new Set([
+          ...BUILTIN_THEME_IDS,
+          ...(yield* readUserThemes()).themes.map((t) => t.id)
+        ])
+
+        const base = themeIdFromName(newName)
+        let candidate = base
+        for (let n = 2; taken.has(candidate); n++) candidate = `${base}-${n}`
+
+        return yield* save(candidate, { ...source, name: newName })
+      })
+
+    /**
+     * Import pasted VS Code theme JSON.
+     *
+     * The decode failure is surfaced with the offending path rather than folded
+     * to "invalid theme", because the realistic input here is a theme someone
+     * copied out of a marketplace extension and the realistic failure is one
+     * bad key in nine hundred. "Invalid theme" leaves them nothing to fix.
+     */
+    const importJson = (
+      json: string,
+      name?: string
+    ): Effect.Effect<ThemeSummary, ThemeError, ThemeEnv> =>
+      Effect.gen(function* () {
+        const decoded = yield* Schema.decodeUnknown(Schema.parseJson(VsCodeThemeSchema))(json).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ThemeError({ message: `Not a VS Code theme: ${describeDecodeFailure(cause)}`, cause })
+          )
+        )
+
+        const theme = name ? { ...decoded, name } : decoded
+        const taken = new Set([
+          ...BUILTIN_THEME_IDS,
+          ...(yield* readUserThemes()).themes.map((t) => t.id)
+        ])
+        const base = themeIdFromName(theme.name)
+        let candidate = base
+        for (let n = 2; taken.has(candidate); n++) candidate = `${base}-${n}`
+
+        return yield* save(candidate, theme)
+      })
+
+    /**
+     * Re-emit the catalog whenever the themes directory changes on disk.
+     *
+     * The stream carries the whole catalog rather than a per-file delta. A
+     * delta would be smaller, but the consumer is a settings grid that renders
+     * the full list and a provider that needs to know whether the ACTIVE theme
+     * just changed — both of which would have to reconstruct the whole list
+     * from deltas anyway, and would drift out of sync the first time an event
+     * was missed.
+     *
+     * Missing directories are watched for creation rather than treated as an
+     * error, so the first `duplicate` — which creates the directory — shows up
+     * live instead of needing a restart.
+     *
+     * **Consume this with `Stream.unwrap(Effect.map(ThemeService, (t) =>
+     * t.watch()))`, never through the generated accessor.** An `Effect` is
+     * itself a `Stream` of one element, so `ThemeService.watch()` —
+     * `Effect<Stream<ThemeCatalog>>` — type-checks wherever a
+     * `Stream<ThemeCatalog>` is expected and silently produces a stream whose
+     * one element is the real stream. Nothing fails; the catalog just never
+     * arrives. `Review.watch` in `main/rpc.ts` has the same shape for the same
+     * reason.
+     */
+    const watch = (): Stream.Stream<ThemeCatalog, never, ThemeEnv> =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const dir = yield* themesDir
+
+          yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orElseSucceed(() => undefined))
+
+          return fs.watch(dir).pipe(
+            // Editors save a file two or three times in a handful of
+            // milliseconds. Without this the app repaints per event and one of
+            // those reads catches the file mid-write, so a valid theme flashes
+            // an error on every save.
+            Stream.debounce(WATCH_DEBOUNCE_MS),
+            Stream.mapEffect(() => list()),
+            // A watcher that dies takes live-reload with it silently. Ending
+            // the stream instead leaves the app fully usable, just without
+            // external-edit pickup until the next launch.
+            Stream.catchAll(() => Stream.empty)
+          )
+        })
+      )
+
+    return { list, get, resolve, save, remove, duplicate, importJson, watch }
+  }
+}) {}
+
+/**
+ * Turn a `ParseError` into something an operator can act on.
+ *
+ * The realistic input here is a theme copied out of a marketplace extension and
+ * the realistic failure is one bad key in nine hundred, so the message has to
+ * name the key.
+ *
+ * Effect's default `Error.message` cannot: it leads with the full expected
+ * schema signature, which for `VsCodeTheme` is a 400-character type expression.
+ * Truncating that gives every failure the identical, useless prefix
+ * `(parseJson <-> { readonly name: string; readonly type: "dark" | …` — a theme
+ * missing `type` and a theme with a numeric colour produce byte-identical
+ * errors. `ArrayFormatter` instead yields one entry per issue with a structured
+ * `path`, which is the part worth showing.
+ *
+ * Capped at three issues because a truly wrong file (someone pasted a
+ * `package.json`) produces dozens, and a wall of them is as unactionable as
+ * none.
+ */
+const describeDecodeFailure = (cause: unknown): string => {
+  if (ParseResult.isParseError(cause)) {
+    const issues = ArrayFormatter.formatErrorSync(cause)
+    const described = issues.slice(0, 3).map((issue) => {
+      const where = issue.path.length > 0 ? issue.path.join(".") : "the file"
+      return `${where}: ${issue.message}`
+    })
+    if (described.length > 0) {
+      const more = issues.length > described.length ? ` (+${issues.length - described.length} more)` : ""
+      return `${described.join("; ")}${more}`.slice(0, 240)
+    }
+  }
+  const text = cause instanceof Error ? cause.message : String(cause)
+  return (text.split("\n").find((line) => line.trim().length > 0) ?? "unrecognised shape").trim().slice(0, 240)
+}

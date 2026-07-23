@@ -11,8 +11,8 @@ const badge = cva(
   {
     variants: {
       tone: {
-        count: "bg-white/5 text-muted-foreground",
-        neutral: "bg-white/5 text-text",
+        count: "bg-hover text-muted-foreground",
+        neutral: "bg-hover text-text",
         blue: "bg-blue/12 text-blue",
         green: "bg-green/[0.13] text-green",
         yellow: "bg-yellow/12 text-yellow",

@@ -133,3 +133,5 @@ export * from "./screens/login-screen.js"
 
 // Seed data
 export * from "./seed.js"
+export * from "./theme-provider.js"
+export * from "./composites/themes-settings.js"

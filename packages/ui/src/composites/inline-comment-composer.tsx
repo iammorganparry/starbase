@@ -37,7 +37,7 @@ export function InlineCommentComposer({
   const range = endLine > startLine ? `L${startLine}–${endLine}` : `L${startLine}`
 
   return (
-    <div className="max-w-[560px] overflow-hidden rounded-lg border border-blue/45 bg-panel shadow-[0_12px_30px_-14px_rgba(0,0,0,0.7)]">
+    <div className="max-w-[560px] overflow-hidden rounded-lg border border-blue/45 bg-panel shadow-[0_12px_30px_-14px_var(--sb-shadow-strong)]">
       <div className="flex items-center gap-2 border-b border-hairline bg-blue/[0.06] px-[11px] py-2">
         <span className="text-[11.5px] font-semibold text-text-bright">Comment on</span>
         <span className="rounded-md bg-blue/[0.14] px-2 py-0.5 font-mono text-[10.5px] text-blue">

@@ -8,6 +8,12 @@ declare const __APP_VERSION__: string
 // shuttles opaque RPC frames — no business logic lives here. See
 // `src/preload/index.ts` and `src/renderer/rpc-client.ts`.
 interface StarbaseBridge {
+  /**
+   * The active theme's `:root` block, fetched synchronously by the preload so
+   * `main.tsx` can inject it before the document's first paint. Empty string
+   * when main had no answer — the fallback in `globals.css` then applies.
+   */
+  readonly initialThemeCss: string
   /** Send one client→server RPC frame to the main process. */
   readonly send: (data: unknown) => void
   /** Subscribe to server→client RPC frames. Returns an unsubscribe fn. */

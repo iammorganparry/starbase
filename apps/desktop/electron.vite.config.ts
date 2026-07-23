@@ -22,6 +22,7 @@ const workspacePackages = [
   "@starbase/core",
   "@starbase/contracts",
   "@starbase/cli-adapters",
+  "@starbase/themes",
   "@starbase/ui"
 ]
 

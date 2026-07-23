@@ -164,7 +164,7 @@ export function SettingsDialog({
                 <>
                   Sign in from your terminal, then Recheck. Run:
                   <span className="mt-2 flex items-center gap-2">
-                    <code className="flex-1 rounded-md bg-black/30 px-2 py-1 font-mono text-[11.5px] text-text">
+                    <code className="flex-1 rounded-md bg-canvas px-2 py-1 font-mono text-[11.5px] text-text">
                       {LOGIN_CMD}
                     </code>
                     <button

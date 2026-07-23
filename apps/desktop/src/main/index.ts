@@ -26,6 +26,7 @@ import {
   parseAuthCallback,
   registerProtocolClient
 } from "./deep-link.js"
+import { bootBackgroundColor, registerBootThemeChannel, resolveBootTheme } from "./boot-theme.js"
 import { runtime } from "./runtime.js"
 import { initAutoUpdater } from "./updater.js"
 
@@ -111,6 +112,16 @@ if (!gotPrimaryLock) {
     focusMainWindow()
   })
 
+  /**
+   * The window's pre-paint background, resolved from the active theme.
+   *
+   * Seeded with the One Dark canvas so a window created before the theme has
+   * resolved still looks like the app rather than like a white rectangle. In
+   * practice `whenReady` resolves the theme before the first `createWindow`;
+   * this only covers the `activate` path on macOS if that somehow races.
+   */
+  let themeBackgroundColor = "#16181d"
+
   const createWindow = () => {
     const window = new BrowserWindow({
       width: 1320,
@@ -124,7 +135,10 @@ if (!gotPrimaryLock) {
       minWidth: 900,
       minHeight: 600,
       show: false,
-      backgroundColor: "#16181d",
+      // Electron paints this before any HTML exists. Hardcoding the One Dark
+      // canvas here meant a light theme flashed dark on every single launch,
+      // before the document had a chance to say otherwise.
+      backgroundColor: themeBackgroundColor,
       titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
       webPreferences: {
         preload: join(import.meta.dirname, "../preload/index.mjs"),
@@ -174,6 +188,15 @@ if (!gotPrimaryLock) {
     await runtime.runPromise(Effect.void)
     // Not awaited — the catalogue warms in the background while the window opens.
     void runtime.runPromise(prefetchModels)
+
+    // Themes, before the window. Both of these have to happen ahead of
+    // `createWindow` or the first frame is painted in the wrong theme: the
+    // background colour is read by `BrowserWindow` at construction, and the
+    // preload pulls the stylesheet synchronously as the document starts. Never
+    // throws — a failure here resolves to One Dark Pro. See `boot-theme.ts`.
+    registerBootThemeChannel()
+    themeBackgroundColor = bootBackgroundColor(await resolveBootTheme())
+
     createWindow()
 
     // Self-update only makes sense in a packaged build (dev has no update feed).

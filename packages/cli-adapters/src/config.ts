@@ -7,7 +7,7 @@ import type {
   NotificationsConfig,
   ProviderConfig
 } from "@starbase/core"
-import { WorkspaceConfig } from "@starbase/core"
+import { DEFAULT_THEME_ID, WorkspaceConfig } from "@starbase/core"
 import { ConfigError } from "@starbase/core"
 import { FileSystem } from "@effect/platform"
 import { Effect, Schema } from "effect"
@@ -71,6 +71,7 @@ export class ConfigService extends Effect.Service<ConfigService>()(
             // `false` is a real setting and must survive an unrelated write.
             ...(existing?.planAutoRun !== undefined ? { planAutoRun: existing.planAutoRun } : {}),
             ...(existing?.adhdMode !== undefined ? { adhdMode: existing.adhdMode } : {}),
+            ...(existing?.theme ? { theme: existing.theme } : {}),
             // MANDATORY: omit a section here and every unrelated save silently
             // drops it, because `patch` is a whole-object read-modify-write.
             ...patch
@@ -117,6 +118,40 @@ export class ConfigService extends Effect.Service<ConfigService>()(
        */
       const setDefaultCli = (defaultCli: CliKind) => patch({ defaultCli })
 
+      /**
+       * Switch the active colour theme, preserving any `colorCustomizations`
+       * the operator has layered on top.
+       *
+       * Preserving rather than clearing because the overrides are keyed by VS
+       * Code colour name, not by theme — "I always want a louder focus ring"
+       * survives trying out a different theme, which is the whole reason the
+       * override layer is separate from the theme file in the first place.
+       */
+      const setActiveTheme = (activeId: string) =>
+        Effect.gen(function* () {
+          const existing = yield* get()
+          return yield* patch({
+            theme: {
+              activeId,
+              ...(existing?.theme?.colorCustomizations
+                ? { colorCustomizations: existing.theme.colorCustomizations }
+                : {})
+            }
+          })
+        })
+
+      /** Replace the override layer wholesale, keeping the active theme id. */
+      const setThemeCustomizations = (colorCustomizations: Record<string, string>) =>
+        Effect.gen(function* () {
+          const existing = yield* get()
+          return yield* patch({
+            theme: {
+              activeId: existing?.theme?.activeId ?? DEFAULT_THEME_ID,
+              colorCustomizations
+            }
+          })
+        })
+
       const setProvider = (cli: CliKind, provider: ProviderConfig) =>
         Effect.gen(function* () {
           const existing = yield* get()
@@ -157,7 +192,9 @@ export class ConfigService extends Effect.Service<ConfigService>()(
         setDefaultCli,
         setProvider,
         setOrchestrator,
-        setGigaplanRouting
+        setGigaplanRouting,
+        setActiveTheme,
+        setThemeCustomizations
       }
     }
   }

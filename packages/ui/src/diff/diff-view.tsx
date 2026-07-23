@@ -186,7 +186,7 @@ export function DiffView({ rows, patch, className, overscan = 24, actions }: Dif
 
       {/* Floating action bar for the current selection. */}
       {actions && range && (
-        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 border-t border-hairline bg-panel p-2.5 shadow-[0_-8px_20px_-12px_rgba(0,0,0,0.6)]">
+        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 border-t border-hairline bg-panel p-2.5 shadow-[0_-8px_20px_-12px_var(--sb-shadow-strong)]">
           <div className="flex items-center gap-2 text-[11px]">
             <span className="truncate font-mono text-blue">
               {range.path.split("/").pop()} L{range.startLine}
@@ -286,9 +286,9 @@ function DiffRowView({
   const bg = selected
     ? "bg-blue/[0.14]"
     : row.type === "add"
-      ? "bg-green/[0.13]"
+      ? "bg-diff-add"
       : row.type === "del"
-        ? "bg-red/[0.12]"
+        ? "bg-diff-del"
         : ""
   // The SIGN is green/red. The code is not — see the same note in
   // `review-diff.tsx`. Add/remove is carried by the background wash so the text
@@ -297,9 +297,9 @@ function DiffRowView({
   const gutter = selected
     ? "text-blue"
     : row.type === "add"
-      ? "text-[#4e6b45]"
+      ? "text-diff-add-fg"
       : row.type === "del"
-        ? "text-[#6b4a4e]"
+        ? "text-diff-del-fg"
         : "text-line-strong"
   const sign = row.type === "add" ? "+" : row.type === "del" ? "-" : " "
   return (

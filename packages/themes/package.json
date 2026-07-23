@@ -1,0 +1,22 @@
+{
+  "name": "@starbase/themes",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor-themes.mjs",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@starbase/core": "workspace:*",
+    "effect": "^3.21.4"
+  },
+  "devDependencies": {
+    "@shikijs/themes": "^4.3.1",
+    "@starbase/tsconfig": "workspace:*"
+  }
+}

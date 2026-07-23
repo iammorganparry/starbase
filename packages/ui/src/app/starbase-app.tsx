@@ -35,6 +35,7 @@ import { AppShell } from "./app-shell.js"
 import { NewSessionDialog } from "../composites/new-session-dialog.js"
 import { UsageModal } from "../composites/usage-modal.js"
 import { SettingsView } from "../composites/settings-view.js"
+import type { ThemesSettingsProps } from "../composites/themes-settings.js"
 import { type ConversationPaneCtx, SessionConversation } from "../screens/session-conversation.js"
 import { useSplitLayout } from "./use-split-layout.js"
 import { MAX_PANES } from "./split-layout.js"
@@ -117,6 +118,12 @@ export interface StarbaseAppProps {
   /** Whether every agent turn is shaped for an ADHD reader; absent means off. */
   adhdMode?: boolean | null
   onSaveAdhdMode?: (adhdMode: boolean) => Promise<void> | void
+  /**
+   * Everything Settings › Themes needs. Optional so the Storybook shell and the
+   * component gallery can mount the app without a theme catalog; absent renders
+   * the section's stub.
+   */
+  themes?: ThemesSettingsProps
   /** Re-run `gh auth status` (the settings "Recheck" button); may be async. */
   onRecheckGh?: () => Promise<void> | void
   /** Persisted per-CLI provider defaults (Settings · Providers view). */
@@ -263,6 +270,7 @@ export function StarbaseApp({
   planAutoRun,
   onSavePlanAutoRun,
   adhdMode,
+  themes,
   onSaveAdhdMode,
   onRecheckGh,
   providersConfig,
@@ -623,6 +631,7 @@ export function StarbaseApp({
               onSavePlanAutoRun={onSavePlanAutoRun}
               adhdMode={adhdMode}
               onSaveAdhdMode={onSaveAdhdMode}
+              themes={themes}
               onClose={() => setSettingsOpen(false)}
             />
           ) : undefined

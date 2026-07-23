@@ -54,6 +54,9 @@ import type {
   Skill,
   StreamEvent,
   TerminalChunk,
+  ThemeCatalog,
+  ThemeSummary,
+  VsCodeTheme,
   TerminalInfo,
   ContextConfig,
   ContextSnapshot,
@@ -588,6 +591,55 @@ export const rpc = {
       fiber = runtime.runFork(
         client.Terminal.attach({ terminalId }).pipe(
           Stream.runForEach((chunk) => Effect.sync(() => onChunk(chunk)))
+        )
+      )
+    })
+    return () => {
+      cancelled = true
+      if (fiber) runtime.runFork(Fiber.interrupt(fiber))
+    }
+  },
+
+  // ── Themes ─────────────────────────────────────────────────────────────────
+
+  /** Bundled presets plus `~/starbase/themes`, each with resolved tokens. */
+  themeList: (): Promise<ThemeCatalog> => run((c) => c.Theme.list()),
+
+  /** The raw VS Code JSON for a theme — what the editor loads. */
+  themeGet: (id: string): Promise<VsCodeTheme | null> => run((c) => c.Theme.get({ id })),
+
+  themeSave: (id: string, theme: VsCodeTheme): Promise<ThemeSummary> =>
+    run((c) => c.Theme.save({ id, theme })),
+
+  themeDelete: (id: string): Promise<void> => run((c) => c.Theme.delete({ id })),
+
+  /** Copy a theme to an editable user theme — the only way to edit a built-in. */
+  themeDuplicate: (id: string, name?: string): Promise<ThemeSummary> =>
+    run((c) => c.Theme.duplicate({ id, name })),
+
+  themeImport: (json: string, name?: string): Promise<ThemeSummary> =>
+    run((c) => c.Theme.import({ json, name })),
+
+  themeSetActive: (id: string): Promise<WorkspaceConfig> => run((c) => c.Theme.setActive({ id })),
+
+  /** Reveal a user theme's file in Finder/Explorer. Ignored for other paths. */
+  themeReveal: (path: string): Promise<void> => run((c) => c.Theme.reveal({ path })),
+
+  themeSetCustomizations: (colors: Record<string, string>): Promise<WorkspaceConfig> =>
+    run((c) => c.Theme.setCustomizations({ colors })),
+
+  /**
+   * Subscribe to `~/starbase/themes` changing on disk, so a theme edited in the
+   * operator's own editor repaints the app live. Returns an unsubscribe.
+   */
+  themeWatch: (onCatalog: (catalog: ThemeCatalog) => void): (() => void) => {
+    let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
+    let cancelled = false
+    void clientPromise.then((client) => {
+      if (cancelled) return
+      fiber = runtime.runFork(
+        client.Theme.watch().pipe(
+          Stream.runForEach((catalog) => Effect.sync(() => onCatalog(catalog)))
         )
       )
     })

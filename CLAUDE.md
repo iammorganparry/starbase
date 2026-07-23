@@ -56,7 +56,8 @@ Copy `apps/server/.env.example` → `apps/server/.env` for local dev; the server
 - `packages/core` — domain types and errors, expressed as **Effect `Schema`** (`CliKind`, `Session`, `AuthSession`, tagged errors). No runtime logic.
 - `packages/contracts` — the **RPC contract** (`StarbaseRpcs`, an `@effect/rpc` `RpcGroup`). The single source of truth for every desktop main↔renderer call.
 - `packages/cli-adapters` — the desktop **backend logic** as **Effect services** (`Effect.Service`): `SessionStore`, `AgentRunner`, `WorkspaceService` (git/worktrees), `TerminalService`, `GhService`, `AuthService`, `DiscoveryService`, etc. These run in the Electron **main** process.
-- `packages/ui` — React component library (Tailwind, **One Dark Pro** palette, Storybook). Consumed by the renderer.
+- `packages/themes` — the **theme engine**: nine vendored VS Code themes, the fold from a VS Code theme JSON to Starbase's `ThemeTokens`, and the colour maths. Pure — no Effect, no filesystem, no React — because main, `cli-adapters` and the renderer all import it.
+- `packages/ui` — React component library (Tailwind, **themeable** — One Dark Pro is the default and the fallback, Storybook). Consumed by the renderer.
 - `packages/tsconfig` — shared tsconfig presets: `base.json`, `node.json`, `react.json` (the last adds `jsx` + DOM/React types).
 
 ### Workspace packages ship raw TypeScript (important)
@@ -76,9 +77,53 @@ The Electron app is **main / preload / renderer**. Instead of ad-hoc IPC, it run
 
 Renderer UI state is driven by **XState** machines (e.g. `authMachine`, `appMachine`); the app is gated on `authMachine` reaching `signedIn`.
 
+### Theming
+
+The app ships **VS Code-compatible themes**: nine built in, and any VS Code theme
+JSON can be dropped into `~/starbase/themes/*.json` or pasted into Settings ›
+Themes. That format is the *stored* format on purpose — themes are a thing people
+already own, and a Starbase-shaped file would mean every one needs translating.
+
+**Never hardcode a colour in a component.** Every colour is a `--sb-*` custom
+property re-exported to Tailwind (`bg-panel`, `text-blue`, `border-line`), and a
+literal hex is invisible to the theme system — it survives a theme switch
+unchanged, which on a light theme means white text on white. If the colour you
+need has no token, add one.
+
+**Adding a token is three edits, in this order:**
+
+1. `ThemeTokens` **and** `CSS_VAR_BY_TOKEN` in `packages/core/src/theme.ts`
+2. the `:root` fallback **and** the `@theme inline` mapping in `packages/ui/src/globals.css`
+3. the fallback chain in `packages/themes/src/map.ts`
+
+Miss (3) and the token is `undefined` for every theme but the default. Miss (2)
+and no Tailwind utility exists. Only a missed (1) fails loudly.
+
+Other things worth knowing before touching this:
+
+- **One Dark Pro is a pixel-exact no-op.** It is `DEFAULT_THEME_ID`, what every
+  pre-theming config resolves to, and what every failure falls back to — so a
+  test pins all 26 of its tokens to the literals in `globals.css`. If applying
+  the default changed anything, "theming shipped" and "the theme failed to load"
+  would look identical.
+- **Themes are untrusted input on a path to a stylesheet.** Every token is
+  interpolated into `:root { --sb-x: … }`, and that text is inlined into a
+  `<style>` in the boot HTML. The mapper never passes a theme's string through —
+  every value is re-emitted from parsed components.
+- **`map.ts` has a second pass (`ramp.ts`) and it is not optional.** Real themes
+  invert or collapse the planes Starbase needs separated: Monokai puts its
+  selection colour in `panel.background`, Light Modern gives `foreground` and
+  `descriptionForeground` the same value.
+- **The first paint is main's job**, not the renderer's — `main/boot-theme.ts`
+  plus a synchronous preload fetch. By the time React could ask, the browser has
+  already painted.
+- Re-vendor the built-ins with `pnpm --filter @starbase/themes vendor`. The
+  script flattens VS Code's `include` chains; without that, `dark_modern.json`
+  resolves to zero syntax rules and renders as grey mush with no error.
+
 ### Persistence
 
-Desktop state is **JSON files under `~/starbase`** (no ORM) — see `apps/desktop/src/main/app-paths.ts`: `config.json`, `sessions.json`, `worktrees/`, `transcripts/`, `.starbase/` (plans), `auth.enc` (the bearer token via `SecretStore`). **`STARBASE_HOME` overrides the root** — the e2e suite points it at a throwaway dir so tests never touch the developer's real `~/starbase`. The auth server's own state lives in **Postgres** (Drizzle schema in `apps/server/src/db/schema.ts`), separate from the desktop's JSON store.
+Desktop state is **JSON files under `~/starbase`** (no ORM) — see `apps/desktop/src/main/app-paths.ts`: `config.json`, `sessions.json`, `worktrees/`, `transcripts/`, `themes/` (user colour themes, watched for live reload), `.starbase/` (plans), `auth.enc` (the bearer token via `SecretStore`). **`STARBASE_HOME` overrides the root** — the e2e suite points it at a throwaway dir so tests never touch the developer's real `~/starbase`. The auth server's own state lives in **Postgres** (Drizzle schema in `apps/server/src/db/schema.ts`), separate from the desktop's JSON store.
 
 ### Auth flow
 

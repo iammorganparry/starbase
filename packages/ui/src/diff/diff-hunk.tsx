@@ -34,9 +34,9 @@ export function DiffHunk({
       </div>
       <div className="bg-editor font-mono text-[11px] leading-[1.85]">
         {lines.map((line, i) => {
-          const bg = line.type === "add" ? "bg-green/[0.13]" : line.type === "del" ? "bg-red/[0.12]" : ""
+          const bg = line.type === "add" ? "bg-diff-add" : line.type === "del" ? "bg-diff-del" : ""
           const fg = line.type === "add" ? "text-green" : line.type === "del" ? "text-red" : "text-muted-foreground"
-          const gutter = line.type === "add" ? "text-[#4e6b45]" : line.type === "del" ? "text-[#6b4a4e]" : "text-line-strong"
+          const gutter = line.type === "add" ? "text-diff-add-fg" : line.type === "del" ? "text-diff-del-fg" : "text-line-strong"
           const sign = line.type === "add" ? "+ " : line.type === "del" ? "- " : "  "
           return (
             <div key={i} className={cn("flex", bg)}>

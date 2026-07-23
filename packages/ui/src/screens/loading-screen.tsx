@@ -21,15 +21,16 @@ interface Star {
   readonly delay: string
 }
 
+/* Tokens, not hexes — the sky inverts with the theme, so the stars must too. */
 const STARS: ReadonlyArray<Star> = [
-  { left: "12%", top: "22%", size: 2, color: "#d7dae0", dur: "3s", delay: "0.2s" },
-  { left: "28%", top: "14%", size: 2, color: "#61afef", dur: "2.4s", delay: "0.9s" },
-  { left: "68%", top: "18%", size: 2, color: "#d7dae0", dur: "3.4s", delay: "0.5s" },
-  { left: "82%", top: "28%", size: 3, color: "#56b6c2", dur: "2.8s", delay: "1.4s" },
-  { left: "44%", top: "9%", size: 2, color: "#d7dae0", dur: "3.1s", delay: "0.7s" },
-  { left: "56%", top: "34%", size: 2, color: "#828997", dur: "2.2s", delay: "1.1s" },
-  { left: "91%", top: "12%", size: 2, color: "#828997", dur: "2.6s", delay: "0s" },
-  { left: "7%", top: "44%", size: 2, color: "#d7dae0", dur: "3.6s", delay: "1.8s" }
+  { left: "12%", top: "22%", size: 2, color: "var(--sb-text-bright)", dur: "3s", delay: "0.2s" },
+  { left: "28%", top: "14%", size: 2, color: "var(--sb-blue)", dur: "2.4s", delay: "0.9s" },
+  { left: "68%", top: "18%", size: 2, color: "var(--sb-text-bright)", dur: "3.4s", delay: "0.5s" },
+  { left: "82%", top: "28%", size: 3, color: "var(--sb-cyan)", dur: "2.8s", delay: "1.4s" },
+  { left: "44%", top: "9%", size: 2, color: "var(--sb-text-bright)", dur: "3.1s", delay: "0.7s" },
+  { left: "56%", top: "34%", size: 2, color: "var(--sb-muted)", dur: "2.2s", delay: "1.1s" },
+  { left: "91%", top: "12%", size: 2, color: "var(--sb-muted)", dur: "2.6s", delay: "0s" },
+  { left: "7%", top: "44%", size: 2, color: "var(--sb-text-bright)", dur: "3.6s", delay: "1.8s" }
 ]
 
 interface Streak {
@@ -41,12 +42,18 @@ interface Streak {
   readonly delay: string
 }
 
+/*
+ * `color-mix` rather than an element `opacity`, because `sb-streak` already
+ * animates opacity across the ascent — an inline value would just be overridden
+ * by the keyframes. Mixing toward `transparent` bakes the alpha into the colour
+ * itself, which the animation leaves alone.
+ */
 const STREAKS: ReadonlyArray<Streak> = [
-  { left: "14%", width: 2, height: 44, tint: "rgba(255,255,255,.35)", dur: "1.1s", delay: "0.1s" },
-  { left: "31%", width: 1, height: 60, tint: "rgba(97,175,239,.5)", dur: "0.9s", delay: "0.4s" },
-  { left: "52%", width: 2, height: 36, tint: "rgba(255,255,255,.3)", dur: "1.3s", delay: "0.2s" },
-  { left: "70%", width: 1, height: 52, tint: "rgba(255,255,255,.3)", dur: "1s", delay: "0.6s" },
-  { left: "87%", width: 2, height: 40, tint: "rgba(86,182,194,.45)", dur: "1.2s", delay: "0.3s" }
+  { left: "14%", width: 2, height: 44, tint: "color-mix(in srgb, var(--sb-text-bright) 35%, transparent)", dur: "1.1s", delay: "0.1s" },
+  { left: "31%", width: 1, height: 60, tint: "color-mix(in srgb, var(--sb-blue) 50%, transparent)", dur: "0.9s", delay: "0.4s" },
+  { left: "52%", width: 2, height: 36, tint: "color-mix(in srgb, var(--sb-text-bright) 30%, transparent)", dur: "1.3s", delay: "0.2s" },
+  { left: "70%", width: 1, height: 52, tint: "color-mix(in srgb, var(--sb-text-bright) 30%, transparent)", dur: "1s", delay: "0.6s" },
+  { left: "87%", width: 2, height: 40, tint: "color-mix(in srgb, var(--sb-cyan) 45%, transparent)", dur: "1.2s", delay: "0.3s" }
 ]
 
 export function LoadingScreen() {
@@ -169,8 +176,11 @@ export function LoadingScreen() {
     <div
       className="relative h-full w-full overflow-hidden font-sans"
       style={{
+        // Nebula falloff, in tokens: the lit rim at the bottom out to the
+        // deepest surface the theme has. `canvas` is the darkest token, so the
+        // outer two stops share it and the geometry carries the depth.
         background:
-          "radial-gradient(120% 90% at 50% 118%,#1b2230 0%,#12141a 45%,#0f1115 100%)"
+          "radial-gradient(120% 90% at 50% 118%,var(--sb-sunken) 0%,var(--sb-canvas) 45%,var(--sb-canvas) 100%)"
       }}
     >
       {/* Twinkling stars */}
@@ -205,7 +215,7 @@ export function LoadingScreen() {
               left: s.left,
               width: s.width,
               height: s.height,
-              background: `linear-gradient(rgba(255,255,255,0),${s.tint})`,
+              background: `linear-gradient(transparent,${s.tint})`,
               animation: `sb-streak ${s.dur} linear infinite`,
               animationDelay: s.delay
             }}
@@ -218,8 +228,10 @@ export function LoadingScreen() {
         ref={glow}
         className="absolute bottom-[24%] left-1/2 h-[70px] w-[200px] -translate-x-1/2 rounded-[50%] opacity-25"
         style={{
+          // Exhaust light on the pad. `--sb-orange` rather than a baked flame
+          // hex so the glow keeps whatever warmth the theme calls warm.
           background:
-            "radial-gradient(ellipse at center,rgba(229,136,63,.35),rgba(229,136,63,0) 65%)"
+            "radial-gradient(ellipse at center,color-mix(in srgb, var(--sb-orange) 35%, transparent),transparent 65%)"
         }}
       />
 
@@ -231,11 +243,14 @@ export function LoadingScreen() {
         <div
           ref={trail}
           className="absolute top-[52px] left-[calc(50%+2px)] h-0 w-[10px] -translate-x-1/2 rounded-[6px] opacity-0 [filter:blur(2px)]"
-          style={{ background: "linear-gradient(#ffd696,#e5883f 30%,rgba(229,136,63,0))" }}
+          style={{
+            background:
+              "linear-gradient(var(--sb-yellow),var(--sb-orange) 30%,transparent)"
+          }}
         />
         <div
           ref={shake}
-          className="text-[58px] leading-none [transform:rotate(-45deg)] [filter:drop-shadow(0_5px_14px_rgba(0,0,0,.5))]"
+          className="text-[58px] leading-none [transform:rotate(-45deg)] [filter:drop-shadow(0_5px_14px_var(--sb-shadow))]"
         >
           🚀
         </div>
@@ -278,7 +293,7 @@ export function LoadingScreen() {
             <div
               ref={bar}
               className="h-full w-0 rounded-[3px]"
-              style={{ background: "linear-gradient(90deg,#61afef,#56b6c2)" }}
+              style={{ background: "linear-gradient(90deg,var(--sb-blue),var(--sb-cyan))" }}
             />
           </div>
           <span

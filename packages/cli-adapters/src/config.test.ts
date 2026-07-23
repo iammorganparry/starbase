@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs"
 import { mkdirSync } from "node:fs"
 import { FileSystem } from "@effect/platform"
 import type { GigaplanRoutingConfig } from "@starbase/core"
+import { DEFAULT_THEME_ID } from "@starbase/core"
 import { Effect } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { AppPaths } from "./app-paths.js"
@@ -286,5 +287,54 @@ describe("ConfigService", () => {
     )
     expect(exit._tag).toBe("Success")
     if (exit._tag === "Success") expect(exit.value?.defaultCli).toBe("codex")
+  })
+
+  it("persists the active theme and keeps it across an unrelated save", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setActiveTheme("solarized-light")
+        yield* ConfigService.setLastRepoPath("/repos/widget")
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") expect(exit.value?.theme?.activeId).toBe("solarized-light")
+  })
+
+  /**
+   * Overrides are keyed by VS Code colour name, not by theme, so they are a
+   * standing preference ("I always want a louder focus ring") rather than part
+   * of the theme being tried. Clearing them on every switch would make the
+   * override layer useless the moment you browsed the picker.
+   */
+  it("keeps colour customizations when the active theme changes", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setThemeCustomizations({ focusBorder: "#ff00ff" })
+        yield* ConfigService.setActiveTheme("monokai")
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") {
+      expect(exit.value?.theme?.activeId).toBe("monokai")
+      expect(exit.value?.theme?.colorCustomizations).toEqual({ focusBorder: "#ff00ff" })
+    }
+  })
+
+  /**
+   * Saving overrides before ever picking a theme must not invent an empty
+   * `activeId` — the renderer resolves that id against the catalog, and an
+   * empty string would fall through to the error path on next boot.
+   */
+  it("falls back to the default theme id when overrides are saved first", async () => {
+    const exit = await provided(
+      Effect.gen(function* () {
+        yield* ConfigService.setThemeCustomizations({ "editor.background": "#101010" })
+        return yield* ConfigService.get()
+      })
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag === "Success") expect(exit.value?.theme?.activeId).toBe(DEFAULT_THEME_ID)
   })
 })

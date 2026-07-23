@@ -24,8 +24,11 @@ export function AuthCard({ title, subtitle, children, className }: AuthCardProps
         className
       )}
       style={{
+        // Two accent glows over one lift shadow. `color-mix` rather than a baked
+        // rgba so the halo follows `--sb-blue` — a hardcoded One Dark blue would
+        // still be glowing cornflower on a theme whose accent is green.
         boxShadow:
-          "0 0 64px -14px rgba(97,175,239,0.5),0 0 22px -6px rgba(97,175,239,0.35),0 10px 30px -12px rgba(0,0,0,0.7)"
+          "0 0 64px -14px color-mix(in srgb, var(--sb-blue) 50%, transparent),0 0 22px -6px color-mix(in srgb, var(--sb-blue) 35%, transparent),0 10px 30px -12px var(--sb-shadow-strong)"
       }}
     >
       <div className="mb-4 flex size-[38px] items-center justify-center rounded-md border border-blue/30 bg-blue/10">

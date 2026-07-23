@@ -6,25 +6,54 @@
 @import "katex/dist/katex.min.css";
 
 /*
- * Starbase design system — One Dark Pro, on a shadcn/Tailwind v4 base.
- * The app renders permanently in dark; One Dark values live on :root and are
- * exposed to Tailwind via @theme so components use semantic shadcn tokens
- * (bg-background, text-muted-foreground, border-border, …) AND the brand ramp
- * (bg-panel, text-blue, border-line, …).
+ * Starbase design system — a shadcn/Tailwind v4 base over swappable themes.
+ *
+ * ## This block is the FALLBACK, not the theme
+ *
+ * Every colour below is a `--sb-*` custom property re-exported to Tailwind by
+ * the `@theme inline` block underneath, so components only ever say `bg-panel`
+ * / `text-blue` / `border-line` and never a hex. That indirection is what makes
+ * theming possible at all: `ThemeProvider` (packages/ui/src/theme-provider.tsx)
+ * appends a single `<style id="starbase-theme">` that re-declares these same
+ * properties on `:root`, and the whole app repaints without one component
+ * knowing themes exist.
+ *
+ * The values here are One Dark Pro, which is also `DEFAULT_THEME_ID`. They are
+ * kept in sync with what `@starbase/themes` folds the One Dark Pro preset down
+ * to — a test pins all 26 of them — so applying the default theme is a
+ * pixel-exact no-op and the app is correctly styled during the instant before
+ * the theme sheet is attached.
+ *
+ * ## Adding a token means three edits, in this order
+ *
+ *   1. `ThemeTokens` in `packages/core/src/theme.ts`, plus `CSS_VAR_BY_TOKEN`
+ *   2. here — the fallback value AND the `@theme inline` mapping
+ *   3. the fallback chain in `packages/themes/src/map.ts`
+ *
+ * Miss (3) and the token is `undefined` for every theme but this one. Miss (2)
+ * and no Tailwind utility exists for it. A test in `theme.test.ts` catches a
+ * missed `CSS_VAR_BY_TOKEN` entry; the other two do not fail loudly.
+ *
+ * ## Never hardcode a colour in a component
+ *
+ * A literal hex is invisible to the theme system, so it survives a theme switch
+ * unchanged — which on a light theme means white text on white. If a colour
+ * you need has no token, add one (three edits above) rather than reaching for
+ * an arbitrary value.
  */
 
 :root {
-  /* Surfaces (darkest → lightest) */
-  --sb-border: #181a1f;
-  --sb-panel: #21252b;
+  /* Surfaces (backmost → frontmost on a dark ground) */
+  --sb-canvas: #16181d;
   --sb-sunken: #1e2228;
+  --sb-panel: #21252b;
   --sb-editor: #282c34;
   --sb-surface: #2c313a;
-  --sb-canvas: #16181d;
+  --sb-border: #181a1f;
   --sb-line: #3e4451;
   --sb-line-strong: #4b5263;
 
-  /* Text ramp */
+  /* Text ramp (loudest → quietest) */
   --sb-text-bright: #d7dae0;
   --sb-text-body: #c8ccd4;
   --sb-text: #abb2bf;
@@ -40,7 +69,60 @@
   --sb-cyan: #56b6c2;
   --sb-orange: #d19a66;
 
-  /* shadcn semantic tokens mapped onto One Dark */
+  /*
+   * Effects — translucent ON PURPOSE.
+   *
+   * These are the tokens One Dark never had to name, because an app that only
+   * ever renders dark can hardcode `bg-black/20` for a scrim and be right every
+   * time. On a light theme that same scrim is wrong, and worse, it is wrong in
+   * a way that still looks deliberate.
+   *
+   * They stay translucent rather than being resolved to a hex because each sits
+   * over a surface that is not known in advance: `--sb-hover` lands on rows,
+   * chips, tabs and buttons, which are four different colours. Baking it opaque
+   * would make it correct on exactly one of them.
+   */
+  --sb-overlay: rgb(0 0 0 / 0.55);
+  --sb-shadow: rgb(0 0 0 / 0.45);
+  --sb-shadow-strong: rgb(0 0 0 / 0.62);
+  --sb-selection: rgb(62 68 81 / 0.45);
+  --sb-hover: rgb(255 255 255 / 0.055);
+
+  /*
+   * Diff — a background WASH plus a quiet gutter marker.
+   *
+   * A wash and not a fill: the syntax tokens have to stay readable on top, which
+   * is the entire reason `diff/highlight.ts` exists. The `add`/`del` foregrounds
+   * are deliberately dim — the wash already says "added", so a marker loud
+   * enough to pass a UI-contrast check would compete with the code it annotates.
+   */
+  --sb-diff-add-bg: rgb(152 195 121 / 0.13);
+  --sb-diff-del-bg: rgb(224 108 117 / 0.12);
+  --sb-diff-add-fg: #4e6b45;
+  --sb-diff-del-fg: #6b4a4e;
+
+  /* Chrome */
+  --sb-scrollbar: #3e4451;
+  --sb-scrollbar-hover: #4b5263;
+  --sb-link-hover: #7cc0f5;
+
+  /*
+   * Which ground is active — `dark` | `light` | `high-contrast`.
+   *
+   * `ThemeProvider` also mirrors this onto `documentElement.dataset.themeKind`,
+   * because a custom property cannot be used in a selector. Use the data
+   * attribute (`[data-theme-kind="light"] &`) when you need to BRANCH, and this
+   * var only when you need the value.
+   */
+  --sb-theme-kind: dark;
+  /*
+   * Makes the browser theme its own chrome — form controls, the caret, native
+   * scrollbars. Without it a light theme still gets a dark caret in every input
+   * and a dark native date picker.
+   */
+  color-scheme: dark;
+
+  /* shadcn semantic tokens mapped onto the ramp above */
   --background: var(--sb-editor);
   --foreground: var(--sb-text);
   --card: var(--sb-panel);
@@ -106,6 +188,24 @@
   --color-purple: var(--sb-purple);
   --color-cyan: var(--sb-cyan);
   --color-orange: var(--sb-orange);
+
+  /*
+   * Effects → utilities (bg-overlay, bg-hover, shadow-[…] via var, …).
+   *
+   * These carry their own alpha, so use them BARE — `bg-overlay`, not
+   * `bg-overlay/50`. Tailwind's slash modifier replaces an alpha channel rather
+   * than multiplying it, so `bg-hover/50` would resolve to 50% opacity instead
+   * of the 5.5% the token intends, which is a 9× difference that reads as a
+   * hover state that never turns off.
+   */
+  --color-overlay: var(--sb-overlay);
+  --color-hover: var(--sb-hover);
+  --color-selection: var(--sb-selection);
+  --color-diff-add: var(--sb-diff-add-bg);
+  --color-diff-del: var(--sb-diff-del-bg);
+  --color-diff-add-fg: var(--sb-diff-add-fg);
+  --color-diff-del-fg: var(--sb-diff-del-fg);
+  --color-link-hover: var(--sb-link-hover);
 
   --font-sans: "Hanken Grotesk", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -287,7 +387,10 @@
     text-decoration: none;
   }
   a:hover {
-    color: #7cc0f5;
+    color: var(--sb-link-hover);
+  }
+  ::selection {
+    background: var(--sb-selection);
   }
 
   /*
@@ -313,10 +416,10 @@
     cursor: not-allowed;
   }
 
-  /* Thin One Dark scrollbars. */
+  /* Thin themed scrollbars. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #3e4451 transparent;
+    scrollbar-color: var(--sb-scrollbar) transparent;
   }
   *::-webkit-scrollbar {
     width: 10px;
@@ -326,13 +429,13 @@
     background: transparent;
   }
   *::-webkit-scrollbar-thumb {
-    background: #3e4451;
+    background: var(--sb-scrollbar);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: #4b5263;
+    background: var(--sb-scrollbar-hover);
     border: 2px solid transparent;
     background-clip: padding-box;
   }

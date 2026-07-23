@@ -10,7 +10,11 @@ function GitHubMark() {
   )
 }
 
-/** Google "G" mark (full colour). */
+/**
+ * Google "G" mark (full colour). The four hexes are Google's brand palette and
+ * are literals on purpose — a themed "G" is an unrecognisable "G", and Google's
+ * branding terms require the mark be reproduced exactly.
+ */
 function GoogleMark() {
   return (
     <svg viewBox="0 0 24 24" className="size-4 flex-none" aria-hidden>

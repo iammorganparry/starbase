@@ -43,6 +43,18 @@ export interface AppPathsShape {
    */
   readonly planRoundsDir: string
   /**
+   * `~/starbase/themes` — user-authored colour themes, one VS Code theme JSON
+   * per file at `<themesDir>/<id>.json`.
+   *
+   * A directory of plain files rather than a section of `config.json` for two
+   * reasons. A theme is kilobytes of colour table and `config.json` is
+   * read-modify-written on every settings save, so inlining them would make an
+   * unrelated toggle rewrite every theme the user owns. And themes are a format
+   * people already exchange — being able to drop a file in, or hand one to
+   * someone, is most of the point of storing VS Code's format at all.
+   */
+  readonly themesDir: string
+  /**
    * `~/starbase/auth.enc` — the signed-in session token, encrypted with the OS
    * credential vault (Electron `safeStorage`). Only ever ciphertext is written
    * here; see `SecretStore`.
