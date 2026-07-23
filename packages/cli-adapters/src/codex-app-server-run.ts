@@ -30,6 +30,7 @@ const MAX_QUESTION_ROUNDS = 4
 const MAX_PLAN_ROUNDS = 6
 const EMERGENCY_COMPACTION_RATIO = 0.9
 const RESUME_REPLAY_WAIT_MS = 1_000
+const INTERRUPT_REQUEST_TIMEOUT_MS = 2_000
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -524,10 +525,14 @@ export const runCodexAppServer = (
             activeTurnId !== null
           ) {
             await connection
-              .request("turn/interrupt", {
-                threadId: activeThreadId,
-                turnId: activeTurnId
-              })
+              .request(
+                "turn/interrupt",
+                {
+                  threadId: activeThreadId,
+                  turnId: activeTurnId
+                },
+                { timeoutMs: INTERRUPT_REQUEST_TIMEOUT_MS }
+              )
               .catch(() => undefined)
           }
           connection?.close()

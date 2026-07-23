@@ -29,6 +29,10 @@ export interface CodexAppServerConnectionOptions {
   readonly requestTimeoutMs?: number
 }
 
+export interface CodexAppServerRequestOptions {
+  readonly timeoutMs?: number
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
 /**
@@ -136,18 +140,23 @@ export class CodexAppServerConnection {
     this.#input.write(`${JSON.stringify(message)}\n`)
   }
 
-  request(method: string, params: unknown): Promise<unknown> {
+  request(
+    method: string,
+    params: unknown,
+    options: CodexAppServerRequestOptions = {}
+  ): Promise<unknown> {
     const id = this.#nextId
     this.#nextId += 1
+    const timeoutMs = options.timeoutMs ?? this.#requestTimeoutMs
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (!this.#pending.delete(id)) return
         reject(
           new Error(
-            `Codex app-server request "${method}" timed out after ${this.#requestTimeoutMs}ms`
+            `Codex app-server request "${method}" timed out after ${timeoutMs}ms`
           )
         )
-      }, this.#requestTimeoutMs)
+      }, timeoutMs)
       timeout.unref()
       this.#pending.set(id, { resolve, reject, timeout })
       try {

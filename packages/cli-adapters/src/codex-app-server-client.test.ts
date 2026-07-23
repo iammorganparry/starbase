@@ -112,4 +112,15 @@ describe("CodexAppServerConnection", () => {
     )
     connection.close()
   })
+
+  it("supports a shorter deadline for teardown requests", async () => {
+    const { connection } = harness(30_000)
+
+    await expect(
+      connection.request("turn/interrupt", {}, { timeoutMs: 10 })
+    ).rejects.toThrow(
+      'Codex app-server request "turn/interrupt" timed out after 10ms'
+    )
+    connection.close()
+  })
 })
