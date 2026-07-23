@@ -2,7 +2,11 @@ import { spawn } from "node:child_process"
 import { stopChild, trackChild } from "./child-registry.js"
 
 /** The app-server is a local probe; never let protocol drift leave it hanging. */
-const TIMEOUT_MS = 8000
+const REQUEST_TIMEOUT_MS = 8000
+/** Context telemetry must not hold a completed reply hostage for discovery's full timeout. */
+const CONTEXT_USAGE_TIMEOUT_MS = 2000
+/** A timed-out thread did not replay usage; do not pay the same timeout on every turn. */
+const unsupportedContextThreads = new Set<string>()
 
 export interface CodexContextUsage {
   /** Tokens resident in the model's context for its latest request. */
@@ -73,7 +77,7 @@ export const requestCodexAppServer = (
       resolve(result)
     }
 
-    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
+    const timer = setTimeout(() => finish(null), REQUEST_TIMEOUT_MS)
 
     try {
       child = trackChild(
@@ -145,9 +149,16 @@ export const requestCodexAppServer = (
  */
 export const readCodexContextUsage = (
   binPath: string | null | undefined,
-  threadId: string
+  threadId: string,
+  signal?: AbortSignal
 ): Promise<CodexContextUsage | null> => {
-  if (threadId.length === 0) return Promise.resolve(null)
+  if (
+    threadId.length === 0 ||
+    unsupportedContextThreads.has(threadId) ||
+    signal?.aborted === true
+  ) {
+    return Promise.resolve(null)
+  }
 
   return new Promise((resolve) => {
     let settled = false
@@ -157,11 +168,17 @@ export const readCodexContextUsage = (
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener("abort", abort)
       if (child) stopChild(child)
       resolve(result)
     }
 
-    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
+    const abort = () => finish(null)
+    signal?.addEventListener("abort", abort, { once: true })
+    const timer = setTimeout(() => {
+      unsupportedContextThreads.add(threadId)
+      finish(null)
+    }, CONTEXT_USAGE_TIMEOUT_MS)
 
     try {
       child = trackChild(

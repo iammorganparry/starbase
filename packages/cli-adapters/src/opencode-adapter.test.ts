@@ -6,6 +6,7 @@ import {
   createOpencodeMapper,
   mapOpencodeReasoning,
   mapOpencodePermission,
+  opencodePromptBody,
   planTools,
   parseServerUrl,
   permissionToRequest,
@@ -35,6 +36,29 @@ describe("mapOpencodeReasoning", () => {
     expect(mapOpencodeReasoning("think")).toBe("medium")
     expect(mapOpencodeReasoning("think-hard")).toBe("high")
     expect(mapOpencodeReasoning("ultrathink")).toBe("xhigh")
+  })
+})
+
+describe("opencodePromptBody", () => {
+  it("carries the selected variant through the live request boundary", () => {
+    expect(
+      opencodePromptBody(
+        { model: "openai/gpt-5", reasoningEffort: "ultrathink" },
+        "Inspect the repository",
+        false
+      )
+    ).toStrictEqual({
+      model: { providerID: "openai", modelID: "gpt-5" },
+      variant: "xhigh",
+      parts: [{ type: "text", text: "Inspect the repository" }]
+    })
+  })
+
+  it("leaves native reasoning untouched by default and confines planning prompts", () => {
+    expect(opencodePromptBody({ model: null }, "Draft a plan", true)).toStrictEqual({
+      tools: { edit: false, write: false, patch: false, task: false },
+      parts: [{ type: "text", text: "Draft a plan" }]
+    })
   })
 })
 

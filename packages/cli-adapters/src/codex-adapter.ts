@@ -498,19 +498,25 @@ export const runCodex = (
             }
           }
           if (completedUsage !== null) {
-            // Probe after the SDK stream closes so the rollout is fully flushed.
+            // Probe only once the OPERATOR-FACING turn settles. A question or
+            // plan revision queues another Codex turn immediately; replaying the
+            // whole thread between those rounds adds latency and produces a
+            // reading that cannot settle compaction yet.
+            const settle = followUp === null
+            // One-shot callers (adversarial roles, reviews, digest builders,
+            // plan steps) never feed ContextManager and deliberately discard
+            // their thread. Replaying those threads cannot help compaction.
+            const reportContext = settle && spec.fresh !== true
+            const context =
+              threadId === null || !reportContext
+                ? null
+                : await readCodexContextUsage(spec.binPath, threadId, abort.signal)
             // Failure is deliberately silent: preserving the last good context
             // reading is safer than replacing it with cumulative spend or zero.
-            const context =
-              threadId === null
-                ? null
-                : await readCodexContextUsage(spec.binPath, threadId)
-            // A question or approved/revised plan is one operator-facing turn
-            // spanning multiple Codex turns. Only the final round may settle it.
             for (const terminal of codexCompletionEvents(
               completedUsage,
               context,
-              followUp === null
+              settle
             )) {
               await runP(ctx.emit(terminal))
             }

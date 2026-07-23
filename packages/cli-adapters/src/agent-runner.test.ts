@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape, PermissionDecision } from "./adapter.js"
 import { ConfigService } from "./config.js"
-import { AgentRunner } from "./agent-runner.js"
+import { AgentRunner, resolveIntakeHarness } from "./agent-runner.js"
 import { ContextManager } from "./context-manager.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -68,6 +68,34 @@ const gates = (events: ReadonlyArray<StreamEvent>) =>
 
 const ranTool = (events: ReadonlyArray<StreamEvent>, id: string) =>
   events.some((e) => e._tag === "ToolStart" && e.id === id)
+
+describe("resolveIntakeHarness", () => {
+  it("uses the configured orchestrator when its harness is installed", () => {
+    expect(
+      resolveIntakeHarness(
+        { cli: "claude", model: "opus" },
+        { cli: "codex", model: "gpt-5" },
+        [
+          { kind: "claude", binPath: "/bin/claude" },
+          { kind: "codex", binPath: "/bin/codex" }
+        ]
+      )
+    ).toStrictEqual({ cli: "claude", model: "opus" })
+  })
+
+  it("keeps persisted Gigaplan intake usable when the configured harness disappeared", () => {
+    expect(
+      resolveIntakeHarness(
+        { cli: "claude", model: "opus" },
+        { cli: "codex", model: "gpt-5" },
+        [
+          { kind: "claude", binPath: null },
+          { kind: "codex", binPath: "/bin/codex" }
+        ]
+      )
+    ).toStrictEqual({ cli: "codex", model: "gpt-5" })
+  })
+})
 
 describe("AgentRunner HITL gating", () => {
   it("accept-edits: applies edits without a gate, but pauses for a command", async () => {

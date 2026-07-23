@@ -1,6 +1,7 @@
 import type { PermissionMode, ReasoningEffort, StreamEvent } from "@starbase/core"
 import { CliExecError, resumePlanPrompt, splitModelId } from "@starbase/core"
-import type { Event, Part } from "@opencode-ai/sdk"
+import type { Event, Part, SessionPromptData as LegacySessionPromptData } from "@opencode-ai/sdk"
+import type { SessionPromptData } from "@opencode-ai/sdk/v2/client"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, PermissionRequest, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
@@ -160,6 +161,32 @@ export const planTools: Readonly<Record<string, boolean>> = {
   write: false,
   patch: false,
   task: false
+}
+
+type OpencodePromptBody =
+  & NonNullable<LegacySessionPromptData["body"]>
+  & Pick<NonNullable<SessionPromptData["body"]>, "variant">
+
+/**
+ * Build the body handed to the live `/session/{sessionID}/message` endpoint.
+ *
+ * The package's legacy root export has stale generated types that omit
+ * `variant`, while the same installed package's v2 OpenAPI types—and OpenCode
+ * 1.18's live `/doc` schema—include it. Typing the boundary against that current
+ * schema prevents an object spread from hiding future request-shape drift.
+ */
+export const opencodePromptBody = (
+  spec: Pick<SessionSpec, "model" | "reasoningEffort">,
+  prompt: string,
+  planning: boolean
+): OpencodePromptBody => {
+  const variant = mapOpencodeReasoning(spec.reasoningEffort)
+  return {
+    ...(spec.model === null ? {} : { model: splitModelId(spec.model) }),
+    ...(variant === undefined ? {} : { variant }),
+    ...(planning ? { tools: { ...planTools } } : {}),
+    parts: [{ type: "text", text: prompt }]
+  }
 }
 
 /**
@@ -816,16 +843,9 @@ const driveOpencode = async (
         let followUp: string | null = null
         const result = await client.session.prompt({
           path: { id: opencodeSessionId },
-          body: {
-            ...(spec.model === null ? {} : { model: splitModelId(spec.model) }),
-            ...(mapOpencodeReasoning(spec.reasoningEffort)
-              ? { variant: mapOpencodeReasoning(spec.reasoningEffort) }
-              : {}),
-            // Withheld per PROMPT, not per run: the plan turn cannot edit, and
-            // the execution prompt that follows approval can. See `planTools`.
-            ...(planning ? { tools: { ...planTools } } : {}),
-            parts: [{ type: "text", text: turnPrompt }]
-          }
+          // Withheld per PROMPT, not per run: the plan turn cannot edit, and
+          // the execution prompt that follows approval can. See `planTools`.
+          body: opencodePromptBody(spec, turnPrompt, planning)
         })
 
         // The SDK REPORTS failure rather than throwing it, so this has to be

@@ -1,6 +1,8 @@
 import type {
   ApprovalGate,
   Attachment,
+  CliInfo,
+  CliKind,
   ExecutionMode,
   GateDecision,
   Message,
@@ -52,6 +54,32 @@ import { PlanStore } from "./plan-store.js"
 
 /** Tools that write to disk — a successful one advances the matching plan step. */
 const EDIT_TOOLS = new Set(["Write", "Edit", "Update", "MultiEdit", "NotebookEdit"])
+
+interface HarnessRoute {
+  readonly cli: CliKind
+  readonly model: string
+}
+
+/**
+ * Resolve the harness that can actually drive a Gigaplan intake turn.
+ *
+ * Adversarial readiness is intentionally not the gate here: intake only needs
+ * one provider, while handoff needs two independent labs. If the configured
+ * orchestrator disappeared since this session persisted Gigaplan mode, keep the
+ * intake usable on the session's installed harness instead of dispatching to
+ * the scripted missing-binary fallback.
+ */
+export const resolveIntakeHarness = (
+  configured: HarnessRoute,
+  session: HarnessRoute,
+  discovered: ReadonlyArray<Pick<CliInfo, "kind" | "binPath">>
+): HarnessRoute => {
+  const installed = (cli: CliKind): boolean =>
+    discovered.some((candidate) => candidate.kind === cli && candidate.binPath !== null)
+  if (installed(configured.cli)) return configured
+  if (session.cli !== "starbase" && installed(session.cli)) return session
+  return configured
+}
 
 /**
  * How long `stop` waits for an interrupted run to finish unwinding before it
@@ -621,7 +649,17 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // nothing.
           const sessionCli = session?.cli ?? "claude"
           const workspaceConfig = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
-          const orchestrator = resolveOrchestrator(workspaceConfig)
+          const discoveredClis = yield* DiscoveryService.list().pipe(
+            Effect.orElseSucceed(() => [])
+          )
+          const orchestrator = resolveIntakeHarness(
+            resolveOrchestrator(workspaceConfig),
+            {
+              cli: sessionCli,
+              model: session?.model ?? defaultModel(sessionCli)
+            },
+            discoveredClis
+          )
           const orchestrating = target === "orchestrator"
           // Intake is read-only but ungated: the harness can inspect files without
           // stopping for shell approval, while `readOnly` below removes mutation.
@@ -640,9 +678,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           yield* Ref.update(execDefaults, (m) => new Map(m).set(sessionId, execDefault))
           // Resolve the harness binary; null → the dispatcher uses the scripted
           // fallback (also the path when the CLI isn't installed).
-          const binPath =
-            (yield* DiscoveryService.list().pipe(Effect.orElseSucceed(() => [])))
-              .find((c) => c.kind === cli)?.binPath ?? null
+          const binPath = discoveredClis.find((c) => c.kind === cli)?.binPath ?? null
           // The agent always runs in the session's isolated worktree.
           //
           // This comment used to claim an empty value "would fail loudly on a

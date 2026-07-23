@@ -65,7 +65,21 @@ const sdk = vi.hoisted(() => {
   return { state, Codex }
 })
 
+const contextProbe = vi.hoisted(() => ({
+  calls: [] as Array<{ binPath: string | null | undefined; threadId: string; signal: AbortSignal | undefined }>
+}))
+
 vi.mock("@openai/codex-sdk", () => ({ Codex: sdk.Codex }))
+vi.mock("./codex-app-server.js", () => ({
+  readCodexContextUsage: (
+    binPath: string | null | undefined,
+    threadId: string,
+    signal?: AbortSignal
+  ) => {
+    contextProbe.calls.push({ binPath, threadId, signal })
+    return Promise.resolve({ tokens: 193_496, window: 258_400 })
+  }
+}))
 
 // Imported AFTER the mock is registered.
 const { runCodex } = await import("./codex-adapter.js")
@@ -131,6 +145,7 @@ beforeEach(() => {
   sdk.state.runs = []
   sdk.state.resumedWith = []
   sdk.state.sandboxMode = ""
+  contextProbe.calls = []
 })
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -154,6 +169,14 @@ describe("the Codex plan loop", () => {
     // The approved plan is restated, because a re-opened thread is a new turn.
     expect(sdk.state.runs[1]!.prompt).toContain("Add a tier column")
     expect(emitted.some((e) => e._tag === "Done")).toBe(true)
+    // The planning reply queued an execution follow-up. Replaying the whole
+    // thread between them would add probe latency to an unfinished turn.
+    expect(contextProbe.calls).toHaveLength(1)
+    expect(contextProbe.calls[0]).toMatchObject({
+      binPath: "/usr/bin/codex",
+      threadId: "t1"
+    })
+    expect(contextProbe.calls[0]!.signal).toBeInstanceOf(AbortSignal)
   })
 
   it("sends the operator's comments back as the next prompt on revise", async () => {
@@ -180,6 +203,8 @@ describe("the Codex plan loop", () => {
     // Distinct ids, so the second proposal renders as a revision rather than
     // silently overwriting the first.
     expect(proposed[0]!.id).not.toBe(proposed[1]!.id)
+    // Two intermediate plan rounds, one final execution round, one probe.
+    expect(contextProbe.calls).toHaveLength(1)
   })
 
   it("ends the turn on reject without re-prompting", async () => {
@@ -225,6 +250,19 @@ describe("the Codex plan loop", () => {
 
     expect(proposed).toEqual([])
     expect(emitted.some((e) => e._tag === "Assistant")).toBe(true)
+  })
+
+  it("does not probe context for a one-shot fresh thread", async () => {
+    sdk.state.script = [
+      [{ type: "thread.started", thread_id: "t1" }, agentMessage("Reviewed."), turnDone]
+    ]
+    const { ctx } = harness([])
+
+    await Effect.runPromise(
+      runCodex("review_1", spec({ mode: "ask", fresh: true, readOnly: true }), ctx, new Map())
+    )
+
+    expect(contextProbe.calls).toEqual([])
   })
 
   it("degrades to plain text once the round cap is spent", async () => {
