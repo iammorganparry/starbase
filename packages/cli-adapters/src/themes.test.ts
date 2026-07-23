@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { FileSystem, Path } from "@effect/platform"
 import { DEFAULT_THEME_ID } from "@starbase/core"
@@ -251,6 +251,37 @@ describe("ThemeService", () => {
     it("treats deleting a theme that is not there as success", async () => {
       const exit = await provided(ThemeService.remove("never-existed"))
       expect(exit._tag).toBe("Success")
+    })
+  })
+
+  describe("path confinement", () => {
+    it("refuses to save outside the themes directory", async () => {
+      const exit = await provided(ThemeService.save("../config", VALID_THEME as never))
+
+      expect(failureOf(exit)?._tag).toBe("ThemeError")
+      expect(existsSync(join(temp.root, "config.json"))).toBe(false)
+    })
+
+    it("refuses to delete outside the themes directory", async () => {
+      mkdirSync(temp.root, { recursive: true })
+      const sessionsFile = join(temp.root, "sessions.json")
+      writeFileSync(sessionsFile, "keep me")
+
+      const exit = await provided(ThemeService.remove("../sessions"))
+
+      expect(failureOf(exit)?._tag).toBe("ThemeError")
+      expect(readFileSync(sessionsFile, "utf8")).toBe("keep me")
+    })
+
+    it("does not read a traversed path as a theme", async () => {
+      mkdirSync(temp.root, { recursive: true })
+      writeFileSync(join(temp.root, "config.json"), JSON.stringify(VALID_THEME))
+
+      const exit = await provided(ThemeService.get("../config"))
+
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value).toBeNull()
     })
   })
 

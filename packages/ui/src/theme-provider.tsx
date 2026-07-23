@@ -114,6 +114,11 @@ export const useOptionalThemeTokens = (): ThemeTokens | null =>
 export interface ThemeProviderProps {
   /** The resolved tokens to apply. */
   tokens: ThemeTokens
+  /**
+   * Whether `tokens` are resolved and may replace the pre-paint stylesheet.
+   * False during Electron's config/catalog handoff; defaults true elsewhere.
+   */
+  applyToDocument?: boolean
   /** Id of the active theme, so the picker can mark it. */
   activeId?: string
   /** Everything installed. Absent in Storybook and tests. */
@@ -125,6 +130,7 @@ export interface ThemeProviderProps {
 
 export function ThemeProvider({
   tokens,
+  applyToDocument = true,
   activeId = DEFAULT_THEME_ID,
   catalog,
   theme = null,
@@ -140,6 +146,11 @@ export function ThemeProvider({
    * that paint.
    */
   React.useLayoutEffect(() => {
+    // Electron injected the active theme before React mounted. While its async
+    // config/catalog queries are pending, `tokens` is only a One Dark context
+    // fallback and must not clobber that correct boot stylesheet.
+    if (!applyToDocument) return
+
     const doc = globalThis.document
     if (!doc) return
 
@@ -158,7 +169,7 @@ export function ThemeProvider({
     // onto a data attribute for the handful of rules that must BRANCH on it
     // rather than read a value.
     doc.documentElement.dataset.themeKind = tokens.kind
-  }, [tokens])
+  }, [tokens, applyToDocument])
 
   const value = React.useMemo(
     (): ThemeContextValue => ({ tokens, activeId, catalog: catalog?.themes ?? [], theme }),

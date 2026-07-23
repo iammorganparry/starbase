@@ -120,6 +120,28 @@ describe("ThemeProvider", () => {
     expect(styleText()).toContain("--sb-editor: #282c34;")
   })
 
+  it("preserves the pre-paint theme until the async theme state is ready", () => {
+    const bootCss = themeCssText(lightModern)
+    const boot = document.createElement("style")
+    boot.id = "starbase-theme"
+    boot.textContent = bootCss
+    document.head.appendChild(boot)
+
+    const { rerender } = render(
+      <ThemeProvider tokens={oneDark} applyToDocument={false}>
+        <div>hi</div>
+      </ThemeProvider>
+    )
+    expect(styleText()).toBe(bootCss)
+
+    rerender(
+      <ThemeProvider tokens={lightModern} applyToDocument>
+        <div>hi</div>
+      </ThemeProvider>
+    )
+    expect(styleText()).toBe(bootCss)
+  })
+
   it("is appended last, so it beats the fallback block in globals.css", () => {
     render(
       <ThemeProvider tokens={oneDark}>

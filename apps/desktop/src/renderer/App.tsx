@@ -759,6 +759,7 @@ export function App() {
   return (
     <ThemeProvider
       tokens={theme.tokens}
+      applyToDocument={theme.ready}
       activeId={theme.activeId}
       catalog={theme.catalog}
       theme={theme.theme}

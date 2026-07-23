@@ -52,6 +52,8 @@ export interface ThemeState {
   readonly tokens: ThemeTokens
   readonly activeId: string
   readonly catalog: ThemeCatalog | undefined
+  /** True once config and catalog can resolve the active theme without guessing. */
+  readonly ready: boolean
   /** The active theme's raw JSON, for shiki. Null until it loads. */
   readonly theme: VsCodeTheme | null
 }
@@ -105,8 +107,13 @@ export function useTheme(config: WorkspaceConfig | null | undefined): ThemeState
     if (catalog) void queryClient.invalidateQueries({ queryKey: ["theme-source"] })
   }, [catalog, queryClient])
 
+  // Until both inputs land, `tokens` is intentionally just a context fallback.
+  // The document keeps the synchronously injected boot stylesheet instead of
+  // repainting through that fallback; see `applyToDocument` in App.tsx.
+  const ready = catalog !== undefined && config !== undefined
+
   return useMemo(
-    () => ({ tokens, activeId, catalog, theme: theme ?? null }),
-    [tokens, activeId, catalog, theme]
+    () => ({ tokens, activeId, catalog, ready, theme: theme ?? null }),
+    [tokens, activeId, catalog, ready, theme]
   )
 }
