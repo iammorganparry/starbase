@@ -193,9 +193,15 @@ if (!gotPrimaryLock) {
     // `createWindow` or the first frame is painted in the wrong theme: the
     // background colour is read by `BrowserWindow` at construction, and the
     // preload pulls the stylesheet synchronously as the document starts. Never
-    // throws — a failure here resolves to One Dark Pro. See `boot-theme.ts`.
+    // normally resolves failures to One Dark Pro. Keep the await behind one
+    // final launch-boundary catch too: a defect in the fallback path must not
+    // prevent the window from being created.
     registerBootThemeChannel()
-    themeBackgroundColor = bootBackgroundColor(await resolveBootTheme())
+    try {
+      themeBackgroundColor = bootBackgroundColor(await resolveBootTheme())
+    } catch (cause) {
+      console.error("Could not prepare the boot theme; using One Dark Pro.", cause)
+    }
 
     createWindow()
 
