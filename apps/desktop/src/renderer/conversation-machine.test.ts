@@ -181,6 +181,15 @@ beforeEach(() => {
 })
 
 describe("conversationMachine — context size", () => {
+  it("rehydrates the persisted context reading before the next live event", async () => {
+    const persisted = { ...session, contextTokens: 206_865 } as Session
+    const actor = createActor(conversationMachine, { input: { session: persisted } }).start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    expect(actor.getSnapshot().context.tokens).toBe(206_865)
+    actor.stop()
+  })
+
   it("tracks the latest context and does not replace it with the final run total", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))

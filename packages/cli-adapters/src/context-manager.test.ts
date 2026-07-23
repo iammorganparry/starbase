@@ -714,8 +714,8 @@ describe("window correction", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(598_000)
-    // The corrected window can use the 500k quality cap.
-    expect(snap.triggerAt).toBe(500_000)
+    // The corrected window still preserves the 25% emergency reserve.
+    expect(snap.triggerAt).toBe(448_500)
   })
 
   it("keeps the corrected window after the reading falls back", async () => {
@@ -995,7 +995,7 @@ describe("ContextManager.snapshot", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(200_000)
-    expect(snap.triggerAt).toBe(170_000)
+    expect(snap.triggerAt).toBe(150_000)
     expect(snap.tokens).toBe(100_000)
     expect(snap.phase).toBe("idle")
   })
@@ -1052,7 +1052,7 @@ describe("ContextManager.snapshot", () => {
       recordingAdapter(GOOD_REPLY, rec)
     )
     expect(snap.window).toBe(200_000)
-    expect(snap.triggerAt).toBe(170_000)
+    expect(snap.triggerAt).toBe(150_000)
   })
 
   it("reports unknown for a harness it cannot measure", async () => {
@@ -1105,7 +1105,7 @@ describe("ContextManager.snapshot", () => {
     expect(before.tokens).toBe(2_979_284)
     expect(after.tokens).toBe(193_496)
     expect(after.window).toBe(258_400)
-    expect(after.triggerAt).toBe(219_640)
+    expect(after.triggerAt).toBe(193_800)
     expect(after.phase).toBe("idle")
   })
 

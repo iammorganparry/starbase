@@ -30,11 +30,11 @@ export const Meter: Story = {
   render: () => (
     <div className="w-[420px] space-y-3 p-6">
       {[
-        { label: "Early in a 200k session", tokens: 30_000, triggerAt: 170_000 },
-        { label: "Half way", tokens: 85_000, triggerAt: 170_000 },
-        { label: "Approaching the trigger", tokens: 150_000, triggerAt: 170_000 },
-        { label: "Over — a digest is being prepared", tokens: 178_000, triggerAt: 170_000 },
-        { label: "Digest ready, reseeds next turn", tokens: 178_000, triggerAt: 170_000, ready: true },
+        { label: "Early in a 200k session", tokens: 30_000, triggerAt: 150_000 },
+        { label: "Half way", tokens: 75_000, triggerAt: 150_000 },
+        { label: "Approaching the trigger", tokens: 140_000, triggerAt: 150_000 },
+        { label: "Over — a digest is being prepared", tokens: 158_000, triggerAt: 150_000 },
+        { label: "Digest ready, reseeds next turn", tokens: 158_000, triggerAt: 150_000, ready: true },
         { label: "1M model at 300k — full, not 30%", tokens: 300_000, triggerAt: 300_000 }
       ].map((row) => (
         <div key={row.label} className="flex items-center justify-between gap-4">

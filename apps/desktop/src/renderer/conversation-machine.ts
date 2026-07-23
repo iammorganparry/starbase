@@ -932,7 +932,11 @@ export const conversationMachine = setup({
     executePlanId: null,
     executePlanMode: null,
     planReadiness: null,
-    tokens: 0,
+    // Rehydrate the last measured working set immediately. ContextManager owns
+    // the trigger/phase snapshot, but the view reads this live field for the
+    // meter's numerator; starting at zero hid the whole component after every
+    // app restart until Codex happened to emit another Usage event.
+    tokens: input.session.contextTokens ?? 0,
     runStartedAt: null,
     lastOutcome: null,
     persistedStatus: input.session.status,

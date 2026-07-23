@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape, PermissionDecision } from "./adapter.js"
 import { ConfigService } from "./config.js"
-import { AgentRunner, isCodexSkillInvocation, resolveIntakeHarness } from "./agent-runner.js"
+import {
+  AgentRunner,
+  isCodexSkillInvocation,
+  isContextOverflowFailure,
+  resolveIntakeHarness
+} from "./agent-runner.js"
 import { ContextManager } from "./context-manager.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -73,6 +78,18 @@ describe("isCodexSkillInvocation", () => {
   it("recognises explicit Codex skill tokens without treating paths as skills", () => {
     expect(isCodexSkillInvocation("$babysit-pr get it to main")).toBe(true)
     expect(isCodexSkillInvocation("/Users/morgan/repo")).toBe(false)
+  })
+})
+
+describe("isContextOverflowFailure", () => {
+  it("recognises Codex and API context exhaustion without matching ordinary failures", () => {
+    expect(
+      isContextOverflowFailure(
+        "Codex ran out of room in the model's context window. Start a new thread."
+      )
+    ).toBe(true)
+    expect(isContextOverflowFailure("maximum context length exceeded")).toBe(true)
+    expect(isContextOverflowFailure("Claude authentication failed")).toBe(false)
   })
 })
 
