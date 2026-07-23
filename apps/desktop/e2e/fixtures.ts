@@ -278,8 +278,9 @@ process.stdin.on("data", (chunk) => {
       }
       if (msg.method === "thread/resume") {
         send({ id: msg.id, result: { thread: { id: "thread-e2e" } } })
-        // Resume replay: high enough to require compaction before turn/start.
-        notifyUsage(206000, "turn-previous")
+        // Deliver replay in a later stdout chunk, as the real server may. This is
+        // high enough to require compaction before turn/start.
+        setTimeout(() => notifyUsage(206000, "turn-previous"), 100)
       }
       if (msg.method === "thread/compact/start") {
         send({ id: msg.id, result: {} })

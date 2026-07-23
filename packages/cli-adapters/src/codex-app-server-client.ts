@@ -22,7 +22,14 @@ const errorMessage = (error: unknown): string => {
 interface PendingRequest {
   readonly resolve: (value: unknown) => void
   readonly reject: (cause: Error) => void
+  readonly timeout: NodeJS.Timeout
 }
+
+export interface CodexAppServerConnectionOptions {
+  readonly requestTimeoutMs?: number
+}
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
 /**
  * A newline-delimited JSON-RPC 2.0 connection to Codex app-server.
@@ -35,6 +42,7 @@ export class CodexAppServerConnection {
   readonly #input: Writable
   readonly #output: Readable
   readonly #closeTransport: () => void
+  readonly #requestTimeoutMs: number
   readonly #pending = new Map<JsonRpcId, PendingRequest>()
   readonly #queued: Array<JsonRpcMessage> = []
   readonly #waiting: Array<(message: JsonRpcMessage | null) => void> = []
@@ -43,10 +51,17 @@ export class CodexAppServerConnection {
   #closed = false
   #failure: Error | null = null
 
-  constructor(input: Writable, output: Readable, closeTransport: () => void) {
+  constructor(
+    input: Writable,
+    output: Readable,
+    closeTransport: () => void,
+    options: CodexAppServerConnectionOptions = {}
+  ) {
     this.#input = input
     this.#output = output
     this.#closeTransport = closeTransport
+    this.#requestTimeoutMs =
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     output.on("data", this.#onData)
     output.on("error", this.#onError)
     output.on("end", this.#onEnd)
@@ -86,6 +101,7 @@ export class CodexAppServerConnection {
       const pending = this.#pending.get(id)
       if (pending === undefined) return
       this.#pending.delete(id)
+      clearTimeout(pending.timeout)
       if (message.error !== undefined) {
         pending.reject(new Error(errorMessage(message.error)))
       } else {
@@ -108,6 +124,7 @@ export class CodexAppServerConnection {
     this.#output.off("end", this.#onEnd)
     this.#input.off("error", this.#onError)
     for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timeout)
       pending.reject(cause ?? new Error("Codex app-server closed"))
     }
     this.#pending.clear()
@@ -123,11 +140,21 @@ export class CodexAppServerConnection {
     const id = this.#nextId
     this.#nextId += 1
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject })
+      const timeout = setTimeout(() => {
+        if (!this.#pending.delete(id)) return
+        reject(
+          new Error(
+            `Codex app-server request "${method}" timed out after ${this.#requestTimeoutMs}ms`
+          )
+        )
+      }, this.#requestTimeoutMs)
+      timeout.unref()
+      this.#pending.set(id, { resolve, reject, timeout })
       try {
         this.#send({ jsonrpc: "2.0", id, method, params })
       } catch (cause) {
         this.#pending.delete(id)
+        clearTimeout(timeout)
         reject(cause instanceof Error ? cause : new Error(String(cause)))
       }
     })
@@ -150,6 +177,35 @@ export class CodexAppServerConnection {
     if (queued !== undefined) return Promise.resolve(queued)
     if (this.#closed) return Promise.resolve(null)
     return new Promise((resolve) => this.#waiting.push(resolve))
+  }
+
+  /**
+   * Wait for one notification without leaving a stale waiter behind on timeout.
+   * Used for request-adjacent notifications whose delivery is not atomic with
+   * the JSON-RPC response.
+   */
+  nextMessageWithin(timeoutMs: number): Promise<JsonRpcMessage | null> {
+    const queued = this.#queued.shift()
+    if (queued !== undefined) return Promise.resolve(queued)
+    if (this.#closed) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      let settled = false
+      const waiter = (message: JsonRpcMessage | null): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        resolve(message)
+      }
+      const timeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        const index = this.#waiting.indexOf(waiter)
+        if (index >= 0) this.#waiting.splice(index, 1)
+        resolve(null)
+      }, timeoutMs)
+      timeout.unref()
+      this.#waiting.push(waiter)
+    })
   }
 
   /** Take notifications already delivered with a request response without waiting. */

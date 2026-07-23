@@ -2,7 +2,7 @@ import { PassThrough } from "node:stream"
 import { describe, expect, it } from "vitest"
 import { CodexAppServerConnection } from "./codex-app-server-client.js"
 
-const harness = () => {
+const harness = (requestTimeoutMs?: number) => {
   const clientInput = new PassThrough()
   const clientOutput = new PassThrough()
   const sent: Array<Record<string, unknown>> = []
@@ -28,7 +28,8 @@ const harness = () => {
     () => {
       clientInput.end()
       clientOutput.end()
-    }
+    },
+    requestTimeoutMs === undefined ? undefined : { requestTimeoutMs }
   )
   return { connection, output: clientOutput, sent }
 }
@@ -82,10 +83,33 @@ describe("CodexAppServerConnection", () => {
     connection.close()
   })
 
+  it("removes a timed-out notification waiter without stealing the next message", async () => {
+    const { connection, output } = harness()
+
+    await expect(connection.nextMessageWithin(5)).resolves.toBeNull()
+    output.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "turn/started", params: { threadId: "t1" } })}\n`
+    )
+
+    await expect(connection.nextMessage()).resolves.toMatchObject({
+      method: "turn/started"
+    })
+    connection.close()
+  })
+
   it("rejects a pending request when the transport closes", async () => {
     const { connection, output } = harness()
     const request = connection.request("turn/start", {})
     output.end()
     await expect(request).rejects.toThrow("Codex app-server closed")
+  })
+
+  it("rejects a request when a live transport never responds", async () => {
+    const { connection } = harness(10)
+
+    await expect(connection.request("initialize", {})).rejects.toThrow(
+      'Codex app-server request "initialize" timed out after 10ms'
+    )
+    connection.close()
   })
 })

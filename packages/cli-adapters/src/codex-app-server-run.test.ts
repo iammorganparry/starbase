@@ -12,6 +12,7 @@ const server = vi.hoisted(() => {
   const state = {
     messages: [] as Array<Record<string, unknown>>,
     replay: [] as Array<Record<string, unknown>>,
+    delayedReplay: [] as Array<Record<string, unknown>>,
     requests: [] as Array<{ method: string; params: unknown }>,
     responses: [] as Array<{ id: number | string; result: unknown }>,
     threadId: "thread-1",
@@ -36,6 +37,8 @@ const server = vi.hoisted(() => {
     },
     respondError: vi.fn(),
     nextMessage: () => Promise.resolve(state.messages.shift() ?? null),
+    nextMessageWithin: () =>
+      Promise.resolve(state.delayedReplay.shift() ?? null),
     drainMessages: () => state.replay.splice(0),
     close: () => {
       state.closed = true
@@ -92,6 +95,7 @@ const harness = (decision: PlanDecisionType = PlanDecision.Reject()) => {
 beforeEach(() => {
   server.state.messages = []
   server.state.replay = []
+  server.state.delayedReplay = []
   server.state.requests = []
   server.state.responses = []
   server.state.threadId = "thread-1"
@@ -293,6 +297,76 @@ describe("runCodexAppServer", () => {
       tokens: 206_000,
       window: 258_400
     })
+  })
+
+  it("waits for delayed replay usage before starting a resumed turn", async () => {
+    server.state.delayedReplay = [
+      {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "previous-turn",
+          tokenUsage: {
+            total: { totalTokens: 900_000 },
+            last: { totalTokens: 206_000 },
+            modelContextWindow: 258_400
+          }
+        }
+      }
+    ]
+    server.state.messages = [
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed", error: null }
+        }
+      }
+    ]
+    const { ctx } = harness()
+
+    await Effect.runPromise(
+      runCodexAppServer("s1", spec({ resumeId: "thread-1" }), ctx, new Map())
+    )
+
+    expect(server.state.requests.map((request) => request.method).slice(0, 3)).toStrictEqual([
+      "thread/resume",
+      "thread/compact/start",
+      "turn/start"
+    ])
+  })
+
+  it("ignores completion events from another turn on the active thread", async () => {
+    server.state.messages = [
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "compaction-turn", status: "completed", error: null }
+        }
+      },
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "agentMessage", id: "m1", text: "Active turn finished." }
+        }
+      },
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed", error: null }
+        }
+      }
+    ]
+    const { ctx, emitted } = harness()
+
+    await Effect.runPromise(runCodexAppServer("s1", spec(), ctx, new Map()))
+
+    expect(emitted).toContainEqual({ _tag: "Assistant", text: "Active turn finished." })
+    expect(emitted.filter((event) => event._tag === "Done")).toHaveLength(1)
   })
 
   it("starts a resumed thread directly when replay usage is below the safety band", async () => {

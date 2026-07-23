@@ -29,6 +29,7 @@ import { worktreeEnv } from "./worktree-env.js"
 const MAX_QUESTION_ROUNDS = 4
 const MAX_PLAN_ROUNDS = 6
 const EMERGENCY_COMPACTION_RATIO = 0.9
+const RESUME_REPLAY_WAIT_MS = 1_000
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -330,33 +331,46 @@ export const runCodexAppServer = (
           let baselineSpend: number | null = prior === undefined ? 0 : null
           let latestSpend = baselineSpend ?? 0
           if (prior !== undefined) {
-            // `thread/resume` replays its last token reading. Let stdout deliver
-            // notifications that followed the response, then consume that replay
-            // before starting a new model request. This is the recovery path for
-            // sessions created before live telemetry existed: if one is already
-            // near its ceiling, compact it natively instead of discovering that
-            // fact only after `turn/start` has raced into another hard failure.
-            await new Promise<void>((resolve) => setImmediate(resolve))
+            const resumedThreadId = activeThreadId
+            // `thread/resume` replays its last token reading after its response.
+            // The response and notification may arrive in separate stdout chunks,
+            // so use a bounded protocol wait rather than an event-loop tick.
             const replayState = makeCodexAppServerEventState()
-            for (const message of connection.drainMessages()) {
+            let replayUsageSeen = false
+            let replayRequiresCompaction = false
+            const consumeReplay = async (message: JsonRpcMessage): Promise<void> => {
               for (const event of codexAppServerMessageToStreamEvents(
                 message,
-                activeThreadId,
+                resumedThreadId,
                 replayState
               )) {
                 await runP(ctx.emit(event))
               }
-              const cumulative = cumulativeUsage(message, activeThreadId)
+              const cumulative = cumulativeUsage(message, resumedThreadId)
               if (cumulative !== null) {
+                replayUsageSeen = true
                 if (baselineSpend === null) baselineSpend = cumulative
                 latestSpend = cumulative
               }
-              const ratio = usageRatio(message, activeThreadId)
-              if (ratio !== null && ratio >= 0.75) {
-                await connection
-                  .request("thread/compact/start", { threadId: activeThreadId })
-                  .catch(() => undefined)
-              }
+              const ratio = usageRatio(message, resumedThreadId)
+              if (ratio !== null) replayUsageSeen = true
+              if (ratio !== null && ratio >= 0.75) replayRequiresCompaction = true
+            }
+            for (const message of connection.drainMessages()) {
+              await consumeReplay(message)
+            }
+            const replayDeadline = Date.now() + RESUME_REPLAY_WAIT_MS
+            while (!replayUsageSeen) {
+              const remaining = replayDeadline - Date.now()
+              if (remaining <= 0) break
+              const message = await connection.nextMessageWithin(remaining)
+              if (message === null) break
+              await consumeReplay(message)
+            }
+            if (replayRequiresCompaction) {
+              await connection
+                .request("thread/compact/start", { threadId: resumedThreadId })
+                .catch(() => undefined)
             }
           }
           let questionRound = 0
@@ -463,7 +477,9 @@ export const runCodexAppServer = (
                   .request("thread/compact/start", { threadId: activeThreadId })
                   .catch(() => undefined)
               }
-              terminal = completedTurn(message, activeThreadId)
+              const completed = completedTurn(message, activeThreadId)
+              terminal =
+                completed?.turnId === activeTurnId ? completed : null
             }
 
             activeTurnId = null
