@@ -287,10 +287,16 @@ process.stdin.on("data", (chunk) => {
       }
       if (msg.method === "turn/start") {
         send({ id: msg.id, result: { turn: { id: "turn-e2e" } } })
+        const isDigest = JSON.stringify(msg.params?.input ?? "").includes(
+          "You are compacting a coding session's context"
+        )
+        const reply = isDigest
+          ? '{"goal":"Continue the legacy Codex session.","recentWork":["Loaded the existing session transcript."],"nextStep":"Continue the implementation.","decisions":[],"filesTouched":[],"openThreads":[],"preferences":[],"midFlow":false,"midFlowReason":""}'
+          : "Codex E2E complete."
         // Occupancy arrives after turn/start has resolved, like the real server.
         // The completion delay gives Playwright a deterministic interval to see
         // the meter and Stop while the transport remains active.
-        setTimeout(() => notifyUsage(120000, "turn-e2e"), 500)
+        if (!isDigest) setTimeout(() => notifyUsage(120000, "turn-e2e"), 500)
         setTimeout(
           () =>
             send({
@@ -301,11 +307,11 @@ process.stdin.on("data", (chunk) => {
                 item: {
                   type: "agentMessage",
                   id: "message-e2e",
-                  text: "Codex E2E complete."
+                  text: reply
                 }
               }
             }),
-          1000
+          isDigest ? 20 : 1000
         )
         setTimeout(
           () =>
@@ -316,7 +322,7 @@ process.stdin.on("data", (chunk) => {
                 turn: { id: "turn-e2e", status: "completed", error: null }
               }
             }),
-          3000
+          isDigest ? 40 : 3000
         )
       }
       if (msg.method === "turn/interrupt") {

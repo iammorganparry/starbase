@@ -720,6 +720,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
            * digest; an immediate retry waits here rather than resuming the same
            * full thread. Sub-agents never reach this top-level path.
            */
+          if (!orchestrating) {
+            yield* ContextManager.prepareUnknownCodexResume(sessionId)
+          }
           const applied = orchestrating ? null : yield* ContextManager.applyWhenReady(sessionId)
           const digest = applied?.digest ?? null
           // The WORKING SET at the moment of the swap, straight from the manager.

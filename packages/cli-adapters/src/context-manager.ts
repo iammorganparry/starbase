@@ -59,6 +59,13 @@ const DIGEST_TIMEOUT = "90 seconds"
  */
 const MAX_FAILURES = 2
 
+/**
+ * Legacy Codex sessions created before live occupancy telemetry can resume with
+ * `contextTokens: 0`. A large local transcript is then the only evidence that
+ * resuming the vendor thread is unsafe.
+ */
+const UNKNOWN_CODEX_TRANSCRIPT_RECOVERY_CHARS = 500_000
+
 interface SessionContext {
   readonly status: "idle" | "preparing" | "ready"
   readonly digest: ContextDigest | null
@@ -506,6 +513,44 @@ export class ContextManager extends Effect.Service<ContextManager>()(
         })
 
       /**
+       * Prepare a blocking digest for a legacy Codex resume whose occupancy is
+       * unknown but whose transcript is already large enough to be risky.
+       *
+       * This is deliberately narrower than ordinary auto-compaction: measured
+       * sessions use their Usage reading, small unknown sessions proceed, and an
+       * operator who disabled automatic compaction keeps that choice.
+       */
+      const prepareUnknownCodexResume = (
+        sessionId: string
+      ): Effect.Effect<void, never, DigestEnv> =>
+        Effect.gen(function* () {
+          const settings = yield* settingsFor(sessionId)
+          if (
+            settings === null ||
+            !settings.auto ||
+            settings.session.cli !== "codex" ||
+            settings.session.resumeId === null
+          ) {
+            return
+          }
+          const state = yield* stateOf(sessionId)
+          const persisted = settings.session.contextTokens ?? 0
+          if (state.tokens > 0 || persisted > 0 || state.status === "ready") return
+
+          const messages = yield* TranscriptStore.list(sessionId).pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
+          )
+          let chars = 0
+          for (const message of messages) {
+            chars += JSON.stringify(message).length
+            if (chars >= UNKNOWN_CODEX_TRANSCRIPT_RECOVERY_CHARS) {
+              yield* compactNow(sessionId, { waitForReady: true })
+              return
+            }
+          }
+        })
+
+      /**
        * The structural half of the mid-flow question, which no summary can see.
        *
        * These are facts about the session's CURRENT state rather than its
@@ -721,7 +766,16 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           }
         })
 
-      return { observe, settle, applyIfReady, applyWhenReady, compactNow, cancel, snapshot }
+      return {
+        observe,
+        settle,
+        applyIfReady,
+        applyWhenReady,
+        compactNow,
+        prepareUnknownCodexResume,
+        cancel,
+        snapshot
+      }
     })
   }
 ) {}
