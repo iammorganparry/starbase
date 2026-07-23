@@ -41,11 +41,16 @@ export const BUDGET_RANGE = { min: 256_000, max: 500_000 } as const
  * the budget (a legacy 200k Claude) must still compact before it hits that ceiling, so
  * the effective trigger is `min(budget, window × SAFETY_RATIO)`.
  *
- * 0.85 leaves room for one more full turn plus the harness's own preamble. It is
+ * 0.75 leaves room for one full agentic turn plus the harness's own preamble. A
+ * live Codex thread exhausted a 258.4k window from a last good 206.9k reading:
+ * the former 15% reserve could not hold its ten tool/model calls. Twenty-five
+ * percent prepares the digest before that turn begins.
+ *
+ * It is
  * deliberately not a user lever: it is mechanical self-preservation, and a user
  * who set it to 0.99 would simply get hard context errors instead of compaction.
  */
-const SAFETY_RATIO = 0.85
+const SAFETY_RATIO = 0.75
 
 /**
  * ── Window floors ──────────────────────────────────────────────────────────
@@ -61,7 +66,7 @@ const SAFETY_RATIO = 0.85
 const WINDOW_PREFIXES: Partial<Record<CliKind, ReadonlyArray<readonly [string, number]>>> = {
   claude: [
     // Fable's 1M window is the whole reason a percentage-of-window rule fails —
-    // 85% of 1M is 850k, deep into the rot. The budget wins here, by design.
+    // 75% of 1M is 750k, deep into the rot. The budget wins here, by design.
     ["claude-fable", 1_000_000],
     ["fable", 1_000_000],
     // Bare `opus` and `sonnet` are current Claude Code routes. Release-numbered
@@ -177,7 +182,7 @@ export const clampBudget = (tokens: number): number =>
  * the window's safety margin, whichever comes first.
  *
  * A 1M model triggers at the budget because it *should*; a 200k model triggers at
- * 170k because it *must*.
+ * 150k because it *must*.
  */
 export const triggerAt = (window: number, budget: number): number =>
   Math.min(clampBudget(budget), Math.floor(window * SAFETY_RATIO))
@@ -237,8 +242,8 @@ export const MAX_SWAP_DEFERRALS = 3
  * The occupancy fraction past which deferral stops being offered.
  *
  * Deliberately HIGHER than `SAFETY_RATIO`, and that gap is the whole hold band.
- * On a 200k model `triggerAt` is already 0.85 × window, so a hold ceiling at
- * 0.85 would leave no room at all: every digest would be built at the exact
+ * On a 200k model `triggerAt` is already 0.75 × window, so a hold ceiling at
+ * 0.75 would leave no room at all: every digest would be built at the exact
  * point holding became forbidden, and the gate would be dead code on the most
  * common harness in the app.
  *

@@ -114,24 +114,36 @@ describe("clampBudget", () => {
 })
 
 describe("triggerAt", () => {
-  // The headline property. 85% of 1M is 850k — deep into the rot the feature
+  // The headline property. 75% of 1M is 750k — deep into the rot the feature
   // exists to avoid. The budget has to win.
-  it("triggers a 1M-window model at the budget, not at 850k", () => {
+  it("triggers a 1M-window model at the budget, not at 750k", () => {
     expect(triggerAt(1_000_000, DEFAULT_BUDGET_TOKENS)).toBe(500_000)
   })
 
   // The mirror property. A 200k model can't reach a 500k budget, so the safety
   // margin has to win or it would never compact at all and simply hard-fail.
   it("triggers a 200k-window model at its safety margin, not at the budget", () => {
-    expect(triggerAt(200_000, DEFAULT_BUDGET_TOKENS)).toBe(170_000)
+    expect(triggerAt(200_000, DEFAULT_BUDGET_TOKENS)).toBe(150_000)
   })
 
   it("triggers a 272k Codex window at its safety margin", () => {
-    expect(triggerAt(272_000, DEFAULT_BUDGET_TOKENS)).toBe(231_200)
+    expect(triggerAt(272_000, DEFAULT_BUDGET_TOKENS)).toBe(204_000)
   })
 
   it("keeps a 256k window below its safety margin", () => {
-    expect(triggerAt(256_000, DEFAULT_BUDGET_TOKENS)).toBe(217_600)
+    expect(triggerAt(256_000, DEFAULT_BUDGET_TOKENS)).toBe(192_000)
+  })
+
+  it("prepares before the next agentic Codex turn can exhaust a 258.4k window", () => {
+    expect(
+      contextPhase({
+        tokens: 206_865,
+        window: 258_400,
+        budget: 456_000,
+        auto: true,
+        digestReady: false
+      })
+    ).toBe("prepare")
   })
 
   it("clamps an out-of-band budget before comparing", () => {
@@ -257,8 +269,8 @@ describe("shouldHoldSwap", () => {
 
   /**
    * The band the gate actually operates in. On a 200k model `triggerAt` is
-   * 170k, so a digest only ever exists above that — a hold ceiling at the same
-   * 0.85 would make every hold impossible and the feature dead code.
+   * 150k, so a digest only ever exists above that — a hold ceiling at the same
+   * 0.75 would make every hold impossible and the feature dead code.
    */
   it("holds inside the band between the trigger and the ceiling", () => {
     expect(shouldHoldSwap({ ...base, midFlow: true, tokens: 171_000 })).toBe(true)

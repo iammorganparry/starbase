@@ -112,6 +112,18 @@ const INTERRUPT_GRACE = "5 seconds"
 const FIRST_EVENT_DEADLINE = "120 seconds"
 
 /**
+ * Whether a harness failure means the resident conversation can no longer fit.
+ *
+ * Keep this deliberately narrow: ordinary provider errors must not spend a
+ * second model call building a digest. These phrases cover Codex's app-server
+ * wording plus the standard API variants used by the other adapters.
+ */
+export const isContextOverflowFailure = (message: string): boolean =>
+  /ran out of room[^.]*context window|maximum context length|context window[^.]*\b(?:exceed(?:ed|s)?|exhausted|full|too (?:large|long))\b|too many tokens/i.test(
+    message
+  )
+
+/**
  * A concise context note prepended to a run when the session's worktree has saved
  * plan(s). It does two jobs: (1) anchor the agent to its worktree, and (2) hand it
  * the plan file path(s).
@@ -1077,6 +1089,18 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // manager uses the latest `Usage` reading instead.
               if (!orchestrating && event._tag === "Done") {
                 yield* ContextManager.settle(sessionId).pipe(Effect.ignore)
+              }
+              // A hard context failure has no Done event, so the ordinary settle
+              // path above can never prepare a digest. Force one from the
+              // persisted last-good reading; the next turn can then swap onto
+              // the compacted primer instead of failing against the same thread
+              // forever.
+              if (
+                !orchestrating &&
+                event._tag === "Failed" &&
+                isContextOverflowFailure(event.message)
+              ) {
+                yield* ContextManager.compactNow(sessionId).pipe(Effect.ignore)
               }
             }).pipe(Effect.provide(env), Effect.asVoid)
 
