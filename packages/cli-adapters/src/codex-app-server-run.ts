@@ -35,6 +35,18 @@ const INTERRUPT_REQUEST_TIMEOUT_MS = 2_000
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+/**
+ * Codex persists thread history as a local rollout. Starbase can outlive that
+ * file, leaving a valid persisted resume id that Codex can no longer open.
+ *
+ * Match the provider's specific diagnosis rather than JSON-RPC's generic
+ * -32600 code, which also covers unrelated requests that must still fail.
+ */
+export const isMissingCodexRolloutError = (cause: unknown): boolean => {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  return message.includes("no rollout found for thread id")
+}
+
 const recordAt = (
   record: Record<string, unknown>,
   key: string
@@ -310,16 +322,31 @@ export const runCodexAppServer = (
             sandbox: activePolicy.sandbox,
             approvalPolicy: activePolicy.approvalPolicy
           }
-          const threadResponse =
-            prior === undefined
-              ? await connection.request("thread/start", {
-                  ...threadParams,
-                  ephemeral: spec.fresh === true
-                })
-              : await connection.request("thread/resume", {
-                  threadId: prior,
-                  ...threadParams
-                })
+          let resumed = prior !== undefined
+          let threadResponse: unknown
+          if (!resumed) {
+            threadResponse = await connection.request("thread/start", {
+              ...threadParams,
+              ephemeral: spec.fresh === true
+            })
+          } else {
+            try {
+              threadResponse = await connection.request("thread/resume", {
+                threadId: prior,
+                ...threadParams
+              })
+            } catch (cause) {
+              if (!isMissingCodexRolloutError(cause)) throw cause
+              // Resume failed before a turn could start, so replacing the
+              // thread cannot duplicate commands or edits from this prompt.
+              resume.delete(sessionId)
+              resumed = false
+              threadResponse = await connection.request("thread/start", {
+                ...threadParams,
+                ephemeral: false
+              })
+            }
+          }
           activeThreadId = threadIdFromResponse(threadResponse)
           if (activeThreadId === null) {
             throw new Error("Codex app-server returned no thread id")
@@ -329,9 +356,9 @@ export const runCodexAppServer = (
           await runP(ctx.emit({ _tag: "Started", sessionId: activeThreadId }))
 
           let turnInput = toCodexAppServerInput(staged.input)
-          let baselineSpend: number | null = prior === undefined ? 0 : null
+          let baselineSpend: number | null = resumed ? null : 0
           let latestSpend = baselineSpend ?? 0
-          if (prior !== undefined) {
+          if (resumed) {
             const resumedThreadId = activeThreadId
             // `thread/resume` replays its last token reading after its response.
             // The response and notification may arrive in separate stdout chunks,

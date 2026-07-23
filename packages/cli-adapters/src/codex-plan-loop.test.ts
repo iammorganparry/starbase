@@ -31,6 +31,7 @@ const sdk = vi.hoisted(() => {
   const state = {
     /** Turns to serve, in order: each is the events one `runStreamed` yields. */
     script: [] as Array<ReadonlyArray<unknown>>,
+    failures: [] as Array<Error | null>,
     runs: [] as RecordedRun[],
     /** The policy the CURRENT thread handle was opened with. */
     sandboxMode: "",
@@ -42,6 +43,8 @@ const sdk = vi.hoisted(() => {
     return {
       runStreamed: (prompt: string) => {
         state.runs.push({ prompt, sandboxMode: state.sandboxMode })
+        const failure = state.failures.shift()
+        if (failure !== undefined && failure !== null) return Promise.reject(failure)
         const events = state.script.shift() ?? []
         return Promise.resolve({
           events: (async function* () {
@@ -166,6 +169,7 @@ const harness = (decisions: ReadonlyArray<PlanDecisionType>) => {
 
 beforeEach(() => {
   sdk.state.script = []
+  sdk.state.failures = []
   sdk.state.runs = []
   sdk.state.resumedWith = []
   sdk.state.sandboxMode = ""
@@ -175,6 +179,88 @@ beforeEach(() => {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe("the Codex plan loop", () => {
+  it("replaces a resumed thread whose local rollout no longer exists", async () => {
+    sdk.state.failures = [
+      new Error(
+        "Codex Exec exited with code 1: thread/resume failed: no rollout found for thread id stale-thread (code -32600)"
+      ),
+      null
+    ]
+    sdk.state.script = [
+      [
+        { type: "thread.started", thread_id: "replacement-thread" },
+        agentMessage("Recovered."),
+        turnDone
+      ]
+    ]
+    const resume = new Map<string, string>()
+    const { ctx, emitted } = harness([])
+
+    await Effect.runPromise(
+      runCodex(
+        "s1",
+        spec({
+          mode: "accept-edits",
+          prompt: "inspect the repository",
+          resumeId: "stale-thread"
+        }),
+        ctx,
+        resume
+      )
+    )
+
+    expect(sdk.state.runs.map((run) => run.prompt)).toStrictEqual([
+      "inspect the repository",
+      "inspect the repository"
+    ])
+    expect(sdk.state.resumedWith).toStrictEqual(["stale-thread"])
+    expect(resume.get("s1")).toBe("replacement-thread")
+    expect(emitted).toContainEqual({
+      _tag: "Started",
+      sessionId: "replacement-thread"
+    })
+  })
+
+  it("does not replace a resumed thread after an unrelated error", async () => {
+    sdk.state.failures = [new Error("thread/resume failed: permission denied")]
+    const { ctx } = harness([])
+
+    await expect(
+      Effect.runPromise(
+        runCodex(
+          "s1",
+          spec({ mode: "accept-edits", resumeId: "thread-1" }),
+          ctx,
+          new Map()
+        )
+      )
+    ).rejects.toThrow("permission denied")
+
+    expect(sdk.state.runs).toHaveLength(1)
+    expect(sdk.state.resumedWith).toStrictEqual(["thread-1"])
+  })
+
+  it("attempts at most one replacement thread", async () => {
+    const missing = new Error(
+      "thread/resume failed: no rollout found for thread id stale-thread (code -32600)"
+    )
+    sdk.state.failures = [missing, missing]
+    const { ctx } = harness([])
+
+    await expect(
+      Effect.runPromise(
+        runCodex(
+          "s1",
+          spec({ mode: "accept-edits", resumeId: "stale-thread" }),
+          ctx,
+          new Map()
+        )
+      )
+    ).rejects.toThrow("no rollout found")
+
+    expect(sdk.state.runs).toHaveLength(2)
+  })
+
   it("plans read-only, then executes with write access once approved", async () => {
     sdk.state.script = [
       [{ type: "thread.started", thread_id: "t1" }, agentMessage(PLAN_TEXT), turnDone],
