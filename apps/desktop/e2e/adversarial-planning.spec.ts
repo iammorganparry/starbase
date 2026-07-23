@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import type { Page } from "@playwright/test"
+import { GIGAPLAN_ROUTING_POLICY_VERSION } from "@starbase/core"
 import { expect, test } from "./fixtures.js"
 import type { LaunchOptions, SeedSession } from "./fixtures.js"
 
@@ -139,7 +140,9 @@ test("a real shadow round preserves execution while showing the semantic recomme
 
   await expect(window.getByLabel("Will run on claude opus").last()).toBeVisible()
   await expect(window.getByText(/Shadow recommendation: codex\/gpt-5\.5/)).toBeVisible()
-  await expect(window.getByText(/system-default · gigaplan-routing-v\d+/)).toBeVisible()
+  await expect(
+    window.getByText(`system-default · ${GIGAPLAN_ROUTING_POLICY_VERSION}`)
+  ).toBeVisible()
 })
 
 test("a real active round applies the deterministic semantic route", async ({ launchApp }) => {
@@ -150,7 +153,9 @@ test("a real active round applies the deterministic semantic route", async ({ la
   await runGigaplanRound(window)
 
   await expect(window.getByLabel("Will run on codex gpt-5.5").last()).toBeVisible()
-  await expect(window.getByText(/policy-profile · gigaplan-routing-v\d+/)).toBeVisible()
+  await expect(
+    window.getByText(`policy-profile · ${GIGAPLAN_ROUTING_POLICY_VERSION}`)
+  ).toBeVisible()
   await expect(window.getByText(/Shadow recommendation:/)).toHaveCount(0)
 })
 
