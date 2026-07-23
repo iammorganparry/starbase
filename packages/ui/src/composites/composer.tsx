@@ -712,11 +712,11 @@ export function Composer({
                is what the placeholder advertises. No "⎋" hint here: Escape only
                fires while the composer is UNfocused, so it wouldn't work from
                where the cursor is when you're reading this button. */
-            <Button variant="danger" size="sm" className="min-h-10" onClick={onStop}>
+            <Button variant="danger" size="sm" onClick={onStop}>
               Stop
             </Button>
           ) : (
-            <Button variant="primary" size="sm" className="min-h-10" onClick={send}>
+            <Button variant="primary" size="sm" onClick={send}>
               {busy ? "Queue ↵" : "Send ↵"}
             </Button>
           )}

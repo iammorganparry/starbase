@@ -14,13 +14,17 @@ afterEach(cleanup)
 describe("Composer stop button", () => {
   it("offers Send when the agent is idle", () => {
     render(<Composer busy={false} onStop={() => {}} />)
-    expect(screen.getByRole("button", { name: /Send/ })).toBeDefined()
+    const send = screen.getByRole("button", { name: /Send/ })
+    expect(send).toBeDefined()
+    expect(send.className).not.toContain("min-h-10")
     expect(screen.queryByRole("button", { name: /^Stop$/ })).toBeNull()
   })
 
   it("swaps Send for Stop while the agent is busy", () => {
     render(<Composer busy onStop={() => {}} />)
-    expect(screen.getByRole("button", { name: /^Stop$/ })).toBeDefined()
+    const stop = screen.getByRole("button", { name: /^Stop$/ })
+    expect(stop).toBeDefined()
+    expect(stop.className).not.toContain("min-h-10")
     expect(screen.queryByRole("button", { name: /Send/ })).toBeNull()
   })
 
