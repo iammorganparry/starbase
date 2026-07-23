@@ -291,7 +291,7 @@ process.stdin.on("data", (chunk) => {
           "You are compacting a coding session's context"
         )
         const reply = isDigest
-          ? '{"goal":"Continue the legacy Codex session.","recentWork":["Loaded the existing session transcript."],"nextStep":"Continue the implementation.","decisions":[],"filesTouched":[],"openThreads":[],"preferences":[],"midFlow":false,"midFlowReason":""}'
+          ? '{"goal":"Continue the legacy Codex session.","recentWork":["Loaded the existing session transcript."],"nextStep":"Continue the implementation.","decisions":[],"filesTouched":[],"openThreads":["The implementation is still active."],"preferences":[],"midFlow":true,"midFlowReason":"The implementation is still active."}'
           : "Codex E2E complete."
         // Occupancy arrives after turn/start has resolved, like the real server.
         // The completion delay gives Playwright a deterministic interval to see

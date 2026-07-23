@@ -50,6 +50,18 @@ const GOOD_REPLY = `\`\`\`json
 }
 \`\`\``
 
+const MID_FLOW_REPLY = `\`\`\`json
+{
+  "goal": "Finish the deployment verification",
+  "decisions": [],
+  "filesTouched": [],
+  "openThreads": ["The deployment is still being verified"],
+  "preferences": [],
+  "midFlow": true,
+  "midFlowReason": "The deployment verification is still running"
+}
+\`\`\``
+
 interface Recorder {
   readonly specs: Array<SessionSpec>
   readonly runs: { count: number }
@@ -933,6 +945,20 @@ describe("ContextManager.compactNow", () => {
         return yield* ContextManager.applyWhenReady(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec, "delay")
+    )
+    expect(rec.runs.count).toBe(1)
+    expect(digest).not.toBeNull()
+  })
+
+  it("applies a forced recovery digest even when the summary is mid-flow", async () => {
+    const rec = recorder()
+    const digest = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* ContextManager.compactNow(SESSION, { waitForReady: true })
+        return yield* ContextManager.applyWhenReady(SESSION)
+      }),
+      recordingAdapter(MID_FLOW_REPLY, rec, "delay")
     )
     expect(rec.runs.count).toBe(1)
     expect(digest).not.toBeNull()
