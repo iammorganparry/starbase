@@ -1084,6 +1084,32 @@ describe("ContextManager.snapshot", () => {
     expect(snap.tokens).toBe(175_000)
   })
 
+  it("replaces poisoned cumulative Codex spend with the next resident reading", async () => {
+    const rec = recorder()
+    const { before, after } = await run(
+      Effect.gen(function* () {
+        // Exact bad value persisted by s_royal-liskov when the SDK's cumulative
+        // turn usage was mistaken for context occupancy.
+        yield* seed({
+          cli: "codex",
+          model: "gpt-5.6-sol",
+          contextTokens: 2_979_284
+        })
+        const before = yield* ContextManager.snapshot(SESSION)
+        yield* ContextManager.observe(SESSION, 193_496, 258_400)
+        const after = yield* ContextManager.snapshot(SESSION)
+        return { before, after }
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+
+    expect(before.tokens).toBe(2_979_284)
+    expect(after.tokens).toBe(193_496)
+    expect(after.window).toBe(258_400)
+    expect(after.triggerAt).toBe(219_640)
+    expect(after.phase).toBe("idle")
+  })
+
   it("counts compactions so the UI can show what happened", async () => {
     const rec = recorder()
     const snap = await run(

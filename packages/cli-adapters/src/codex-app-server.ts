@@ -4,6 +4,51 @@ import { stopChild, trackChild } from "./child-registry.js"
 /** The app-server is a local probe; never let protocol drift leave it hanging. */
 const TIMEOUT_MS = 8000
 
+export interface CodexContextUsage {
+  /** Tokens resident in the model's context for its latest request. */
+  readonly tokens: number
+  /** The effective context ceiling reported by the running Codex model. */
+  readonly window: number
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
+/**
+ * Decode the one app-server notification that describes context occupancy.
+ *
+ * `tokenUsage.total` is cumulative spend across every model request in the
+ * thread. `tokenUsage.last` is what the latest request actually held, and is
+ * the value Codex's own context meter uses. Keeping that distinction in this
+ * decoder prevents a multi-million-token agent loop from masquerading as a
+ * multi-million-token context window.
+ */
+export const codexContextUsageFromMessage = (
+  message: unknown,
+  expectedThreadId: string
+): CodexContextUsage | null => {
+  if (!isRecord(message) || message.method !== "thread/tokenUsage/updated") return null
+  const params = message.params
+  if (!isRecord(params) || params.threadId !== expectedThreadId) return null
+  const tokenUsage = params.tokenUsage
+  if (!isRecord(tokenUsage)) return null
+  const last = tokenUsage.last
+  if (!isRecord(last)) return null
+  const tokens = last.totalTokens
+  const window = tokenUsage.modelContextWindow
+  if (
+    typeof tokens !== "number" ||
+    !Number.isFinite(tokens) ||
+    tokens < 0 ||
+    typeof window !== "number" ||
+    !Number.isFinite(window) ||
+    window <= 0
+  ) {
+    return null
+  }
+  return { tokens, window }
+}
+
 /**
  * Make one request against Codex's newline-delimited JSON-RPC app server.
  *
@@ -85,3 +130,111 @@ export const requestCodexAppServer = (
 
     send(1, "initialize", { clientInfo: { name: "starbase", version: "1" } })
   })
+
+/**
+ * Read the authoritative context occupancy for a persisted Codex thread.
+ *
+ * The exec SDK's `turn.completed.usage` is cumulative spend and deliberately
+ * does not expose the resident-context fields. The app-server does: resuming a
+ * persisted thread replays `thread/tokenUsage/updated`, whose `last` reading and
+ * runtime window are the same source Codex's own UI uses.
+ *
+ * Best-effort like the other discovery probes in this module. Protocol drift,
+ * a missing thread, a failed process, or a timeout all resolve to null so usage
+ * telemetry can never fail an otherwise successful agent turn.
+ */
+export const readCodexContextUsage = (
+  binPath: string | null | undefined,
+  threadId: string
+): Promise<CodexContextUsage | null> => {
+  if (threadId.length === 0) return Promise.resolve(null)
+
+  return new Promise((resolve) => {
+    let settled = false
+    let child: ReturnType<typeof spawn> | null = null
+
+    const finish = (result: CodexContextUsage | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (child) stopChild(child)
+      resolve(result)
+    }
+
+    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
+
+    try {
+      child = trackChild(
+        spawn(binPath || "codex", ["app-server"], { stdio: ["pipe", "pipe", "ignore"] })
+      )
+    } catch {
+      finish(null)
+      return
+    }
+
+    child.on("error", () => finish(null))
+    child.on("exit", () => finish(null))
+    child.stdin?.on("error", () => finish(null))
+
+    const send = (message: Record<string, unknown>) => {
+      try {
+        child?.stdin?.write(`${JSON.stringify(message)}\n`)
+      } catch {
+        finish(null)
+      }
+    }
+
+    let buffer = ""
+    child.stdout?.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString()
+      for (;;) {
+        const newline = buffer.indexOf("\n")
+        if (newline < 0) break
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        if (!line.trim()) continue
+
+        let message: unknown
+        try {
+          message = JSON.parse(line)
+        } catch {
+          continue
+        }
+
+        const usage = codexContextUsageFromMessage(message, threadId)
+        if (usage !== null) {
+          finish(usage)
+          continue
+        }
+        if (!isRecord(message)) continue
+
+        if (message.id === 1) {
+          if (message.error !== undefined) {
+            finish(null)
+            continue
+          }
+          // The protocol requires the initialized acknowledgement before any
+          // thread method. It has no id because it is a notification.
+          send({ jsonrpc: "2.0", method: "initialized", params: {} })
+          // Do not set `excludeTurns`: Codex intentionally skips the restored
+          // token-usage replay in that mode.
+          send({
+            jsonrpc: "2.0",
+            id: 2,
+            method: "thread/resume",
+            params: { threadId }
+          })
+          continue
+        }
+        if (message.id === 2 && message.error !== undefined) finish(null)
+      }
+    })
+
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "starbase", version: "1" } }
+    })
+  })
+}

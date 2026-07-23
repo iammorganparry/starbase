@@ -20,6 +20,7 @@ import type {
   PlanComment,
   ProviderModels,
   QuestionAnswer,
+  ReasoningEffort,
   ReviewPhase,
   Session,
   SessionStatus,
@@ -36,6 +37,7 @@ import {
   applySubagentEvent,
   assistantMessage,
   defaultModel,
+  latestPlan,
   nextReviewPhase,
   isSubagentEvent,
   retractSubagent,
@@ -76,6 +78,10 @@ export interface ConversationContext {
   readonly pendingText: string
   /** Images attached to the turn currently running (sent to the harness). */
   readonly pendingImages: ReadonlyArray<Attachment>
+  /** Harness target for the pending turn; Gigaplan intake has its own thread. */
+  readonly agentTarget: "session" | "orchestrator"
+  /** Semantic thinking strength for the next and subsequent turns. */
+  readonly reasoningEffort?: ReasoningEffort
   /**
    * Messages the operator sent while the agent was busy — held FIFO and sent, one
    * turn at a time, as soon as the current run (and its diff refresh) settles.
@@ -172,10 +178,12 @@ type ConversationEvent =
   | { type: "ANSWER_QUESTION"; requestId: string; answers: ReadonlyArray<QuestionAnswer> }
   | { type: "SET_MODE"; mode: PermissionMode }
   | { type: "SET_HARNESS"; cli: CliKind; model: string }
+  | { type: "SET_REASONING"; reasoningEffort?: ReasoningEffort }
   | { type: "SKILLS_LOADED"; skills: ReadonlyArray<Skill> }
   | { type: "CATALOG_LOADED"; catalog: ReadonlyArray<ProviderModels> }
   | { type: "READINESS_LOADED"; readiness: PlanningReadiness }
   | { type: "PLAN_ADVERSARIALLY"; brief: string }
+  | { type: "HANDOFF_PLAN" }
   | { type: "REVIEW_EVENT"; event: StreamEvent }
   | { type: "COMMENT_PLAN_STEP"; planId: string; stepId: string; body: string }
   | { type: "REVISE_PLAN"; planId: string }
@@ -260,6 +268,8 @@ const agentStream = fromCallback<
     adversarialBrief: string | null
     executePlanId: string | null
     executePlanMode: ExecutionMode | null
+    agentTarget: "session" | "orchestrator"
+    reasoningEffort?: ReasoningEffort
   }
 >(({ sendBack, input }) => {
   const onEvent = (event: StreamEvent) => sendBack({ type: "STREAM_EVENT", event })
@@ -269,15 +279,23 @@ const agentStream = fromCallback<
   // else is a normal turn. They share the `running` state because they share
   // everything that matters downstream — the same StreamEvents, the same fold,
   // the same stop button.
-  const cancel = input.adversarialBrief
+  const cancel = input.adversarialBrief !== null
     ? // The brief's screenshots go with it: a Gigaplan round is very often
       // "build this mockup", and the roles run headless with no other way to see it.
-      rpc.planAdversarial(input.sessionId, input.adversarialBrief, onEvent, input.images)
+      rpc.planAdversarial(
+        input.sessionId,
+        input.adversarialBrief.length > 0 ? input.adversarialBrief : undefined,
+        onEvent,
+        input.images
+      )
     : input.executePlanId
       ? rpc.planExecute(input.sessionId, input.executePlanId, input.executePlanMode, onEvent)
       : input.resumePlanId
         ? rpc.agentResumePlan(input.sessionId, input.resumePlanId, onEvent)
-        : rpc.agentRun(input.sessionId, input.text, onEvent, input.images)
+        : rpc.agentRun(input.sessionId, input.text, onEvent, input.images, {
+            target: input.agentTarget,
+            reasoningEffort: input.reasoningEffort ?? null
+          })
   return cancel
 })
 
@@ -329,29 +347,6 @@ export const conversationMachine = setup({
       (event.event._tag === "Done" || event.event._tag === "Failed"),
     hasQueued: ({ context }) => context.queued.length > 0,
     canPlanAdversarially: ({ context }) => context.planReadiness?.ready === true,
-    /**
-     * Whether an ordinary send should become a planning round.
-     *
-     * Both halves matter. The harness check is the operator's choice; the
-     * readiness check is the same one the explicit trigger uses, because a round
-     * the service would only refuse must not be started from a keyboard path
-     * either. When readiness says no, the send falls through to a normal turn
-     * rather than failing — the session still works, it just isn't orchestrated.
-     */
-    /**
-     * Whether this send is a Gigaplan round.
-     *
-     * Reads `context.mode`, which tracks the live mode rather than whatever was
-     * persisted — the operator can switch mid-session, and orchestrating after
-     * they switched away (or refusing after they switched to it) would both be
-     * wrong. The readiness half is not redundant: the mode can be persisted on a
-     * machine that HAD two providers and reopened on one that doesn't, and a
-     * round the service would only refuse must not start from a keyboard path.
-     * When readiness says no the send falls through to an ordinary turn, so the
-     * session still works — it just isn't orchestrated.
-     */
-    orchestrates: ({ context }) =>
-      context.mode === "gigaplan" && context.planReadiness?.ready === true,
 
     /**
      * Whether THIS plan needs the per-step executor — asked of the plan, not of
@@ -391,6 +386,7 @@ export const conversationMachine = setup({
       return {
         pendingText: text,
         pendingImages: images,
+        agentTarget: context.mode === "gigaplan" ? "orchestrator" : "session",
         // A fresh turn starts with no sub-agents (any from a prior turn are gone).
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
@@ -422,6 +418,7 @@ export const conversationMachine = setup({
       const id = stamp()
       return {
         resumePlanId: event.planId,
+        agentTarget: "session" as const,
         // Both cleared, because `agentStream` picks its RPC by checking these in
         // order and `adversarialBrief` wins. Leaving the finished round's brief
         // set meant approving its plan started a WHOLE SECOND ROUND — two
@@ -481,6 +478,7 @@ export const conversationMachine = setup({
         queued: rest,
         pendingText: next.text,
         pendingImages: next.images,
+        agentTarget: context.mode === "gigaplan" ? "orchestrator" : "session",
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         resumePlanId: null,
@@ -608,6 +606,11 @@ export const conversationMachine = setup({
         ? { mode: event.mode, executionMode: event.mode }
         : { mode: event.mode }
     }),
+    persistReasoning: assign(({ context, event }) => {
+      if (event.type !== "SET_REASONING") return {}
+      void rpc.agentSetReasoning(context.session.id, event.reasoningEffort)
+      return { reasoningEffort: event.reasoningEffort }
+    }),
     // Plan mode (optimistic + fire-and-forget, like the gate/question actions).
     // The runner echoes a `PlanUpdated` so the authoritative state reconciles.
     optimisticPlanComment: assign(({ context, event }) => {
@@ -647,6 +650,7 @@ export const conversationMachine = setup({
       return {
         executePlanId: event.planId,
         executePlanMode: executionMode,
+        agentTarget: "session" as const,
         resumePlanId: null,
         adversarialBrief: null,
         mode: executionMode,
@@ -742,31 +746,30 @@ export const conversationMachine = setup({
      * machinery — stop, streaming, sub-agent tabs — rather than duplicating it.
      */
     beginAdversarial: assign(({ context, event }) => {
-      // Two ways in, one behaviour: the explicit trigger, and an ordinary send
-      // on a session whose harness IS the orchestrator. On that harness there is
-      // no separate "plan adversarially" gesture to make — driving the round is
-      // the whole reason the operator picked it — so the brief is just whatever
-      // they typed.
-      const brief =
-        event.type === "PLAN_ADVERSARIALLY"
-          ? event.brief
-          : event.type === "SEND"
-            ? event.text
-            : null
-      if (brief === null || brief.trim().length === 0) return {}
-      // Screenshots ride along with the brief. `pendingImages` is what the run
-      // actor reads, so clearing it here — as an ordinary send does after
-      // handing them over — would drop the very mockup the round is about.
-      const images = event.type === "SEND" ? (event.images ?? []) : []
+      if (event.type !== "HANDOFF_PLAN" && event.type !== "PLAN_ADVERSARIALLY") return {}
+      const explicitBrief =
+        event.type === "PLAN_ADVERSARIALLY" ? event.brief.trim() : null
+      if (explicitBrief !== null && explicitBrief.length === 0) return {}
+      // Empty is an intentional sentinel: main derives the brief and screenshots
+      // from the durable Gigaplan intake transcript.
+      const brief = explicitBrief ?? ""
+      const label =
+        explicitBrief ??
+        (latestPlan(context.messages) === null
+          ? "Create a plan from this Gigaplan conversation."
+          : "Update the plan from this Gigaplan conversation.")
       const now = new Date().toISOString()
       const id = stamp()
       return {
         adversarialBrief: brief,
+        agentTarget: "session" as const,
         pendingText: "",
-        pendingImages: images,
+        pendingImages: [],
         subagents: [],
         reviewer: keepReviewer(context.reviewer),
         resumePlanId: null,
+        executePlanId: null,
+        executePlanMode: null,
         tokens: 0,
         runStartedAt: Date.now(),
         lastOutcome: null,
@@ -776,7 +779,7 @@ export const conversationMachine = setup({
         // it — would be silently dropped.
         messages: [
           ...context.messages,
-          userMessage(`u_local_${id}`, brief, now, images),
+          userMessage(`u_local_${id}`, label, now),
           assistantMessage(`a_local_${id}`, now)
         ]
       }
@@ -896,7 +899,8 @@ export const conversationMachine = setup({
     CATALOG_LOADED: { actions: "applyCatalog" },
     READINESS_LOADED: { actions: "applyReadiness" },
     SKILLS_LOADED: { actions: "applySkills" },
-    REVIEW_EVENT: { actions: "applyReview" }
+    REVIEW_EVENT: { actions: "applyReview" },
+    SET_REASONING: { actions: "persistReasoning" }
   },
   context: ({ input }) => ({
     session: input.session,
@@ -914,6 +918,8 @@ export const conversationMachine = setup({
     patch: "",
     pendingText: "",
     pendingImages: [],
+    agentTarget: "session",
+    reasoningEffort: input.session.reasoningEffort,
     queued: [],
     subagents: [],
     resumePlanId: null,
@@ -996,13 +1002,9 @@ export const conversationMachine = setup({
       // status can be recorded truthfully.
       entry: "persistSettledStatus",
       on: {
-        SEND: [
-          // In Gigaplan, a send IS the round — that is what selecting the mode
-          // asks for. Every other mode is an ordinary turn on the model the
-          // operator picked.
-          { guard: "orchestrates", target: "running", actions: "beginAdversarial" },
-          { target: "running", actions: "appendTurns" }
-        ],
+        // Gigaplan sends continue its orchestrator intake thread. The separate
+        // handoff below is the only path that spends on an adversarial round.
+        SEND: { target: "running", actions: "appendTurns" },
         // Approving a finished Gigaplan runs it per-step; anything else
         // re-drives a stale plan on the session's own harness. Both arrive here
         // rather than in `running` because neither has a live run to resume:
@@ -1028,6 +1030,11 @@ export const conversationMachine = setup({
           target: "running",
           actions: "beginAdversarial"
         },
+        HANDOFF_PLAN: {
+          guard: "canPlanAdversarially",
+          target: "running",
+          actions: "beginAdversarial"
+        },
         // Re-read the worktree diff on demand (e.g. after a revert from the rail).
         REFRESH_DIFF: { target: "refreshingDiff" }
       }
@@ -1042,7 +1049,9 @@ export const conversationMachine = setup({
           resumePlanId: context.resumePlanId,
           adversarialBrief: context.adversarialBrief,
           executePlanId: context.executePlanId,
-          executePlanMode: context.executePlanMode
+          executePlanMode: context.executePlanMode,
+          agentTarget: context.agentTarget,
+          reasoningEffort: context.reasoningEffort
         })
       },
       on: {

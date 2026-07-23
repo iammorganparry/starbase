@@ -13,23 +13,19 @@ const renderAt = (width: number, props: Partial<React.ComponentProps<typeof Comp
   )
 
 describe("Composer at width", () => {
-  it("shows the keyboard hint when there's room for it", () => {
+  it("keeps decorative keyboard hints out even when there is room", () => {
     renderAt(1000)
-    expect(screen.getByText("/ · @ · paste image")).toBeTruthy()
-  })
-
-  it("drops the keyboard hint first — it costs ~120px and has no affordance", () => {
-    renderAt(500)
     expect(screen.queryByText("/ · @ · paste image")).toBeNull()
   })
 
-  it("keeps Send visible at every width", () => {
+  it("keeps Send and thinking visible at every width", () => {
     // The primary action is `flex-none` and last in DOM order precisely so a
     // squeeze wraps the chips above it rather than pushing it past the border.
     for (const width of [1200, 700, 450, 320]) {
       cleanup()
       renderAt(width)
       expect(screen.getByRole("button", { name: /Send/ })).toBeTruthy()
+      expect(screen.getByRole("button", { name: "Thinking strength" })).toBeTruthy()
     }
   })
 

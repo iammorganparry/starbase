@@ -22,6 +22,7 @@ import type {
   Plan,
   QuestionAnswer,
   QuestionRequest,
+  ReasoningEffort,
   ReviewPhase,
   Session,
   SessionStatus,
@@ -35,6 +36,7 @@ import { getConversationActor } from "./conversation-registry.js"
 export interface Conversation {
   readonly messages: ReadonlyArray<Message>
   readonly mode: PermissionMode
+  readonly reasoningEffort?: ReasoningEffort
   readonly skills: ReadonlyArray<Skill>
   readonly files: ReadonlyArray<string>
   /**
@@ -77,10 +79,11 @@ export interface Conversation {
   readonly sendPrompt: (text: string, images?: ReadonlyArray<Attachment>) => void
   readonly decideGate: (gateId: string, decision: GateDecision) => void
   readonly setMode: (mode: PermissionMode) => void
+  readonly setReasoning: (reasoningEffort?: ReasoningEffort) => void
   /** Whether an adversarial planning round can run, and the reason when it can't. */
   readonly adversarialPlanning: { readonly ready: boolean; readonly reason: string | null } | null
-  /** Start an adversarial planning round for `brief`. */
-  readonly planAdversarially: (brief: string) => void
+  /** Hand the durable Gigaplan intake thread to the adversarial planners. */
+  readonly handoffPlan: () => void
   /** Picking a model implies its harness, so both are set together. */
   readonly setHarness: (cli: CliKind, model: string) => void
   /**
@@ -100,7 +103,7 @@ export function useConversation(session: Session): Conversation {
   const state = useSelector(actor, (s) => s)
   const send = actor.send
   const {
-    messages, mode, skills, files, cli, model, catalog, patch, queued, subagents, tokens,
+    messages, mode, reasoningEffort, skills, files, cli, model, catalog, patch, queued, subagents, tokens,
     runStartedAt, reviewer, reviewPhase, reviewStartedAt
   } = state.context
 
@@ -129,6 +132,7 @@ export function useConversation(session: Session): Conversation {
   return {
     messages,
     mode,
+    reasoningEffort,
     skills,
     files,
     cli,
@@ -157,8 +161,9 @@ export function useConversation(session: Session): Conversation {
     decideGate: (gateId, decision) => send({ type: "DECIDE_GATE", gateId, decision }),
     answerQuestion: (requestId, answers) => send({ type: "ANSWER_QUESTION", requestId, answers }),
     setMode: (m) => send({ type: "SET_MODE", mode: m }),
+    setReasoning: (effort) => send({ type: "SET_REASONING", reasoningEffort: effort }),
     adversarialPlanning: state.context.planReadiness,
-    planAdversarially: (brief) => send({ type: "PLAN_ADVERSARIALLY", brief }),
+    handoffPlan: () => send({ type: "HANDOFF_PLAN" }),
     setHarness: (c, m) => send({ type: "SET_HARNESS", cli: c, model: m }),
     stop: () => send({ type: "STOP" }),
     refreshDiff: () => send({ type: "REFRESH_DIFF" })

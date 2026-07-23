@@ -89,6 +89,7 @@ import type {
   SettledSessionStatus,
   ProviderModels,
   ProvidersConfig,
+  ReasoningEffort,
   Usage
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
@@ -228,7 +229,13 @@ export const createSessionFromPr = (input: CreateSessionFromPrInput) =>
   Effect.gen(function* () {
     const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
     const allowSharedCheckout = config?.git?.shareCheckedOutBranches ?? true
-    return yield* SessionStore.createFromPr(input, { allowSharedCheckout })
+    const provider = config?.providers?.[input.cli]
+    return yield* SessionStore.createFromPr(input, {
+      allowSharedCheckout,
+      defaultMode: provider?.defaultMode,
+      defaultModel: provider?.defaultModel,
+      defaultReasoningEffort: provider?.reasoningEffort
+    })
   })
 
 /**
@@ -243,7 +250,8 @@ export const createSession = (input: CreateSessionInput) =>
     const provider = config?.providers?.[input.cli]
     return yield* SessionStore.create(input, {
       defaultMode: provider?.defaultMode,
-      defaultModel: provider?.defaultModel
+      defaultModel: provider?.defaultModel,
+      defaultReasoningEffort: provider?.reasoningEffort
     })
   })
 
@@ -330,7 +338,8 @@ export const createSessionFromIssue = (input: CreateSessionFromIssueInput) =>
     const provider = config?.providers?.[input.cli]
     return yield* SessionStore.createFromIssue(input, {
       defaultMode: provider?.defaultMode,
-      defaultModel: provider?.defaultModel
+      defaultModel: provider?.defaultModel,
+      defaultReasoningEffort: provider?.reasoningEffort
     })
   })
 
@@ -889,6 +898,51 @@ type PlanAdversarialEnv =
   | Path.Path
   | AppPaths
 
+/** Build the planner handoff from the durable Gigaplan intake, not one message. */
+export const gigaplanBriefFromTranscript = (messages: ReadonlyArray<Message>): string => {
+  const turns = messages.flatMap((message) => {
+    const parts = message.parts.flatMap((part): ReadonlyArray<string> => {
+      if (part._tag === "Text" && part.text.trim().length > 0) return [part.text.trim()]
+      if (part._tag === "Plan") return [`ACTIVE PLAN\n${part.plan.raw.trim()}`]
+      if (part._tag !== "Question") return []
+      return part.request.questions.map((question, index) => {
+        const answer = part.answers?.[index]
+        const response = answer
+          ? [...answer.selected, ...(answer.other ? [answer.other] : [])].join(", ")
+          : "Unanswered"
+        return `QUESTION: ${question.question}\nANSWER: ${response}`
+      })
+    })
+    return parts.length === 0
+      ? []
+      : [`${message.role === "user" ? "OPERATOR" : "ORCHESTRATOR"}\n${parts.join("\n\n")}`]
+  })
+  const body = turns.join("\n\n").trim()
+  // Keep the newest context when an intake has become very long. The active
+  // harness thread still holds the full discussion; the round needs a bounded
+  // brief that does not crowd out its repository inspection.
+  const bounded = body.length > 60_000 ? body.slice(-60_000) : body
+  return bounded.length === 0
+    ? ""
+    : `Create or update the implementation plan from this reviewed Gigaplan intake.\n\n${bounded}`
+}
+
+const gigaplanImagesFromTranscript = (
+  messages: ReadonlyArray<Message>
+): ReadonlyArray<Attachment> => {
+  const seen = new Set<string>()
+  return messages
+    .flatMap((message) =>
+      message.parts.flatMap((part) => (part._tag === "Image" ? [part.attachment] : []))
+    )
+    .filter((attachment) => {
+      if (seen.has(attachment.id)) return false
+      seen.add(attachment.id)
+      return true
+    })
+    .slice(-8)
+}
+
 /**
  * `Plan.adversarial` handler — run a planning round and stream its events.
  *
@@ -898,7 +952,7 @@ type PlanAdversarialEnv =
  */
 export const planAdversarial = (
   sessionId: string,
-  brief: string,
+  brief?: string,
   images: ReadonlyArray<Attachment> = []
 ): Stream.Stream<StreamEvent, PlanError, PlanAdversarialEnv> =>
   Stream.unwrap(
@@ -911,6 +965,19 @@ export const planAdversarial = (
           })
         )
       }
+      const prior = yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => []))
+      const explicitBrief = brief?.trim() ?? ""
+      const roundBrief =
+        explicitBrief.length > 0 ? explicitBrief : gigaplanBriefFromTranscript(prior)
+      if (roundBrief.length === 0) {
+        return Stream.fail(
+          new PlanError({
+            message: "Gigaplan needs an intake conversation before it can create a plan."
+          })
+        )
+      }
+      const roundImages =
+        images.length > 0 ? images : gigaplanImagesFromTranscript(prior)
       const { clis, catalog, config, usage, vendors } = yield* planningVendors
       const routingMode = config?.gigaplanRouting?.mode ?? "shadow"
       const ranking = routingMode === "active" ? yield* RankingService.latest : null
@@ -937,7 +1004,6 @@ export const planAdversarial = (
       // Seed past any id already in the transcript, for the reason `AgentRunner`
       // does: ids are positional, and a round after a restart would otherwise
       // collide with earlier turns and stack rows keyed by the same id.
-      const prior = yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => []))
       const maxN = prior.reduce((max, m) => {
         const n = Number(m.id.split("_").pop())
         return Number.isFinite(n) && n > max ? n : max
@@ -948,7 +1014,16 @@ export const planAdversarial = (
         sessionId,
         // The attachments ride on the user turn exactly as they do for an
         // ordinary send, so a reopened session still shows what the round saw.
-        userMessage(`u_${sessionId}_${maxN + 1}`, brief, now, images)
+        userMessage(
+          `u_${sessionId}_${maxN + 1}`,
+          explicitBrief.length > 0
+            ? explicitBrief
+            : prior.some((message) => message.parts.some((part) => part._tag === "Plan"))
+              ? "Update the plan from this Gigaplan conversation."
+              : "Create a plan from this Gigaplan conversation.",
+          now,
+          roundImages
+        )
       ).pipe(Effect.ignore)
       const assistantId = `a_${sessionId}_${maxN + 2}`
       yield* TranscriptStore.append(sessionId, assistantMessage(assistantId, now)).pipe(
@@ -968,8 +1043,8 @@ export const planAdversarial = (
           repo: session.repo,
           branch: session.branch,
           cwd: session.worktreePath,
-          brief,
-          images,
+          brief: roundBrief,
+          images: roundImages,
           vendors,
           binPathFor,
           assignAgents: true,
@@ -982,6 +1057,9 @@ export const planAdversarial = (
             usage,
             affinityEnabled: false
           },
+          ...(session.reasoningEffort
+            ? { reasoningEffort: session.reasoningEffort }
+            : {}),
           // Persistence is wired in here rather than inside the service so the
           // round logic stays free of the filesystem and testable without one.
           onRound: (round: PlanRound) => PlanRoundStore.set(round).pipe(Effect.provide(storeCtx))
@@ -1397,9 +1475,17 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Sessions.diff": ({ id }) => sessionDiff(id),
   // The streaming agent seam: unwrap the runner's `Stream<StreamEvent>` so the
   // renderer subscribes to normalized events, harness-agnostic.
-  "Agent.run": ({ sessionId, text, images }) =>
+  "Agent.run": ({ sessionId, text, images, target, reasoningEffort }) =>
     Stream.unwrap(
-      Effect.map(AgentRunner, (runner) => runner.prompt(sessionId, text, images ?? []))
+      Effect.map(AgentRunner, (runner) =>
+        runner.prompt(
+          sessionId,
+          text,
+          images ?? [],
+          target ?? "session",
+          reasoningEffort
+        )
+      )
     ),
   "Agent.decideGate": ({ sessionId, gateId, decision }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.decideGate(sessionId, gateId, decision)),
@@ -1407,6 +1493,11 @@ const HandlersLayer = StarbaseRpcs.toLayer({
     Effect.flatMap(AgentRunner, (runner) => runner.answerQuestion(sessionId, requestId, answers)),
   "Agent.setMode": ({ sessionId, mode }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.setMode(sessionId, mode)),
+  "Agent.setReasoning": ({ sessionId, reasoningEffort }) =>
+    SessionStore.setReasoningEffort(
+      sessionId,
+      reasoningEffort as ReasoningEffort | undefined
+    ).pipe(Effect.ignore),
   "Agent.commentPlanStep": ({ sessionId, planId, stepId, body }) =>
     Effect.flatMap(AgentRunner, (runner) =>
       runner.commentPlanStep(sessionId, planId, stepId, body)

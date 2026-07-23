@@ -27,6 +27,7 @@ import {
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
 import type {
   CliKind,
+  Message,
   Plan,
   RouteAttempt,
   RoutingRankingSnapshot,
@@ -45,6 +46,7 @@ import {
   createTerminal,
   eligibleRoutingCatalog,
   githubDetectPr,
+  gigaplanBriefFromTranscript,
   githubSubmitReview,
   githubPr,
   mcpList,
@@ -64,6 +66,48 @@ import {
   planReadiness,
   workspaceRevertLines
 } from "./rpc.js"
+
+describe("Gigaplan handoff brief", () => {
+  it("includes the whole intake, structured answers, and active plan", () => {
+    const messages = [
+      {
+        role: "user",
+        parts: [{ _tag: "Text", text: "Preserve the current filters." }]
+      },
+      {
+        role: "assistant",
+        parts: [
+          {
+            _tag: "Question",
+            request: {
+              id: "q1",
+              questions: [
+                {
+                  question: "Which export?",
+                  header: "Export",
+                  multiSelect: false,
+                  options: [{ label: "CSV", description: "Flat file" }]
+                }
+              ]
+            },
+            answers: [{ selected: ["CSV"], other: null }]
+          },
+          { _tag: "Plan", plan: { raw: "summary: Existing plan" } }
+        ]
+      },
+      {
+        role: "user",
+        parts: [{ _tag: "Text", text: "Also include hidden columns." }]
+      }
+    ] as unknown as ReadonlyArray<Message>
+
+    const brief = gigaplanBriefFromTranscript(messages)
+    expect(brief).toContain("Preserve the current filters.")
+    expect(brief).toContain("ANSWER: CSV")
+    expect(brief).toContain("ACTIVE PLAN")
+    expect(brief).toContain("Also include hidden columns.")
+  })
+})
 
 /**
  * The RPC handlers own the app's error-folding policy: a config read error must

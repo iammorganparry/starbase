@@ -16,7 +16,12 @@ import { conversationMachine } from "./conversation-machine.js"
 // Shared harness state the mocked rpc reads/writes (hoisted for the vi.mock factory).
 const h = vi.hoisted(() => ({
   streamCb: null as null | ((event: unknown) => void),
-  agentRunCalls: [] as Array<{ sessionId: string; text: string; images: unknown }>,
+  agentRunCalls: [] as Array<{
+    sessionId: string
+    text: string
+    images: unknown
+    options: unknown
+  }>,
   execCalls: [] as Array<{ sessionId: string; planId: string; executionMode: string | undefined }>,
   resumeCalls: [] as Array<{ sessionId: string; planId: string }>,
   diffValue: "diff-0",
@@ -35,7 +40,8 @@ const h = vi.hoisted(() => ({
   // Lets a test hold the transcript load, to drive the "typed before it lands" race.
   transcriptGate: Promise.resolve() as Promise<void>,
   setHarnessCalls: [] as Array<{ sessionId: string; cli: string; model: string }>,
-  planCalls: [] as Array<{ sessionId: string; brief: string }>,
+  planCalls: [] as Array<{ sessionId: string; brief: string | undefined }>,
+  reasoningCalls: [] as Array<string | undefined>,
   readinessGate: Promise.resolve() as Promise<void>,
   readiness: { ready: true, vendors: [], reason: null } as {
     ready: boolean
@@ -68,8 +74,14 @@ vi.mock("./rpc-client.js", () => ({
       h.diffCalls += 1
       return h.diffValue
     },
-    agentRun: (sessionId: string, text: string, onEvent: (event: unknown) => void, images: unknown) => {
-      h.agentRunCalls.push({ sessionId, text, images })
+    agentRun: (
+      sessionId: string,
+      text: string,
+      onEvent: (event: unknown) => void,
+      images: unknown,
+      options: unknown
+    ) => {
+      h.agentRunCalls.push({ sessionId, text, images, options })
       h.streamCb = onEvent
       return () => {
         h.streamCb = null
@@ -98,7 +110,7 @@ vi.mock("./rpc-client.js", () => ({
         h.streamCb = null
       }
     },
-    planAdversarial: (sessionId: string, brief: string, onEvent: (event: unknown) => void) => {
+    planAdversarial: (sessionId: string, brief: string | undefined, onEvent: (event: unknown) => void) => {
       h.planCalls.push({ sessionId, brief })
       h.streamCb = onEvent
       return () => {
@@ -114,6 +126,9 @@ vi.mock("./rpc-client.js", () => ({
     agentDecideGate: async () => {},
     agentAnswerQuestion: async () => {},
     agentSetMode: async () => {},
+    agentSetReasoning: async (_sessionId: string, effort: string | undefined) => {
+      h.reasoningCalls.push(effort)
+    },
     agentSetHarness: async (sessionId: string, cli: string, model: string) => {
       h.setHarnessCalls.push({ sessionId, cli, model })
     },
@@ -158,6 +173,7 @@ beforeEach(() => {
   h.transcriptGate = Promise.resolve()
   h.reviewCb = null
   h.planCalls.length = 0
+  h.reasoningCalls.length = 0
   h.execCalls.length = 0
   h.resumeCalls.length = 0
   h.readinessGate = Promise.resolve()
@@ -914,6 +930,39 @@ describe("conversationMachine — stop", () => {
 })
 
 describe("conversationMachine — adversarial planning", () => {
+  it("continues Gigaplan as orchestrator chat until explicit handoff", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SET_MODE", mode: "gigaplan" })
+
+    actor.send({ type: "SEND", text: "The export must preserve filters" })
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.planCalls).toEqual([])
+    expect(h.agentRunCalls[0]).toMatchObject({
+      text: "The export must preserve filters",
+      options: { target: "orchestrator" }
+    })
+
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "HANDOFF_PLAN" })
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: undefined }])
+  })
+
+  it("applies a changed thinking strength to the next turn", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SET_REASONING", reasoningEffort: "think-hard" })
+    actor.send({ type: "SEND", text: "inspect the repo" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    expect(h.reasoningCalls).toEqual(["think-hard"])
+    expect(h.agentRunCalls[0]).toMatchObject({
+      options: { target: "session", reasoningEffort: "think-hard" }
+    })
+  })
+
   it("routes the round through the planning RPC, not a normal turn", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))

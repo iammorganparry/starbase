@@ -181,17 +181,20 @@ describe("SessionStore", () => {
     expect(s.diff).toStrictEqual({ added: 0, removed: 0 })
   })
 
-  it("stamps the provider's default mode + model when supplied (else leaves them unset)", async () => {
+  it("stamps provider mode, model, and reasoning defaults when supplied", async () => {
     const withDefaults = await runExit(
-      SessionStore.create(input(), { defaultMode: "plan", defaultModel: "opus" }).pipe(
-        Effect.provide(services)
-      ),
+      SessionStore.create(input(), {
+        defaultMode: "plan",
+        defaultModel: "opus",
+        defaultReasoningEffort: "think-hard"
+      }).pipe(Effect.provide(services)),
       temp.layer
     )
     expect(withDefaults._tag).toBe("Success")
     if (withDefaults._tag === "Success") {
       expect(withDefaults.value.mode).toBe("plan")
       expect(withDefaults.value.model).toBe("opus")
+      expect(withDefaults.value.reasoningEffort).toBe("think-hard")
     }
 
     const noDefaults = await runExit(
@@ -202,7 +205,32 @@ describe("SessionStore", () => {
     if (noDefaults._tag === "Success") {
       expect(noDefaults.value.mode).toBeUndefined()
       expect(noDefaults.value.model).toBeUndefined()
+      expect(noDefaults.value.reasoningEffort).toBeUndefined()
     }
+  })
+
+  it("keeps normal and Gigaplan resume ids independent", async () => {
+    const exit = await runExit(
+      Effect.gen(function* () {
+        const created = yield* SessionStore.create(input({ title: "Two threads" }))
+        yield* SessionStore.setResumeId(created.id, "normal-thread")
+        yield* SessionStore.setGigaplanResumeId(created.id, "intake-thread")
+        yield* SessionStore.setReasoningEffort(created.id, "ultrathink")
+        const configured = yield* SessionStore.get(created.id)
+        yield* SessionStore.setReasoningEffort(created.id, undefined)
+        const cleared = yield* SessionStore.get(created.id)
+        return { configured, cleared }
+      }).pipe(Effect.provide(services)),
+      temp.layer
+    )
+    expect(exit._tag).toBe("Success")
+    if (exit._tag !== "Success") return
+    expect(exit.value.configured.resumeId).toBe("normal-thread")
+    expect(exit.value.configured.gigaplanResumeId).toBe("intake-thread")
+    expect(exit.value.configured.reasoningEffort).toBe("ultrathink")
+    expect(exit.value.cleared.resumeId).toBe("normal-thread")
+    expect(exit.value.cleared.gigaplanResumeId).toBe("intake-thread")
+    expect(exit.value.cleared.reasoningEffort).toBeUndefined()
   })
 
   it("falls back to the 'session' slug when the title has no alphanumerics", async () => {

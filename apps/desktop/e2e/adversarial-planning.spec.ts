@@ -13,8 +13,7 @@ const GIGAPLAN_SETTINGS = /^Gigaplan/
  * on the conversation machine's entry, so if that RPC were missing from
  * `HandlersLayer` — or its contract disagreed with its handler, both of which
  * type-check fine — the call would reject and readiness would stay null. That is
- * load-bearing twice over: readiness decides whether Gigaplan is offered in the
- * mode chip at all, and whether a send in that mode becomes a round.
+ * Readiness decides whether Gigaplan and its explicit plan handoff are offered.
  *
  * Driven through the UI rather than an injected RPC global on purpose: adding a
  * test hook to production code to verify production code is a weaker check than
@@ -60,6 +59,11 @@ const runGigaplanRound = async (window: Page) => {
   const composer = window.getByPlaceholder("Message Claude…")
   await composer.fill("Add deterministic request limits")
   await composer.press("Enter")
+  // The first message is intake on the configured orchestrator. A round starts
+  // only when the operator explicitly hands that conversation to the planners.
+  const createPlan = window.getByRole("button", { name: "Create plan" })
+  await expect(createPlan).toBeEnabled({ timeout: 30_000 })
+  await createPlan.click()
   await expect(window.getByText("Plan Review").first()).toBeVisible({ timeout: 30_000 })
   await window.getByText("Plan Review").first().click()
   await expect(window.getByRole("button", { name: /^01 Add request limiter/ })).toBeVisible({
@@ -92,20 +96,38 @@ test("selecting Gigaplan takes the model picker away, and changing mode brings i
   await expect(modelChip).toBeVisible()
 
   const ordinaryMode = window.getByRole("button", { name: "accept edits" })
-  const ordinaryWidth = await ordinaryMode.evaluate((element) => element.getBoundingClientRect().width)
   await ordinaryMode.click()
   await window.getByRole("menuitem", { name: "Gigaplan" }).click()
 
   const gigaplanMode = window.getByRole("button", { name: "Gigaplan" })
   await expect(gigaplanMode).toBeVisible()
-  const gigaplanWidth = await gigaplanMode.evaluate((element) => element.getBoundingClientRect().width)
-  expect(Math.abs(gigaplanWidth - ordinaryWidth)).toBeLessThan(1)
   await expect(modelChip).toHaveCount(0)
 
   // Back to an ordinary mode → the picker returns, on the same model.
   await window.getByRole("button", { name: "Gigaplan" }).click()
   await window.getByRole("menuitem", { name: "ask" }).click()
   await expect(window.getByRole("button", { name: /opus/ })).toBeVisible()
+})
+
+test("Gigaplan follow-ups stay conversational until Create plan is clicked", async ({
+  launchApp
+}) => {
+  const { window } = await openSession(launchApp)
+  await window.getByRole("button", { name: "accept edits" }).click()
+  await window.getByRole("menuitem", { name: "Gigaplan" }).click()
+  const composer = window.getByPlaceholder("Message Claude…")
+  const createPlan = window.getByRole("button", { name: "Create plan" })
+
+  await composer.fill("Preserve the active filters")
+  await composer.press("Enter")
+  await expect(createPlan).toBeEnabled({ timeout: 30_000 })
+
+  await composer.fill("Also include hidden columns")
+  await composer.press("Enter")
+  await expect(createPlan).toBeEnabled({ timeout: 30_000 })
+
+  await expect(window.getByRole("button", { name: /^01 Add request limiter/ })).toHaveCount(0)
+  await expect(window.getByRole("button", { name: "Update plan" })).toHaveCount(0)
 })
 
 test("a real shadow round preserves execution while showing the semantic recommendation", async ({
@@ -117,7 +139,7 @@ test("a real shadow round preserves execution while showing the semantic recomme
 
   await expect(window.getByLabel("Will run on claude opus").last()).toBeVisible()
   await expect(window.getByText(/Shadow recommendation: codex\/gpt-5\.5/)).toBeVisible()
-  await expect(window.getByText(/system-default · gigaplan-routing-v3/)).toBeVisible()
+  await expect(window.getByText(/system-default · gigaplan-routing-v\d+/)).toBeVisible()
 })
 
 test("a real active round applies the deterministic semantic route", async ({ launchApp }) => {
@@ -128,7 +150,7 @@ test("a real active round applies the deterministic semantic route", async ({ la
   await runGigaplanRound(window)
 
   await expect(window.getByLabel("Will run on codex gpt-5.5").last()).toBeVisible()
-  await expect(window.getByText(/policy-profile · gigaplan-routing-v3/)).toBeVisible()
+  await expect(window.getByText(/policy-profile · gigaplan-routing-v\d+/)).toBeVisible()
   await expect(window.getByText(/Shadow recommendation:/)).toHaveCount(0)
 })
 

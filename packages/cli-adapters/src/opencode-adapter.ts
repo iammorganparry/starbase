@@ -1,4 +1,4 @@
-import type { PermissionMode, StreamEvent } from "@starbase/core"
+import type { PermissionMode, ReasoningEffort, StreamEvent } from "@starbase/core"
 import { CliExecError, resumePlanPrompt, splitModelId } from "@starbase/core"
 import type { Event, Part } from "@opencode-ai/sdk"
 import { Effect, Runtime } from "effect"
@@ -42,6 +42,24 @@ import { worktreeEnv } from "./worktree-env.js"
  * exported here because it reads as an opencode concern at every call site.
  */
 export { splitModelId }
+
+/** OpenCode exposes model-defined reasoning variants as a string per prompt. */
+export const mapOpencodeReasoning = (
+  effort: ReasoningEffort | undefined
+): string | undefined => {
+  switch (effort) {
+    case "off":
+      return "minimal"
+    case "think":
+      return "medium"
+    case "think-hard":
+      return "high"
+    case "ultrathink":
+      return "xhigh"
+    default:
+      return undefined
+  }
+}
 
 /**
  * opencode's permission config for a run. Values are `"ask" | "allow" | "deny"`.
@@ -800,6 +818,9 @@ const driveOpencode = async (
           path: { id: opencodeSessionId },
           body: {
             ...(spec.model === null ? {} : { model: splitModelId(spec.model) }),
+            ...(mapOpencodeReasoning(spec.reasoningEffort)
+              ? { variant: mapOpencodeReasoning(spec.reasoningEffort) }
+              : {}),
             // Withheld per PROMPT, not per run: the plan turn cannot edit, and
             // the execution prompt that follows approval can. See `planTools`.
             ...(planning ? { tools: { ...planTools } } : {}),

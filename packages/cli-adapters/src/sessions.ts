@@ -5,6 +5,7 @@ import type {
   CreateSessionInput,
   IssueAutomations,
   PermissionMode,
+  ReasoningEffort,
   Session,
   SettledSessionStatus
 } from "@starbase/core"
@@ -162,7 +163,11 @@ export class SessionStore extends Effect.Service<SessionStore>()(
       const create = (
         input: CreateSessionInput,
         /** Provider defaults (from config) to stamp onto the new session. */
-        options: { defaultMode?: PermissionMode; defaultModel?: string } = {}
+        options: {
+          defaultMode?: PermissionMode
+          defaultModel?: string
+          defaultReasoningEffort?: ReasoningEffort
+        } = {}
       ): Effect.Effect<
         Session,
         GitError,
@@ -249,7 +254,10 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             // Seed the session's permission mode / model from the provider's
             // configured defaults (omitted → the harness falls back on its own).
             ...(options.defaultMode ? { mode: options.defaultMode } : {}),
-            ...(options.defaultModel ? { model: options.defaultModel } : {})
+            ...(options.defaultModel ? { model: options.defaultModel } : {}),
+            ...(options.defaultReasoningEffort
+              ? { reasoningEffort: options.defaultReasoningEffort }
+              : {})
           }
           // `existing` was read above (for the friendly-name collision check).
           // Re-read INSIDE the lock rather than reusing the list read before
@@ -275,7 +283,12 @@ export class SessionStore extends Effect.Service<SessionStore>()(
        */
       const createFromPr = (
         input: CreateSessionFromPrInput,
-        opts: { allowSharedCheckout: boolean } = { allowSharedCheckout: false }
+        opts: {
+          allowSharedCheckout?: boolean
+          defaultMode?: PermissionMode
+          defaultModel?: string
+          defaultReasoningEffort?: ReasoningEffort
+        } = {}
       ): Effect.Effect<
         Session,
         GitError | GhError,
@@ -316,7 +329,7 @@ export class SessionStore extends Effect.Service<SessionStore>()(
           // opted in (the git "share checked-out branches" lever), fall back to a
           // shared checkout so the PR can still be opened as a session.
           const checkout = GhService.checkoutPr(worktree.path, input.pr.number)
-          yield* opts.allowSharedCheckout
+          yield* (opts.allowSharedCheckout ?? false)
             ? checkout.pipe(
                 Effect.catchIf(
                   (e) => /already checked out|already used by worktree/i.test(e.message),
@@ -343,7 +356,12 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             updatedAt: now,
             worktreePath: worktree.path,
             repoPath: worktree.repoPath,
-            baseBranch: input.pr.baseRefName
+            baseBranch: input.pr.baseRefName,
+            ...(opts.defaultMode ? { mode: opts.defaultMode } : {}),
+            ...(opts.defaultModel ? { model: opts.defaultModel } : {}),
+            ...(opts.defaultReasoningEffort
+              ? { reasoningEffort: opts.defaultReasoningEffort }
+              : {})
           }
           const existing = yield* readAll()
           // Re-read INSIDE the lock rather than reusing the list read before
@@ -368,7 +386,11 @@ export class SessionStore extends Effect.Service<SessionStore>()(
        */
       const createFromIssue = (
         input: CreateSessionFromIssueInput,
-        options: { defaultMode?: PermissionMode; defaultModel?: string } = {}
+        options: {
+          defaultMode?: PermissionMode
+          defaultModel?: string
+          defaultReasoningEffort?: ReasoningEffort
+        } = {}
       ): Effect.Effect<
         Session,
         GitError,
@@ -430,7 +452,10 @@ export class SessionStore extends Effect.Service<SessionStore>()(
             repoPath: worktree.repoPath,
             baseBranch: input.baseBranch,
             ...(options.defaultMode ? { mode: options.defaultMode } : {}),
-            ...(options.defaultModel ? { model: options.defaultModel } : {})
+            ...(options.defaultModel ? { model: options.defaultModel } : {}),
+            ...(options.defaultReasoningEffort
+              ? { reasoningEffort: options.defaultReasoningEffort }
+              : {})
           }
           // Re-read INSIDE the lock rather than reusing the list read before
           // the worktree fork: that read is now seconds stale, and appending to
@@ -463,6 +488,14 @@ export class SessionStore extends Effect.Service<SessionStore>()(
 
       /** Persist the session's harness model. */
       const setModel = (id: string, model: string) => update(id, (s) => ({ ...s, model }))
+
+      /** Persist a per-session thinking override, or remove it to use the harness default. */
+      const setReasoningEffort = (id: string, reasoningEffort: ReasoningEffort | undefined) =>
+        update(id, (s) => {
+          if (reasoningEffort !== undefined) return { ...s, reasoningEffort }
+          const { reasoningEffort: _reasoningEffort, ...rest } = s
+          return rest
+        })
 
       /**
        * Accrue what a finished turn reported, ADDING to the session's running
@@ -513,6 +546,10 @@ export class SessionStore extends Effect.Service<SessionStore>()(
 
       /** Persist the harness session id so the conversation resumes after a restart. */
       const setResumeId = (id: string, resumeId: string) => update(id, (s) => ({ ...s, resumeId }))
+
+      /** Persist the independent Gigaplan intake conversation id. */
+      const setGigaplanResumeId = (id: string, gigaplanResumeId: string) =>
+        update(id, (s) => ({ ...s, gigaplanResumeId }))
 
       /**
        * Drop the harness session id so the NEXT turn starts a fresh conversation.
@@ -676,9 +713,11 @@ export class SessionStore extends Effect.Service<SessionStore>()(
         createFromIssue,
         setMode,
         setModel,
+        setReasoningEffort,
         addUsage,
         setHarness,
         setResumeId,
+        setGigaplanResumeId,
         clearResumeId,
         setContextTokens,
         setAutoCompact,

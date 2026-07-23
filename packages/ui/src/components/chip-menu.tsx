@@ -47,6 +47,8 @@ export function ChipMenu<T extends string>({
   renderTrailing,
   side = "top",
   matchTriggerWidth = false,
+  appearance = "chip",
+  ariaLabel,
   className
 }: {
   /** The currently-selected value (a check marks it in the list). */
@@ -89,6 +91,10 @@ export function ChipMenu<T extends string>({
   side?: "top" | "bottom"
   /** Make the menu exactly as wide as its trigger — what a field wants. */
   matchTriggerWidth?: boolean
+  /** `quiet` keeps the menu behavior while removing the composer's pill chrome. */
+  appearance?: "chip" | "quiet"
+  /** Accessible name when the visible value alone does not name the setting. */
+  ariaLabel?: string
   className?: string
 }) {
   const [open, setOpen] = useState(false)
@@ -150,8 +156,14 @@ export function ChipMenu<T extends string>({
       // composer row that may only have 320px for everything.
       title={typeof (current?.label ?? value) === "string" ? String(current?.label ?? value) : undefined}
       className={cn(
-        "inline-flex min-w-0 items-center gap-1.5 rounded-md border border-line bg-surface px-2 py-[3px] font-mono text-[11px] text-text-bright",
-        !disabled && "cursor-pointer hover:border-line-strong",
+        "inline-flex min-w-0 items-center gap-1.5 rounded-md font-mono text-[11px] text-text-bright",
+        appearance === "chip"
+          ? "border border-line bg-surface px-2 py-[3px]"
+          : "px-1.5 py-1 text-muted-foreground transition-colors",
+        !disabled &&
+          (appearance === "chip"
+            ? "cursor-pointer hover:border-line-strong"
+            : "cursor-pointer hover:bg-surface hover:text-text-bright"),
         className
       )}
     >
@@ -179,8 +191,10 @@ export function ChipMenu<T extends string>({
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
+          aria-label={ariaLabel}
           className={cn(
             "min-w-0 outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-ring",
+            appearance === "quiet" && "inline-flex min-h-10 items-center",
             // A custom trigger is usually a full-width field; the default chip
             // must stay intrinsically sized.
             trigger && "w-full text-left"

@@ -9,6 +9,7 @@ import type {
   PlanComment,
   QuestionAnswer,
   QuestionRequest,
+  ReasoningEffort,
   Session,
   StreamEvent
 } from "@starbase/core"
@@ -21,6 +22,7 @@ import {
   findApprovedPlan,
   isBackgroundTaskEvent,
   isSubagentEvent,
+  latestPlan,
   PLAN_AUTO_RUN_DEFAULT,
   resumePlanPrompt,
   setQuestionAnswers,
@@ -34,6 +36,7 @@ import { Cause, Deferred, Effect, Fiber, Mailbox, Option, Ref, Stream } from "ef
 import { adhdNote } from "./adhd-prompt.js"
 import { planNote } from "./plan-prompt.js"
 import { questionNote } from "./question-prompt.js"
+import { gigaplanIntakePrompt } from "./gigaplan-intake-prompt.js"
 import { AppPaths } from "./app-paths.js"
 import { ConfigService } from "./config.js"
 import { CliAdapter, PlanDecision } from "./adapter.js"
@@ -254,6 +257,8 @@ type PromptEnv =
   | FileSystem.FileSystem
   | Path.Path
   | AppPaths
+
+export type AgentRunTarget = "session" | "orchestrator"
 
 /**
  * Orchestrates a prompt against the selected harness. `prompt` returns a
@@ -588,7 +593,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     const promptSetup = (
       sessionId: string,
       text: string,
-      images: ReadonlyArray<Attachment>
+      images: ReadonlyArray<Attachment>,
+      target: AgentRunTarget,
+      reasoningEffort: ReasoningEffort | null | undefined
     ) =>
       Effect.suspend(() =>
         Effect.gen(function* () {
@@ -598,7 +605,8 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             Effect.orElseSucceed(() => null)
           )
 
-          const mode = (yield* Ref.get(modes)).get(sessionId) ?? session?.mode ?? "accept-edits"
+          const sessionMode =
+            (yield* Ref.get(modes)).get(sessionId) ?? session?.mode ?? "accept-edits"
           const allow = new Set<string>([
             ...((yield* Ref.get(allowlists)).get(sessionId) ?? []),
             ...(session?.allowlist ?? [])
@@ -614,13 +622,18 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           const sessionCli = session?.cli ?? "claude"
           const workspaceConfig = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
           const orchestrator = resolveOrchestrator(workspaceConfig)
+          const orchestrating = target === "orchestrator"
+          // Intake is read-only but ungated: the harness can inspect files without
+          // stopping for shell approval, while `readOnly` below removes mutation.
+          const mode: PermissionMode = orchestrating ? "auto" : sessionMode
           // Read once per turn: plan mode's commands run unattended unless the
           // operator switched that off in Settings.
           const planAutoRun = workspaceConfig?.planAutoRun ?? PLAN_AUTO_RUN_DEFAULT
           // Read per turn, not per session: flipping ADHD mode in Settings takes
           // effect on the very next message of an already-running session.
           const adhdMode = workspaceConfig?.adhdMode ?? ADHD_MODE_DEFAULT
-          const cli = sessionCli === "starbase" ? orchestrator.cli : sessionCli
+          const cli =
+            orchestrating || sessionCli === "starbase" ? orchestrator.cli : sessionCli
           // Cache the user's configured default exec mode so approving a plan can
           // restore it.
           const execDefault = yield* resolveExecMode(sessionId)
@@ -655,7 +668,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
            * reach this code: they run inside the harness process, and this is the
            * top-level turn path.
            */
-          const applied = yield* ContextManager.applyIfReady(sessionId)
+          const applied = orchestrating ? null : yield* ContextManager.applyIfReady(sessionId)
           const digest = applied?.digest ?? null
           // The WORKING SET at the moment of the swap, straight from the manager.
           //
@@ -703,8 +716,16 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // `planModeInstructions` as a real SDK option there, and saying it twice
           // would compete with the `ExitPlanMode` tool the harness is steered
           // toward. Everything else is told to end its reply with the block.
-          const planProtocol = mode === "plan" ? planNote(cli) : null
+          const planProtocol = !orchestrating && mode === "plan" ? planNote(cli) : null
           const planning = planProtocol === null ? "" : `${planProtocol}\n\n`
+          const priorMessages = yield* TranscriptStore.list(sessionId).pipe(
+            Effect.orElseSucceed(() => [] as ReadonlyArray<Message>)
+          )
+          const promptText = orchestrating
+            ? gigaplanIntakePrompt({ message: text, activePlan: latestPlan(priorMessages) })
+            : text
+          const resolvedReasoning =
+            reasoningEffort === undefined ? session?.reasoningEffort : reasoningEffort
 
           const spec: SessionSpec = {
             cli,
@@ -716,16 +737,17 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // turned `/babysit-pr …` into prose, and the turn came back instantly
             // with nothing to say — the empty "CLAUDE" block. When the operator
             // opens with a command, the context rides along AFTER it instead.
-            prompt: isSlashCommand(text)
-              ? `${text}\n\n${primer}${planPointer}${adhd}${ask}${planning}`.trimEnd()
-              : `${primer}${planPointer}${adhd}${ask}${planning}${text}`,
+            prompt: !orchestrating && isSlashCommand(promptText)
+              ? `${promptText}\n\n${primer}${planPointer}${adhd}${ask}${planning}`.trimEnd()
+              : `${primer}${planPointer}${adhd}${ask}${planning}${promptText}`,
             images,
             binPath,
             mode,
             model:
-              sessionCli === "starbase"
+              orchestrating || sessionCli === "starbase"
                 ? orchestrator.model
                 : (session?.model ?? defaultModel(cli)),
+            ...(resolvedReasoning ? { reasoningEffort: resolvedReasoning } : {}),
             // The persisted harness session id, so the adapter resumes the full
             // conversation even after a restart cleared its in-memory resume map.
             //
@@ -733,8 +755,14 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // harness conversation seeded with the summary. `fresh` is required
             // alongside it because the adapter prefers its in-memory resume map
             // over the spec, so a null id alone would silently resume anyway.
-            resumeId: digest === null ? session?.resumeId ?? null : null,
-            ...(digest === null ? {} : { fresh: true })
+            resumeId:
+              digest === null
+                ? orchestrating
+                  ? session?.gigaplanResumeId ?? null
+                  : session?.resumeId ?? null
+                : null,
+            ...(digest === null ? {} : { fresh: true }),
+            ...(orchestrating ? { readOnly: true } : {})
           }
 
           // Clear the PERSISTED id too, so a crash between here and the harness
@@ -770,8 +798,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // session, otherwise a run after a restart re-emits colliding ids
           // (`u_<sid>_1`, `a_<sid>_2`, …) and the virtualized transcript stacks
           // rows keyed by those ids. Deterministic: empty transcript → starts at 1.
-          const priorMax = (yield* TranscriptStore.list(sessionId).pipe(Effect.orElseSucceed(() => [])))
-            .reduce((max, m) => {
+          const priorMax = priorMessages.reduce((max, m) => {
               const n = Number(m.id.split("_").pop())
               return Number.isFinite(n) && n > max ? n : max
             }, 0)
@@ -956,7 +983,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               yield* TranscriptStore.patchLast(sessionId, () => next).pipe(Effect.ignore)
               // Persist the harness's actual model (reported on init) so the chip
               // reflects reality even when the session hadn't pinned one.
-              if (event._tag === "Started" && event.model) {
+              if (!orchestrating && event._tag === "Started" && event.model) {
                 yield* SessionStore.setModel(sessionId, event.model).pipe(Effect.ignore)
               }
               // Persist the harness session id (carried on Started) so the NEXT
@@ -964,7 +991,11 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // the adapter's in-memory resume map. `event.sessionId` is the
               // harness's own id, not our `sessionId` (the Starbase session key).
               if (event._tag === "Started" && event.sessionId.length > 0) {
-                yield* SessionStore.setResumeId(sessionId, event.sessionId).pipe(Effect.ignore)
+                yield* (
+                  orchestrating
+                    ? SessionStore.setGigaplanResumeId(sessionId, event.sessionId)
+                    : SessionStore.setResumeId(sessionId, event.sessionId)
+                ).pipe(Effect.ignore)
               }
               // Remember an edit's target path so its ToolEnd can tie back to a step.
               if (event._tag === "ToolStart" && EDIT_TOOLS.has(event.name) && event.target) {
@@ -986,7 +1017,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // be skipped at swap time — neither summarised nor replayed.
               //
               // `Done` is the only point at which the transcript is coherent.
-              if (event._tag === "Usage") {
+              if (!orchestrating && event._tag === "Usage") {
                 yield* ContextManager.observe(sessionId, event.tokens, event.window ?? null).pipe(
                   Effect.ignore
                 )
@@ -998,7 +1029,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
               // window size and compacted on every single turn, at a threshold
               // that moved with the tool count rather than the context. The
               // manager uses the latest `Usage` reading instead.
-              if (event._tag === "Done") {
+              if (!orchestrating && event._tag === "Done") {
                 yield* ContextManager.settle(sessionId).pipe(Effect.ignore)
               }
             }).pipe(Effect.provide(env), Effect.asVoid)
@@ -1007,7 +1038,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             Effect.gen(function* () {
               // Re-read the live mode each call so an in-run change (e.g. a plan
               // approval restoring the exec mode) takes effect on this same turn.
-              const liveMode = (yield* Ref.get(modes)).get(sessionId) ?? mode
+              const liveMode = orchestrating
+                ? mode
+                : (yield* Ref.get(modes)).get(sessionId) ?? mode
               if (verdict(liveMode, allow, req, planAutoRun) === "allow") return "allow" as const
               const gn = yield* nextId
               const gateId = `g_${sessionId}_${gn}`
@@ -1094,7 +1127,10 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             yield* emit({ _tag: "ContextCompacted", digest, tokensBefore: compactedFrom })
           }
 
-          const run = adapter.run(sessionId, spec, {
+          // A separate adapter key keeps the live resume map isolated too; a
+          // Claude intake thread must never displace a Codex session thread.
+          const adapterSessionId = orchestrating ? `${sessionId}:gigaplan` : sessionId
+          const run = adapter.run(adapterSessionId, spec, {
             emit,
             canUseTool,
             askQuestion,
@@ -1226,7 +1262,7 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                   if ((yield* Ref.get(eventCount)) > 0) return
                   yield* emit({
                     _tag: "Failed",
-                    message: `${session?.cli ?? "The agent"} produced no output for ${FIRST_EVENT_DEADLINE}. The turn was cancelled — send your message again.`
+                    message: `${orchestrating ? "The Gigaplan orchestrator" : (session?.cli ?? "The agent")} produced no output for ${FIRST_EVENT_DEADLINE}. The turn was cancelled — send your message again.`
                   })
                   yield* Fiber.interrupt(fiber)
                 })
@@ -1240,11 +1276,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
     const prompt = (
       sessionId: string,
       text: string,
-      images: ReadonlyArray<Attachment> = []
+      images: ReadonlyArray<Attachment> = [],
+      target: AgentRunTarget = "session",
+      reasoningEffort?: ReasoningEffort | null
     ): Stream.Stream<StreamEvent, never, PromptEnv> =>
       Stream.unwrapScoped(
         Effect.flatMap(sessionLock(sessionId), (lock) =>
-          lock.withPermits(1)(promptSetup(sessionId, text, images))
+          lock.withPermits(1)(promptSetup(sessionId, text, images, target, reasoningEffort))
         )
       )
 

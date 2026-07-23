@@ -4,6 +4,7 @@ import {
   asPermissionAsked,
   assistantText,
   createOpencodeMapper,
+  mapOpencodeReasoning,
   mapOpencodePermission,
   planTools,
   parseServerUrl,
@@ -26,6 +27,16 @@ import {
  */
 
 const ev = (e: unknown): Event => e as Event
+
+describe("mapOpencodeReasoning", () => {
+  it("leaves default unset and maps semantic strength to model variants", () => {
+    expect(mapOpencodeReasoning(undefined)).toBeUndefined()
+    expect(mapOpencodeReasoning("off")).toBe("minimal")
+    expect(mapOpencodeReasoning("think")).toBe("medium")
+    expect(mapOpencodeReasoning("think-hard")).toBe("high")
+    expect(mapOpencodeReasoning("ultrathink")).toBe("xhigh")
+  })
+})
 
 describe("splitModelId", () => {
   /**
