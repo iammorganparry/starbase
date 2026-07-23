@@ -629,15 +629,22 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           // Would swapping RIGHT NOW cost more than it saves? The digest is not
           // discarded when it would — it stays ready and is re-offered next turn,
           // so a hold costs one turn of extra context and nothing else.
-          const hold = shouldHoldSwap({
-            // Absent means the digest predates the verdict (or the model omitted
-            // it): "we don't know" must never hold a session open.
-            midFlow: state.digest.midFlow ?? false,
-            localHold: yield* midFlowLocally(sessionId),
-            tokens: tokensBefore,
-            window: state.window ?? contextWindowFor(session?.cli ?? "claude", session?.model ?? null),
-            deferrals: state.deferrals
-          })
+          // A forced recovery has no usable old conversation to preserve. The
+          // normal mid-flow hold is valuable for proactive/background digests,
+          // but applying it after a hard overflow (or an unsafe legacy resume)
+          // sends the next turn straight back to the already-dead vendor thread.
+          const hold =
+            !state.waitForReady &&
+            shouldHoldSwap({
+              // Absent means the digest predates the verdict (or the model omitted
+              // it): "we don't know" must never hold a session open.
+              midFlow: state.digest.midFlow ?? false,
+              localHold: yield* midFlowLocally(sessionId),
+              tokens: tokensBefore,
+              window:
+                state.window ?? contextWindowFor(session?.cli ?? "claude", session?.model ?? null),
+              deferrals: state.deferrals
+            })
           if (hold) {
             const reason =
               state.digest.midFlowReason ?? "the session is in the middle of something"
