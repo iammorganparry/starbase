@@ -100,9 +100,18 @@ const WINDOW_PREFIXES: Partial<Record<CliKind, ReadonlyArray<readonly [string, n
     // one can run into the harness ceiling without any way to reconcile down.
     ["haiku", 200_000]
   ],
-  // The gpt-5 family's INPUT window, which is the number that matters for
-  // context occupancy (the larger "total" figure includes output).
-  codex: [["gpt-5", 272_000]]
+  // Codex reports the effective session window through
+  // `thread/tokenUsage/updated.modelContextWindow`. Current GPT-5.6 sessions
+  // report 258,400 even though the public Responses API advertises a larger
+  // model context. This table is only the conservative pre-telemetry fallback;
+  // the live runtime value replaces it as soon as the adapter receives one.
+  codex: [
+    ["gpt-5.6-sol", 258_400],
+    ["gpt-5.6-terra", 258_400],
+    ["gpt-5.6-luna", 258_400],
+    ["gpt-5.6", 258_400],
+    ["gpt-5", 272_000]
+  ]
 }
 
 /**

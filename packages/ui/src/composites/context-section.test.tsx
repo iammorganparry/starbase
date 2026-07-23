@@ -96,7 +96,7 @@ describe("Settings → Context", () => {
     open()
     expect(screen.getByText(/apply to each harness's default model/)).toBeDefined()
     expect(screen.getByText("500k of 1M")).toBeDefined()
-    expect(screen.getByText("231k of 272k")).toBeDefined()
+    expect(screen.getByText("194k of 258k")).toBeDefined()
   })
 
   it("recomputes the trigger points when the budget moves", () => {
@@ -113,7 +113,7 @@ describe("Settings → Context", () => {
         claude: { enabled: true, defaultMode: "accept-edits", defaultModel: "claude-opus-4-1" }
       }
     })
-    expect(screen.getByText("170k of 200k")).toBeDefined()
+    expect(screen.getByText("150k of 200k")).toBeDefined()
   })
 
   it("falls back to the harness default when the configured model is empty", () => {

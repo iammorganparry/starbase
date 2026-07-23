@@ -82,7 +82,7 @@ vi.mock("./codex-app-server.js", () => ({
 }))
 
 // Imported AFTER the mock is registered.
-const { runCodex } = await import("./codex-adapter.js")
+const { runCodexSdk: runCodex } = await import("./codex-adapter.js")
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 

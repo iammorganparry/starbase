@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
-import { stageCodexInput } from "./codex-input.js"
+import { stageCodexInput, toCodexAppServerInput } from "./codex-input.js"
 
 describe("stageCodexInput", () => {
   it("keeps an image-free prompt as a plain string", async () => {
@@ -27,5 +27,19 @@ describe("stageCodexInput", () => {
 
     await staged.cleanup()
     await expect(access(image.path)).rejects.toThrow()
+  })
+})
+
+describe("toCodexAppServerInput", () => {
+  it("adds the app-server text metadata and translates local image casing", () => {
+    expect(
+      toCodexAppServerInput([
+        { type: "text", text: "inspect this" },
+        { type: "local_image", path: "/tmp/example.png" }
+      ])
+    ).toStrictEqual([
+      { type: "text", text: "inspect this", text_elements: [] },
+      { type: "localImage", path: "/tmp/example.png" }
+    ])
   })
 })
