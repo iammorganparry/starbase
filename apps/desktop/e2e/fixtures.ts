@@ -20,9 +20,12 @@ export interface SeedSession {
   readonly prNumber: number | null
   readonly costUsd: number
   readonly tokens: number
+  readonly contextTokens?: number
   readonly updatedAt: string
   readonly worktreePath?: string
   readonly baseBranch?: string
+  readonly model?: string
+  readonly resumeId?: string
   readonly mode?: "ask" | "accept-edits" | "auto"
   readonly archived?: boolean
   readonly archiveReason?: "merged" | "closed"
@@ -30,6 +33,11 @@ export interface SeedSession {
 }
 
 export interface LaunchOptions {
+  /**
+   * Route turns through the deterministic in-process adapter by default.
+   * Set false only when a spec needs a fake harness process end to end.
+   */
+  readonly scriptedAgent?: boolean
   /**
    * Relaunch against an EXISTING `~/starbase` (a previous launch's `home`) —
    * i.e. a real app restart, reading whatever the last run persisted rather than
@@ -222,19 +230,37 @@ const installFakeCodex = (binDir: string): void => {
   mkdirSync(binDir, { recursive: true })
   const shim = `#!/usr/bin/env node
 if (process.argv.includes("--version") || process.argv.includes("-v")) {
-  process.stdout.write("codex-cli 0.5.0\\n")
+  process.stdout.write("codex-cli 0.144.1\\n")
   process.exit(0)
 }
 if (process.argv[2] !== "app-server") process.exit(0)
 
-// Newline-delimited JSON-RPC over stdio, matching codex-models.ts: ack
-// \`initialize\` (id 1), then answer \`model/list\` (id 2) with the shape its
-// \`CodexModel\` parser expects.
+const fs = require("node:fs")
 const models = [
   { id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", isDefault: true },
   { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
   { id: "gpt-5.5", displayName: "GPT-5.5" }
 ]
+const send = (message) =>
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n")
+const notifyUsage = (tokens, turnId) =>
+  send({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "thread-e2e",
+      turnId,
+      tokenUsage: {
+        total: { totalTokens: tokens },
+        last: { totalTokens: tokens },
+        modelContextWindow: 258400
+      }
+    }
+  })
+const record = (method) => {
+  if (process.env.STARBASE_E2E_CODEX_LOG) {
+    fs.appendFileSync(process.env.STARBASE_E2E_CODEX_LOG, method + "\\n")
+  }
+}
 let buffer = ""
 process.stdin.on("data", (chunk) => {
   buffer += chunk.toString()
@@ -244,9 +270,56 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.slice(index + 1)
     if (line) {
       const msg = JSON.parse(line)
-      if (msg.id === 1) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }) + "\\n")
-      if (msg.id === 2) {
-        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { data: models } }) + "\\n")
+      if (msg.method) record(msg.method)
+      if (msg.method === "initialize") send({ id: msg.id, result: {} })
+      if (msg.method === "model/list") send({ id: msg.id, result: { data: models } })
+      if (msg.method === "thread/start") {
+        send({ id: msg.id, result: { thread: { id: "thread-e2e" } } })
+      }
+      if (msg.method === "thread/resume") {
+        send({ id: msg.id, result: { thread: { id: "thread-e2e" } } })
+        // Resume replay: high enough to require compaction before turn/start.
+        notifyUsage(206000, "turn-previous")
+      }
+      if (msg.method === "thread/compact/start") {
+        send({ id: msg.id, result: {} })
+      }
+      if (msg.method === "turn/start") {
+        send({ id: msg.id, result: { turn: { id: "turn-e2e" } } })
+        // Occupancy arrives after turn/start has resolved, like the real server.
+        // The completion delay gives Playwright a deterministic interval to see
+        // the meter and Stop while the transport remains active.
+        setTimeout(() => notifyUsage(120000, "turn-e2e"), 500)
+        setTimeout(
+          () =>
+            send({
+              method: "item/completed",
+              params: {
+                threadId: "thread-e2e",
+                turnId: "turn-e2e",
+                item: {
+                  type: "agentMessage",
+                  id: "message-e2e",
+                  text: "Codex E2E complete."
+                }
+              }
+            }),
+          1000
+        )
+        setTimeout(
+          () =>
+            send({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-e2e",
+                turn: { id: "turn-e2e", status: "completed", error: null }
+              }
+            }),
+          3000
+        )
+      }
+      if (msg.method === "turn/interrupt") {
+        send({ id: msg.id, result: {} })
       }
     }
     index = buffer.indexOf("\\n")
@@ -402,6 +475,8 @@ export interface LaunchedApp {
    * store, never Starbase's SecretStore.
    */
   readonly opencodeAuthWrites: () => ReadonlyArray<{ id: string; body: { type: string; key: string } }>
+  /** Ordered JSON-RPC methods received by the fake Codex app-server. */
+  readonly codexCalls: () => ReadonlyArray<string>
   /**
    * Drive a `starbase://` sign-in callback into the running app (the OS would
    * normally do this after the browser flow). Emits the main-process `open-url`.
@@ -784,7 +859,8 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
           STARBASE_SECRET_STORE: "memory",
           // Force the deterministic scripted agent so chat e2e never spawns a
           // real harness (no auth, no network, reproducible).
-          STARBASE_SCRIPTED_AGENT: "1",
+          STARBASE_SCRIPTED_AGENT: options.scriptedAgent === false ? "0" : "1",
+          STARBASE_E2E_CODEX_LOG: join(binDir, "codex-calls.log"),
           // Keep the window hidden and off the dock. The suite launches a real
           // Electron app dozens of times, and a visible window steals focus on
           // every launch — which makes running the suite locally (its only home;
@@ -821,6 +897,12 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         return readFileSync(log, "utf8").split("\n").filter((l) => l.length > 0)
       }
 
+      const codexCalls = () => {
+        const log = join(home, "bin", "codex-calls.log")
+        if (!existsSync(log)) return []
+        return readFileSync(log, "utf8").split("\n").filter((line) => line.length > 0)
+      }
+
       return {
         app,
         window,
@@ -831,6 +913,7 @@ export const test = base.extend<{ launchApp: (options?: LaunchOptions) => Promis
         authServer,
         completeDeepLinkSignIn,
         opencodeAuthWrites,
+        codexCalls,
         ghCalls
       }
     }

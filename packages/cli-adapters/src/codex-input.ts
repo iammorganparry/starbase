@@ -23,10 +23,30 @@ export interface StagedCodexInput {
   readonly cleanup: () => Promise<void>
 }
 
+export type CodexAppServerInput =
+  | { readonly type: "text"; readonly text: string; readonly text_elements: ReadonlyArray<never> }
+  | { readonly type: "localImage"; readonly path: string }
+
+/** Translate the SDK input shape into app-server v2's UserInput shape. */
+export const toCodexAppServerInput = (input: Input): ReadonlyArray<CodexAppServerInput> => {
+  if (typeof input === "string") {
+    return [{ type: "text", text: input, text_elements: [] }]
+  }
+  return input.map((item): CodexAppServerInput => {
+    if (item.type === "text") {
+      return { type: "text", text: item.text, text_elements: [] }
+    }
+    if (item.type === "local_image") {
+      return { type: "localImage", path: item.path }
+    }
+    return { type: "text", text: "", text_elements: [] }
+  })
+}
+
 /**
- * Materialize Starbase's durable base64 attachments for the Codex SDK.
+ * Materialize Starbase's durable base64 attachments for Codex.
  *
- * The SDK only accepts local image paths. A private temporary directory keeps
+ * Both transports accept local image paths. A private temporary directory keeps
  * transcript data out of the worktree and is removed whether the turn succeeds,
  * fails, or is interrupted.
  */

@@ -18,14 +18,14 @@ import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { readCodexContextUsage } from "./codex-app-server.js"
 import type { CodexContextUsage } from "./codex-app-server.js"
 import { stageCodexInput } from "./codex-input.js"
+import { runCodexAppServer } from "./codex-app-server-run.js"
 
 /**
- * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
- * autonomous: unlike Claude there is no per-tool `canUseTool` callback, so HITL
- * is coarse — our mode maps onto Codex's `sandboxMode` + `approvalPolicy` at
- * thread start (per-command gating is a follow-up via the app-server protocol).
- * The `ThreadEvent` → `StreamEvent` mapping is pure and unit-tested; `runCodex`
- * is verified live.
+ * Legacy Codex SDK transport retained as a pre-activation fallback for older
+ * CLI builds. The primary transport lives in `codex-app-server-run.ts`, where
+ * resident-context notifications and server-initiated interactions are visible.
+ * This file keeps the SDK's pure `ThreadEvent` → `StreamEvent` mapping tested so
+ * degrading the transport never degrades transcript correctness.
  */
 
 // ── Pure mapping helpers (the testable seam) ─────────────────────────────────
@@ -416,7 +416,7 @@ export const codexEventToStreamEvents = (
  * `ctx.canUseTool` is unused (Codex has no per-tool callback — see the mode
  * mapping above). Interrupting the Effect aborts the run.
  */
-export const runCodex = (
+export const runCodexSdk = (
   sessionId: string,
   spec: SessionSpec,
   ctx: AgentContext,
@@ -628,3 +628,32 @@ export const runCodex = (
         })
     }).pipe(Effect.onInterrupt(() => Effect.sync(() => abort.abort())))
   })
+
+/**
+ * Primary Codex transport: app-server provides live resident-context telemetry.
+ *
+ * Older Codex builds can lack the v2 methods. Falling back is safe only before
+ * app-server has opened the thread; after activation, replaying through the SDK
+ * would duplicate an operator turn that may already have mutated the worktree.
+ */
+export const runCodex = (
+  sessionId: string,
+  spec: SessionSpec,
+  ctx: AgentContext,
+  resume: Map<string, string>
+): Effect.Effect<void, CliExecError> => {
+  let activated = false
+  return runCodexAppServer(
+    sessionId,
+    spec,
+    ctx,
+    resume,
+    () => {
+      activated = true
+    }
+  ).pipe(
+    Effect.catchAll((failure) =>
+      activated ? Effect.fail(failure) : runCodexSdk(sessionId, spec, ctx, resume)
+    )
+  )
+}
