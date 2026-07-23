@@ -134,4 +134,17 @@ describe("ThemeError over the wire", () => {
     expect(decoded.themeId).toBeUndefined()
     expect(decoded._tag).toBe("ThemeError")
   })
+
+  it("carries a serializable cause rather than a live error object", () => {
+    const error = new ThemeError({
+      message: "Not a VS Code theme",
+      cause: "colors.editor.background: Expected a string"
+    })
+    const decoded = Schema.decodeUnknownSync(ThemeError)(
+      JSON.parse(JSON.stringify(Schema.encodeSync(ThemeError)(error)))
+    )
+
+    expect(decoded.cause).toContain("editor.background")
+    expect(typeof decoded.cause).toBe("string")
+  })
 })

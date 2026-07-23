@@ -51,6 +51,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
+import { dirname, resolve } from "node:path"
 import {
   applyStreamEvent,
   assistantMessage,
@@ -1582,13 +1583,16 @@ const HandlersLayer = StarbaseRpcs.toLayer({
    *
    * The renderer supplies the path, and the renderer renders untrusted content
    * (agent markdown, PR bodies). An unconstrained reveal would be a way to make
-   * the app open an arbitrary filesystem location; checking the prefix keeps
-   * this exactly as powerful as the feature needs and no more.
+   * the app open an arbitrary filesystem location. Only an immediate child of
+   * the themes directory is valid — the same confinement rule ThemeService
+   * applies to reads, writes and deletes.
    */
   "Theme.reveal": ({ path }) =>
     Effect.flatMap(AppPaths, (paths) =>
       Effect.sync(() => {
-        if (path.startsWith(paths.themesDir)) shell.showItemInFolder(path)
+        const themesDir = resolve(paths.themesDir)
+        const file = resolve(path)
+        if (dirname(file) === themesDir) shell.showItemInFolder(file)
       })
     )
 })

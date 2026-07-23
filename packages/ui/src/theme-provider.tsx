@@ -27,36 +27,17 @@
  * colour that should be a utility class.
  */
 import * as React from "react"
-import type { ThemeCatalog, ThemeSummary, ThemeTokens, VsCodeTheme } from "@starbase/core"
-import { CSS_VAR_BY_TOKEN, DEFAULT_THEME_ID } from "@starbase/core"
+import type { ThemeCatalog, ThemeTokens, VsCodeTheme } from "@starbase/core"
+import { DEFAULT_THEME_ID, THEME_STYLE_ID, toCssText } from "@starbase/core"
 
-/** Must match `THEME_STYLE_ID` in `@starbase/themes` and the preload's boot tag. */
-const STYLE_ID = "starbase-theme"
-
-/**
- * `ThemeTokens` → the `:root` block.
- *
- * Duplicated from `@starbase/themes`'s `toCssText` on purpose: `@starbase/ui`
- * is consumed by Storybook and by the UI test suite, neither of which should
- * have to pull in nine vendored colour tables to render a button. The shared
- * thing that actually matters — `CSS_VAR_BY_TOKEN`, the table saying which
- * token writes which var — comes from `@starbase/core`, so the two cannot drift
- * on the part that would silently break.
- */
-export const themeCssText = (tokens: ThemeTokens): string => {
-  const lines = Object.entries(CSS_VAR_BY_TOKEN).map(
-    ([token, cssVar]) => `  ${cssVar}: ${tokens[token as keyof typeof CSS_VAR_BY_TOKEN]};`
-  )
-  lines.push(`  --sb-theme-kind: ${tokens.kind};`)
-  lines.push(`  color-scheme: ${tokens.kind === "light" ? "light" : "dark"};`)
-  return `:root {\n${lines.join("\n")}\n}\n`
-}
+/** Backward-compatible name for callers that render theme CSS directly. */
+export const themeCssText = toCssText
 
 interface ThemeContextValue {
   readonly tokens: ThemeTokens
   readonly activeId: string
-  /** Everything installed, for the picker. Empty until the first catalog lands. */
-  readonly catalog: ReadonlyArray<ThemeSummary>
+  /** Everything installed, plus files that could not be decoded. */
+  readonly catalog: ThemeCatalog | undefined
   /** The active theme's raw JSON, for shiki. Null until it loads. */
   readonly theme: VsCodeTheme | null
 }
@@ -76,8 +57,11 @@ export const useThemeTokens = (): ThemeTokens => {
   return ctx.tokens
 }
 
-/** The active theme's id and the full catalog — for the settings picker. */
-export const useThemeCatalog = (): { activeId: string; catalog: ReadonlyArray<ThemeSummary> } => {
+/** The active theme's id and full catalog — the settings picker's data source. */
+export const useThemeCatalog = (): {
+  activeId: string
+  catalog: ThemeCatalog | undefined
+} => {
   const ctx = React.useContext(ThemeContext)
   if (!ctx) throw new Error("useThemeCatalog must be used inside <ThemeProvider>")
   return { activeId: ctx.activeId, catalog: ctx.catalog }
@@ -154,16 +138,16 @@ export function ThemeProvider({
     const doc = globalThis.document
     if (!doc) return
 
-    let el = doc.getElementById(STYLE_ID) as HTMLStyleElement | null
+    let el = doc.getElementById(THEME_STYLE_ID) as HTMLStyleElement | null
     if (!el) {
       el = doc.createElement("style")
-      el.id = STYLE_ID
+      el.id = THEME_STYLE_ID
       // Appended to <head> LAST so it wins over the fallback block in
       // globals.css on document order at equal specificity — no `!important`,
       // which would stop the settings editor's live preview overriding it.
       doc.head.appendChild(el)
     }
-    el.textContent = themeCssText(tokens)
+    el.textContent = toCssText(tokens)
 
     // A custom property cannot be used in a selector, so the ground is mirrored
     // onto a data attribute for the handful of rules that must BRANCH on it
@@ -172,7 +156,7 @@ export function ThemeProvider({
   }, [tokens, applyToDocument])
 
   const value = React.useMemo(
-    (): ThemeContextValue => ({ tokens, activeId, catalog: catalog?.themes ?? [], theme }),
+    (): ThemeContextValue => ({ tokens, activeId, catalog, theme }),
     [tokens, activeId, catalog, theme]
   )
 

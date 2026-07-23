@@ -335,6 +335,19 @@ describe("ThemeService", () => {
       expect(exit.value).toEqual(["mine", "mine-2"])
     })
 
+    it("does not overwrite a malformed theme file when choosing a copy id", async () => {
+      mkdirSync(themesDir(), { recursive: true })
+      const malformed = join(themesDir(), "mine.json")
+      writeFileSync(malformed, "{ recoverable work in progress")
+
+      const exit = await provided(ThemeService.duplicate("monokai", "Mine"))
+
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.id).toBe("mine-2")
+      expect(readFileSync(malformed, "utf8")).toBe("{ recoverable work in progress")
+    })
+
     it("never collides with a built-in id", async () => {
       const exit = await provided(ThemeService.duplicate("monokai", "Monokai"))
       expect(exit._tag).toBe("Success")
@@ -424,6 +437,30 @@ describe("ThemeService", () => {
       expect(exit.value.id).toBe("renamed-on-import")
       expect(exit.value.name).toBe("Renamed On Import")
     })
+
+    it("does not overwrite a malformed theme file when choosing an import id", async () => {
+      mkdirSync(themesDir(), { recursive: true })
+      const malformed = join(themesDir(), "pasted.json")
+      writeFileSync(malformed, "{ recoverable work in progress")
+
+      const exit = await provided(
+        ThemeService.importJson(JSON.stringify({ ...VALID_THEME, name: "Pasted" }))
+      )
+
+      expect(exit._tag).toBe("Success")
+      if (exit._tag !== "Success") return
+      expect(exit.value.id).toBe("pasted-2")
+      expect(readFileSync(malformed, "utf8")).toBe("{ recoverable work in progress")
+    })
+
+    it("serializes decode causes before returning a ThemeError", async () => {
+      const exit = await provided(ThemeService.importJson('{"name":"Missing Type"}'))
+      const failure = failureOf(exit)
+
+      expect(failure?._tag).toBe("ThemeError")
+      expect(typeof failure?.cause).toBe("string")
+      expect(failure?.cause).toContain("type")
+    })
   })
 
   /**
@@ -452,9 +489,15 @@ describe("ThemeService", () => {
             Stream.runCollect
           )
           const fiber = yield* Effect.fork(stream)
-          // Let the watcher attach before the change it is meant to notice.
-          yield* Effect.sleep("150 millis")
-          yield* Effect.sync(act)
+          // The fork and native watcher attach asynchronously. Retry the
+          // idempotent write until an event proves the watcher is live instead
+          // of assuming a loaded CI runner will attach within a fixed delay.
+          for (let attempt = 0; attempt < 12; attempt++) {
+            yield* Effect.sync(act)
+            yield* Effect.sleep("250 millis")
+            const completed = yield* Fiber.poll(fiber)
+            if (completed._tag === "Some") break
+          }
           const chunks = yield* Fiber.join(fiber)
           return Chunk.toReadonlyArray(chunks)[0]
         }).pipe(Effect.timeout("5 seconds"))

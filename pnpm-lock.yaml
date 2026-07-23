@@ -260,13 +260,13 @@ importers:
       '@starbase/core':
         specifier: workspace:*
         version: link:../core
-      '@starbase/themes':
-        specifier: workspace:*
-        version: link:../themes
       effect:
         specifier: ^3.21.4
         version: 3.21.4
     devDependencies:
+      '@starbase/themes':
+        specifier: workspace:*
+        version: link:../themes
       '@starbase/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig

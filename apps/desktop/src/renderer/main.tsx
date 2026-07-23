@@ -1,6 +1,7 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClientProvider } from "@tanstack/react-query"
+import { THEME_STYLE_ID } from "@starbase/core"
 import "./index.css"
 import { App } from "./App.js"
 import { queryClient } from "./query-client.js"
@@ -23,7 +24,7 @@ import { queryClient } from "./query-client.js"
 const bootThemeCss = window.starbase?.initialThemeCss
 if (bootThemeCss) {
   const style = document.createElement("style")
-  style.id = "starbase-theme"
+  style.id = THEME_STYLE_ID
   style.textContent = bootThemeCss
   document.head.appendChild(style)
 }

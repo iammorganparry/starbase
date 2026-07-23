@@ -166,6 +166,6 @@ export class ThemeError extends Schema.TaggedError<ThemeError>()(
   {
     message: Schema.String,
     themeId: Schema.optional(Schema.String),
-    cause: Schema.optional(Schema.Unknown)
+    cause: Schema.optional(Schema.String)
   }
 ) {}

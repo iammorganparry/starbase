@@ -29,7 +29,8 @@
  */
 import * as React from "react"
 import type { ThemeSummary, VsCodeTheme } from "@starbase/core"
-import { Check, Copy, Download, FolderOpen, Trash2, X } from "lucide-react"
+import { parseHex, toHex } from "@starbase/themes"
+import { Check, Copy, Download, FolderOpen, Pencil, Trash2, X } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { Button } from "../components/button.js"
 import { Callout } from "../components/callout.js"
@@ -311,7 +312,7 @@ function ThemeCard({
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           {onEdit && (
             <IconAction label={`Edit ${theme.name}`} onClick={onEdit}>
-              <Check size={11} />
+              <Pencil size={11} />
             </IconAction>
           )}
           <IconAction
@@ -421,31 +422,48 @@ function ThemeEditor({
 }) {
   const [theme, setTheme] = React.useState<VsCodeTheme | null>(null)
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSave = React.useRef<{ id: string; theme: VsCodeTheme } | null>(null)
+  const loadThemeRef = React.useRef(loadTheme)
+  const onSaveRef = React.useRef(onSave)
+
+  React.useEffect(() => {
+    loadThemeRef.current = loadTheme
+  }, [loadTheme])
+
+  React.useEffect(() => {
+    onSaveRef.current = onSave
+  }, [onSave])
 
   React.useEffect(() => {
     let live = true
-    void loadTheme(summary.id).then((loaded) => {
+    void loadThemeRef.current(summary.id).then((loaded) => {
       if (live) setTheme(loaded)
     })
     return () => {
       live = false
     }
-  }, [summary.id, loadTheme])
+  }, [summary.id])
+
+  const flushPendingSave = React.useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+    const pending = pendingSave.current
+    pendingSave.current = null
+    if (pending) void onSaveRef.current(pending.id, pending.theme)
+  }, [])
 
   // A pending save must still land if the operator closes the pane mid-drag.
-  React.useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current)
-    },
-    []
-  )
+  React.useEffect(() => () => flushPendingSave(), [flushPendingSave])
 
   const setColor = (key: string, value: string) => {
     if (!theme) return
     const next: VsCodeTheme = { ...theme, colors: { ...(theme.colors ?? {}), [key]: value } }
     setTheme(next)
     if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(() => void onSave(summary.id, next), 200)
+    pendingSave.current = { id: summary.id, theme: next }
+    timer.current = setTimeout(flushPendingSave, 200)
   }
 
   return (
@@ -549,10 +567,10 @@ function ColorRow({
   fallback: string
   onChange: (value: string) => void
 }) {
-  // `<input type="color">` only accepts `#rrggbb`. A theme may legitimately
-  // carry `#rrggbbaa`, so the alpha is trimmed for the picker rather than
-  // letting the browser silently reject the value and show black.
-  const current = (value ?? fallback).slice(0, 7)
+  // `<input type="color">` only accepts `#rrggbb`. VS Code also permits short
+  // hex and alpha, so normalise through the theme parser before handing the
+  // value to the browser.
+  const current = toHex((parseHex(value) ?? parseHex(fallback))!)
   return (
     <label className="flex items-center gap-3 py-2">
       <span className="min-w-0 flex-1">

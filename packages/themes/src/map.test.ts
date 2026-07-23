@@ -259,7 +259,7 @@ describe("toTokens — translucent values", () => {
 /**
  * Themes are user-supplied files that people download and share, and every
  * token ends up interpolated into `:root { --sb-x: <value>; }` — text that is
- * additionally inlined into a `<style>` element in the boot HTML so the first
+ * additionally injected into a `<style>` before React mounts so the first
  * paint is themed.
  *
  * So a theme is untrusted input on a path to a stylesheet. The mapper's defence

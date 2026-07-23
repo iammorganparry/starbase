@@ -19,7 +19,15 @@ import type {
   User
 } from "@starbase/core"
 import { DEFAULT_THEME_ID } from "@starbase/core"
-import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp, ThemeProvider } from "@starbase/ui"
+import {
+  ConfirmDialog,
+  LoadingScreen,
+  LoginScreen,
+  SetupScreen,
+  StarbaseApp,
+  ThemeProvider,
+  useThemeCatalog
+} from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { authMachine } from "./auth-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
@@ -44,7 +52,7 @@ import { routeReviewToAgent } from "./auto-route.js"
 import { reviewQueryKey } from "./review-routing.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
-import { useTheme } from "./use-theme.js"
+import { themeCatalogKey, useTheme } from "./use-theme.js"
 
 const GH_UNKNOWN: GhStatus = {
   available: false,
@@ -107,6 +115,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const termDock = useTerminalDock()
   const browserDock = useBrowserPreview()
   const qc = useQueryClient()
+  const { activeId: activeThemeId, catalog: themeCatalog } = useThemeCatalog()
 
   // Renderer-side rpc reads, via react-query.
   const configQuery = useQuery({ queryKey: ["config"], queryFn: () => rpc.configGet() })
@@ -172,12 +181,15 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
    * the affected summary, but only `Theme.list` knows the whole ordering, so the
    * catalog is refetched and the config patched in place.
    */
-  const themeCatalog = useQuery({ queryKey: ["themes"], queryFn: () => rpc.themeList() })
-  const refreshThemes = () => qc.invalidateQueries({ queryKey: ["themes"] })
+  const refreshThemes = useCallback(
+    () => qc.invalidateQueries({ queryKey: themeCatalogKey }),
+    [qc]
+  )
+  const loadTheme = useCallback((id: string) => rpc.themeGet(id), [])
   const themeSettings = {
-    themes: themeCatalog.data?.themes ?? [],
-    skipped: themeCatalog.data?.skipped ?? [],
-    activeId: configQuery.data?.theme?.activeId ?? DEFAULT_THEME_ID,
+    themes: themeCatalog?.themes ?? [],
+    skipped: themeCatalog?.skipped ?? [],
+    activeId: activeThemeId,
     onSelect: (id: string) =>
       rpc.themeSetActive(id).then((saved) => {
         qc.setQueryData(["config"], saved)
@@ -187,13 +199,20 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
         await refreshThemes()
         return copy
       }),
-    onDelete: (id: string) => rpc.themeDelete(id).then(() => refreshThemes()).then(() => undefined),
+    onDelete: async (id: string) => {
+      await rpc.themeDelete(id)
+      if (id === activeThemeId) {
+        const saved = await rpc.themeSetActive(DEFAULT_THEME_ID)
+        qc.setQueryData(["config"], saved)
+      }
+      await refreshThemes()
+    },
     onImport: (json: string) =>
       rpc.themeImport(json).then(async (imported) => {
         await refreshThemes()
         return imported
       }),
-    loadTheme: (id: string) => rpc.themeGet(id),
+    loadTheme,
     onSave: (id: string, theme: VsCodeTheme) =>
       rpc.themeSave(id, theme).then(async (saved) => {
         // The editor debounces, so this fires per settled drag rather than per

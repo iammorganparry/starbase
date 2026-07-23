@@ -107,8 +107,8 @@ Other things worth knowing before touching this:
   the default changed anything, "theming shipped" and "the theme failed to load"
   would look identical.
 - **Themes are untrusted input on a path to a stylesheet.** Every token is
-  interpolated into `:root { --sb-x: … }`, and that text is inlined into a
-  `<style>` in the boot HTML. The mapper never passes a theme's string through —
+  interpolated into `:root { --sb-x: … }`, and the renderer injects that text
+  into a `<style>` before React mounts. The mapper never passes a theme's string through —
   every value is re-emitted from parsed components.
 - **`map.ts` has a second pass (`ramp.ts`) and it is not optional.** Real themes
   invert or collapse the planes Starbase needs separated: Monokai puts its

@@ -188,6 +188,46 @@ describe("ThemesSettings — the editor", () => {
     expect(screen.getByLabelText("Editor colour")).toHaveProperty("value", "#272822")
   })
 
+  it("normalizes shorthand hex for the native colour input", async () => {
+    renderThemes({
+      loadTheme: async () => ({
+        ...editable,
+        colors: { "editor.background": "#abc" }
+      })
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Edit Monokai" }))
+
+    await waitFor(() => expect(screen.getByLabelText("Editor colour")).toBeTruthy())
+    expect(screen.getByLabelText("Editor colour")).toHaveProperty("value", "#aabbcc")
+  })
+
+  it("does not reload an in-progress edit when callback identities change", async () => {
+    const firstLoad = vi.fn(async () => editable)
+    const secondLoad = vi.fn(async () => editable)
+    const { rerender } = render(
+      <ThemesSettings
+        themes={THEMES}
+        activeId="one-dark-pro"
+        {...noop}
+        loadTheme={firstLoad}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Edit Monokai" }))
+    await waitFor(() => expect(screen.getByLabelText("Editor colour")).toBeTruthy())
+
+    rerender(
+      <ThemesSettings
+        themes={THEMES}
+        activeId="one-dark-pro"
+        {...noop}
+        loadTheme={secondLoad}
+      />
+    )
+
+    expect(firstLoad).toHaveBeenCalledTimes(1)
+    expect(secondLoad).not.toHaveBeenCalled()
+  })
+
   /**
    * Most keys in most themes are unset. A picker defaulting to black would tell
    * the operator their sidebar is black when it is actually a derived grey —
@@ -231,6 +271,34 @@ describe("ThemesSettings — the editor", () => {
       await vi.advanceTimersByTimeAsync(250)
       expect(onSave).toHaveBeenCalledTimes(1)
       expect(onSave.mock.calls[0]?.[1].colors?.["editor.background"]).toBe("#333333")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("flushes the latest pending edit when the editor closes", async () => {
+    vi.useFakeTimers()
+    try {
+      const onSave = vi.fn(async (_id: string, _theme: VsCodeTheme) => undefined)
+      render(
+        <ThemesSettings
+          themes={THEMES}
+          activeId="one-dark-pro"
+          {...noop}
+          onSave={onSave}
+          loadTheme={async () => editable}
+        />
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Edit Monokai" }))
+      await vi.waitFor(() => expect(screen.queryByLabelText("Editor colour")).toBeTruthy())
+
+      fireEvent.change(screen.getByLabelText("Editor colour"), {
+        target: { value: "#445566" }
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Back to themes" }))
+
+      expect(onSave).toHaveBeenCalledTimes(1)
+      expect(onSave.mock.calls[0]?.[1].colors?.["editor.background"]).toBe("#445566")
     } finally {
       vi.useRealTimers()
     }

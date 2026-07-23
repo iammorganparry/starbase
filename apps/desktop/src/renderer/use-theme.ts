@@ -19,14 +19,15 @@
  * `main/boot-theme.ts` plus the preload's synchronous fetch; this hook takes
  * over from the identical stylesheet, so the handover is invisible.
  */
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ThemeCatalog, ThemeTokens, VsCodeTheme, WorkspaceConfig } from "@starbase/core"
 import { DEFAULT_THEME_ID } from "@starbase/core"
-import { BUILTIN_THEMES, toTokens } from "@starbase/themes"
+import { oneDarkPro, toTokens } from "@starbase/themes"
 import { rpc } from "./rpc-client.js"
 
 export const themeCatalogKey = ["themes"] as const
+const defaultTokens = toTokens(oneDarkPro)
 
 /**
  * The tokens to render with, resolved from the catalog and the config.
@@ -44,8 +45,7 @@ const resolveTokens = (
   const found = catalog?.themes.find((t) => t.id === activeId)
   if (found) return { tokens: found.tokens, activeId }
 
-  const fallback = BUILTIN_THEMES.find((b) => b.id === DEFAULT_THEME_ID)!
-  return { tokens: toTokens(fallback.theme), activeId: catalog ? DEFAULT_THEME_ID : activeId }
+  return { tokens: defaultTokens, activeId: catalog ? DEFAULT_THEME_ID : activeId }
 }
 
 export interface ThemeState {
@@ -103,8 +103,14 @@ export function useTheme(config: WorkspaceConfig | null | undefined): ThemeState
   // A theme edited on disk changes its rules too, so the fetched source has to
   // be dropped when the catalog moves — otherwise the diff keeps highlighting
   // from the pre-edit copy until the app restarts.
+  const catalogHasLoaded = useRef(false)
   useEffect(() => {
-    if (catalog) void queryClient.invalidateQueries({ queryKey: ["theme-source"] })
+    if (!catalog) return
+    if (!catalogHasLoaded.current) {
+      catalogHasLoaded.current = true
+      return
+    }
+    void queryClient.invalidateQueries({ queryKey: ["theme-source"] })
   }, [catalog, queryClient])
 
   // Until both inputs land, `tokens` is intentionally just a context fallback.

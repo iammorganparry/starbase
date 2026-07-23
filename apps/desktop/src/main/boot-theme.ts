@@ -26,7 +26,7 @@
  * copied across a process boundary once per launch.
  */
 import { ThemeService, ConfigService } from "@starbase/cli-adapters"
-import { toCssText, toTokens } from "@starbase/themes"
+import { oneDarkPro, toCssText, toTokens } from "@starbase/themes"
 import type { ThemeTokens } from "@starbase/core"
 import { Effect } from "effect"
 import { ipcMain } from "electron"
@@ -54,13 +54,24 @@ let bootTokens: ThemeTokens | null = null
  * owns that fallback; this just refuses to let a config read failure escape.
  */
 export const resolveBootTheme = async (): Promise<ThemeTokens> => {
-  const tokens = await runtime.runPromise(
-    Effect.gen(function* () {
-      const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
-      const { theme } = yield* ThemeService.resolve(config?.theme?.activeId)
-      return toTokens(theme, config?.theme?.colorCustomizations as Record<string, string> | undefined)
-    })
-  )
+  let tokens = toTokens(oneDarkPro)
+  try {
+    tokens = await runtime.runPromise(
+      Effect.gen(function* () {
+        const config = yield* ConfigService.get().pipe(Effect.orElseSucceed(() => null))
+        const { theme } = yield* ThemeService.resolve(config?.theme?.activeId)
+        return toTokens(
+          theme,
+          config?.theme?.colorCustomizations as Record<string, string> | undefined
+        )
+      })
+    )
+  } catch (cause) {
+    // Typed failures are already handled inside the Effect. This catches
+    // defects and runtime failures too: booting in One Dark is preferable to
+    // never creating a window.
+    console.error("Could not resolve the boot theme; using One Dark Pro.", cause)
+  }
   bootTokens = tokens
   return tokens
 }

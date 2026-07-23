@@ -1,6 +1,6 @@
 import { CSS_VAR_BY_TOKEN } from "@starbase/core"
 import { describe, expect, it } from "vitest"
-import { THEME_STYLE_ID, toCssText, toStyleTag } from "./css.js"
+import { THEME_STYLE_ID, toCssText } from "./css.js"
 import { toTokens } from "./map.js"
 import { highContrastDark } from "./presets/high-contrast-dark.js"
 import { lightModern } from "./presets/light-modern.js"
@@ -66,19 +66,8 @@ describe("toCssText", () => {
   })
 })
 
-describe("toStyleTag", () => {
-  it("wraps the css text in the managed style element", () => {
-    expect(toStyleTag(dark)).toBe(`<style id="starbase-theme">${toCssText(dark)}</style>`)
-  })
-
-  /**
-   * The renderer finds this element by `THEME_STYLE_ID` to swap themes at
-   * runtime. If the exported id ever drifted from the one the main process
-   * inlines at boot, the renderer would append a second sheet instead of
-   * replacing the first.
-   */
-  it("uses THEME_STYLE_ID as the element's id", () => {
+describe("THEME_STYLE_ID", () => {
+  it("names the element shared by the pre-paint injector and ThemeProvider", () => {
     expect(THEME_STYLE_ID).toBe("starbase-theme")
-    expect(toStyleTag(dark)).toContain(`id="${THEME_STYLE_ID}"`)
   })
 })

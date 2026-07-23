@@ -319,6 +319,26 @@ export const CSS_VAR_BY_TOKEN: Readonly<Record<Exclude<keyof ThemeTokens, "kind"
   linkHover: "--sb-link-hover"
 }
 
+/** The id of the single managed theme style element. */
+export const THEME_STYLE_ID = "starbase-theme"
+
+/**
+ * Emit the complete `:root` stylesheet for a resolved theme.
+ *
+ * Main and the renderer share this exact serializer so the pre-paint sheet and
+ * React's first applied sheet are byte-identical. Keeping `color-scheme` here
+ * matters too: it themes native controls, scrollbars and the caret.
+ */
+export const toCssText = (tokens: ThemeTokens): string => {
+  const lines: Array<string> = []
+  for (const [token, cssVar] of Object.entries(CSS_VAR_BY_TOKEN)) {
+    lines.push(`  ${cssVar}: ${tokens[token as keyof typeof CSS_VAR_BY_TOKEN]};`)
+  }
+  lines.push(`  --sb-theme-kind: ${tokens.kind};`)
+  lines.push(`  color-scheme: ${tokens.kind === "light" ? "light" : "dark"};`)
+  return `:root {\n${lines.join("\n")}\n}\n`
+}
+
 // ── Catalog ──────────────────────────────────────────────────────────────────
 
 /** Where a theme came from. Built-ins are read-only; user themes are files. */
@@ -400,10 +420,6 @@ export type ThemeConfig = Schema.Schema.Type<typeof ThemeConfig>
  * load" indistinguishable from "the theme loaded".
  */
 export const DEFAULT_THEME_ID = "one-dark-pro"
-
-/** Ids that may not be overwritten or deleted; they ship inside the bundle. */
-export const isBuiltinThemeId = (id: string, builtinIds: ReadonlyArray<string>): boolean =>
-  builtinIds.includes(id)
 
 /**
  * Filesystem-safe id from a display name: "Solarized Dark" → "solarized-dark".

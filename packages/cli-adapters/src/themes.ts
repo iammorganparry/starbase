@@ -103,7 +103,11 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
      * mean the app writes to disk just for opening a settings tab.
      */
     const readUserThemes = (): Effect.Effect<
-      { themes: ReadonlyArray<ThemeSummary>; skipped: ReadonlyArray<ThemeLoadFailure> },
+      {
+        themes: ReadonlyArray<ThemeSummary>
+        skipped: ReadonlyArray<ThemeLoadFailure>
+        ids: ReadonlyArray<string>
+      },
       never,
       ThemeEnv
     > =>
@@ -113,16 +117,18 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
         const dir = yield* themesDir
 
         const exists = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
-        if (!exists) return { themes: [], skipped: [] }
+        if (!exists) return { themes: [], skipped: [], ids: [] }
 
         const entries = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [] as Array<string>))
         const themes: Array<ThemeSummary> = []
         const skipped: Array<ThemeLoadFailure> = []
+        const ids: Array<string> = []
 
         for (const entry of entries) {
           if (!entry.endsWith(".json")) continue
           const file = path.join(dir, entry)
           const id = entry.slice(0, -".json".length)
+          ids.push(id)
 
           const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => null))
           if (raw === null) {
@@ -152,7 +158,7 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
           themes.push(summary.right)
         }
 
-        return { themes, skipped }
+        return { themes, skipped, ids }
       })
 
     /**
@@ -245,7 +251,12 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
 
         const encoded = yield* Schema.encode(VsCodeThemeSchema)(theme).pipe(
           Effect.mapError(
-            (cause) => new ThemeError({ message: "Theme is not valid", themeId: id, cause })
+            (cause) =>
+              new ThemeError({
+                message: "Theme is not valid",
+                themeId: id,
+                cause: describeDecodeFailure(cause)
+              })
           )
         )
 
@@ -253,14 +264,24 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
           .makeDirectory(dir, { recursive: true })
           .pipe(
             Effect.mapError(
-              (cause) => new ThemeError({ message: "Could not create ~/starbase/themes", themeId: id, cause })
+              (cause) =>
+                new ThemeError({
+                  message: "Could not create ~/starbase/themes",
+                  themeId: id,
+                  cause: describeDecodeFailure(cause)
+                })
             )
           )
         yield* fs
           .writeFileString(file, `${JSON.stringify(encoded, null, 2)}\n`)
           .pipe(
             Effect.mapError(
-              (cause) => new ThemeError({ message: "Could not write the theme file", themeId: id, cause })
+              (cause) =>
+                new ThemeError({
+                  message: "Could not write the theme file",
+                  themeId: id,
+                  cause: describeDecodeFailure(cause)
+                })
             )
           )
 
@@ -304,7 +325,7 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
         const newName = name ?? `${source.name} (Copy)`
         const taken = new Set([
           ...BUILTIN_THEME_IDS,
-          ...(yield* readUserThemes()).themes.map((t) => t.id)
+          ...(yield* readUserThemes()).ids
         ])
 
         const base = themeIdFromName(newName)
@@ -329,15 +350,20 @@ export class ThemeService extends Effect.Service<ThemeService>()("@starbase/Them
       Effect.gen(function* () {
         const decoded = yield* Schema.decodeUnknown(Schema.parseJson(VsCodeThemeSchema))(json).pipe(
           Effect.mapError(
-            (cause) =>
-              new ThemeError({ message: `Not a VS Code theme: ${describeDecodeFailure(cause)}`, cause })
+            (cause) => {
+              const description = describeDecodeFailure(cause)
+              return new ThemeError({
+                message: `Not a VS Code theme: ${description}`,
+                cause: description
+              })
+            }
           )
         )
 
         const theme = name ? { ...decoded, name } : decoded
         const taken = new Set([
           ...BUILTIN_THEME_IDS,
-          ...(yield* readUserThemes()).themes.map((t) => t.id)
+          ...(yield* readUserThemes()).ids
         ])
         const base = themeIdFromName(theme.name)
         let candidate = base

@@ -12,11 +12,11 @@
   },
   "dependencies": {
     "@starbase/core": "workspace:*",
-    "@starbase/themes": "workspace:*",
     "@effect/rpc": "^0.75.1",
     "effect": "^3.21.4"
   },
   "devDependencies": {
+    "@starbase/themes": "workspace:*",
     "@starbase/tsconfig": "workspace:*"
   }
 }

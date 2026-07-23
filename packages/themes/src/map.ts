@@ -147,7 +147,7 @@ const pickOpaque = (colors: Colors, base: Rgba, ...keys: ReadonlyArray<string>):
  *
  * This is a laundering step, not a convenience. Every token ends up
  * interpolated into `:root { --sb-x: <value>; }` by `css.ts`, and that text is
- * additionally inlined into a `<style>` element in the boot HTML so the first
+ * additionally injected into a `<style>` before React mounts so the first
  * paint is themed. A theme file is user-supplied and shareable — people will
  * download them — so a value like
  *
