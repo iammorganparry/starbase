@@ -28,6 +28,7 @@ import {
   DEFAULT_REVIEW_MODEL,
   NOTIFICATIONS_DEFAULT,
   contextWindowFor,
+  defaultModel,
   digestModelFor,
   newSessionCli,
   reviewModelFor,
@@ -1145,7 +1146,8 @@ function ContextSection({
                 <span className="text-[12px] text-text-body">{cli.label}</span>
                 <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                   {(() => {
-                    const w = contextWindowFor(cli.kind, null, providers?.[cli.kind]?.contextWindow)
+                    const model = providers?.[cli.kind]?.defaultModel ?? defaultModel(cli.kind)
+                    const w = contextWindowFor(cli.kind, model, providers?.[cli.kind]?.contextWindow)
                     return w === null
                       ? "set a window below"
                       : `${fmtK(triggerAt(w, draft.budgetTokens))} of ${fmtK(w)}`

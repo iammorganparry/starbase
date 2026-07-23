@@ -552,7 +552,7 @@ export const ContextConfig = Schema.Struct({
 })
 export type ContextConfig = Schema.Schema.Type<typeof ContextConfig>
 
-/** The shipped defaults — auto ON, mid-band budget. */
+/** The shipped defaults — auto ON, maximum quality-band budget. */
 export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
   auto: true,
   budgetTokens: DEFAULT_BUDGET_TOKENS

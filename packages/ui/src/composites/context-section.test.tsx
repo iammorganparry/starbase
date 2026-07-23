@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { CliInfo, ContextConfig } from "@starbase/core"
+import type { CliInfo, ContextConfig, ProvidersConfig } from "@starbase/core"
 import { SettingsView } from "./settings-view.js"
 
 afterEach(cleanup)
@@ -33,6 +33,7 @@ const CLIS: ReadonlyArray<CliInfo> = [
 const open = (
   props: {
     context?: ContextConfig | null
+    providers?: ProvidersConfig
     onSaveContext?: (c: ContextConfig) => void
     onSaveProvider?: ReturnType<typeof vi.fn>
     contextSessions?: React.ComponentProps<typeof SettingsView>["contextSessions"]
@@ -45,6 +46,7 @@ const open = (
       onSaveProvider={props.onSaveProvider ?? vi.fn()}
       loadModels={async () => []}
       context={props.context ?? null}
+      providers={props.providers}
       onSaveContext={props.onSaveContext}
       contextSessions={props.contextSessions}
     />
@@ -58,10 +60,10 @@ const open = (
  * a budget with no sense of what sessions actually use is just a slider.
  */
 describe("Settings → Context", () => {
-  it("ships with auto-compaction on and a mid-band budget", () => {
+  it("ships with auto-compaction on and the maximum quality-band budget", () => {
     open()
-    expect(screen.getByLabelText("Working-set budget")).toHaveProperty("value", "400000")
-    expect(screen.getByText("400k tokens")).toBeDefined()
+    expect(screen.getByLabelText("Working-set budget")).toHaveProperty("value", "500000")
+    expect(screen.getByText("500k tokens")).toBeDefined()
   })
 
   it("saves a new budget as the slider moves", () => {
@@ -75,7 +77,7 @@ describe("Settings → Context", () => {
     const onSaveContext = vi.fn()
     open({ onSaveContext })
     fireEvent.click(screen.getByRole("switch"))
-    expect(onSaveContext).toHaveBeenCalledWith({ auto: false, budgetTokens: 400_000 })
+    expect(onSaveContext).toHaveBeenCalledWith({ auto: false, budgetTokens: 500_000 })
   })
 
   it("constrains the budget to the usable quality band", () => {
@@ -86,22 +88,31 @@ describe("Settings → Context", () => {
   })
 
   /**
-   * The lever only makes sense alongside its consequence. A 200k Claude compacts
-   * at its safety margin (170k) rather than the full budget, and showing that
-   * per harness is what stops the budget reading as an arbitrary number.
+   * The lever only makes sense alongside its consequence. The current Claude
+   * default is a 1M model, so it reaches the 500k quality cap; Codex reaches its
+   * smaller window's safety margin instead.
    */
   it("translates the budget into a per-harness trigger point", () => {
     open()
-    expect(screen.getByText("170k of 200k")).toBeDefined()
+    expect(screen.getByText("500k of 1M")).toBeDefined()
     expect(screen.getByText("231k of 272k")).toBeDefined()
   })
 
   it("recomputes the trigger points when the budget moves", () => {
     open()
     fireEvent.change(screen.getByLabelText("Working-set budget"), { target: { value: "256000" } })
-    // Claude's 200k window still binds first — the safety margin is unchanged.
-    expect(screen.getByText("170k of 200k")).toBeDefined()
+    // The configured 256k budget now binds before Claude's 1M window.
+    expect(screen.getByText("256k of 1M")).toBeDefined()
     expect(screen.getByText("256k tokens")).toBeDefined()
+  })
+
+  it("uses the provider's configured model for the preview", () => {
+    open({
+      providers: {
+        claude: { enabled: true, defaultMode: "accept-edits", defaultModel: "claude-opus-4-1" }
+      }
+    })
+    expect(screen.getByText("170k of 200k")).toBeDefined()
   })
 
   it("names harnesses that cannot be measured instead of hiding them", () => {
