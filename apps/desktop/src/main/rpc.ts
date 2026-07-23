@@ -90,7 +90,6 @@ import type {
   SettledSessionStatus,
   ProviderModels,
   ProvidersConfig,
-  ReasoningEffort,
   Usage
 } from "@starbase/core"
 import { StarbaseRpcs } from "@starbase/contracts"
@@ -1436,6 +1435,25 @@ export const createTerminal = (input: {
   })
 
 /**
+ * Persist a per-session reasoning override without making the composer's
+ * optimistic control wait on disk. The RPC remains best-effort, but a failed
+ * sessions.json write must be visible in the main-process log: otherwise the
+ * selection appears to work until the next restart and leaves no diagnosis.
+ */
+export const setReasoning = (
+  sessionId: string,
+  reasoningEffort: Parameters<typeof SessionStore.setReasoningEffort>[1]
+) =>
+  SessionStore.setReasoningEffort(sessionId, reasoningEffort).pipe(
+    Effect.tapError((error) =>
+      Effect.logWarning(
+        `Failed to persist reasoning strength for session ${sessionId}: ${error.message}`
+      )
+    ),
+    Effect.ignore
+  )
+
+/**
  * Handlers for every procedure in the group. Each one delegates straight to an
  * Effect service, so the group remains the sole contract. `Discovery.list`
  * pulls in a `CommandExecutor` requirement (via `DiscoveryService.list()`) that
@@ -1495,10 +1513,7 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Agent.setMode": ({ sessionId, mode }) =>
     Effect.flatMap(AgentRunner, (runner) => runner.setMode(sessionId, mode)),
   "Agent.setReasoning": ({ sessionId, reasoningEffort }) =>
-    SessionStore.setReasoningEffort(
-      sessionId,
-      reasoningEffort as ReasoningEffort | undefined
-    ).pipe(Effect.ignore),
+    setReasoning(sessionId, reasoningEffort),
   "Agent.commentPlanStep": ({ sessionId, planId, stepId, body }) =>
     Effect.flatMap(AgentRunner, (runner) =>
       runner.commentPlanStep(sessionId, planId, stepId, body)

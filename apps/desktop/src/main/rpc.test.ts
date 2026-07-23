@@ -35,10 +35,11 @@ import type {
   StreamEvent,
   Usage
 } from "@starbase/core"
+import { GitError } from "@starbase/core"
 import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
 import type { CommandExecutor } from "@effect/platform"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Logger, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DialogService } from "./dialog.js"
 import {
@@ -59,6 +60,7 @@ import {
   reviewMarkRouted,
   reviewReconcile,
   reviewRun,
+  setReasoning,
   sessionDiff,
   skillsList,
   workspaceRevertFile,
@@ -133,6 +135,37 @@ describe("RPC handlers", () => {
 
   const fakeDialog = (chosen: string | null) =>
     Layer.succeed(DialogService, { chooseDirectory: () => Effect.succeed(chosen) })
+
+  describe("Agent.setReasoning", () => {
+    it("logs a best-effort persistence failure", async () => {
+      const messages: Array<{ level: string; text: string }> = []
+      const logger = Logger.make(({ logLevel, message }) => {
+        const text = Array.isArray(message) ? message.map(String).join(" ") : String(message)
+        messages.push({ level: logLevel.label, text })
+      })
+      const store = await Effect.runPromise(
+        SessionStore.pipe(Effect.provide(SessionStore.Default))
+      )
+      const failedStore = SessionStore.make({
+        ...store,
+        setReasoningEffort: () =>
+          Effect.fail(new GitError({ message: "test sessions.json write failed" }))
+      })
+
+      await Effect.runPromise(
+        setReasoning("session-1", "think-hard").pipe(
+          Effect.provide(Layer.succeed(SessionStore, failedStore)),
+          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+          Effect.provide(base)
+        )
+      )
+
+      expect(messages).toContainEqual({
+        level: "WARN",
+        text: "Failed to persist reasoning strength for session session-1: test sessions.json write failed"
+      })
+    })
+  })
 
   describe("Gigaplan provider eligibility", () => {
     const enabled = undefined
