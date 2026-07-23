@@ -279,6 +279,30 @@ describe("codexEventToStreamEvents", () => {
     ])
   })
 
+  it("accepts Codex's runtime null MCP error on a successful connector call", () => {
+    const events = codexEventToStreamEvents(
+      ev({
+        type: "item.completed",
+        item: {
+          id: "mcp-null-error",
+          type: "mcp_tool_call",
+          server: "posthog",
+          tool: "exec",
+          arguments: {},
+          result: { content: [], structured_content: { rows: 1 } },
+          error: null,
+          status: "completed"
+        }
+      }),
+      "s1"
+    )
+    expect(events.at(-1)).toMatchObject({
+      _tag: "ToolEnd",
+      status: "success",
+      output: '{"rows":1}'
+    })
+  })
+
   it("maps agent_message and reasoning completions to Assistant / Thinking", () => {
     expect(
       codexEventToStreamEvents(ev({ type: "item.completed", item: { id: "m1", type: "agent_message", text: "Done." } }), "s1")

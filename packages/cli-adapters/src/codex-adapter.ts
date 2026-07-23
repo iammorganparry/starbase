@@ -261,8 +261,11 @@ const ensureToolStart = (
 const mcpOutput = (
   item: Extract<CodexItem, { type: "mcp_tool_call" }>
 ): string | undefined => {
-  if (item.error !== undefined) return capOutput(item.error.message)
-  if (item.result === undefined) return
+  // The 0.145 CLI serializes absent MCP fields as null even though the 0.144
+  // SDK types declare them as optional-only. Treat both wire representations as
+  // absent so a successful connector call cannot crash while rendering its card.
+  if (item.error !== undefined && item.error !== null) return capOutput(item.error.message)
+  if (item.result === undefined || item.result === null) return
   const value = item.result.structured_content ?? item.result.content
   const rendered = typeof value === "string" ? value : JSON.stringify(value)
   return rendered === undefined || rendered.length === 0 ? undefined : capOutput(rendered)
