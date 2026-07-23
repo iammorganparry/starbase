@@ -32,7 +32,7 @@ const stateMeta: Record<PrState, { label: string; text: string; bg: string; bord
   open: { label: "Open", text: "text-green", bg: "bg-green/[0.13]", border: "border-green/30", dot: "bg-green" },
   merged: { label: "Merged", text: "text-purple", bg: "bg-purple/[0.13]", border: "border-purple/30", dot: "bg-purple" },
   closed: { label: "Closed", text: "text-red", bg: "bg-red/[0.08]", border: "border-red/30", dot: "bg-red" },
-  draft: { label: "Draft", text: "text-dim", bg: "bg-white/5", border: "border-line", dot: "bg-line-strong" }
+  draft: { label: "Draft", text: "text-dim", bg: "bg-hover", border: "border-line", dot: "bg-line-strong" }
 }
 
 /** The bordered status lozenge (green Open / purple Merged / red Closed / neutral Draft). */

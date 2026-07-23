@@ -29,6 +29,12 @@ export function TitleBar({
       <div className="pointer-events-none absolute inset-x-0 text-center text-[12px] text-dim">
         {title}
       </div>
+      {/*
+        Literal hexes on purpose: these are macOS's own traffic-light colours,
+        which stay put across every theme (and across macOS's own light/dark
+        switch). Tokenising them would make the window controls stop reading as
+        window controls.
+      */}
       <div style={noDrag} className="relative flex gap-2">
         <span className="size-3 rounded-full bg-[#ff5f57]" />
         <span className="size-3 rounded-full bg-[#febc2e]" />

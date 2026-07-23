@@ -3,6 +3,7 @@ import { useMachine } from "@xstate/react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   ContextConfig,
+  VsCodeTheme,
   CliKind,
   CreateSessionFromIssueInput,
   CreateSessionFromPrInput,
@@ -17,7 +18,16 @@ import type {
   SessionActivity,
   User
 } from "@starbase/core"
-import { ConfirmDialog, LoadingScreen, LoginScreen, SetupScreen, StarbaseApp } from "@starbase/ui"
+import { DEFAULT_THEME_ID } from "@starbase/core"
+import {
+  ConfirmDialog,
+  LoadingScreen,
+  LoginScreen,
+  SetupScreen,
+  StarbaseApp,
+  ThemeProvider,
+  useThemeCatalog
+} from "@starbase/ui"
 import { appMachine } from "./app-machine.js"
 import { authMachine } from "./auth-machine.js"
 import { ConversationPane } from "./conversation-pane.js"
@@ -42,6 +52,7 @@ import { routeReviewToAgent } from "./auto-route.js"
 import { reviewQueryKey } from "./review-routing.js"
 import { newlyPlannedSessionIds } from "./retitle-triggers.js"
 import { rpc } from "./rpc-client.js"
+import { themeCatalogKey, useTheme } from "./use-theme.js"
 
 const GH_UNKNOWN: GhStatus = {
   available: false,
@@ -104,6 +115,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
   const termDock = useTerminalDock()
   const browserDock = useBrowserPreview()
   const qc = useQueryClient()
+  const { activeId: activeThemeId, catalog: themeCatalog } = useThemeCatalog()
 
   // Renderer-side rpc reads, via react-query.
   const configQuery = useQuery({ queryKey: ["config"], queryFn: () => rpc.configGet() })
@@ -158,6 +170,59 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
     rpc.configSetAdhdMode(value).then((saved) => {
       qc.setQueryData(["config"], saved)
     })
+
+  /**
+   * Settings › Themes.
+   *
+   * The catalog comes from the SAME query key `useTheme` subscribes to, so a
+   * write here — select, duplicate, delete, import — repaints the app through
+   * the provider without this component knowing anything about CSS. Writes seed
+   * the cache directly rather than invalidating: `Theme.save`/`duplicate` return
+   * the affected summary, but only `Theme.list` knows the whole ordering, so the
+   * catalog is refetched and the config patched in place.
+   */
+  const refreshThemes = useCallback(
+    () => qc.invalidateQueries({ queryKey: themeCatalogKey }),
+    [qc]
+  )
+  const loadTheme = useCallback((id: string) => rpc.themeGet(id), [])
+  const themeSettings = {
+    themes: themeCatalog?.themes ?? [],
+    skipped: themeCatalog?.skipped ?? [],
+    activeId: activeThemeId,
+    onSelect: (id: string) =>
+      rpc.themeSetActive(id).then((saved) => {
+        qc.setQueryData(["config"], saved)
+      }),
+    onDuplicate: (id: string, name?: string) =>
+      rpc.themeDuplicate(id, name).then(async (copy) => {
+        await refreshThemes()
+        return copy
+      }),
+    onDelete: async (id: string) => {
+      await rpc.themeDelete(id)
+      if (id === activeThemeId) {
+        const saved = await rpc.themeSetActive(DEFAULT_THEME_ID)
+        qc.setQueryData(["config"], saved)
+      }
+      await refreshThemes()
+    },
+    onImport: (json: string) =>
+      rpc.themeImport(json).then(async (imported) => {
+        await refreshThemes()
+        return imported
+      }),
+    loadTheme,
+    onSave: (id: string, theme: VsCodeTheme) =>
+      rpc.themeSave(id, theme).then(async (saved) => {
+        // The editor debounces, so this fires per settled drag rather than per
+        // frame. Refetching keeps the swatch preview in step with the picker.
+        await refreshThemes()
+        await qc.invalidateQueries({ queryKey: ["theme-source", id] })
+        return saved
+      }),
+    onReveal: (path: string) => void rpc.themeReveal(path)
+  }
   const saveDefaultCli = (cli: CliKind) =>
     rpc.configSetDefaultCli(cli).then((saved) => {
       qc.setQueryData(["config"], saved)
@@ -566,6 +631,7 @@ function AuthedApp({ user, onSignOut }: { user?: User; onSignOut?: () => void })
       onSavePlanAutoRun={savePlanAutoRun}
       adhdMode={adhdMode}
       onSaveAdhdMode={saveAdhdMode}
+      themes={themeSettings}
       providersConfig={providersConfig}
       onSaveProvider={saveProvider}
       defaultCli={defaultCli}
@@ -687,6 +753,21 @@ function loginStateOf(matches: (value: object) => boolean): "default" | "loading
 export function App() {
   const [authState, authSend] = useMachine(authMachine)
 
+  /**
+   * The theme is applied ABOVE the sign-in wall, not inside it.
+   *
+   * The loading splash and the login screen are the first things an operator
+   * sees, and they are on screen for the longest at the moment the app has the
+   * least state. Theming only the signed-in app would mean launching into a
+   * dark login screen and having it turn light the instant auth resolved —
+   * exactly the flash `boot-theme.ts` exists to prevent, just moved later.
+   *
+   * Sharing the `["config"]` query key with `AuthedApp` means React Query
+   * dedupes this: it is the same in-flight request, not a second read.
+   */
+  const configQuery = useQuery({ queryKey: ["config"], queryFn: () => rpc.configGet() })
+  const theme = useTheme(configQuery.data)
+
   useEffect(() => {
     const unsubscribe = window.starbase.onAuthComplete((payload) => {
       if (payload.ok) authSend({ type: "CALLBACK" })
@@ -694,6 +775,26 @@ export function App() {
     return unsubscribe
   }, [authSend])
 
+  return (
+    <ThemeProvider
+      tokens={theme.tokens}
+      applyToDocument={theme.ready}
+      activeId={theme.activeId}
+      catalog={theme.catalog}
+      theme={theme.theme}
+    >
+      <AppContent authState={authState} authSend={authSend} />
+    </ThemeProvider>
+  )
+}
+
+function AppContent({
+  authState,
+  authSend
+}: {
+  authState: ReturnType<typeof useMachine<typeof authMachine>>[0]
+  authSend: ReturnType<typeof useMachine<typeof authMachine>>[1]
+}) {
   if (authState.matches("checking") || authState.matches("signingOut")) {
     return <LoadingScreen />
   }

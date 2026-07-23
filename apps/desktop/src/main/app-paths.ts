@@ -25,5 +25,6 @@ export const AppPathsLive = Layer.succeed(AppPaths, {
   reviewsDir: join(root, "reviews"),
   planRoundsDir: join(root, "plan-rounds"),
   plansDir: join(root, ".starbase"),
+  themesDir: join(root, "themes"),
   authFile: join(root, "auth.enc")
 })

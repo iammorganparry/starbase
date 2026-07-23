@@ -101,7 +101,7 @@ export function SetupScreen({
                       "flex items-center gap-1.5 rounded-md border px-2 py-[3px] font-mono text-[10.5px]",
                       cli.available
                         ? "border-green/30 bg-green/10 text-text"
-                        : "border-line bg-white/[0.03] text-dim opacity-60"
+                        : "border-line bg-hover text-dim opacity-60"
                     )}
                   >
                     <StatusDot
@@ -169,7 +169,7 @@ export function SetupScreen({
                     <span
                       key={repo.path}
                       title={repo.path}
-                      className="flex items-center gap-1.5 rounded-md border border-line bg-white/[0.03] px-2 py-[3px] font-mono text-[10.5px] text-text"
+                      className="flex items-center gap-1.5 rounded-md border border-line bg-hover px-2 py-[3px] font-mono text-[10.5px] text-text"
                     >
                       <GitBranch size={11} className="text-cyan" />
                       {repo.name}
@@ -204,7 +204,7 @@ export function SetupScreen({
 function GhChip({ gh }: { gh: GhStatus }) {
   if (!gh.available) {
     return (
-      <span className="flex items-center gap-1.5 rounded-md border border-line bg-white/[0.03] px-2 py-[3px] font-mono text-[10.5px] text-dim opacity-60">
+      <span className="flex items-center gap-1.5 rounded-md border border-line bg-hover px-2 py-[3px] font-mono text-[10.5px] text-dim opacity-60">
         <StatusDot tone="bg-line-strong" size={6} glow={false} />
         gh not installed
       </span>
@@ -218,7 +218,7 @@ function GhChip({ gh }: { gh: GhStatus }) {
         "flex items-center gap-1.5 rounded-md border px-2 py-[3px] font-mono text-[10.5px]",
         authed
           ? "border-green/30 bg-green/10 text-text"
-          : "border-line bg-white/[0.03] text-dim"
+          : "border-line bg-hover text-dim"
       )}
     >
       <StatusDot tone={authed ? "bg-green" : "bg-line-strong"} size={6} glow={false} />

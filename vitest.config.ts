@@ -18,9 +18,17 @@ export default defineConfig({
         "packages/core/src/**",
         "packages/contracts/src/**",
         "packages/cli-adapters/src/**",
+        "packages/themes/src/**",
         "apps/desktop/src/main/**"
       ],
-      exclude: ["**/*.test.ts", "**/index.ts", "**/test-support.ts"]
+      // Vendored theme presets are generated colour tables, not logic — every
+      // line is data and covering them would only inflate the number.
+      exclude: [
+        "**/*.test.ts",
+        "**/index.ts",
+        "**/test-support.ts",
+        "packages/themes/src/presets/**"
+      ]
     }
   }
 })

@@ -33,18 +33,18 @@ export function ProviderCard({
       className={cn(
         "flex items-center gap-3 rounded-md border px-2.5 py-2.5 text-left transition-colors",
         selected
-          ? "border-blue/45 bg-surface shadow-[0_0_0_3px_rgba(97,175,239,0.1)]"
+          ? "border-blue/45 bg-surface shadow-[0_0_0_3px] shadow-blue/10"
           : "border-line bg-sunken hover:bg-surface",
         !enabled && "opacity-70"
       )}
     >
-      <span className="flex size-8 flex-none items-center justify-center rounded-md bg-black/20">
+      <span className="flex size-8 flex-none items-center justify-center rounded-md bg-canvas">
         <ProviderIcon cli={cli} size={17} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className="text-[13.5px] font-semibold text-text-bright">{label}</span>
-          <span className="rounded bg-white/5 px-1.5 py-px font-mono text-[9px] text-muted-foreground">
+          <span className="rounded bg-hover px-1.5 py-px font-mono text-[9px] text-muted-foreground">
             {cli}
           </span>
         </span>

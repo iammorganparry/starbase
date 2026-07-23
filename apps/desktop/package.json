@@ -45,6 +45,7 @@
     "@starbase/cli-adapters": "workspace:*",
     "@starbase/contracts": "workspace:*",
     "@starbase/core": "workspace:*",
+    "@starbase/themes": "workspace:*",
     "@starbase/tsconfig": "workspace:*",
     "@starbase/ui": "workspace:*",
     "@tailwindcss/vite": "^4.3.2",

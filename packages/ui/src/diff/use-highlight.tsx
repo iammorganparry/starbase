@@ -1,5 +1,25 @@
 import * as React from "react"
+import { toShikiTheme } from "@starbase/themes"
+import { useOptionalThemeTokens, useThemeSyntax } from "../theme-provider.js"
 import { langForPath, type Token, tokenizeLines } from "./highlight.js"
+
+/**
+ * The active theme, in the shape shiki wants — or null before it has loaded.
+ *
+ * Memoised on the theme's identity because building it copies the whole colour
+ * table, and the hooks below run on every diff in every open pane.
+ */
+const useShikiTheme = () => {
+  const raw = useThemeSyntax()
+  // Optional, not strict: these hooks also run in Storybook and in the diff
+  // test suite, neither of which mounts a provider. Both correctly fall back to
+  // shiki's bundled One Dark Pro.
+  const tokens = useOptionalThemeTokens()
+  return React.useMemo(
+    () => (raw && tokens ? toShikiTheme(raw, tokens) : null),
+    [raw, tokens]
+  )
+}
 
 /**
  * Highlight a whole diff body once, and hand each row its own tokens.
@@ -25,6 +45,7 @@ export function useDiffHighlight(
   // it's the difference between highlighting once and highlighting forever.
   const key = React.useMemo(() => lines.join("\n"), [lines])
   const lang = React.useMemo(() => (path === null ? null : langForPath(path)), [path])
+  const theme = useShikiTheme()
 
   React.useEffect(() => {
     if (lang === null) {
@@ -35,13 +56,16 @@ export function useDiffHighlight(
     // close the pane — before it lands. Without this guard the late resolve
     // paints one file's tokens onto another's rows.
     let live = true
-    void tokenizeLines(key.split("\n"), lang).then((result) => {
+    void tokenizeLines(key.split("\n"), lang, theme).then((result) => {
       if (live) setTokens(result)
     })
     return () => {
       live = false
     }
-  }, [key, lang])
+    // `theme` is in the deps so a theme switch re-tokenizes. Without it the
+    // diff keeps the OLD theme's token colours until the file is reopened —
+    // dark-theme syntax colours left sitting on a light panel.
+  }, [key, lang, theme])
 
   return tokens
 }
@@ -81,6 +105,7 @@ export function useMultiFileHighlight(
     () => `${paths.join("\u0000")}\u0001${contents.join("\u0000")}`,
     [contents, paths]
   )
+  const theme = useShikiTheme()
 
   React.useEffect(() => {
     let live = true
@@ -101,7 +126,7 @@ export function useMultiFileHighlight(
     void Promise.all(
       [...byPath].map(async ([path, indices]) => {
         const lines = indices.map((i) => contents[i] ?? "")
-        const result = await tokenizeLines(lines, langForPath(path))
+        const result = await tokenizeLines(lines, langForPath(path), theme)
         return { indices, result }
       })
     ).then((groups) => {
@@ -120,8 +145,10 @@ export function useMultiFileHighlight(
       live = false
     }
     // `key` is the content fingerprint; the arrays themselves are read inside.
+    // `theme` is listed so a theme switch re-tokenizes rather than leaving the
+    // previous theme's colours on screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+  }, [key, theme])
 
   return tokens
 }

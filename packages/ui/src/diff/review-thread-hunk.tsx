@@ -16,14 +16,14 @@ export function ReviewThreadHunk({ hunk, className }: { hunk: string; className?
   return (
     <div className={cn("overflow-x-auto bg-editor font-mono text-[11px] leading-[1.85]", className)}>
       {lines.map((line, i) => {
-        const bg = line.type === "add" ? "bg-green/[0.13]" : line.type === "del" ? "bg-red/[0.12]" : ""
+        const bg = line.type === "add" ? "bg-diff-add" : line.type === "del" ? "bg-diff-del" : ""
         const fg =
           line.type === "add" ? "text-green" : line.type === "del" ? "text-red" : "text-muted-foreground"
         const gutter =
           line.type === "add"
-            ? "text-[#4e6b45]"
+            ? "text-diff-add-fg"
             : line.type === "del"
-              ? "text-[#6b4a4e]"
+              ? "text-diff-del-fg"
               : "text-line-strong"
         const sign = line.type === "add" ? "+ " : line.type === "del" ? "- " : "  "
         return (

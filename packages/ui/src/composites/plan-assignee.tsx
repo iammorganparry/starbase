@@ -27,7 +27,7 @@ export function PlanAssignee({
         aria-label={label}
         title={`${label}${assignee.reason ? ` — ${assignee.reason}` : ""}`}
         className={cn(
-          "flex min-w-0 max-w-[132px] flex-none items-center gap-1.5 rounded-md bg-surface px-1.5 py-1 text-[10px] text-text-body shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07)]",
+          "flex min-w-0 max-w-[132px] flex-none items-center gap-1.5 rounded-md bg-surface px-1.5 py-1 text-[10px] text-text-body shadow-[inset_0_0_0_1px_var(--sb-hover)]",
           className
         )}
       >
@@ -41,7 +41,7 @@ export function PlanAssignee({
     <div
       aria-label={label}
       className={cn(
-        "flex items-start gap-3 rounded-lg bg-panel p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]",
+        "flex items-start gap-3 rounded-lg bg-panel p-3 shadow-[inset_0_0_0_1px_var(--sb-hover)]",
         className
       )}
     >

@@ -52,7 +52,10 @@ import {
   StreamEvent,
   TerminalChunk,
   TerminalInfo,
+  ThemeCatalog,
+  ThemeSummary,
   Usage,
+  VsCodeTheme,
   WorkspaceConfig
 } from "@starbase/core"
 import {
@@ -65,6 +68,7 @@ import {
   ReviewError,
   SessionNotFoundError,
   TerminalError,
+  ThemeError,
   WorkspaceNotConfiguredError
 } from "@starbase/core"
 import { Rpc, RpcGroup } from "@effect/rpc"
@@ -1086,5 +1090,112 @@ export class StarbaseRpcs extends RpcGroup.make(
   Rpc.make("BrowserPreview.reload", {}),
 
   /** Hide + destroy the view (pane closed or session switched). Idempotent. */
-  Rpc.make("BrowserPreview.close", {})
+  Rpc.make("BrowserPreview.close", {}),
+
+  // ── Themes ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Everything installed: bundled presets plus `~/starbase/themes/*.json`.
+   *
+   * Never errors. A malformed user file arrives in `skipped` alongside the
+   * themes that did load — one bad file must not empty the picker, and the
+   * operator needs both to keep switching themes AND to be told which file is
+   * broken.
+   *
+   * Each summary carries its fully-resolved `tokens`, so the settings grid can
+   * paint nine live previews from one call rather than nine.
+   */
+  Rpc.make("Theme.list", {
+    success: ThemeCatalog
+  }),
+
+  /**
+   * The raw VS Code theme JSON for `id` — what the editor loads and what
+   * "export" would write. Null when the id names nothing.
+   */
+  Rpc.make("Theme.get", {
+    success: Schema.NullOr(VsCodeTheme),
+    payload: { id: Schema.String }
+  }),
+
+  /**
+   * Write a user theme. Fails on a built-in id: presets stay immutable so the
+   * fallback always has something to fall back to (duplicate one instead).
+   */
+  Rpc.make("Theme.save", {
+    success: ThemeSummary,
+    error: ThemeError,
+    payload: { id: Schema.String, theme: VsCodeTheme }
+  }),
+
+  /** Delete a user theme. Fails on a built-in; a missing file is success. */
+  Rpc.make("Theme.delete", {
+    error: ThemeError,
+    payload: { id: Schema.String }
+  }),
+
+  /**
+   * Copy any theme to a new editable user theme — the only route from a
+   * built-in to something the colour picker can write to.
+   */
+  Rpc.make("Theme.duplicate", {
+    success: ThemeSummary,
+    error: ThemeError,
+    payload: { id: Schema.String, name: Schema.optional(Schema.String) }
+  }),
+
+  /**
+   * Import pasted VS Code theme JSON. The error names the offending key rather
+   * than saying "invalid theme" — the realistic input is a marketplace theme
+   * and the realistic failure is one bad key in nine hundred.
+   */
+  Rpc.make("Theme.import", {
+    success: ThemeSummary,
+    error: ThemeError,
+    payload: { json: Schema.String, name: Schema.optional(Schema.String) }
+  }),
+
+  /** Persist the active theme, keeping any colour customizations layered on it. */
+  Rpc.make("Theme.setActive", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { id: Schema.String }
+  }),
+
+  /**
+   * Replace the override layer — Starbase's `workbench.colorCustomizations`.
+   * Keyed by VS Code colour name, so an override survives switching themes and
+   * stays portable back to VS Code.
+   */
+  Rpc.make("Theme.setCustomizations", {
+    success: WorkspaceConfig,
+    error: ConfigError,
+    payload: { colors: Schema.Record({ key: Schema.String, value: Schema.String }) }
+  }),
+
+  /**
+   * Re-emits the whole catalog whenever `~/starbase/themes` changes on disk, so
+   * editing a theme in your own editor repaints the app live.
+   *
+   * The whole catalog rather than a per-file delta: the consumers are a grid
+   * that renders the full list and a provider that needs to know whether the
+   * ACTIVE theme just moved. Both would have to rebuild the list from deltas
+   * anyway, and would drift the first time an event was dropped.
+   */
+  Rpc.make("Theme.watch", {
+    success: ThemeCatalog,
+    stream: true
+  }),
+
+  /**
+   * Reveal a user theme's file in the OS file manager.
+   *
+   * The whole premise of storing themes as files is that you can open one in
+   * your own editor — but only if you can find it. Confined to the themes
+   * directory in the handler, so this cannot become a general "reveal any path"
+   * primitive by accident.
+   */
+  Rpc.make("Theme.reveal", {
+    payload: { path: Schema.String }
+  })
 ) {}

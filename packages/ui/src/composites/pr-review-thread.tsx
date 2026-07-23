@@ -172,7 +172,7 @@ export function PrReviewThreadView({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 border-b border-hairline px-[13px] py-2.5 text-left hover:bg-white/[0.02]"
+        className="flex w-full items-center gap-2 border-b border-hairline px-[13px] py-2.5 text-left hover:bg-hover"
       >
         {open ? (
           <ChevronDown size={13} className="flex-none text-dim" />

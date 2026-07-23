@@ -16,6 +16,7 @@
     "effect": "^3.21.4"
   },
   "devDependencies": {
+    "@starbase/themes": "workspace:*",
     "@starbase/tsconfig": "workspace:*"
   }
 }

@@ -13,6 +13,7 @@
  * does NOT kill the PTY; it keeps running in main and is re-attachable.
  */
 import { useEffect, useRef } from "react"
+import { useThemeTokens } from "@starbase/ui"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebglAddon } from "@xterm/addon-webgl"
@@ -20,30 +21,13 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import "@xterm/xterm/css/xterm.css"
 import { rpc } from "./rpc-client.js"
 
-/** One Dark Pro terminal palette — matches the app's `bg-sunken` surface. */
-const ONE_DARK = {
-  background: "#1e2228",
-  foreground: "#abb2bf",
-  cursor: "#61afef",
-  cursorAccent: "#1e2228",
-  selectionBackground: "#3e4451",
-  black: "#3f4451",
-  red: "#e06c75",
-  green: "#98c379",
-  yellow: "#e5c07b",
-  blue: "#61afef",
-  magenta: "#c678dd",
-  cyan: "#56b6c2",
-  white: "#abb2bf",
-  brightBlack: "#4b5263",
-  brightRed: "#e06c75",
-  brightGreen: "#98c379",
-  brightYellow: "#d19a66",
-  brightBlue: "#61afef",
-  brightMagenta: "#c678dd",
-  brightCyan: "#56b6c2",
-  brightWhite: "#e6e6e6"
-} as const
+/**
+ * The terminal is themed like everything else, but through a different pipe:
+ * xterm paints to a canvas and takes a JS object, so it reads `ThemeTokens`
+ * directly instead of CSS custom properties. `tokens.terminal` is the theme's
+ * own `terminal.ansi*` palette where it declares one, and a derivation from the
+ * accent ramp where it does not — see `@starbase/themes`'s mapper.
+ */
 
 export interface XtermViewProps {
   terminalId: string
@@ -57,6 +41,20 @@ export function XtermView({ terminalId, onExit }: XtermViewProps) {
   const onExitRef = useRef(onExit)
   onExitRef.current = onExit
 
+  const { terminal: palette } = useThemeTokens()
+  /**
+   * The palette is read through a ref in the mount effect, and applied through
+   * a SEPARATE effect afterwards.
+   *
+   * Putting it in the mount effect's dependency array would tear down and
+   * rebuild the whole terminal on every theme switch — losing the WebGL
+   * context, the PTY attachment and, most visibly, the entire scrollback. A
+   * colour change must not cost the operator their session output.
+   */
+  const themeRef = useRef(palette)
+  themeRef.current = palette
+  const termRef = useRef<Terminal | null>(null)
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -68,8 +66,10 @@ export function XtermView({ terminalId, onExit }: XtermViewProps) {
       lineHeight: 1.4,
       cursorBlink: true,
       allowProposedApi: true,
-      theme: ONE_DARK
+      theme: { ...themeRef.current }
     })
+
+    termRef.current = term
 
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -129,8 +129,15 @@ export function XtermView({ terminalId, onExit }: XtermViewProps) {
       detach()
       webgl?.dispose()
       term.dispose()
+      termRef.current = null
     }
   }, [terminalId])
+
+  // Repaint an already-running terminal in place: no remount, no lost
+  // scrollback, no dropped PTY.
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.theme = { ...palette }
+  }, [palette])
 
   return <div ref={containerRef} className="h-full w-full" />
 }

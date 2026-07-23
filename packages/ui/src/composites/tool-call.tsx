@@ -124,7 +124,7 @@ export function ToolCall({
       )}
       {/* While running with no peek yet, a shimmer bar signals live work. */}
       {status === "running" && children == null && (
-        <div className="h-[22px] animate-shine bg-[length:220px_100%] bg-gradient-to-r from-white/[0.02] via-white/[0.07] to-white/[0.02]" />
+        <div className="h-[22px] animate-shine bg-[length:220px_100%] bg-gradient-to-r from-transparent via-hover to-transparent" />
       )}
       {children}
     </div>

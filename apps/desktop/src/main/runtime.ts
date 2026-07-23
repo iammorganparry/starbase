@@ -26,6 +26,7 @@ import {
   McpService,
   SkillsService,
   TerminalService,
+  ThemeService,
   TranscriptStore,
   BackgroundTaskStore,
   RankingService,
@@ -95,6 +96,11 @@ const AppLayer = RpcServerLive.pipe(
   // provideMerge: the RPC auth handlers consume SecretStore AND the main process
   // reaches the same instance directly (deep-link token storage in index.ts).
   Layer.provideMerge(SecretStoreLayer),
+  // provideMerge: the `Theme.*` handlers consume ThemeService AND the main
+  // process reaches the very same instance at startup, to resolve the boot
+  // theme before the window is constructed (see `boot-theme.ts`). That has to
+  // happen outside the RPC surface by definition — there is no renderer yet.
+  Layer.provideMerge(ThemeService.Default),
   // Merged into one stage purely to stay inside `pipe`'s 20-argument limit;
   // neither depends on the other, so the composition is unchanged.
   Layer.provide(Layer.mergeAll(SkillsService.Default, McpService.Default)),
@@ -105,12 +111,17 @@ const AppLayer = RpcServerLive.pipe(
   Layer.provideMerge(Layer.mergeAll(ModelsService.Default, RankingService.Default)),
   Layer.provide(UsageService.Default),
   Layer.provide(GhService.Default),
-  Layer.provide(ConfigService.Default),
+  // provideMerge: the `Config.*` handlers consume ConfigService AND the boot
+  // theme resolution reads the active theme id from it before any window
+  // exists.
+  Layer.provideMerge(ConfigService.Default),
   Layer.provide(GitService.Default),
   Layer.provide(HarnessCliAdapterLive),
   Layer.provide(DialogServiceLive),
   Layer.provide(BrowserPreviewServiceLive),
-  Layer.provide(AppPathsLive),
+  // provideMerge so ThemeService/ConfigService stay callable from the runtime
+  // directly (boot theme), not only from inside an RPC handler.
+  Layer.provideMerge(AppPathsLive),
   // NodeContext bundles CommandExecutor + FileSystem + Path used by the git/gh/
   // discovery/config/workspace/session services. Merged (not just provided) so
   // the startup prefetch can run `DiscoveryService.list`, which needs the executor.

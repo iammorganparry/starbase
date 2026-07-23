@@ -28,7 +28,7 @@ export function PhaseNode({
       className={cn(
         "flex flex-col gap-1.5 rounded-lg px-[11px] py-[9px]",
         active
-          ? "border border-blue bg-surface shadow-[0_0_0_3px_rgba(97,175,239,.13)]"
+          ? "border border-blue bg-surface shadow-[0_0_0_3px] shadow-blue/[0.13]"
           : "border border-dashed border-line bg-editor opacity-[.72]",
         className
       )}

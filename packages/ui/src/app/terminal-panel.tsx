@@ -125,7 +125,7 @@ export function TerminalDock(props: TerminalDockProps) {
       </div>
 
       {/* Body — every terminal stays mounted; only the active one is shown. */}
-      <div className="relative min-h-0 flex-1" style={{ backgroundColor: "#1e2228" }}>
+      <div className="relative min-h-0 flex-1 bg-sunken">
         {tabs.length === 0 ? (
           <EmptyDock onNew={props.onNew} />
         ) : (

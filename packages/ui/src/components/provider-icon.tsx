@@ -52,15 +52,19 @@ export const PROVIDER_LABEL: Record<CliKind, string> = {
 /**
  * Brand colours: Anthropic's clay orange for Claude; OpenAI, Cursor and opencode
  * render monochrome (their marks are black/white) so they read cleanly on dark.
+ *
+ * Claude's hex is deliberately a literal — it is Anthropic's mark, so it must
+ * NOT shift when the theme does. The monochrome three take `--sb-text-bright`
+ * instead of a baked light grey, or they would be invisible on a light theme.
  */
 export const PROVIDER_COLOR: Record<CliKind, string> = {
   claude: "#d97757",
-  codex: "#d7dae0",
-  cursor: "#d7dae0",
-  opencode: "#d7dae0",
-  // `--sb-blue`, the app's own accent — the one colour in this map that is ours
-  // rather than a vendor's.
-  starbase: "#61afef"
+  codex: "var(--sb-text-bright)",
+  cursor: "var(--sb-text-bright)",
+  opencode: "var(--sb-text-bright)",
+  // The app's own accent — the one colour in this map that is ours rather than
+  // a vendor's, so it follows the theme.
+  starbase: "var(--sb-blue)"
 }
 
 export function ProviderIcon({

@@ -147,3 +147,25 @@ export class BrowserPreviewError extends Schema.TaggedError<BrowserPreviewError>
     message: Schema.String
   }
 ) {}
+
+/**
+ * Raised when a theme cannot be read, written or deleted — a malformed JSON
+ * file in `~/starbase/themes`, a write to a built-in id, or an import whose
+ * shape isn't a VS Code theme.
+ *
+ * Carries `themeId` alongside the message because the operator is almost always
+ * looking at a grid of nine-plus swatches when this fires, and "failed to save
+ * theme" without naming which one is an error message that costs more time than
+ * it saves.
+ *
+ * Note that LISTING never uses this channel: one broken file must not empty the
+ * picker, so `ThemeCatalog.skipped` reports per-file failures inline instead.
+ */
+export class ThemeError extends Schema.TaggedError<ThemeError>()(
+  "ThemeError",
+  {
+    message: Schema.String,
+    themeId: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.String)
+  }
+) {}

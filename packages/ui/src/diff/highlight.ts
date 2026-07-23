@@ -1,4 +1,5 @@
 import type { HighlighterCore } from "shiki/core"
+import type { ShikiThemeLike } from "@starbase/themes"
 
 /**
  * Syntax highlighting for diff bodies.
@@ -32,8 +33,15 @@ import type { HighlighterCore } from "shiki/core"
  * minor disappointment; a diff that doesn't render is a broken review.
  */
 
-/** The theme, chosen to match the app's own One Dark palette. */
-const THEME = "one-dark-pro"
+/**
+ * The theme to fall back to when the caller has none yet.
+ *
+ * Bundled with the highlighter so a diff opened during the async window — or in
+ * Storybook, which has no theme provider — still highlights rather than
+ * rendering flat. Once the active theme arrives it is registered alongside and
+ * used instead; see `tokenizeLines`.
+ */
+const FALLBACK_THEME = "one-dark-pro"
 
 /**
  * The grammars worth bundling, keyed by the extensions that map to them.
@@ -117,6 +125,15 @@ export const langForPath = (path: string): string | null => {
 
 let corePromise: Promise<HighlighterCore> | null = null
 const loaded = new Set<string>()
+/**
+ * Themes already registered on the shared highlighter, by name.
+ *
+ * Registration parses the theme's full rule set, so doing it per call would pay
+ * that cost on every hunk of every file. Keyed by name because that is what
+ * shiki itself keys on — registering two different themes under one name would
+ * silently keep the first.
+ */
+const loadedThemes = new Set<string>([FALLBACK_THEME])
 
 /**
  * The shared highlighter, created once for the whole app.
@@ -169,7 +186,16 @@ export interface Token {
  */
 export const tokenizeLines = async (
   lines: ReadonlyArray<string>,
-  lang: string | null
+  lang: string | null,
+  /**
+   * The active theme's syntax rules.
+   *
+   * A diff highlighted in One Dark Pro inside a Solarized Light panel is not a
+   * small mismatch — dark-theme syntax colours are chosen against near-black
+   * and most of them are invisible on cream. Null falls back to the bundled
+   * One Dark Pro, which is right during the async window and in Storybook.
+   */
+  theme?: ShikiThemeLike | null
 ): Promise<ReadonlyArray<ReadonlyArray<Token>> | null> => {
   if (lang === null || lines.length === 0) return null
   const load = LOADERS[lang]
@@ -181,7 +207,17 @@ export const tokenizeLines = async (
       await highlighter.loadLanguage((await load()) as never)
       loaded.add(lang)
     }
-    const { tokens } = highlighter.codeToTokens(lines.join("\n"), { lang, theme: THEME })
+
+    let themeName = FALLBACK_THEME
+    if (theme) {
+      if (!loadedThemes.has(theme.name)) {
+        await highlighter.loadTheme(theme as never)
+        loadedThemes.add(theme.name)
+      }
+      themeName = theme.name
+    }
+
+    const { tokens } = highlighter.codeToTokens(lines.join("\n"), { lang, theme: themeName })
     // Shiki drops a trailing empty line; pad so index N of the result always
     // means input line N. A caller indexing past the end would otherwise render
     // its last row plain for no visible reason.

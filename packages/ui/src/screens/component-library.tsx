@@ -23,8 +23,13 @@ import { SessionRow } from "../composites/session-row.js"
 import { Composer } from "../composites/composer.js"
 import { DiffHunk } from "../diff/diff-hunk.js"
 
-const SURFACES = ["#282c34", "#21252b", "#1e2228", "#2c313a", "#181a1f"]
-const ACCENTS = ["#61afef", "#98c379", "#e5c07b", "#e06c75", "#c678dd", "#56b6c2", "#d19a66"]
+/*
+ * The swatch ribbons name TOKENS, not hexes — this gallery is the one screen
+ * that has to repaint with the theme, or it documents One Dark Pro forever
+ * rather than whatever is actually active.
+ */
+const SURFACES = ["editor", "panel", "sunken", "surface", "border"]
+const ACCENTS = ["blue", "green", "yellow", "red", "purple", "cyan", "orange"]
 
 const demoSession: Session = {
   id: "demo",
@@ -66,7 +71,7 @@ export function ComponentLibrary() {
       <div className="flex flex-wrap gap-6 rounded-lg border border-line bg-panel px-[18px] py-4">
         <Ribbon label="Surfaces">
           {SURFACES.map((c) => (
-            <span key={c} title={c} className="size-[30px] rounded-md border border-line" style={{ background: c }} />
+            <span key={c} title={`--sb-${c}`} className="size-[30px] rounded-md border border-line" style={{ background: `var(--sb-${c})` }} />
           ))}
         </Ribbon>
         <Ribbon label="Text ramp">
@@ -78,7 +83,7 @@ export function ComponentLibrary() {
         </Ribbon>
         <Ribbon label="Accents">
           {ACCENTS.map((c) => (
-            <span key={c} className="size-[30px] rounded-md" style={{ background: c }} />
+            <span key={c} title={`--sb-${c}`} className="size-[30px] rounded-md" style={{ background: `var(--sb-${c})` }} />
           ))}
         </Ribbon>
         <Ribbon label="Type">

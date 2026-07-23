@@ -58,6 +58,9 @@ export function HtmlPreview({ code, className }: { code: string; className?: str
           // Empty sandbox = opaque origin, no JS. Scripts only when opted in;
           // never `allow-same-origin`, so the frame can't reach the host.
           sandbox={scripts ? "allow-scripts" : ""}
+          // `bg-white`, not a token: the frame renders the agent's own HTML,
+          // which was almost certainly authored against a white page. Painting
+          // it with our surface would silently restyle somebody else's document.
           className="block h-[360px] w-full border-0 bg-white"
         />
       )}

@@ -43,6 +43,7 @@ import {
   setOpencodeAuth,
   SkillsService,
   TerminalService,
+  ThemeService,
   BackgroundTaskStore,
   RankingService,
   TranscriptStore,
@@ -50,6 +51,7 @@ import {
   WorkspaceService
 } from "@starbase/cli-adapters"
 import { homedir } from "node:os"
+import { dirname, resolve } from "node:path"
 import {
   applyStreamEvent,
   assistantMessage,
@@ -97,7 +99,7 @@ import { RpcServer } from "@effect/rpc"
 import type { FromClientEncoded, FromServerEncoded } from "@effect/rpc/RpcMessage"
 import { Effect, Layer, Mailbox, Option, Runtime, Stream } from "effect"
 import type { WebContents } from "electron"
-import { BrowserWindow, ipcMain } from "electron"
+import { BrowserWindow, ipcMain, shell } from "electron"
 import { showNotification, shouldNotify } from "./notifications.js"
 import { BrowserPreviewService } from "./browser-preview.js"
 import { DialogService } from "./dialog.js"
@@ -1553,7 +1555,46 @@ const HandlersLayer = StarbaseRpcs.toLayer({
   "Auth.getSession": () => AuthService.getSession(),
   "Auth.startSignIn": ({ provider }) => AuthService.startSignIn(provider),
   "Auth.sendMagicLink": ({ email, name }) => AuthService.sendMagicLink(email, name),
-  "Auth.signOut": () => AuthService.signOut()
+  "Auth.signOut": () => AuthService.signOut(),
+
+  // Themes — the picker, the editor, and live reload of `~/starbase/themes`.
+  "Theme.list": () => ThemeService.list(),
+  "Theme.get": ({ id }) => ThemeService.get(id),
+  "Theme.save": ({ id, theme }) => ThemeService.save(id, theme),
+  "Theme.delete": ({ id }) => ThemeService.remove(id),
+  "Theme.duplicate": ({ id, name }) => ThemeService.duplicate(id, name),
+  "Theme.import": ({ json, name }) => ThemeService.importJson(json, name),
+  "Theme.setActive": ({ id }) => ConfigService.setActiveTheme(id),
+  "Theme.setCustomizations": ({ colors }) => ConfigService.setThemeCustomizations({ ...colors }),
+
+  /**
+   * `Stream.unwrap(Effect.map(…))`, NOT the `ThemeService.watch()` accessor.
+   *
+   * An `Effect` is itself a `Stream` of one element, so the accessor form —
+   * `Effect<Stream<ThemeCatalog>>` — type-checks here and silently produces a
+   * stream whose single element is the real stream. No error, no catalog, and
+   * live reload just never fires. Same shape as `Review.watch` above, for the
+   * same reason.
+   */
+  "Theme.watch": () => Stream.unwrap(Effect.map(ThemeService, (t) => t.watch())),
+
+  /**
+   * Confined to `~/starbase/themes` on purpose.
+   *
+   * The renderer supplies the path, and the renderer renders untrusted content
+   * (agent markdown, PR bodies). An unconstrained reveal would be a way to make
+   * the app open an arbitrary filesystem location. Only an immediate child of
+   * the themes directory is valid — the same confinement rule ThemeService
+   * applies to reads, writes and deletes.
+   */
+  "Theme.reveal": ({ path }) =>
+    Effect.flatMap(AppPaths, (paths) =>
+      Effect.sync(() => {
+        const themesDir = resolve(paths.themesDir)
+        const file = resolve(path)
+        if (dirname(file) === themesDir) shell.showItemInFolder(file)
+      })
+    )
 })
 
 /**

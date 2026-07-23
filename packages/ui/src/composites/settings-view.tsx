@@ -39,6 +39,7 @@ import {
   ChevronRight,
   Cpu,
   Keyboard,
+  Palette,
   RotateCcw,
   Server,
   ShieldCheck,
@@ -56,6 +57,7 @@ import { GithubMark } from "../components/github-mark.js"
 import { ProviderIcon, PROVIDER_LABEL } from "../components/provider-icon.js"
 import { ORCHESTRATOR_DEFAULT } from "@starbase/core"
 import { GigaplanSettings } from "./gigaplan-settings.js"
+import { ThemesSettings, type ThemesSettingsProps } from "./themes-settings.js"
 import {
   Select,
   SelectContent,
@@ -80,6 +82,7 @@ type SectionKey =
   | "permissions"
   | "mcp"
   | "github"
+  | "themes"
   | "keybindings"
 
 interface NavItem {
@@ -99,6 +102,7 @@ const NAV: ReadonlyArray<NavItem> = [
   { key: "permissions", label: "Permissions", icon: <ShieldCheck size={14} />, ready: false },
   { key: "mcp", label: "MCP servers", icon: <Server size={14} />, ready: true },
   { key: "github", label: "GitHub", icon: <GithubMark size={14} />, ready: true },
+  { key: "themes", label: "Themes", icon: <Palette size={14} />, ready: true },
   { key: "keybindings", label: "Keybindings", icon: <Keyboard size={14} />, ready: false }
 ]
 
@@ -253,7 +257,7 @@ function OpencodeProviders({
         {p.source !== null && (
           <span
             title={SOURCE_HINT[p.source]}
-            className="rounded bg-black/25 px-1.5 py-px font-mono text-[9.5px] text-muted-foreground"
+            className="rounded bg-canvas px-1.5 py-px font-mono text-[9.5px] text-muted-foreground"
           >
             {SOURCE_LABEL[p.source]}
           </span>
@@ -301,7 +305,7 @@ function OpencodeProviders({
               }}
               placeholder={`${p.id} API key`}
               className={cn(
-                "min-w-0 flex-1 rounded border bg-black/20 px-2 py-1 font-mono text-[11px] text-text-bright outline-none",
+                "min-w-0 flex-1 rounded border bg-canvas px-2 py-1 font-mono text-[11px] text-text-bright outline-none",
                 saveError === null
                   ? "border-hairline focus:border-line-strong"
                   : "border-red/50 focus:border-red"
@@ -383,7 +387,7 @@ function OpencodeProviders({
                       autoFocus
                       onChange={(e) => setFilter(e.target.value)}
                       placeholder="Search providers…"
-                      className="rounded border border-hairline bg-black/20 px-2 py-1 text-[11.5px] text-text-bright outline-none focus:border-line-strong"
+                      className="rounded border border-hairline bg-canvas px-2 py-1 text-[11.5px] text-text-bright outline-none focus:border-line-strong"
                     />
                     {matches.length === 0 ? (
                       <span className="py-1 text-[11.5px] text-dim">
@@ -418,6 +422,12 @@ function OpencodeProviders({
 export interface SettingsViewProps {
   /** Discovered CLIs — every one becomes a provider card. */
   clis: ReadonlyArray<CliInfo>
+  /**
+   * Everything the Themes pane needs. Optional so Storybook and the component
+   * gallery can mount Settings without standing up a theme catalog; absent
+   * renders the stub, exactly as an unbuilt section does.
+   */
+  themes?: ThemesSettingsProps
   /** Persisted per-CLI provider defaults. */
   providers?: ProvidersConfig | null
   /** Persist one CLI's provider config. */
@@ -497,6 +507,7 @@ export interface SettingsViewProps {
  */
 export function SettingsView({
   clis,
+  themes,
   providers,
   onSaveProvider,
   defaultCli,
@@ -574,7 +585,7 @@ export function SettingsView({
               "flex items-center gap-2.5 rounded-md py-2 text-[13px] transition-colors",
               compact ? "justify-center px-2" : "px-2.5",
               section === item.key
-                ? "border border-blue/45 bg-surface font-semibold text-text-bright shadow-[0_0_0_3px_rgba(97,175,239,0.1)]"
+                ? "border border-blue/45 bg-surface font-semibold text-text-bright shadow-[0_0_0_3px] shadow-blue/10"
                 : "border border-transparent text-text-body hover:bg-surface/60"
             )}
           >
@@ -583,7 +594,7 @@ export function SettingsView({
             </span>
             {!compact && <span className="flex-1 text-left">{item.label}</span>}
             {!compact && item.key === "providers" && (
-              <span className="rounded bg-white/5 px-1.5 py-px font-mono text-[9px] text-muted-foreground">
+              <span className="rounded bg-hover px-1.5 py-px font-mono text-[9px] text-muted-foreground">
                 {clis.length}
               </span>
             )}
@@ -645,6 +656,12 @@ export function SettingsView({
         </div>
       ) : section === "mcp" ? (
         <McpSection clis={clis} loadMcpServers={loadMcpServers} loadMcpStatus={loadMcpStatus} />
+      ) : section === "themes" ? (
+        themes ? (
+          <ThemesSettings {...themes} />
+        ) : (
+          <StubSection label="Themes" />
+        )
       ) : section === "github" ? (
         <GithubSection
           ghStatus={ghStatus}
@@ -748,7 +765,7 @@ function ProvidersSection({
         <div className="flex flex-1 flex-col gap-5 overflow-auto p-6">
           {/* header */}
           <div className="flex items-center gap-3">
-            <span className="flex size-9 flex-none items-center justify-center rounded-lg bg-black/20">
+            <span className="flex size-9 flex-none items-center justify-center rounded-lg bg-canvas">
               <ProviderIcon cli={selected} size={19} />
             </span>
             <div className="min-w-0 flex-1">
@@ -970,7 +987,7 @@ function ModelChoice({
       className={cn(
         "flex flex-col gap-0.5 rounded-md border px-3 py-2.5 text-left transition-colors",
         selected
-          ? "border-blue/45 bg-surface shadow-[0_0_0_3px_rgba(97,175,239,0.1)]"
+          ? "border-blue/45 bg-surface shadow-[0_0_0_3px] shadow-blue/10"
           : "border-line bg-sunken hover:bg-surface"
       )}
     >

@@ -24,7 +24,7 @@ export function AgentCard({
     <div
       className={cn(
         "flex flex-col gap-1.5 rounded-lg px-2.5 py-2",
-        working && "border border-blue bg-surface shadow-[0_0_0_3px_rgba(97,175,239,.12)]",
+        working && "border border-blue bg-surface shadow-[0_0_0_3px] shadow-blue/[0.12]",
         flagged && "border border-red/30 bg-panel",
         state === "done" && "border border-line bg-panel",
         className

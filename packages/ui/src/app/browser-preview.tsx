@@ -125,7 +125,12 @@ export function BrowserPreview(props: BrowserPreviewProps) {
         </div>
       </div>
 
-      {/* View region — the native WebContentsView floats over these bounds. */}
+      {/*
+        View region — the native WebContentsView floats over these bounds. The
+        white is the CSS default for a document with no background of its own,
+        not a Starbase surface: this shows somebody else's web page, so it must
+        not tint with our theme.
+      */}
       <div className="relative min-h-0 flex-1 bg-white">{props.children}</div>
     </div>
   )
