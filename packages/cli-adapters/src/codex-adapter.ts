@@ -18,7 +18,10 @@ import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
 import { readCodexContextUsage } from "./codex-app-server.js"
 import type { CodexContextUsage } from "./codex-app-server.js"
 import { stageCodexInput } from "./codex-input.js"
-import { runCodexAppServer } from "./codex-app-server-run.js"
+import {
+  isMissingCodexRolloutError,
+  runCodexAppServer
+} from "./codex-app-server-run.js"
 
 /**
  * Legacy Codex SDK transport retained as a pre-activation fallback for older
@@ -493,6 +496,7 @@ export const runCodexSdk = (
         let turnPrompt: Input = staged.input
         let questionRound = 0
         let planRound = 0
+        let recoveredMissingRollout = false
         for (;;) {
           let followUp: string | null = null
           let completedUsage: CodexTurnUsage | null = null
@@ -500,7 +504,26 @@ export const runCodexSdk = (
           // on a follow-up. Reusing this set across turns would attach a later
           // completion to an earlier turn's card instead of starting a new one.
           const startedTools = new Set<string>()
-          const { events } = await thread.runStreamed(turnPrompt, { signal: abort.signal })
+          let streamed: Awaited<ReturnType<typeof thread.runStreamed>>
+          try {
+            streamed = await thread.runStreamed(turnPrompt, { signal: abort.signal })
+          } catch (cause) {
+            if (
+              recoveredMissingRollout ||
+              threadId === null ||
+              !isMissingCodexRolloutError(cause)
+            ) {
+              throw cause
+            }
+            // Codex rejects a missing rollout before it starts the turn, so
+            // submitting the same prompt once on a new thread is safe.
+            recoveredMissingRollout = true
+            resume.delete(sessionId)
+            thread = codex.startThread(threadOptions)
+            threadId = null
+            streamed = await thread.runStreamed(turnPrompt, { signal: abort.signal })
+          }
+          const { events } = streamed
           for await (const event of events) {
             if (event.type === "thread.started" && event.thread_id) {
               threadId = event.thread_id

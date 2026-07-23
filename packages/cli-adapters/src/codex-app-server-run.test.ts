@@ -20,6 +20,7 @@ const server = vi.hoisted(() => {
     }>,
     responses: [] as Array<{ id: number | string; result: unknown }>,
     threadId: "thread-1",
+    resumeError: null as Error | null,
     turnNumber: 0,
     hangMessages: false,
     closed: false
@@ -31,6 +32,11 @@ const server = vi.hoisted(() => {
       options?: { timeoutMs?: number }
     ) => {
       state.requests.push({ method, params, ...(options ? { options } : {}) })
+      if (method === "thread/resume" && state.resumeError !== null) {
+        const error = state.resumeError
+        state.resumeError = null
+        return Promise.reject(error)
+      }
       if (method === "thread/start" || method === "thread/resume") {
         return Promise.resolve({ thread: { id: state.threadId } })
       }
@@ -111,12 +117,71 @@ beforeEach(() => {
   server.state.requests = []
   server.state.responses = []
   server.state.threadId = "thread-1"
+  server.state.resumeError = null
   server.state.turnNumber = 0
   server.state.hangMessages = false
   server.state.closed = false
 })
 
 describe("runCodexAppServer", () => {
+  it("replaces a persisted thread whose local rollout no longer exists", async () => {
+    server.state.threadId = "replacement-thread"
+    server.state.resumeError = new Error(
+      "thread/resume failed: no rollout found for thread id stale-thread (code -32600)"
+    )
+    server.state.messages = [
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "replacement-thread",
+          turn: { id: "turn-1", status: "completed", error: null }
+        }
+      }
+    ]
+    const resume = new Map<string, string>()
+    const { ctx, emitted } = harness()
+
+    await Effect.runPromise(
+      runCodexAppServer(
+        "s1",
+        spec({ resumeId: "stale-thread" }),
+        ctx,
+        resume
+      )
+    )
+
+    expect(server.state.requests.slice(0, 3).map((request) => request.method)).toStrictEqual([
+      "thread/resume",
+      "thread/start",
+      "turn/start"
+    ])
+    expect(resume.get("s1")).toBe("replacement-thread")
+    expect(emitted).toContainEqual({
+      _tag: "Started",
+      sessionId: "replacement-thread"
+    })
+  })
+
+  it("does not replace a resumed thread after an unrelated error", async () => {
+    server.state.resumeError = new Error("thread/resume failed: permission denied")
+    const { ctx } = harness()
+
+    await expect(
+      Effect.runPromise(
+        runCodexAppServer(
+          "s1",
+          spec({ resumeId: "thread-1" }),
+          ctx,
+          new Map()
+        )
+      )
+    ).rejects.toThrow("permission denied")
+
+    expect(server.state.requests.map((request) => request.method)).toStrictEqual([
+      "thread/resume"
+    ])
+  })
+
   it("uses GPT-5.6's lightest supported effort for reasoning-off", () => {
     expect(mapCodexAppServerReasoning("off")).toBe("low")
     expect(mapCodexAppServerReasoning("think")).toBe("medium")
