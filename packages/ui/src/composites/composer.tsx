@@ -88,6 +88,10 @@ const activeToken = (value: string, caret: number): MenuState | null => {
   }
 }
 
+/** Codex invokes skills with `$name`; the palette keeps `/` as its common discovery trigger. */
+const skillInsertion = (cli: CliKind | undefined, skill: Skill): string =>
+  cli === "codex" && skill.source === "skill" ? `$${skill.name.slice(1)}` : skill.name
+
 /**
  * The prompt composer — a real controlled textarea with Enter-to-send /
  * Shift+Enter newline, plus two typeahead palettes: `/` surfaces the harness's
@@ -392,7 +396,9 @@ export function Composer({
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault()
-        if (menu.kind === "slash") replaceToken(skillMatches[activeIndex]!.name)
+        if (menu.kind === "slash") {
+          replaceToken(skillInsertion(cli, skillMatches[activeIndex]!))
+        }
         else replaceToken(`@${fileMatches[activeIndex]!}`)
         return
       }
@@ -419,7 +425,7 @@ export function Composer({
             <CommandMenu
               skills={skillMatches}
               activeIndex={activeIndex}
-              onSelect={(s) => replaceToken(s.name)}
+              onSelect={(skill) => replaceToken(skillInsertion(cli, skill))}
               onHover={setActiveIndex}
             />
           ) : (

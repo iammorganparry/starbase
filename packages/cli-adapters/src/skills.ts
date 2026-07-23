@@ -3,12 +3,13 @@ import { FileSystem, Path } from "@effect/platform"
 import { Effect, Ref } from "effect"
 import { NO_CAPABILITIES, probeClaudeCapabilities, SCRIPTED_COMMANDS } from "./claude-commands.js"
 import type { ClaudeCapabilities } from "./claude-commands.js"
+import { probeCodexSkillRoots } from "./codex-skills.js"
 import { isScriptedEnv } from "./scripted.js"
 
 /** What harness a `list` request is scoped to, and where to scan for skills. */
 export interface SkillSpec {
   readonly cli: CliKind
-  /** The real home dir, scanned for GLOBAL skills at `<home>/.claude/skills`. */
+  /** The real home dir, scanned using the selected harness's global skill roots. */
   readonly homeDir: string | null
   /** The session's worktree, scanned for PROJECT skills; null when none. */
   readonly worktreePath: string | null
@@ -45,20 +46,58 @@ const BUILTIN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   usage: "Show usage and limits"
 }
 
-const field = (content: string, key: string): string | null =>
-  content.match(new RegExp(`^${key}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? null
+const yamlScalar = (value: string): string => {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      return typeof parsed === "string" ? parsed : value.slice(1, -1)
+    } catch {
+      return value.slice(1, -1)
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).replaceAll("''", "'")
+  }
+  return value
+}
+
+/** Read the simple scalar and block-scalar frontmatter forms used by SKILL.md files. */
+const field = (content: string, key: string): string | null => {
+  const lines = content.split(/\r?\n/)
+  const index = lines.findIndex((line) => line.startsWith(`${key}:`))
+  if (index < 0) return null
+  const value = lines[index]!.slice(key.length + 1).trim()
+  if (!/^[>|][+-]?$/.test(value)) return value ? yamlScalar(value) : null
+
+  const block: Array<string> = []
+  for (let i = index + 1; i < lines.length; i += 1) {
+    const line = lines[i]!
+    if (line.length > 0 && !/^\s/.test(line)) break
+    block.push(line.trim())
+  }
+  const joined = value.startsWith("|") ? block.join("\n") : block.join(" ")
+  return joined.trim() || null
+}
 
 const baseName = (entry: string): string => entry.replace(/\.(md|skill)$/i, "")
 
 type ScanEnv = FileSystem.FileSystem | Path.Path
 
 /**
- * Scan one `.claude/skills` directory. Each entry is either a skill directory
+ * Scan one harness skill directory. Each entry is either a skill directory
  * (with a `SKILL.md`), or a bare `*.md` / `*.skill` file. Symlinked skills are
  * followed (`fs.stat`, not `lstat`). The display name prefers the `name:`
  * frontmatter, falling back to the entry name.
  */
-const scanSkillsDir = (dir: string): Effect.Effect<ReadonlyArray<Skill>, never, ScanEnv> =>
+interface SkillDir {
+  readonly dir: string
+  readonly namespace?: string
+}
+
+const scanSkillsDir = ({
+  dir,
+  namespace
+}: SkillDir): Effect.Effect<ReadonlyArray<Skill>, never, ScanEnv> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -80,8 +119,9 @@ const scanSkillsDir = (dir: string): Effect.Effect<ReadonlyArray<Skill>, never, 
           if (!isDir && !/\.(md|skill)$/i.test(entry)) return null
           const mdPath = isDir ? path.join(full, "SKILL.md") : full
           const content = yield* fs.readFileString(mdPath).pipe(Effect.orElseSucceed(() => ""))
+          const bareName = field(content, "name") ?? baseName(entry)
           const skill: Skill = {
-            name: `/${field(content, "name") ?? baseName(entry)}`,
+            name: `/${namespace ? `${namespace}:` : ""}${bareName}`,
             description: field(content, "description") ?? "Skill",
             source: "skill"
           }
@@ -107,14 +147,16 @@ const byName = (a: Skill, b: Skill): number => a.name.localeCompare(b.name)
  * The probe is cached per harness for the process lifetime: it costs a CLI
  * startup, and the answer only changes when the operator installs something.
  *
- * Other harnesses report nothing until their own reporters land. That's
- * deliberate: they used to be handed a hardcoded list of five commands, most of
- * which no harness has ever had, and an empty menu is at least true.
+ * Codex has no built-in command reporter in the SDK, so its menu is assembled
+ * from its system/user/project roots and the enabled plugins reported by
+ * `codex plugin list --json`. Its displayed `/name` becomes `$name` when selected.
+ * Other harnesses report nothing until their own reporters land.
  */
 export class SkillsService extends Effect.Service<SkillsService>()("@starbase/SkillsService", {
   accessors: true,
   effect: Effect.gen(function* () {
     const cache = yield* Ref.make(new Map<string, ClaudeCapabilities>())
+    const codexCache = yield* Ref.make(new Map<string, ReadonlyArray<SkillDir>>())
 
     /**
      * The CLI's own surface, probed once per binary.
@@ -140,18 +182,64 @@ export class SkillsService extends Effect.Service<SkillsService>()("@starbase/Sk
 
     const list = (spec: SkillSpec): Effect.Effect<ReadonlyArray<Skill>, never, ScanEnv> =>
       Effect.gen(function* () {
-        if (spec.cli !== "claude") return []
         const path = yield* Path.Path
 
-        // Global first, then project, so a project skill overrides a global one.
-        const dirs = [
-          spec.homeDir ? path.join(spec.homeDir, ".claude", "skills") : null,
-          spec.worktreePath ? path.join(spec.worktreePath, ".claude", "skills") : null
-        ].filter((d): d is string => d !== null)
+        if (spec.cli !== "claude" && spec.cli !== "codex") return []
+
+        let dirs: ReadonlyArray<SkillDir>
+        if (spec.cli === "codex") {
+          const cacheKey = spec.binPath ?? ""
+          const cached = (yield* Ref.get(codexCache)).get(cacheKey)
+          const plugins =
+            cached ??
+            (yield* probeCodexSkillRoots(spec.binPath ?? null, spec.worktreePath).pipe(
+              Effect.map((roots) =>
+                roots.map(
+                  (root): SkillDir => ({
+                    dir: path.join(root.sourcePath, "skills"),
+                    namespace: root.namespace
+                  })
+                )
+              )
+            ))
+          // A miss may be a transient CLI failure; only cache an actual plugin surface.
+          if (!cached && spec.binPath && plugins.length > 0) {
+            yield* Ref.update(codexCache, (entries) => new Map(entries).set(cacheKey, plugins))
+          }
+          // System, user, plugin, then project: the closest definition wins.
+          dirs = [
+            ...(spec.homeDir
+              ? [
+                  { dir: path.join(spec.homeDir, ".codex", "skills", ".system") },
+                  { dir: path.join(spec.homeDir, ".codex", "skills") },
+                  { dir: path.join(spec.homeDir, ".agents", "skills") }
+                ]
+              : []),
+            ...plugins,
+            ...(spec.worktreePath
+              ? [
+                  { dir: path.join(spec.worktreePath, ".codex", "skills") },
+                  { dir: path.join(spec.worktreePath, ".agents", "skills") }
+                ]
+              : [])
+          ]
+        } else {
+          // Global first, then project, so a project skill overrides a global one.
+          dirs = [
+            ...(spec.homeDir
+              ? [{ dir: path.join(spec.homeDir, ".claude", "skills") }]
+              : []),
+            ...(spec.worktreePath
+              ? [{ dir: path.join(spec.worktreePath, ".claude", "skills") }]
+              : [])
+          ]
+        }
 
         const scanned = yield* Effect.forEach(dirs, scanSkillsDir)
         const described = new Map<string, Skill>()
         for (const skill of scanned.flat()) described.set(skill.name, skill)
+
+        if (spec.cli === "codex") return [...described.values()].sort(byName)
 
         // Under the scripted harness there is no CLI to ask — asking would spawn
         // the operator's real `claude`, which is the one thing that switch

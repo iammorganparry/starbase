@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape, PermissionDecision } from "./adapter.js"
 import { ConfigService } from "./config.js"
-import { AgentRunner, resolveIntakeHarness } from "./agent-runner.js"
+import { AgentRunner, isCodexSkillInvocation, resolveIntakeHarness } from "./agent-runner.js"
 import { ContextManager } from "./context-manager.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -68,6 +68,13 @@ const gates = (events: ReadonlyArray<StreamEvent>) =>
 
 const ranTool = (events: ReadonlyArray<StreamEvent>, id: string) =>
   events.some((e) => e._tag === "ToolStart" && e.id === id)
+
+describe("isCodexSkillInvocation", () => {
+  it("recognises explicit Codex skill tokens without treating paths as skills", () => {
+    expect(isCodexSkillInvocation("$babysit-pr get it to main")).toBe(true)
+    expect(isCodexSkillInvocation("/Users/morgan/repo")).toBe(false)
+  })
+})
 
 describe("resolveIntakeHarness", () => {
   it("uses the configured orchestrator when its harness is installed", () => {

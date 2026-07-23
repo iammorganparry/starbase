@@ -145,6 +145,10 @@ const planPointerNote = (worktreePath: string, planFiles: ReadonlyArray<string>)
  */
 export const isSlashCommand = (text: string): boolean => /^\/[A-Za-z][\w:-]*(\s|$)/.test(text.trimStart())
 
+/** Codex's explicit skill syntax; like slash commands, it must lead the composed prompt. */
+export const isCodexSkillInvocation = (text: string): boolean =>
+  /^\$[A-Za-z][\w:-]*(\s|$)/.test(text.trimStart())
+
 /** A gate awaiting the operator; the `Deferred` unblocks the paused agent. */
 interface PendingGate {
   readonly sessionId: string
@@ -773,7 +777,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
             // turned `/babysit-pr …` into prose, and the turn came back instantly
             // with nothing to say — the empty "CLAUDE" block. When the operator
             // opens with a command, the context rides along AFTER it instead.
-            prompt: !orchestrating && isSlashCommand(promptText)
+            prompt:
+              !orchestrating &&
+              (isSlashCommand(promptText) || (cli === "codex" && isCodexSkillInvocation(promptText)))
               ? `${promptText}\n\n${primer}${planPointer}${adhd}${ask}${planning}`.trimEnd()
               : `${primer}${planPointer}${adhd}${ask}${planning}${promptText}`,
             images,

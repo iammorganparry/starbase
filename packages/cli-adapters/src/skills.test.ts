@@ -34,8 +34,13 @@ const run = <A>(effect: Effect.Effect<A, never, SkillsService | NodeContext.Node
     effect.pipe(Effect.provide(Layer.mergeAll(SkillsService.Default, NodeContext.layer)))
   )
 
-const writeSkill = (root: string, name: string, description: string) => {
-  const dir = join(root, ".claude", "skills", name)
+const writeSkill = (
+  root: string,
+  name: string,
+  description: string,
+  skillsDir = join(".claude", "skills")
+) => {
+  const dir = join(root, skillsDir, name)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n`)
 }
@@ -74,14 +79,46 @@ describe("SkillsService", () => {
     expect(skills.some((s) => s.name === "/audit")).toBe(true)
   })
 
-  it("invents nothing for a harness that can't report yet", async () => {
-    writeSkill(home.dir, "deploy", "Global deploy")
+  it("surfaces Codex user and project skills without leaking Claude skills", async () => {
+    writeSkill(home.dir, "claude-only", "Claude only")
+    writeSkill(home.dir, "audit", "Global audit", join(".agents", "skills"))
+    writeSkill(home.dir, "deploy", "Global deploy", join(".agents", "skills"))
+    writeSkill(repo.dir, "deploy", "Project deploy", join(".agents", "skills"))
     const skills = await run(
       SkillsService.list({ cli: "codex", homeDir: home.dir, worktreePath: repo.dir })
     )
-    // Codex doesn't read ~/.claude/skills, and we can't ask it what it has — so
-    // the honest answer is nothing, not another harness's skills or a made-up list.
-    expect(skills).toStrictEqual([])
+    expect(skills.find((s) => s.name === "/deploy")?.description).toBe("Project deploy")
+    expect(skills.map((s) => s.name)).toContain("/audit")
+    expect(skills.map((s) => s.name)).not.toContain("/claude-only")
+  })
+
+  it("surfaces Codex system skills from ~/.codex/skills/.system", async () => {
+    writeSkill(home.dir, "skill-creator", "Create skills", join(".codex", "skills", ".system"))
+    const skills = await run(
+      SkillsService.list({ cli: "codex", homeDir: home.dir, worktreePath: repo.dir })
+    )
+    expect(skills).toContainEqual({
+      name: "/skill-creator",
+      description: "Create skills",
+      source: "skill"
+    })
+  })
+
+  it("normalizes quoted names and folded descriptions from Codex frontmatter", async () => {
+    const dir = join(home.dir, ".codex", "skills", ".system", "imagegen")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      '---\nname: "imagegen"\ndescription: >-\n  Generate or edit\n  raster images.\n---\n'
+    )
+    const skills = await run(
+      SkillsService.list({ cli: "codex", homeDir: home.dir, worktreePath: repo.dir })
+    )
+    expect(skills).toContainEqual({
+      name: "/imagegen",
+      description: "Generate or edit raster images.",
+      source: "skill"
+    })
   })
 })
 
