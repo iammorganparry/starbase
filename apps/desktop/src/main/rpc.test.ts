@@ -110,6 +110,34 @@ describe("Gigaplan handoff brief", () => {
     expect(brief).toContain("ACTIVE PLAN")
     expect(brief).toContain("Also include hidden columns.")
   })
+
+  it("drops whole oldest turns and labels a truncated intake", () => {
+    const messages = [
+      {
+        role: "user",
+        parts: [{ _tag: "Text", text: `OLDER TURN ${"a".repeat(25_000)}` }]
+      },
+      {
+        role: "assistant",
+        parts: [{ _tag: "Text", text: `MIDDLE TURN ${"b".repeat(25_000)}` }]
+      },
+      {
+        role: "user",
+        parts: [{ _tag: "Text", text: `LATEST TURN ${"c".repeat(20_000)}` }]
+      }
+    ] as unknown as ReadonlyArray<Message>
+
+    const brief = gigaplanBriefFromTranscript(messages)
+    expect(brief).toContain(
+      ["[earlier intake truncated]", "", "ORCHESTRATOR", "MIDDLE TURN"].join("\n")
+    )
+    expect(brief).toContain("OPERATOR\nLATEST TURN")
+    expect(brief).not.toContain("OLDER TURN")
+    expect(brief.length).toBeLessThanOrEqual(
+      "Create or update the implementation plan from this reviewed Gigaplan intake.\n\n".length +
+        60_000
+    )
+  })
 })
 
 /**

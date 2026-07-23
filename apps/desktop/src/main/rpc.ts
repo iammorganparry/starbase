@@ -898,6 +898,31 @@ type PlanAdversarialEnv =
   | Path.Path
   | AppPaths
 
+const GIGAPLAN_INTAKE_LIMIT = 60_000
+const EARLIER_INTAKE_TRUNCATED = "[earlier intake truncated]"
+
+/** Keep a contiguous newest suffix, so a planner never starts inside a turn. */
+const boundGigaplanIntake = (turns: ReadonlyArray<string>): string => {
+  const body = turns.join("\n\n").trim()
+  if (body.length <= GIGAPLAN_INTAKE_LIMIT) return body
+
+  // Reserve room for the explanation before choosing turns, so the displayed
+  // intake remains within the same bound after we say what was omitted.
+  const turnBudget = GIGAPLAN_INTAKE_LIMIT - EARLIER_INTAKE_TRUNCATED.length - 2
+  const retained: Array<string> = []
+  let length = 0
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (turn === undefined) continue
+    const separator = retained.length === 0 ? 0 : 2
+    if (length + separator + turn.length > turnBudget) break
+    retained.unshift(turn)
+    length += separator + turn.length
+  }
+
+  return [EARLIER_INTAKE_TRUNCATED, ...retained].join("\n\n")
+}
+
 /** Build the planner handoff from the durable Gigaplan intake, not one message. */
 export const gigaplanBriefFromTranscript = (messages: ReadonlyArray<Message>): string => {
   const turns = messages.flatMap((message) => {
@@ -917,11 +942,10 @@ export const gigaplanBriefFromTranscript = (messages: ReadonlyArray<Message>): s
       ? []
       : [`${message.role === "user" ? "OPERATOR" : "ORCHESTRATOR"}\n${parts.join("\n\n")}`]
   })
-  const body = turns.join("\n\n").trim()
   // Keep the newest context when an intake has become very long. The active
   // harness thread still holds the full discussion; the round needs a bounded
   // brief that does not crowd out its repository inspection.
-  const bounded = body.length > 60_000 ? body.slice(-60_000) : body
+  const bounded = boundGigaplanIntake(turns)
   return bounded.length === 0
     ? ""
     : `Create or update the implementation plan from this reviewed Gigaplan intake.\n\n${bounded}`
