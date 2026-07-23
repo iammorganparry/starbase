@@ -948,6 +948,11 @@ describe("conversationMachine — adversarial planning", () => {
     actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
     expect(h.planCalls).toEqual([{ sessionId: "s1", brief: undefined }])
+    const localHandoff = actor.getSnapshot().context.messages.at(-2)
+    expect(localHandoff?.parts).toContainEqual({
+      _tag: "Text",
+      text: "Hand off this Gigaplan conversation to planning."
+    })
   })
 
   it("applies a changed thinking strength to the next turn", async () => {

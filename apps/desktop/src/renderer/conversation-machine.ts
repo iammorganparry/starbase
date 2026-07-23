@@ -37,7 +37,6 @@ import {
   applySubagentEvent,
   assistantMessage,
   defaultModel,
-  latestPlan,
   nextReviewPhase,
   isSubagentEvent,
   retractSubagent,
@@ -753,11 +752,10 @@ export const conversationMachine = setup({
       // Empty is an intentional sentinel: main derives the brief and screenshots
       // from the durable Gigaplan intake transcript.
       const brief = explicitBrief ?? ""
-      const label =
-        explicitBrief ??
-        (latestPlan(context.messages) === null
-          ? "Create a plan from this Gigaplan conversation."
-          : "Update the plan from this Gigaplan conversation.")
+      // Main owns the persisted Create/Update wording from the durable
+      // transcript. This local turn only gives streamed events somewhere to
+      // land, so keep it neutral rather than guessing from optimistic state.
+      const label = explicitBrief ?? "Hand off this Gigaplan conversation to planning."
       const now = new Date().toISOString()
       const id = stamp()
       return {

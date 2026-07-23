@@ -1460,6 +1460,32 @@ describe("Gigaplan round persistence", () => {
     expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
   })
 
+  it("owns Create and Update wording from the persisted plan state", async () => {
+    const handoffLabels = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `u_${SESSION}_1`,
+        role: "user",
+        parts: [{ _tag: "Text", text: "Add rate limiting to refunds." }],
+        streaming: false,
+        createdAt: "2026-07-22T00:00:00.000Z"
+      })
+      yield* planAdversarial(SESSION).pipe(Stream.runDrain)
+      yield* planAdversarial(SESSION).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages
+        .filter((message) => message.role === "user")
+        .flatMap((message) =>
+          message.parts.flatMap((part) => (part._tag === "Text" ? [part.text] : []))
+        )
+        .filter((text) => text.endsWith("this Gigaplan conversation."))
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(handoffLabels).toStrictEqual([
+      "Create a plan from this Gigaplan conversation.",
+      "Update the plan from this Gigaplan conversation."
+    ])
+  })
+
   it("reuses historical images for the round without duplicating them in the transcript", async () => {
     const image: Attachment = {
       id: "mockup",

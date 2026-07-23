@@ -57,6 +57,7 @@ import {
   assistantMessage,
   GhError,
   GitError,
+  latestPlan,
   PlanError,
   planningReadiness,
   routeQuotaState,
@@ -1018,7 +1019,7 @@ export const planAdversarial = (
           `u_${sessionId}_${maxN + 1}`,
           explicitBrief.length > 0
             ? explicitBrief
-            : prior.some((message) => message.parts.some((part) => part._tag === "Plan"))
+            : latestPlan(prior) !== null
               ? "Update the plan from this Gigaplan conversation."
               : "Create a plan from this Gigaplan conversation.",
           now,
