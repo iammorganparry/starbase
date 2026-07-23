@@ -714,13 +714,13 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           /**
            * Consume a ready digest, if the context manager has one waiting.
            *
-           * This is the entire swap. Compaction prepared in the background while
-           * the user was reading the last answer, so applying it costs nothing
-           * here — it only changes how the spec below is built. Sub-agents never
-           * reach this code: they run inside the harness process, and this is the
-           * top-level turn path.
+           * This is the entire swap. Normally the digest was prepared while the
+           * user read the last answer, so applying it only changes the spec
+           * below. After a hard overflow, however, the failed turn starts the
+           * digest; an immediate retry waits here rather than resuming the same
+           * full thread. Sub-agents never reach this top-level path.
            */
-          const applied = orchestrating ? null : yield* ContextManager.applyIfReady(sessionId)
+          const applied = orchestrating ? null : yield* ContextManager.applyWhenReady(sessionId)
           const digest = applied?.digest ?? null
           // The WORKING SET at the moment of the swap, straight from the manager.
           //
@@ -989,15 +989,19 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
           // Runs on the single producer fiber, so transcript order is preserved.
           const emit = (event: StreamEvent): Effect.Effect<void> =>
             Effect.gen(function* () {
+              // Codex can surface one app-server failure as both `turn.failed`
+              // and `error`. The first terminal owns the turn; folding the
+              // second printed the same context-overflow message twice.
+              if (event._tag === "Done" || event._tag === "Failed") {
+                if (yield* Ref.get(sawTerminal)) return
+                yield* Ref.set(sawTerminal, true)
+              }
               // Tracked before the early returns below, so background-task and
               // sub-agent events still count toward "what did this run actually
               // emit" — a run that produced only sub-agent chatter and then
               // vanished is a different failure from one that emitted nothing.
               yield* Ref.update(eventCount, (n) => n + 1)
               yield* Ref.set(lastEvent, event._tag)
-              if (event._tag === "Done" || event._tag === "Failed") {
-                yield* Ref.set(sawTerminal, true)
-              }
               // Background tasks are SESSION-level: they outlive this turn, so
               // they fold into the session's task registry (one statechart per
               // task) rather than into the transcript. Surfaced downstream too so

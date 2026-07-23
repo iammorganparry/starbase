@@ -63,7 +63,7 @@ interface Recorder {
 const recordingAdapter = (
   reply: string,
   recorder: Recorder,
-  behaviour: "ok" | "hang" = "ok"
+  behaviour: "ok" | "hang" | "delay" = "ok"
 ): Layer.Layer<CliAdapter> =>
   Layer.succeed(
     CliAdapter,
@@ -73,6 +73,7 @@ const recordingAdapter = (
           recorder.specs.push(spec)
           recorder.runs.count += 1
           if (behaviour === "hang") return yield* Effect.never
+          if (behaviour === "delay") yield* Effect.sleep("75 millis")
           yield* ctx.emit({ _tag: "Assistant", text: reply } as StreamEvent)
         }),
       stop: () => Effect.void
@@ -921,6 +922,20 @@ describe("the mid-flow hold", () => {
 })
 
 describe("ContextManager.compactNow", () => {
+  it("waits for an in-flight recovery digest before the next turn resumes", async () => {
+    const rec = recorder()
+    const digest = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* ContextManager.compactNow(SESSION)
+        return yield* ContextManager.applyWhenReady(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec, "delay")
+    )
+    expect(rec.runs.count).toBe(1)
+    expect(digest).not.toBeNull()
+  })
+
   it("prepares a digest well below the trigger", async () => {
     const rec = recorder()
     const digest = await run(
