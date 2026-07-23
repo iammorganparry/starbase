@@ -119,7 +119,7 @@ const layersFor = (adapter: Layer.Layer<CliAdapter>) =>
   )
 
 /** Seed a session plus a transcript worth summarising. */
-const seed = (over: Partial<Session> = {}) =>
+const seed = (over: Partial<Session> = {}, withTranscript = true) =>
   Effect.gen(function* () {
     const now = new Date().toISOString()
     const session: Session = {
@@ -146,20 +146,22 @@ const seed = (over: Partial<Session> = {}) =>
       mkdirSync(temp.root, { recursive: true })
       writeFileSync(join(temp.root, "sessions.json"), JSON.stringify([session], null, 2))
     })
-    yield* TranscriptStore.append(SESSION, {
-      id: "m1",
-      role: "user",
-      parts: [{ _tag: "Text", text: "add rate limiting" }],
-      streaming: false,
-      createdAt: now
-    })
-    yield* TranscriptStore.append(SESSION, {
-      id: "m2",
-      role: "assistant",
-      parts: [{ _tag: "Text", text: "Added the middleware." }],
-      streaming: false,
-      createdAt: now
-    })
+    if (withTranscript) {
+      yield* TranscriptStore.append(SESSION, {
+        id: "m1",
+        role: "user",
+        parts: [{ _tag: "Text", text: "add rate limiting" }],
+        streaming: false,
+        createdAt: now
+      })
+      yield* TranscriptStore.append(SESSION, {
+        id: "m2",
+        role: "assistant",
+        parts: [{ _tag: "Text", text: "Added the middleware." }],
+        streaming: false,
+        createdAt: now
+      })
+    }
     return session
   })
 
@@ -927,13 +929,67 @@ describe("ContextManager.compactNow", () => {
     const digest = await run(
       Effect.gen(function* () {
         yield* seed()
-        yield* ContextManager.compactNow(SESSION)
+        yield* ContextManager.compactNow(SESSION, { waitForReady: true })
         return yield* ContextManager.applyWhenReady(SESSION)
       }),
       recordingAdapter(GOOD_REPLY, rec, "delay")
     )
     expect(rec.runs.count).toBe(1)
     expect(digest).not.toBeNull()
+  })
+
+  it("does not block a turn behind an ordinary background digest", async () => {
+    const rec = recorder()
+    const result = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(180_000)
+        yield* awaitRuns(rec, 1)
+        const outcome = yield* Effect.race(
+          ContextManager.applyWhenReady(SESSION).pipe(Effect.as("returned" as const)),
+          Effect.sleep("50 millis").pipe(Effect.as("blocked" as const))
+        )
+        yield* ContextManager.cancel(SESSION)
+        return outcome
+      }),
+      recordingAdapter(GOOD_REPLY, rec, "hang")
+    )
+    expect(result).toBe("returned")
+  })
+
+  it("promotes an existing background digest after a hard overflow", async () => {
+    const rec = recorder()
+    const result = await run(
+      Effect.gen(function* () {
+        yield* seed()
+        yield* turnEnd(180_000)
+        yield* awaitRuns(rec, 1)
+        yield* ContextManager.compactNow(SESSION, { waitForReady: true })
+        const outcome = yield* Effect.race(
+          ContextManager.applyWhenReady(SESSION).pipe(Effect.as("returned" as const)),
+          Effect.sleep("50 millis").pipe(Effect.as("waiting" as const))
+        )
+        yield* ContextManager.cancel(SESSION)
+        return outcome
+      }),
+      recordingAdapter(GOOD_REPLY, rec, "hang")
+    )
+    expect(result).toBe("waiting")
+  })
+
+  it("returns an empty-transcript digest attempt to idle", async () => {
+    const rec = recorder()
+    const snap = await run(
+      Effect.gen(function* () {
+        yield* seed({}, false)
+        yield* ContextManager.compactNow(SESSION, { waitForReady: true })
+        yield* settle()
+        return yield* ContextManager.snapshot(SESSION)
+      }),
+      recordingAdapter(GOOD_REPLY, rec)
+    )
+    expect(rec.runs.count).toBe(0)
+    expect(snap.preparing).toBe(false)
   })
 
   it("prepares a digest well below the trigger", async () => {

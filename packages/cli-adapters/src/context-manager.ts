@@ -62,6 +62,13 @@ const MAX_FAILURES = 2
 interface SessionContext {
   readonly status: "idle" | "preparing" | "ready"
   readonly digest: ContextDigest | null
+  /**
+   * Whether the next turn must wait for an in-flight digest.
+   *
+   * Set only after a hard context overflow. Routine and manually requested
+   * background digests must never stall the operator's next prompt.
+   */
+  readonly waitForReady: boolean
   /** Latest OCCUPANCY reading, from a `Usage` event. Never a cumulative total. */
   readonly tokens: number
   /**
@@ -98,6 +105,7 @@ interface SessionContext {
 const EMPTY: SessionContext = {
   status: "idle",
   digest: null,
+  waitForReady: false,
   tokens: 0,
   peakTokens: 0,
   window: null,
@@ -253,7 +261,15 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           const through = lastMessageId(messages)
           // Nothing to summarise. Not a failure — just a session that crossed the
           // threshold on a single enormous turn, which no digest can help with.
-          if (through === null) return yield* Effect.void
+          if (through === null) {
+            yield* setState(sessionId, (s) => ({
+              ...s,
+              status: "idle",
+              digest: null,
+              waitForReady: false
+            }))
+            return
+          }
 
           const adapter = yield* CliAdapter
           const collected = yield* Ref.make<ReadonlyArray<string>>([])
@@ -353,14 +369,22 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             ...s,
             status: "idle",
             digest: null,
+            waitForReady: false,
             failures: s.failures + 1
           }))
         )
 
       /** Fork the digest as a daemon so it outlives the turn that triggered it. */
-      const fork = (sessionId: string): Effect.Effect<void, never, DigestEnv> =>
+      const fork = (
+        sessionId: string,
+        waitForReady = false
+      ): Effect.Effect<void, never, DigestEnv> =>
         Effect.gen(function* () {
-          yield* setState(sessionId, (s) => ({ ...s, status: "preparing" }))
+          yield* setState(sessionId, (s) => ({
+            ...s,
+            status: "preparing",
+            waitForReady
+          }))
           const fiber = yield* Effect.forkDaemon(
             buildDigest(sessionId).pipe(
               Effect.ensuring(Ref.update(fibers, (m) => {
@@ -452,23 +476,33 @@ export class ContextManager extends Effect.Service<ContextManager>()(
         })
 
       /**
-       * Force a digest regardless of the budget — the manual "Compact now".
+       * Force a digest regardless of the budget.
        *
-       * Still refuses when the session is already preparing (a second fiber would
-       * race the first) and still requires a measurable harness, because a manual
-       * compaction against a fabricated reading is no better than an automatic one.
+       * Manual compaction remains background work. A hard-overflow recovery opts
+       * into `waitForReady`, which prevents only that session's immediate retry
+       * from reusing the known-full harness thread.
        */
-      const compactNow = (sessionId: string): Effect.Effect<void, never, DigestEnv> =>
+      const compactNow = (
+        sessionId: string,
+        options: { readonly waitForReady?: boolean } = {}
+      ): Effect.Effect<void, never, DigestEnv> =>
         Effect.gen(function* () {
           const state = yield* stateOf(sessionId)
-          if (state.status === "preparing") return
+          if (state.status === "preparing") {
+            // A hard overflow can arrive while an ordinary digest is already
+            // building. Promote that existing work instead of forking a rival.
+            if (options.waitForReady === true && !state.waitForReady) {
+              yield* setState(sessionId, (s) => ({ ...s, waitForReady: true }))
+            }
+            return
+          }
           if (state.status === "ready") return
           const settings = yield* settingsFor(sessionId)
           if (settings === null || settings.window === null) return
           // A manual request clears the failure count: the user asking again is a
           // reasonable signal to stop giving up.
           yield* setState(sessionId, (s) => ({ ...s, failures: 0 }))
-          yield* fork(sessionId)
+          yield* fork(sessionId, options.waitForReady === true)
         })
 
       /**
@@ -574,6 +608,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             ...s,
             status: "idle",
             digest: null,
+            waitForReady: false,
             // The reseed starts a NEW harness conversation, so the reading that
             // described the old one is not merely stale — it is about a
             // conversation that no longer exists. Leaving it in place made the
@@ -618,7 +653,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           for (;;) {
             const state = yield* stateOf(sessionId)
             if (state.status === "ready") return yield* applyIfReady(sessionId)
-            if (state.status !== "preparing") return null
+            if (state.status !== "preparing" || !state.waitForReady) return null
             yield* Effect.sleep("100 millis")
           }
         }).pipe(
@@ -639,7 +674,12 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             next.delete(sessionId)
             return next
           })
-          yield* setState(sessionId, (s) => ({ ...s, status: "idle", digest: null }))
+          yield* setState(sessionId, (s) => ({
+            ...s,
+            status: "idle",
+            digest: null,
+            waitForReady: false
+          }))
         })
 
       /** Everything the meter and Settings need to describe a session. */

@@ -1104,7 +1104,9 @@ export class AgentRunner extends Effect.Service<AgentRunner>()("@starbase/AgentR
                 event._tag === "Failed" &&
                 isContextOverflowFailure(event.message)
               ) {
-                yield* ContextManager.compactNow(sessionId).pipe(Effect.ignore)
+                yield* ContextManager.compactNow(sessionId, {
+                  waitForReady: true
+                }).pipe(Effect.ignore)
               }
             }).pipe(Effect.provide(env), Effect.asVoid)
 

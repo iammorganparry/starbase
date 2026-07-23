@@ -1,5 +1,5 @@
 import type { Plan, QuestionRequest, StreamEvent } from "@starbase/core"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type {
   AgentContext,
@@ -13,15 +13,24 @@ const server = vi.hoisted(() => {
     messages: [] as Array<Record<string, unknown>>,
     replay: [] as Array<Record<string, unknown>>,
     delayedReplay: [] as Array<Record<string, unknown>>,
-    requests: [] as Array<{ method: string; params: unknown }>,
+    requests: [] as Array<{
+      method: string
+      params: unknown
+      options?: { timeoutMs?: number }
+    }>,
     responses: [] as Array<{ id: number | string; result: unknown }>,
     threadId: "thread-1",
     turnNumber: 0,
+    hangMessages: false,
     closed: false
   }
   const connection = {
-    request: (method: string, params: unknown) => {
-      state.requests.push({ method, params })
+    request: (
+      method: string,
+      params: unknown,
+      options?: { timeoutMs?: number }
+    ) => {
+      state.requests.push({ method, params, ...(options ? { options } : {}) })
       if (method === "thread/start" || method === "thread/resume") {
         return Promise.resolve({ thread: { id: state.threadId } })
       }
@@ -36,7 +45,10 @@ const server = vi.hoisted(() => {
       state.responses.push({ id, result })
     },
     respondError: vi.fn(),
-    nextMessage: () => Promise.resolve(state.messages.shift() ?? null),
+    nextMessage: () =>
+      state.hangMessages
+        ? new Promise<null>(() => undefined)
+        : Promise.resolve(state.messages.shift() ?? null),
     nextMessageWithin: () =>
       Promise.resolve(state.delayedReplay.shift() ?? null),
     drainMessages: () => state.replay.splice(0),
@@ -100,6 +112,7 @@ beforeEach(() => {
   server.state.responses = []
   server.state.threadId = "thread-1"
   server.state.turnNumber = 0
+  server.state.hangMessages = false
   server.state.closed = false
 })
 
@@ -367,6 +380,28 @@ describe("runCodexAppServer", () => {
 
     expect(emitted).toContainEqual({ _tag: "Assistant", text: "Active turn finished." })
     expect(emitted.filter((event) => event._tag === "Done")).toHaveLength(1)
+  })
+
+  it("bounds the interrupt request before closing a wedged server", async () => {
+    server.state.hangMessages = true
+    const { ctx } = harness()
+    const fiber = Effect.runFork(
+      runCodexAppServer("s1", spec(), ctx, new Map())
+    )
+    await vi.waitFor(() => {
+      expect(
+        server.state.requests.some((request) => request.method === "turn/start")
+      ).toBe(true)
+    })
+
+    await Effect.runPromise(Fiber.interrupt(fiber))
+
+    expect(server.state.requests).toContainEqual({
+      method: "turn/interrupt",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+      options: { timeoutMs: 2_000 }
+    })
+    expect(server.state.closed).toBe(true)
   })
 
   it("starts a resumed thread directly when replay usage is below the safety band", async () => {
