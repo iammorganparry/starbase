@@ -16,7 +16,12 @@ import { conversationMachine } from "./conversation-machine.js"
 // Shared harness state the mocked rpc reads/writes (hoisted for the vi.mock factory).
 const h = vi.hoisted(() => ({
   streamCb: null as null | ((event: unknown) => void),
-  agentRunCalls: [] as Array<{ sessionId: string; text: string; images: unknown }>,
+  agentRunCalls: [] as Array<{
+    sessionId: string
+    text: string
+    images: unknown
+    options: unknown
+  }>,
   execCalls: [] as Array<{ sessionId: string; planId: string; executionMode: string | undefined }>,
   resumeCalls: [] as Array<{ sessionId: string; planId: string }>,
   diffValue: "diff-0",
@@ -35,7 +40,8 @@ const h = vi.hoisted(() => ({
   // Lets a test hold the transcript load, to drive the "typed before it lands" race.
   transcriptGate: Promise.resolve() as Promise<void>,
   setHarnessCalls: [] as Array<{ sessionId: string; cli: string; model: string }>,
-  planCalls: [] as Array<{ sessionId: string; brief: string }>,
+  planCalls: [] as Array<{ sessionId: string; brief: string | undefined }>,
+  reasoningCalls: [] as Array<string | undefined>,
   readinessGate: Promise.resolve() as Promise<void>,
   readiness: { ready: true, vendors: [], reason: null } as {
     ready: boolean
@@ -68,8 +74,14 @@ vi.mock("./rpc-client.js", () => ({
       h.diffCalls += 1
       return h.diffValue
     },
-    agentRun: (sessionId: string, text: string, onEvent: (event: unknown) => void, images: unknown) => {
-      h.agentRunCalls.push({ sessionId, text, images })
+    agentRun: (
+      sessionId: string,
+      text: string,
+      onEvent: (event: unknown) => void,
+      images: unknown,
+      options: unknown
+    ) => {
+      h.agentRunCalls.push({ sessionId, text, images, options })
       h.streamCb = onEvent
       return () => {
         h.streamCb = null
@@ -98,7 +110,7 @@ vi.mock("./rpc-client.js", () => ({
         h.streamCb = null
       }
     },
-    planAdversarial: (sessionId: string, brief: string, onEvent: (event: unknown) => void) => {
+    planAdversarial: (sessionId: string, brief: string | undefined, onEvent: (event: unknown) => void) => {
       h.planCalls.push({ sessionId, brief })
       h.streamCb = onEvent
       return () => {
@@ -114,6 +126,9 @@ vi.mock("./rpc-client.js", () => ({
     agentDecideGate: async () => {},
     agentAnswerQuestion: async () => {},
     agentSetMode: async () => {},
+    agentSetReasoning: async (_sessionId: string, effort: string | undefined) => {
+      h.reasoningCalls.push(effort)
+    },
     agentSetHarness: async (sessionId: string, cli: string, model: string) => {
       h.setHarnessCalls.push({ sessionId, cli, model })
     },
@@ -158,6 +173,7 @@ beforeEach(() => {
   h.transcriptGate = Promise.resolve()
   h.reviewCb = null
   h.planCalls.length = 0
+  h.reasoningCalls.length = 0
   h.execCalls.length = 0
   h.resumeCalls.length = 0
   h.readinessGate = Promise.resolve()
@@ -214,7 +230,9 @@ describe("conversationMachine — queue while busy", () => {
 
     // Sent while the agent is busy → queued, not dispatched.
     actor.send({ type: "SEND", text: "second" })
-    expect(actor.getSnapshot().context.queued).toEqual([{ text: "second", images: [] }])
+    expect(actor.getSnapshot().context.queued).toEqual([
+      { text: "second", images: [], target: "session" }
+    ])
     expect(h.agentRunCalls).toHaveLength(1)
 
     // Finishing the turn drains the queue: refresh diff, then start the queued turn.
@@ -222,6 +240,33 @@ describe("conversationMachine — queue while busy", () => {
     await waitFor(actor, () => h.agentRunCalls.length === 2, { timeout: 3000 })
     expect(h.agentRunCalls[1]!.text).toBe("second")
     expect(actor.getSnapshot().context.queued).toEqual([])
+    actor.stop()
+  })
+
+  it("keeps each queued message on the target selected when it was sent", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+
+    actor.send({ type: "SEND", text: "first" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    actor.send({ type: "SEND", text: "working turn" })
+    actor.send({ type: "SET_MODE", mode: "gigaplan" })
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, () => h.agentRunCalls.length === 2, { timeout: 3000 })
+    expect(h.agentRunCalls[1]).toMatchObject({
+      text: "working turn",
+      options: { target: "session" }
+    })
+
+    actor.send({ type: "SEND", text: "intake turn" })
+    actor.send({ type: "SET_MODE", mode: "accept-edits" })
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, () => h.agentRunCalls.length === 3, { timeout: 3000 })
+    expect(h.agentRunCalls[2]).toMatchObject({
+      text: "intake turn",
+      options: { target: "orchestrator" }
+    })
     actor.stop()
   })
 
@@ -301,7 +346,9 @@ describe("conversationMachine — nothing gates the transcript on a CLI probe", 
     actor.send({ type: "SEND", text: "typed on open" })
     // Held, not dispatched — there's no transcript to append it to yet.
     expect(h.agentRunCalls).toHaveLength(0)
-    expect(actor.getSnapshot().context.queued).toEqual([{ text: "typed on open", images: [] }])
+    expect(actor.getSnapshot().context.queued).toEqual([
+      { text: "typed on open", images: [], target: "session" }
+    ])
 
     release()
     await waitFor(actor, (s) => s.matches("running"), { timeout: 3000 })
@@ -914,14 +961,54 @@ describe("conversationMachine — stop", () => {
 })
 
 describe("conversationMachine — adversarial planning", () => {
-  it("routes the round through the planning RPC, not a normal turn", async () => {
+  it("continues Gigaplan as orchestrator chat until explicit handoff", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SET_MODE", mode: "gigaplan" })
+
+    actor.send({ type: "SEND", text: "The export must preserve filters" })
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.planCalls).toEqual([])
+    expect(h.agentRunCalls[0]).toMatchObject({
+      text: "The export must preserve filters",
+      options: { target: "orchestrator" }
+    })
+    expect(actor.getSnapshot().context.messages.at(-2)?.source).toBe("gigaplan-intake")
+    expect(actor.getSnapshot().context.messages.at(-1)?.source).toBe("gigaplan-intake")
+
+    emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "HANDOFF_PLAN" })
+    await waitFor(actor, (s) => s.matches("running"))
+    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: undefined }])
+    const localHandoff = actor.getSnapshot().context.messages.at(-2)
+    expect(localHandoff?.parts).toContainEqual({
+      _tag: "Text",
+      text: "Hand off this Gigaplan conversation to planning."
+    })
+  })
+
+  it("applies a changed thinking strength to the next turn", async () => {
+    const actor = start()
+    await waitFor(actor, (s) => s.matches(idle))
+    actor.send({ type: "SET_REASONING", reasoningEffort: "think-hard" })
+    actor.send({ type: "SEND", text: "inspect the repo" })
+    await waitFor(actor, (s) => s.matches("running"))
+
+    expect(h.reasoningCalls).toEqual(["think-hard"])
+    expect(h.agentRunCalls[0]).toMatchObject({
+      options: { target: "session", reasoningEffort: "think-hard" }
+    })
+  })
+
+  it("routes a handoff through the planning RPC, not a normal turn", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
 
-    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: "Add a tier column" }])
+    expect(h.planCalls).toEqual([{ sessionId: "s1", brief: undefined }])
     // Crucially NOT an Agent.run — a planning round is not a turn.
     expect(h.agentRunCalls).toEqual([])
   })
@@ -933,7 +1020,7 @@ describe("conversationMachine — adversarial planning", () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     expect(actor.getSnapshot().matches(idle)).toBe(true)
     expect(h.planCalls).toEqual([])
   })
@@ -948,12 +1035,12 @@ describe("conversationMachine — adversarial planning", () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "x" })
+    actor.send({ type: "HANDOFF_PLAN" })
     expect(h.planCalls).toEqual([])
 
     release()
     await waitFor(actor, (s) => s.context.planReadiness !== null)
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "x" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
     expect(h.planCalls).toHaveLength(1)
   })
@@ -962,7 +1049,7 @@ describe("conversationMachine — adversarial planning", () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
 
     emit({
@@ -983,11 +1070,11 @@ describe("conversationMachine — adversarial planning", () => {
     expect(plans).toHaveLength(1)
   })
 
-  it("clears the brief so the next normal turn is not another round", async () => {
+  it("clears handoff state so the next normal turn is not another round", async () => {
     const actor = start()
     await waitFor(actor, (s) => s.matches(idle))
 
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "Add a tier column" })
+    actor.send({ type: "HANDOFF_PLAN" })
     await waitFor(actor, (s) => s.matches("running"))
     emit({ _tag: "Done", costUsd: 0, tokens: 0 })
     await waitFor(actor, (s) => s.matches(idle))
@@ -1040,7 +1127,7 @@ describe("conversationMachine — approving a plan after the mode changed", () =
   } as unknown as Plan
 
   const seed = (actor: ReturnType<typeof start>, plan: Plan) => {
-    actor.send({ type: "PLAN_ADVERSARIALLY", brief: "b" })
+    actor.send({ type: "HANDOFF_PLAN" })
     h.streamCb?.({ _tag: "PlanProposed", plan })
     h.streamCb?.({ _tag: "Done", costUsd: 0, tokens: 0 })
   }

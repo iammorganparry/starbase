@@ -177,6 +177,21 @@ test("the mode chip lives in the composer and Shift+Tab cycles it (incl. Plan on
   await expect(surface).toHaveAttribute("data-mode", "ask")
 })
 
+test("thinking strength is a compact per-session composer control", async ({ launchApp }) => {
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: seededSessions
+  })
+  await expect(window.getByPlaceholder("Message Claude…")).toBeVisible()
+  const thinking = window.getByRole("button", { name: "Thinking strength" })
+
+  await expect(thinking).toContainText("default")
+  await thinking.click()
+  await window.getByRole("menuitem", { name: "think hard" }).click()
+  await expect(thinking).toContainText("think hard")
+})
+
 test("the model chip shows the harness model and switches", async ({ launchApp }) => {
   const { window } = await launchApp({ configured: true, withRepo: true, sessions: seededSessions })
   await expect(window.getByText("Sessions", { exact: true })).toBeVisible()

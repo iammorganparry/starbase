@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest"
 import {
   agentReply,
   codexCompletionEvents,
-  codexEventToStreamEvents,
   codexTurnTokens,
+  codexEventToStreamEvents,
+  mapCodexReasoning,
   mapCodexPolicy,
   rememberThread,
   threadIdFor
@@ -17,6 +18,16 @@ import {
  */
 
 const ev = (e: unknown): ThreadEvent => e as ThreadEvent
+
+describe("mapCodexReasoning", () => {
+  it("leaves default unset and uses native Codex effort names", () => {
+    expect(mapCodexReasoning(undefined)).toBeUndefined()
+    expect(mapCodexReasoning("off")).toBe("minimal")
+    expect(mapCodexReasoning("think")).toBe("medium")
+    expect(mapCodexReasoning("think-hard")).toBe("high")
+    expect(mapCodexReasoning("ultrathink")).toBe("xhigh")
+  })
+})
 
 describe("mapCodexPolicy", () => {
   it("gives auto full access, other modes workspace-write (approval never — no callback)", () => {
@@ -189,7 +200,11 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([{ _tag: "Thinking", text: "planning", seconds: null, done: true }])
   })
 
-  it("does not treat cumulative Codex spend as resident context", () => {
+  // Production fixture from s_royal-liskov. Codex's SDK reported 2,979,284
+  // cumulative tokens at turn completion while its persisted token-count event
+  // reported only 193,496 tokens resident in a 258,400-token window. The SDK
+  // number is useful spend data, but it must never drive context compaction.
+  it("keeps cumulative turn spend out of context occupancy", () => {
     expect(
       codexEventToStreamEvents(
         ev({
@@ -209,22 +224,22 @@ describe("codexEventToStreamEvents", () => {
     ).toStrictEqual([{ _tag: "Failed", message: "boom" }])
   })
 
-  it("emits authoritative occupancy independently from turn spend", () => {
+  it("emits authoritative occupancy before cumulative spend settles the turn", () => {
     const usage = {
       input_tokens: 2_961_789,
       cached_input_tokens: 2_758_656,
       output_tokens: 17_495,
       reasoning_output_tokens: 10_295
     }
-    const context = { tokens: 193_496, window: 258_400 }
-
-    expect(codexCompletionEvents(usage, context, true)).toStrictEqual([
+    expect(
+      codexCompletionEvents(usage, { tokens: 193_496, window: 258_400 }, true)
+    ).toStrictEqual([
       { _tag: "Usage", tokens: 193_496, window: 258_400 },
       { _tag: "Done", costUsd: 0, tokens: 2_979_284 }
     ])
-    expect(codexCompletionEvents(usage, context, false)).toStrictEqual([
-      { _tag: "Usage", tokens: 193_496, window: 258_400 }
-    ])
+    expect(
+      codexCompletionEvents(usage, { tokens: 193_496, window: 258_400 }, false)
+    ).toStrictEqual([{ _tag: "Usage", tokens: 193_496, window: 258_400 }])
     expect(codexCompletionEvents(usage, null, true)).toStrictEqual([
       { _tag: "Done", costUsd: 0, tokens: 2_979_284 }
     ])

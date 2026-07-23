@@ -26,17 +26,20 @@ import {
 } from "@starbase/cli-adapters"
 import type { AgentContext, CliAdapterShape, SessionSpec } from "@starbase/cli-adapters"
 import type {
+  Attachment,
   CliKind,
+  Message,
   Plan,
   RouteAttempt,
   RoutingRankingSnapshot,
   StreamEvent,
   Usage
 } from "@starbase/core"
+import { GitError } from "@starbase/core"
 import { appPathsFor, fakeCommandExecutor } from "@starbase/cli-adapters/test-support"
 import { NodeContext } from "@effect/platform-node"
 import type { CommandExecutor } from "@effect/platform"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, Logger, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { DialogService } from "./dialog.js"
 import {
@@ -45,6 +48,7 @@ import {
   createTerminal,
   eligibleRoutingCatalog,
   githubDetectPr,
+  gigaplanBriefFromTranscript,
   githubSubmitReview,
   githubPr,
   mcpList,
@@ -56,6 +60,7 @@ import {
   reviewMarkRouted,
   reviewReconcile,
   reviewRun,
+  setReasoning,
   sessionDiff,
   skillsList,
   workspaceRevertFile,
@@ -64,6 +69,110 @@ import {
   planReadiness,
   workspaceRevertLines
 } from "./rpc.js"
+
+describe("Gigaplan handoff brief", () => {
+  it("includes only Gigaplan intake and the newest Gigaplan plan", () => {
+    const messages = [
+      {
+        role: "user",
+        source: undefined,
+        parts: [{ _tag: "Text", text: "Unrelated normal coding turn." }]
+      },
+      {
+        role: "assistant",
+        source: undefined,
+        parts: [{ _tag: "Plan", plan: { raw: "summary: Unrelated working plan" } }]
+      },
+      {
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: "Preserve the current filters." }]
+      },
+      {
+        role: "assistant",
+        source: "gigaplan-intake",
+        parts: [
+          {
+            _tag: "Question",
+            request: {
+              id: "q1",
+              questions: [
+                {
+                  question: "Which export?",
+                  header: "Export",
+                  multiSelect: false,
+                  options: [{ label: "CSV", description: "Flat file" }]
+                }
+              ]
+            },
+            answers: [{ selected: ["CSV"], other: null }]
+          }
+        ]
+      },
+      {
+        role: "user",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Text", text: "Create a plan from this Gigaplan conversation." }]
+      },
+      {
+        role: "assistant",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Plan", plan: { raw: "summary: Older Gigaplan plan" } }]
+      },
+      {
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: "Also include hidden columns." }]
+      },
+      {
+        role: "assistant",
+        source: "gigaplan-handoff",
+        parts: [{ _tag: "Plan", plan: { raw: "summary: Current Gigaplan plan" } }]
+      }
+    ] as unknown as ReadonlyArray<Message>
+
+    const brief = gigaplanBriefFromTranscript(messages)
+    expect(brief).toContain("Preserve the current filters.")
+    expect(brief).toContain("ANSWER: CSV")
+    expect(brief).toContain("Also include hidden columns.")
+    expect(brief).toContain("ACTIVE PLAN\nsummary: Current Gigaplan plan")
+    expect(brief).not.toContain("Unrelated normal coding turn.")
+    expect(brief).not.toContain("Unrelated working plan")
+    expect(brief).not.toContain("Create a plan from this Gigaplan conversation.")
+    expect(brief).not.toContain("Older Gigaplan plan")
+  })
+
+  it("drops whole oldest turns and labels a truncated intake", () => {
+    const messages = [
+      {
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: `OLDER TURN ${"a".repeat(25_000)}` }]
+      },
+      {
+        role: "assistant",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: `MIDDLE TURN ${"b".repeat(25_000)}` }]
+      },
+      {
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: `LATEST TURN ${"c".repeat(20_000)}` }]
+      }
+    ] as unknown as ReadonlyArray<Message>
+
+    const brief = gigaplanBriefFromTranscript(messages)
+    expect(brief).toContain(
+      ["[earlier intake truncated]", "", "ORCHESTRATOR", "MIDDLE TURN"].join("\n")
+    )
+    expect(brief).toContain("OPERATOR\nLATEST TURN")
+    expect(brief).not.toContain("OLDER TURN")
+    expect(brief.length).toBeLessThanOrEqual(
+      "Create or update the implementation plan from this reviewed Gigaplan intake.\n\n".length +
+        60_000
+    )
+  })
+})
 
 /**
  * The RPC handlers own the app's error-folding policy: a config read error must
@@ -88,6 +197,37 @@ describe("RPC handlers", () => {
 
   const fakeDialog = (chosen: string | null) =>
     Layer.succeed(DialogService, { chooseDirectory: () => Effect.succeed(chosen) })
+
+  describe("Agent.setReasoning", () => {
+    it("logs a best-effort persistence failure", async () => {
+      const messages: Array<{ level: string; text: string }> = []
+      const logger = Logger.make(({ logLevel, message }) => {
+        const text = Array.isArray(message) ? message.map(String).join(" ") : String(message)
+        messages.push({ level: logLevel.label, text })
+      })
+      const store = await Effect.runPromise(
+        SessionStore.pipe(Effect.provide(SessionStore.Default))
+      )
+      const failedStore = SessionStore.make({
+        ...store,
+        setReasoningEffort: () =>
+          Effect.fail(new GitError({ message: "test sessions.json write failed" }))
+      })
+
+      await Effect.runPromise(
+        setReasoning("session-1", "think-hard").pipe(
+          Effect.provide(Layer.succeed(SessionStore, failedStore)),
+          Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
+          Effect.provide(base)
+        )
+      )
+
+      expect(messages).toContainEqual({
+        level: "WARN",
+        text: "Failed to persist reasoning strength for session session-1: test sessions.json write failed"
+      })
+    })
+  })
 
   describe("Gigaplan provider eligibility", () => {
     const enabled = undefined
@@ -1135,6 +1275,7 @@ describe("Gigaplan round persistence", () => {
   let capturedRanking: RoutingRankingSnapshot | null | undefined
   let capturedUsage: Usage | null | undefined
   let capturedVendors: ReadonlyArray<{ readonly vendor: string }> = []
+  let capturedImages: ReadonlyArray<Attachment> = []
   let currentUsage: Usage
   let rankingReads = 0
   let previousAnthropicKey: string | undefined
@@ -1144,6 +1285,7 @@ describe("Gigaplan round persistence", () => {
     capturedRanking = undefined
     capturedUsage = undefined
     capturedVendors = []
+    capturedImages = []
     currentUsage = HEALTHY_USAGE
     rankingReads = 0
     previousAnthropicKey = process.env.ANTHROPIC_API_KEY
@@ -1373,9 +1515,11 @@ describe("Gigaplan round persistence", () => {
     AdversarialPlanService,
     new AdversarialPlanService({
       run: (input: {
+        images: ReadonlyArray<Attachment>
         vendors: ReadonlyArray<{ readonly vendor: string }>
         routing: { ranking?: RoutingRankingSnapshot | null; usage?: Usage | null }
       }) => {
+        capturedImages = input.images
         capturedRanking = input.routing.ranking
         capturedUsage = input.routing.usage
         capturedVendors = input.vendors
@@ -1409,6 +1553,63 @@ describe("Gigaplan round persistence", () => {
     }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
 
     expect(JSON.stringify(texts)).toContain("Add rate limiting to refunds.")
+  })
+
+  it("owns Create and Update wording from the persisted plan state", async () => {
+    const handoffLabels = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `u_${SESSION}_1`,
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [{ _tag: "Text", text: "Add rate limiting to refunds." }],
+        streaming: false,
+        createdAt: "2026-07-22T00:00:00.000Z"
+      })
+      yield* planAdversarial(SESSION).pipe(Stream.runDrain)
+      yield* planAdversarial(SESSION).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages
+        .filter((message) => message.role === "user")
+        .flatMap((message) =>
+          message.parts.flatMap((part) => (part._tag === "Text" ? [part.text] : []))
+        )
+        .filter((text) => text.endsWith("this Gigaplan conversation."))
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(handoffLabels).toStrictEqual([
+      "Create a plan from this Gigaplan conversation.",
+      "Update the plan from this Gigaplan conversation."
+    ])
+  })
+
+  it("reuses historical images for the round without duplicating them in the transcript", async () => {
+    const image: Attachment = {
+      id: "mockup",
+      name: "mockup.png",
+      mediaType: "image/png",
+      data: "aGk="
+    }
+    const storedImageIds = await Effect.gen(function* () {
+      yield* TranscriptStore.append(SESSION, {
+        id: `u_${SESSION}_1`,
+        role: "user",
+        source: "gigaplan-intake",
+        parts: [
+          { _tag: "Text", text: "Match this mockup." },
+          { _tag: "Image", attachment: image }
+        ],
+        streaming: false,
+        createdAt: "2026-07-22T00:00:00.000Z"
+      })
+      yield* planAdversarial(SESSION).pipe(Stream.runDrain)
+      const messages = yield* TranscriptStore.list(SESSION)
+      return messages.flatMap((message) =>
+        message.parts.flatMap((part) => (part._tag === "Image" ? [part.attachment.id] : []))
+      )
+    }).pipe(Effect.provide(roundLayer(root)), Effect.runPromise)
+
+    expect(capturedImages.map((image) => image.id)).toStrictEqual(["mockup"])
+    expect(storedImageIds).toStrictEqual(["mockup"])
   })
 
   it("does not request OpenRouter rankings in the default shadow mode", async () => {

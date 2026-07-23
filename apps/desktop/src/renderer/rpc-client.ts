@@ -46,6 +46,7 @@ import type {
   ProviderConfig,
   PullRequest,
   QuestionAnswer,
+  ReasoningEffort,
   Repo,
   ReviewComment,
   ReviewSubmitKind,
@@ -255,6 +256,16 @@ export const rpc = {
   ): Promise<void> => run((c) => c.Agent.answerQuestion({ sessionId, requestId, answers })),
   agentSetMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
     run((c) => c.Agent.setMode({ sessionId, mode })),
+  agentSetReasoning: (
+    sessionId: string,
+    reasoningEffort: ReasoningEffort | undefined
+  ): Promise<void> =>
+    run((c) =>
+      c.Agent.setReasoning({
+        sessionId,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort })
+      })
+    ),
   agentCommentPlanStep: (sessionId: string, planId: string, stepId: string, body: string): Promise<void> =>
     run((c) => c.Agent.commentPlanStep({ sessionId, planId, stepId, body })),
   agentRevisePlan: (sessionId: string, planId: string): Promise<void> =>
@@ -395,14 +406,18 @@ export const rpc = {
     sessionId: string,
     text: string,
     onEvent: (event: StreamEvent) => void,
-    images: ReadonlyArray<Attachment> = []
+    images: ReadonlyArray<Attachment> = [],
+    options: {
+      readonly target?: "session" | "orchestrator"
+      readonly reasoningEffort?: ReasoningEffort | null
+    } = {}
   ): (() => void) => {
     let fiber: Fiber.RuntimeFiber<void, unknown> | null = null
     let cancelled = false
     void clientPromise.then((client) => {
       if (cancelled) return
       fiber = runtime.runFork(
-        drainRun(client.Agent.run({ sessionId, text, images }), onEvent)
+        drainRun(client.Agent.run({ sessionId, text, images, ...options }), onEvent)
       )
     })
     return () => {
@@ -511,7 +526,7 @@ export const rpc = {
    */
   planAdversarial: (
     sessionId: string,
-    brief: string,
+    brief: string | undefined,
     onEvent: (event: StreamEvent) => void,
     images: ReadonlyArray<Attachment> = []
   ): (() => void) => {
@@ -519,9 +534,11 @@ export const rpc = {
     let cancelled = false
     void clientPromise.then((client) => {
       if (cancelled) return
-      fiber = runtime.runFork(
-        drainRun(client.Plan.adversarial({ sessionId, brief, images }), onEvent)
-      )
+      fiber = runtime.runFork(drainRun(client.Plan.adversarial({
+        sessionId,
+        ...(brief === undefined ? {} : { brief }),
+        images
+      }), onEvent))
     })
     return () => {
       cancelled = true

@@ -43,6 +43,7 @@ import {
   ProviderModels,
   PullRequest,
   QuestionAnswer,
+  ReasoningEffort,
   Repo,
   ReviewComment,
   ReviewSubmitKind,
@@ -284,7 +285,17 @@ export class StarbaseRpcs extends RpcGroup.make(
       sessionId: Schema.String,
       text: Schema.String,
       /** Images the operator attached as context (optional; omitted → none). */
-      images: Schema.optional(Schema.Array(Attachment))
+      images: Schema.optional(Schema.Array(Attachment)),
+      /**
+       * `orchestrator` runs the configured Gigaplan voice on its own durable
+       * thread; absent keeps the ordinary session harness.
+       */
+      target: Schema.optional(Schema.Literal("session", "orchestrator")),
+      /**
+       * Per-turn override. Null deliberately means native default, which lets a
+       * just-cleared composer value win even if its persistence RPC is in flight.
+       */
+      reasoningEffort: Schema.optional(Schema.NullOr(ReasoningEffort))
     }
   }),
 
@@ -309,6 +320,14 @@ export class StarbaseRpcs extends RpcGroup.make(
   /** Change a session's HITL permission mode (ask / accept-edits / auto / plan). */
   Rpc.make("Agent.setMode", {
     payload: { sessionId: Schema.String, mode: PermissionMode }
+  }),
+
+  /** Change this session's thinking strength; absent restores the harness default. */
+  Rpc.make("Agent.setReasoning", {
+    payload: {
+      sessionId: Schema.String,
+      reasoningEffort: Schema.optional(ReasoningEffort)
+    }
   }),
 
   /** Comment on a plan step (plan mode) — accumulates on the plan, doesn't resume. */
@@ -631,7 +650,11 @@ export class StarbaseRpcs extends RpcGroup.make(
     error: PlanError,
     payload: {
       sessionId: Schema.String,
-      brief: Schema.String,
+      /**
+       * An explicit brief is retained for automation/tests. The composer omits it
+       * so main derives the handoff from the accumulated intake transcript.
+       */
+      brief: Schema.optional(Schema.String),
       /**
        * Screenshots attached to the brief (optional; omitted → none).
        *

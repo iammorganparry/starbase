@@ -5,6 +5,7 @@ import type {
   Plan,
   QuestionAnswer,
   QuestionRequest,
+  ReasoningEffort,
   StreamEvent
 } from "@starbase/core"
 import { CliExecError } from "@starbase/core"
@@ -29,6 +30,8 @@ export interface SessionSpec {
   readonly mode: PermissionMode
   /** The model id to run, or null to use the harness default. */
   readonly model: string | null
+  /** Semantic thinking strength; absent leaves the harness default untouched. */
+  readonly reasoningEffort?: ReasoningEffort
   /**
    * The harness session id to RESUME from (persisted across app restarts), or
    * null for a fresh conversation. The adapter prefers its live in-memory id and

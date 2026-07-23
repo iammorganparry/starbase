@@ -159,6 +159,14 @@ export type DiffStat = Schema.Schema.Type<typeof DiffStat>
 export const PermissionMode = Schema.Literal("ask", "accept-edits", "auto", "plan", "gigaplan")
 export type PermissionMode = Schema.Schema.Type<typeof PermissionMode>
 
+/**
+ * Extended-thinking / reasoning budget for a harness, mapped from the design's
+ * "thinking budget" segments. Harness-specific in meaning; persisted per provider
+ * and optionally overridden per session.
+ */
+export const ReasoningEffort = Schema.Literal("off", "think", "think-hard", "ultrathink")
+export type ReasoningEffort = Schema.Schema.Type<typeof ReasoningEffort>
+
 /** Concrete harness permission modes that can execute an approved plan. */
 export const ExecutionMode = Schema.Literal("ask", "accept-edits", "auto")
 export type ExecutionMode = Schema.Schema.Type<typeof ExecutionMode>
@@ -270,12 +278,22 @@ export const Session = Schema.Struct({
    * fresh (re-reading the plan, re-checking state) despite the visible transcript.
    */
   resumeId: Schema.optional(Schema.String),
+  /**
+   * The configured Gigaplan orchestrator's own conversation id.
+   *
+   * Kept separate from `resumeId`: Gigaplan intake may run on another harness,
+   * and letting its thread id overwrite the ordinary session thread would make
+   * switching modes resume the wrong provider.
+   */
+  gigaplanResumeId: Schema.optional(Schema.String),
   /** HITL permission mode; defaults to "accept-edits" when absent. */
   mode: Schema.optional(PermissionMode),
   /** Commands the operator chose to "Always allow" for this session. */
   allowlist: Schema.optional(Schema.Array(Schema.String)),
   /** The harness model id for this session; defaults to the harness default. */
   model: Schema.optional(Schema.String),
+  /** Per-session thinking strength; absent leaves the harness default untouched. */
+  reasoningEffort: Schema.optional(ReasoningEffort),
   /**
    * Per-session auto-compaction override. Absent = follow the global setting.
    *
@@ -395,13 +413,6 @@ export const NOTIFICATIONS_DEFAULT: NotificationsConfig = {
   pr: true,
   sound: false
 }
-
-/**
- * Extended-thinking / reasoning budget for a harness, mapped from the design's
- * "thinking budget" segments. Harness-specific in meaning; persisted per provider.
- */
-export const ReasoningEffort = Schema.Literal("off", "think", "think-hard", "ultrathink")
-export type ReasoningEffort = Schema.Schema.Type<typeof ReasoningEffort>
 
 /** Tone / verbosity preset for a harness's replies (Claude "output style"). */
 export const OutputStyle = Schema.Literal("default", "explanatory", "concise")

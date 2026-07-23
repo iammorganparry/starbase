@@ -308,8 +308,10 @@ export function ConversationPane({
           onStop={convo.stop}
           onDecideGate={convo.decideGate}
           onSetMode={convo.setMode}
+          reasoningEffort={convo.reasoningEffort}
+          onSetReasoning={convo.setReasoning}
           adversarialPlanning={convo.adversarialPlanning ?? undefined}
-          onPlanAdversarially={convo.planAdversarially}
+          onHandoffPlan={convo.handoffPlan}
           question={convo.question}
           onAnswerQuestion={convo.answerQuestion}
           onApprovePlan={(id) => convo.approvePlan(id)}

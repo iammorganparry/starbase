@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { CliAdapter, makeScriptedCliAdapter, scriptedPlan } from "./adapter.js"
 import type { CliAdapterShape, PermissionDecision } from "./adapter.js"
 import { ConfigService } from "./config.js"
-import { AgentRunner } from "./agent-runner.js"
+import { AgentRunner, resolveIntakeHarness } from "./agent-runner.js"
 import { ContextManager } from "./context-manager.js"
 import { DiscoveryService } from "./discovery.js"
 import { SessionStore } from "./sessions.js"
@@ -68,6 +68,34 @@ const gates = (events: ReadonlyArray<StreamEvent>) =>
 
 const ranTool = (events: ReadonlyArray<StreamEvent>, id: string) =>
   events.some((e) => e._tag === "ToolStart" && e.id === id)
+
+describe("resolveIntakeHarness", () => {
+  it("uses the configured orchestrator when its harness is installed", () => {
+    expect(
+      resolveIntakeHarness(
+        { cli: "claude", model: "opus" },
+        { cli: "codex", model: "gpt-5" },
+        [
+          { kind: "claude", binPath: "/bin/claude" },
+          { kind: "codex", binPath: "/bin/codex" }
+        ]
+      )
+    ).toStrictEqual({ cli: "claude", model: "opus" })
+  })
+
+  it("keeps persisted Gigaplan intake usable when the configured harness disappeared", () => {
+    expect(
+      resolveIntakeHarness(
+        { cli: "claude", model: "opus" },
+        { cli: "codex", model: "gpt-5" },
+        [
+          { kind: "claude", binPath: null },
+          { kind: "codex", binPath: "/bin/codex" }
+        ]
+      )
+    ).toStrictEqual({ cli: "codex", model: "gpt-5" })
+  })
+})
 
 describe("AgentRunner HITL gating", () => {
   it("accept-edits: applies edits without a gate, but pauses for a command", async () => {
@@ -1020,6 +1048,96 @@ describe("AgentRunner resume across restarts", () => {
       }).pipe(Effect.provide(base))
     )
     expect(captured.resumeId).toBe("sdk-123")
+  })
+
+  it("keeps Gigaplan intake read-only on its own resumable orchestrator thread", async () => {
+    seedBareSession()
+    const sessionsPath = join(temp.root, "sessions.json")
+    const seeded = JSON.parse(readFileSync(sessionsPath, "utf8")) as Array<Session>
+    writeFileSync(sessionsPath, JSON.stringify([{ ...seeded[0]!, resumeId: "normal-before" }]))
+
+    const specs: Array<{
+      cli: string
+      model: string | null
+      resumeId: string | null
+      readOnly: boolean | undefined
+      prompt: string
+    }> = []
+    let gigaplanRuns = 0
+    const capturing = Layer.succeed(
+      CliAdapter,
+      CliAdapter.of({
+        run: (_sessionId, spec, ctx) =>
+          Effect.gen(function* () {
+            specs.push({
+              cli: spec.cli,
+              model: spec.model,
+              resumeId: spec.resumeId,
+              readOnly: spec.readOnly,
+              prompt: spec.prompt
+            })
+            const harnessId = spec.readOnly
+              ? `gigaplan-${++gigaplanRuns}`
+              : "normal-after"
+            yield* ctx.emit({ _tag: "Started", sessionId: harnessId })
+            yield* ctx.emit({ _tag: "Assistant", text: "ok", agentId: undefined })
+            yield* ctx.emit({ _tag: "Done", costUsd: 0, tokens: 0 })
+          }) as ReturnType<CliAdapterShape["run"]>,
+        stop: () => Effect.void
+      })
+    )
+    const base = Layer.mergeAll(
+      AgentRunner.Default,
+      ConfigService.Default,
+      SessionStore.Default,
+      TranscriptStore.Default,
+      BackgroundTaskStore.Default,
+      PlanStore.Default,
+      capturing,
+      DiscoveryService.Default,
+      ContextManager.Default,
+      temp.layer
+    )
+
+    const persisted = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* ConfigService.setOrchestrator("codex", "gpt-5")
+        const runner = yield* AgentRunner
+        yield* runner
+          .prompt(SESSION, "Preserve the filters", [], "orchestrator")
+          .pipe(Stream.runDrain)
+        yield* runner.prompt(SESSION, "Normal follow-up").pipe(Stream.runDrain)
+        yield* runner
+          .prompt(SESSION, "Also export CSV", [], "orchestrator")
+          .pipe(Stream.runDrain)
+        return {
+          session: yield* SessionStore.get(SESSION),
+          transcript: yield* TranscriptStore.list(SESSION)
+        }
+      }).pipe(Effect.provide(base))
+    )
+
+    expect(specs[0]).toMatchObject({
+      cli: "codex",
+      model: "gpt-5",
+      resumeId: null,
+      readOnly: true
+    })
+    expect(specs[0]!.prompt).toContain("Preserve the filters")
+    expect(specs[0]!.prompt).toContain("read-only")
+    expect(specs[1]).toMatchObject({ resumeId: "normal-before", readOnly: undefined })
+    expect(specs[2]).toMatchObject({ resumeId: "gigaplan-1", readOnly: true })
+    expect(specs[2]!.prompt).toContain("Also export CSV")
+    expect(persisted.session?.resumeId).toBe("normal-after")
+    expect(persisted.session?.gigaplanResumeId).toBe("gigaplan-2")
+    expect(persisted.transcript.map((message) => message.source)).toStrictEqual([
+      "gigaplan-intake",
+      "gigaplan-intake",
+      undefined,
+      undefined,
+      "gigaplan-intake",
+      "gigaplan-intake"
+    ])
   })
 })
 

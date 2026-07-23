@@ -1,4 +1,11 @@
-import type { DiffStat, PermissionMode, Question, QuestionAnswer, StreamEvent } from "@starbase/core"
+import type {
+  DiffStat,
+  PermissionMode,
+  Question,
+  QuestionAnswer,
+  ReasoningEffort,
+  StreamEvent
+} from "@starbase/core"
 import { CliExecError } from "@starbase/core"
 import type { PermissionMode as SdkPermissionMode, PermissionResult, Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { Effect, Runtime } from "effect"
@@ -86,6 +93,29 @@ export const mapPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
   // readiness check failed, running as an ordinary turn — and the cautious
   // reading is the right one for a turn the operator expected to be a plan.
   mode === "accept-edits" ? "acceptEdits" : mode === "plan" ? "plan" : "default"
+
+/** Map Starbase's stable semantic levels onto Claude's adaptive-thinking API. */
+export const mapClaudeReasoning = (
+  effort: ReasoningEffort | undefined
+):
+  | Record<never, never>
+  | {
+      thinking: { type: "disabled" } | { type: "adaptive" }
+      effort?: "low" | "high" | "max"
+    } => {
+  switch (effort) {
+    case "off":
+      return { thinking: { type: "disabled" } }
+    case "think":
+      return { thinking: { type: "adaptive" }, effort: "low" }
+    case "think-hard":
+      return { thinking: { type: "adaptive" }, effort: "high" }
+    case "ultrathink":
+      return { thinking: { type: "adaptive" }, effort: "max" }
+    default:
+      return {}
+  }
+}
 
 /**
  * Handed back when a plan arrives without its ` ```plan ` fence. Starbase renders
@@ -967,6 +997,7 @@ export const runClaude = (
             ...(spec.unattended === true ? { sandbox: unattendedSandbox() } : {}),
             model: spec.model ?? undefined,
             permissionMode: mapPermissionMode(spec.mode),
+            ...mapClaudeReasoning(spec.reasoningEffort),
             ...(spec.mode === "plan" ? { planModeInstructions } : {}),
             ...(spec.readOnly ? { disallowedTools: [...READ_ONLY_DISALLOWED] } : {}),
             includePartialMessages: true,

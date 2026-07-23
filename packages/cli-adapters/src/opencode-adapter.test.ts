@@ -4,7 +4,9 @@ import {
   asPermissionAsked,
   assistantText,
   createOpencodeMapper,
+  mapOpencodeReasoning,
   mapOpencodePermission,
+  opencodePromptBody,
   planTools,
   parseServerUrl,
   permissionToRequest,
@@ -26,6 +28,39 @@ import {
  */
 
 const ev = (e: unknown): Event => e as Event
+
+describe("mapOpencodeReasoning", () => {
+  it("leaves default unset and maps semantic strength to model variants", () => {
+    expect(mapOpencodeReasoning(undefined)).toBeUndefined()
+    expect(mapOpencodeReasoning("off")).toBe("minimal")
+    expect(mapOpencodeReasoning("think")).toBe("medium")
+    expect(mapOpencodeReasoning("think-hard")).toBe("high")
+    expect(mapOpencodeReasoning("ultrathink")).toBe("xhigh")
+  })
+})
+
+describe("opencodePromptBody", () => {
+  it("carries the selected variant through the live request boundary", () => {
+    expect(
+      opencodePromptBody(
+        { model: "openai/gpt-5", reasoningEffort: "ultrathink" },
+        "Inspect the repository",
+        false
+      )
+    ).toStrictEqual({
+      model: { providerID: "openai", modelID: "gpt-5" },
+      variant: "xhigh",
+      parts: [{ type: "text", text: "Inspect the repository" }]
+    })
+  })
+
+  it("leaves native reasoning untouched by default and confines planning prompts", () => {
+    expect(opencodePromptBody({ model: null }, "Draft a plan", true)).toStrictEqual({
+      tools: { edit: false, write: false, patch: false, task: false },
+      parts: [{ type: "text", text: "Draft a plan" }]
+    })
+  })
+})
 
 describe("splitModelId", () => {
   /**

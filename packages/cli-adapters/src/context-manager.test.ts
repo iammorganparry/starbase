@@ -1088,6 +1088,8 @@ describe("ContextManager.snapshot", () => {
     const rec = recorder()
     const { before, after } = await run(
       Effect.gen(function* () {
+        // Exact bad value persisted by s_royal-liskov when the SDK's cumulative
+        // turn usage was mistaken for context occupancy.
         yield* seed({
           cli: "codex",
           model: "gpt-5.6-sol",
@@ -1100,6 +1102,7 @@ describe("ContextManager.snapshot", () => {
       }),
       recordingAdapter(GOOD_REPLY, rec)
     )
+
     expect(before.tokens).toBe(2_979_284)
     expect(after.tokens).toBe(193_496)
     expect(after.window).toBe(258_400)

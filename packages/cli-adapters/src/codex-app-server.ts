@@ -2,10 +2,16 @@ import { spawn } from "node:child_process"
 import { stopChild, trackChild } from "./child-registry.js"
 
 /** The app-server is a local probe; never let protocol drift leave it hanging. */
-const TIMEOUT_MS = 8000
+const REQUEST_TIMEOUT_MS = 8000
+/** Context telemetry must not hold a completed reply hostage for discovery's full timeout. */
+const CONTEXT_USAGE_TIMEOUT_MS = 2000
+/** A timed-out thread did not replay usage; do not pay the same timeout on every turn. */
+const unsupportedContextThreads = new Set<string>()
 
 export interface CodexContextUsage {
+  /** Tokens resident in the model's context for its latest request. */
   readonly tokens: number
+  /** The effective context ceiling reported by the running Codex model. */
   readonly window: number
 }
 
@@ -13,25 +19,25 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null
 
 /**
- * Extract the resident context reading from Codex's authoritative app-server
- * notification. `total` is cumulative spend; `last.totalTokens` is the working
- * set occupying the model window after the latest request.
+ * Decode the one app-server notification that describes context occupancy.
+ *
+ * `tokenUsage.total` is cumulative spend across every model request in the
+ * thread. `tokenUsage.last` is what the latest request actually held, and is
+ * the value Codex's own context meter uses. Keeping that distinction in this
+ * decoder prevents a multi-million-token agent loop from masquerading as a
+ * multi-million-token context window.
  */
 export const codexContextUsageFromMessage = (
   message: unknown,
   expectedThreadId: string
 ): CodexContextUsage | null => {
   if (!isRecord(message) || message.method !== "thread/tokenUsage/updated") return null
-
   const params = message.params
   if (!isRecord(params) || params.threadId !== expectedThreadId) return null
-
   const tokenUsage = params.tokenUsage
   if (!isRecord(tokenUsage)) return null
-
   const last = tokenUsage.last
   if (!isRecord(last)) return null
-
   const tokens = last.totalTokens
   const window = tokenUsage.modelContextWindow
   if (
@@ -44,7 +50,6 @@ export const codexContextUsageFromMessage = (
   ) {
     return null
   }
-
   return { tokens, window }
 }
 
@@ -72,7 +77,7 @@ export const requestCodexAppServer = (
       resolve(result)
     }
 
-    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
+    const timer = setTimeout(() => finish(null), REQUEST_TIMEOUT_MS)
 
     try {
       child = trackChild(
@@ -131,22 +136,29 @@ export const requestCodexAppServer = (
   })
 
 /**
- * Read the current resident context for a persisted Codex thread.
+ * Read the authoritative context occupancy for a persisted Codex thread.
  *
- * The SDK's `turn.completed.usage` is cumulative across every model request in
- * a turn, so it is valid spend accounting but not context occupancy. Resuming
- * through the supported app-server protocol replays the latest
- * `thread/tokenUsage/updated` notification, including the current working set
- * and the runtime model window.
+ * The exec SDK's `turn.completed.usage` is cumulative spend and deliberately
+ * does not expose the resident-context fields. The app-server does: resuming a
+ * persisted thread replays `thread/tokenUsage/updated`, whose `last` reading and
+ * runtime window are the same source Codex's own UI uses.
  *
- * This is optional UI data: protocol drift, a missing binary, and timeout all
- * degrade to null, and every exit path tears down the short-lived child.
+ * Best-effort like the other discovery probes in this module. Protocol drift,
+ * a missing thread, a failed process, or a timeout all resolve to null so usage
+ * telemetry can never fail an otherwise successful agent turn.
  */
 export const readCodexContextUsage = (
   binPath: string | null | undefined,
-  threadId: string
+  threadId: string,
+  signal?: AbortSignal
 ): Promise<CodexContextUsage | null> => {
-  if (threadId.length === 0) return Promise.resolve(null)
+  if (
+    threadId.length === 0 ||
+    unsupportedContextThreads.has(threadId) ||
+    signal?.aborted === true
+  ) {
+    return Promise.resolve(null)
+  }
 
   return new Promise((resolve) => {
     let settled = false
@@ -156,11 +168,17 @@ export const readCodexContextUsage = (
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener("abort", abort)
       if (child) stopChild(child)
       resolve(result)
     }
 
-    const timer = setTimeout(() => finish(null), TIMEOUT_MS)
+    const abort = () => finish(null)
+    signal?.addEventListener("abort", abort, { once: true })
+    const timer = setTimeout(() => {
+      unsupportedContextThreads.add(threadId)
+      finish(null)
+    }, CONTEXT_USAGE_TIMEOUT_MS)
 
     try {
       child = trackChild(
@@ -175,7 +193,7 @@ export const readCodexContextUsage = (
     child.on("exit", () => finish(null))
     child.stdin?.on("error", () => finish(null))
 
-    const send = (message: unknown) => {
+    const send = (message: Record<string, unknown>) => {
       try {
         child?.stdin?.write(`${JSON.stringify(message)}\n`)
       } catch {
@@ -201,20 +219,31 @@ export const readCodexContextUsage = (
         }
 
         const usage = codexContextUsageFromMessage(message, threadId)
-        if (usage !== null) return finish(usage)
+        if (usage !== null) {
+          finish(usage)
+          continue
+        }
         if (!isRecord(message)) continue
 
         if (message.id === 1) {
-          if (message.error !== undefined) return finish(null)
+          if (message.error !== undefined) {
+            finish(null)
+            continue
+          }
+          // The protocol requires the initialized acknowledgement before any
+          // thread method. It has no id because it is a notification.
           send({ jsonrpc: "2.0", method: "initialized", params: {} })
+          // Do not set `excludeTurns`: Codex intentionally skips the restored
+          // token-usage replay in that mode.
           send({
             jsonrpc: "2.0",
             id: 2,
             method: "thread/resume",
             params: { threadId }
           })
+          continue
         }
-        if (message.id === 2 && message.error !== undefined) return finish(null)
+        if (message.id === 2 && message.error !== undefined) finish(null)
       }
     })
 

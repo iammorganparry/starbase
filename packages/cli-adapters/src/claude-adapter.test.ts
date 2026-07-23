@@ -7,6 +7,7 @@ import {
   editStats,
   formatQuestionAnswer,
   PLAN_REFORMAT,
+  mapClaudeReasoning,
   mapPermissionMode,
   parseSdkQuestions,
   probeContextUsage,
@@ -26,6 +27,25 @@ import type { SessionSpec } from "./adapter.js"
 
 // Build a minimal SDK message; the mapper only reads the fields it needs.
 const msg = (m: unknown): SDKMessage => m as SDKMessage
+
+describe("mapClaudeReasoning", () => {
+  it("preserves native default and maps every explicit strength", () => {
+    expect(mapClaudeReasoning(undefined)).toStrictEqual({})
+    expect(mapClaudeReasoning("off")).toStrictEqual({ thinking: { type: "disabled" } })
+    expect(mapClaudeReasoning("think")).toStrictEqual({
+      thinking: { type: "adaptive" },
+      effort: "low"
+    })
+    expect(mapClaudeReasoning("think-hard")).toStrictEqual({
+      thinking: { type: "adaptive" },
+      effort: "high"
+    })
+    expect(mapClaudeReasoning("ultrathink")).toStrictEqual({
+      thinking: { type: "adaptive" },
+      effort: "max"
+    })
+  })
+})
 
 describe("mapPermissionMode", () => {
   it("maps our HITL modes onto the SDK's permission modes", () => {

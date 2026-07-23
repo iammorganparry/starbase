@@ -1,18 +1,21 @@
-import type { PermissionMode, StreamEvent } from "@starbase/core"
+import type { PermissionMode, ReasoningEffort, StreamEvent } from "@starbase/core"
 import { CliExecError, resumePlanPrompt } from "@starbase/core"
-import type { ApprovalMode, SandboxMode, ThreadEvent } from "@openai/codex-sdk"
+import type {
+  ApprovalMode,
+  ModelReasoningEffort,
+  SandboxMode,
+  ThreadEvent
+} from "@openai/codex-sdk"
 import { Effect, Runtime } from "effect"
 import type { AgentContext, SessionSpec } from "./adapter.js"
 import { capOutput } from "./output-cap.js"
-import {
-  readCodexContextUsage,
-  type CodexContextUsage
-} from "./codex-app-server.js"
 import { hasPlanBlock, parsePlan } from "./plan-parse.js"
 import { formatQuestionAnswers, parseQuestionBlock } from "./question-prompt.js"
 import { requireWorktree } from "./cwd.js"
 import { worktreeEnv } from "./worktree-env.js"
 import { harnessEnv, hasSubscriptionAuth } from "./subscription.js"
+import { readCodexContextUsage } from "./codex-app-server.js"
+import type { CodexContextUsage } from "./codex-app-server.js"
 
 /**
  * Real Codex harness, driven by `@openai/codex-sdk`. Codex's exec model is
@@ -64,21 +67,39 @@ export const mapCodexPolicy = (
       ? { sandboxMode: "danger-full-access", approvalPolicy: "never" }
       : { sandboxMode: "workspace-write", approvalPolicy: "never" }
 
+/** Map the composer's semantic strength onto Codex's native thread option. */
+export const mapCodexReasoning = (
+  effort: ReasoningEffort | undefined
+): ModelReasoningEffort | undefined => {
+  switch (effort) {
+    case "off":
+      return "minimal"
+    case "think":
+      return "medium"
+    case "think-hard":
+      return "high"
+    case "ultrathink":
+      return "xhigh"
+    default:
+      return undefined
+  }
+}
+
 /**
- * Tokens spent by a completed Codex turn.
+ * Cumulative tokens Codex reports for a completed turn.
  *
- * The SDK aggregates these totals across every model request made during the
- * turn. That makes input + output useful spend accounting, but not resident
- * context: royal-liskov reported 2,979,284 here while only 193,496 tokens
- * occupied its 258,400-token model window.
+ * This is spend, NOT resident context. An agentic Codex turn makes many model
+ * requests and the SDK adds every request's input to this number. In the
+ * royal-liskov reproduction it reported 2,979,284 while the latest request held
+ * 193,496 tokens. Context occupancy comes from the app-server's separate
+ * `thread/tokenUsage/updated` notification.
  *
  * The two subset fields are deliberately NOT added:
  *  - `cached_input_tokens` is part of `input_tokens` (codex itself derives
  *    non-cached input by subtracting it), and
  *  - `reasoning_output_tokens` is part of `output_tokens`.
- * Summing all four double-counts both and inflates spend by roughly the cache
- * hit rate. Resident context comes separately from the app-server's
- * `thread/tokenUsage/updated` notification.
+ * Summing all four would double-count both cached input and reasoning output,
+ * corrupting even the cumulative spend figure.
  */
 export const codexTurnTokens = (usage: {
   readonly input_tokens?: number
@@ -95,9 +116,11 @@ export const codexTurnTokens = (usage: {
 type CodexTurnUsage = Extract<ThreadEvent, { type: "turn.completed" }>["usage"]
 
 /**
- * Complete one streamed SDK round without conflating cumulative spend with
- * resident context. A queued follow-up refreshes occupancy but does not settle
- * the operator-facing turn.
+ * Build the end-of-round events in their load-bearing order.
+ *
+ * ContextManager must observe resident usage before `Done` asks it to settle.
+ * Intermediate question/plan rounds set `settle` false, so they refresh the
+ * meter without finishing the operator-facing turn.
  */
 export const codexCompletionEvents = (
   usage: CodexTurnUsage,
@@ -346,6 +369,9 @@ export const runCodex = (
           workingDirectory: requireWorktree(spec.cwd, `session ${sessionId}`),
           skipGitRepoCheck: true,
           ...(spec.model ? { model: spec.model } : {}),
+          ...(mapCodexReasoning(spec.reasoningEffort)
+            ? { modelReasoningEffort: mapCodexReasoning(spec.reasoningEffort) }
+            : {}),
           ...mapCodexPolicy(spec.mode, spec.readOnly ?? false, spec.unattended ?? false)
         }
         // Prefer the live in-memory thread id (this launch), else the id persisted
@@ -393,6 +419,10 @@ export const runCodex = (
               threadId = event.thread_id
               rememberThread({ resume, sessionId, threadId: event.thread_id, fresh: spec.fresh })
             }
+            // The SDK's completion usage is cumulative spend, not the resident
+            // working set. Hold the terminal until after the app-server probe so
+            // ContextManager observes the exact occupancy BEFORE Done settles
+            // the turn and decides whether to prepare a digest.
             if (event.type === "turn.completed") {
               completedUsage = event.usage
               continue
@@ -468,20 +498,27 @@ export const runCodex = (
             }
           }
           if (completedUsage !== null) {
-            // Probe after the SDK stream closes so Codex has flushed the latest
-            // thread state. A failed optional probe emits no Usage, preserving
-            // ContextManager's last authoritative reading. Usage precedes Done
-            // so compaction sees the fresh occupancy when the turn settles.
+            // Probe only once the OPERATOR-FACING turn settles. A question or
+            // plan revision queues another Codex turn immediately; replaying the
+            // whole thread between those rounds adds latency and produces a
+            // reading that cannot settle compaction yet.
+            const settle = followUp === null
+            // One-shot callers (adversarial roles, reviews, digest builders,
+            // plan steps) never feed ContextManager and deliberately discard
+            // their thread. Replaying those threads cannot help compaction.
+            const reportContext = settle && spec.fresh !== true
             const context =
-              threadId === null
+              threadId === null || !reportContext
                 ? null
-                : await readCodexContextUsage(spec.binPath, threadId)
-            for (const event of codexCompletionEvents(
+                : await readCodexContextUsage(spec.binPath, threadId, abort.signal)
+            // Failure is deliberately silent: preserving the last good context
+            // reading is safer than replacing it with cumulative spend or zero.
+            for (const terminal of codexCompletionEvents(
               completedUsage,
               context,
-              followUp === null
+              settle
             )) {
-              await runP(ctx.emit(event))
+              await runP(ctx.emit(terminal))
             }
           }
           if (followUp === null) break

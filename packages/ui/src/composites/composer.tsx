@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import type { Attachment, CliKind, PermissionMode, ProviderModels, Skill } from "@starbase/core"
-import { ImagePlus, Plus } from "lucide-react"
+import type {
+  Attachment,
+  CliKind,
+  PermissionMode,
+  ProviderModels,
+  ReasoningEffort,
+  Skill
+} from "@starbase/core"
+import { Brain, ImagePlus, Plus, WandSparkles } from "lucide-react"
 import { cn } from "../lib/cn.js"
 import { atLeast, useWidthTier } from "../hooks/width-tier.js"
 import { modeAccent } from "../tokens.js"
@@ -52,6 +59,15 @@ const GIGAPLAN_OPTION: ChipOption<PermissionMode> = { value: "gigaplan", label: 
 /** Offered on any harness that can hold a plan turn — see `supportsPlanMode`. */
 const PLAN_OPTION: ChipOption<PermissionMode> = { value: "plan", label: "plan" }
 
+type ReasoningChoice = "default" | ReasoningEffort
+const REASONING_OPTIONS: ReadonlyArray<ChipOption<ReasoningChoice>> = [
+  { value: "default", label: "default" },
+  { value: "off", label: "off" },
+  { value: "think", label: "think" },
+  { value: "think-hard", label: "think hard" },
+  { value: "ultrathink", label: "ultrathink" }
+]
+
 type MenuState = { kind: "slash" | "mention"; query: string; start: number }
 
 /** The trigger token (`/…` or `@…`) immediately before the caret, if any. */
@@ -82,9 +98,13 @@ export function Composer({
   onSetHarness,
   mode = "accept-edits",
   onSetMode,
+  reasoningEffort,
+  onSetReasoning,
   allowPlan = false,
   adversarialPlanning,
-  onPlanAdversarially,
+  onHandoffPlan,
+  hasGigaplanIntake = false,
+  hasPlan = false,
   mcp,
   onOpenMcp,
   paused = false,
@@ -128,6 +148,9 @@ export function Composer({
   /** Current HITL mode (shown in the mode chip; Shift+Tab cycles it). */
   mode?: PermissionMode
   onSetMode?: (mode: PermissionMode) => void
+  /** Per-session thinking strength; absent preserves the harness default. */
+  reasoningEffort?: ReasoningEffort
+  onSetReasoning?: (reasoningEffort?: ReasoningEffort) => void
   /** Offer the Plan mode option (harnesses that pass `supportsPlanMode`). */
   allowPlan?: boolean
   /**
@@ -138,8 +161,12 @@ export function Composer({
    * and "you need a second provider" is the one message that would.
    */
   adversarialPlanning?: { readonly ready: boolean; readonly reason: string | null }
-  /** Start a round for the composer's current text. */
-  onPlanAdversarially?: (brief: string) => void
+  /** Explicitly hand the durable Gigaplan intake conversation to planning. */
+  onHandoffPlan?: () => void
+  /** Whether the transcript contains context the planners can consume. */
+  hasGigaplanIntake?: boolean
+  /** Whether that handoff updates an existing plan rather than creating one. */
+  hasPlan?: boolean
   /**
    * MCP status for this session, or undefined until it arrives. The chip stays
    * HIDDEN while undefined rather than rendering "0 servers" — the status lands a
@@ -538,7 +565,7 @@ export function Composer({
             disabled={paused}
             aria-label="Attach an image"
             title="Attach an image"
-            className="flex flex-none items-center gap-1 rounded-md px-1.5 py-1 text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-h-10 min-w-10 flex-none items-center justify-center rounded-md text-cyan outline-none transition-colors hover:bg-surface disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ImagePlus size={14} />
           </button>
@@ -546,10 +573,11 @@ export function Composer({
               the plan it had reviewed, so a model chip here would be a control
               that is silently overridden. It returns the moment the mode
               changes — nothing about the operator's own choice is discarded. */}
-          {!orchestrated && (
+          {!orchestrated && modelValue.length > 0 && (
           <ChipMenu
             value={modelValue}
             groups={modelGroups}
+            appearance="quiet"
             /* The model list grows with every harness installed and every model
                a provider ships — long enough to hunt through. The mode chip
                below is four fixed options, so it stays plain. */
@@ -567,7 +595,7 @@ export function Composer({
             // Capped rather than fixed: model ids are the longest string in this
             // row by a wide margin, and left uncapped one of them decides how
             // much room every other control gets.
-            className={roomy ? "max-w-[220px]" : "max-w-[128px]"}
+            className={roomy ? "max-w-[190px]" : "max-w-[112px]"}
           />
           )}
           {/* Gigaplan is selected on a host that cannot orchestrate. Saying so
@@ -577,7 +605,7 @@ export function Composer({
           {orchestrated && adversarialPlanning?.ready === false && (
             <span
               title={adversarialPlanning.reason ?? undefined}
-              className="flex-none rounded-full border border-yellow/40 px-2 py-0.5 font-mono text-[10px] tracking-[0.3px] text-yellow"
+              className="flex min-h-10 flex-none items-center px-1.5 font-mono text-[10px] tracking-[0.3px] text-yellow"
             >
               {/* The long form explains; the short form still points at the
                   problem, and the `title` above carries the full reason either
@@ -590,10 +618,19 @@ export function Composer({
             value={mode}
             options={modeOptions}
             onSelect={onSetMode}
-            // A stable width prevents the toolbar jumping when a mode hides the
-            // model chip (Gigaplan). Flex shrinking plus the chip's `min-w-0`
-            // still lets this yield inside a genuinely narrow pane.
-            className={cn("w-[112px] justify-between", accent.chip)}
+            appearance="quiet"
+            // Quiet chrome sizes to its current label instead of reserving
+            // permanent toolbar space; cap long modes inside narrow panes.
+            className={cn("max-w-[104px]", accent.chip)}
+          />
+          <ChipMenu
+            value={reasoningEffort ?? "default"}
+            options={REASONING_OPTIONS}
+            onSelect={(value) => onSetReasoning?.(value === "default" ? undefined : value)}
+            appearance="quiet"
+            ariaLabel="Thinking strength"
+            icon={<Brain size={13} className="flex-none" />}
+            className="max-w-[112px]"
           />
           {mcp !== undefined && mcp.total > 0 && (
             <button
@@ -604,7 +641,8 @@ export function Composer({
               // with what it's currently reporting. Keeping it fixed is also
               // what lets a by-name lookup find this chip at any width.
               title="MCP server status"
-              className="inline-flex flex-none items-center gap-1.5 whitespace-nowrap rounded-md border border-line bg-sunken px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-text"
+              aria-label="MCP server status"
+              className="inline-flex min-h-10 flex-none items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-[11px] text-muted-foreground outline-none transition-colors hover:bg-surface hover:text-text focus-visible:ring-2 focus-visible:ring-ring"
             >
               {/* Neutral until a probe has actually run — a green dot before we've
                   checked anything would claim a health we don't know. */}
@@ -624,14 +662,24 @@ export function Composer({
                 : `${mcp.total} MCP`}
             </button>
           )}
-          {/* Pure decoration, and the first thing to go: it costs ~120px, has no
-              affordance, and both hints it names are already discoverable by
-              typing the character it's telling you to type. Below `wide` it
-              would wrap to "paste" on its own line and shove the chips around. */}
-          {roomy && (
-            <span className="flex-none font-mono text-[11px] text-line-strong">
-              / · @ · paste image
-            </span>
+          {orchestrated && onHandoffPlan && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-10 gap-1.5 px-2"
+              disabled={busy || !hasGigaplanIntake || adversarialPlanning?.ready !== true}
+              title={
+                adversarialPlanning?.ready === false
+                  ? (adversarialPlanning.reason ?? undefined)
+                  : !hasGigaplanIntake
+                    ? "Send a Gigaplan message before creating a plan."
+                  : undefined
+              }
+              onClick={onHandoffPlan}
+            >
+              <WandSparkles size={13} />
+              {hasPlan ? "Update plan" : "Create plan"}
+            </Button>
           )}
           {/* `min-w-[8px]` so the spacer still exists after a wrap — a bare
               `flex-1` on a wrapped line collapses to nothing and the send button
@@ -652,11 +700,11 @@ export function Composer({
                is what the placeholder advertises. No "⎋" hint here: Escape only
                fires while the composer is UNfocused, so it wouldn't work from
                where the cursor is when you're reading this button. */
-            <Button variant="danger" size="sm" onClick={onStop}>
+            <Button variant="danger" size="sm" className="min-h-10" onClick={onStop}>
               Stop
             </Button>
           ) : (
-            <Button variant="primary" size="sm" onClick={send}>
+            <Button variant="primary" size="sm" className="min-h-10" onClick={send}>
               {busy ? "Queue ↵" : "Send ↵"}
             </Button>
           )}
