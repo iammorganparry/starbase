@@ -35,13 +35,13 @@ describe("contextWindowFor", () => {
   // keeps the table from going stale every time a provider stamps a date on.
   it("matches a dated, fully-qualified model id", () => {
     expect(contextWindowFor("claude", "claude-sonnet-4-5-20250929")).toBe(1_000_000)
-    expect(contextWindowFor("codex", "gpt-5.6-sol-20260709")).toBe(258_400)
+    expect(contextWindowFor("codex", "gpt-5.6-sol-20260709")).toBe(1_000_000)
   })
 
-  it("uses the effective Codex session window for every GPT-5.6 variant", () => {
-    expect(contextWindowFor("codex", "gpt-5.6-sol")).toBe(258_400)
-    expect(contextWindowFor("codex", "gpt-5.6-terra")).toBe(258_400)
-    expect(contextWindowFor("codex", "gpt-5.6-luna")).toBe(258_400)
+  it("uses the 1M context window for every GPT-5.6 variant", () => {
+    expect(contextWindowFor("codex", "gpt-5.6-sol")).toBe(1_000_000)
+    expect(contextWindowFor("codex", "gpt-5.6-terra")).toBe(1_000_000)
+    expect(contextWindowFor("codex", "gpt-5.6-luna")).toBe(1_000_000)
   })
 
   // `claude-fable-5` contains no shorter model name today, but a future id like

@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react"
+import { type RefObject, useCallback, useLayoutEffect, useRef, useState } from "react"
 import type {
   Attachment,
   CliKind,
@@ -71,6 +71,28 @@ const hasGigaplanPlan = (messages: ReadonlyArray<Message>): boolean =>
     (message) =>
       message.source === "gigaplan-handoff" && message.parts.some((part) => part._tag === "Plan")
   )
+
+const useStickyBottomOnResize = (
+  scrollRef: RefObject<HTMLDivElement | null>,
+  transcriptRef: RefObject<HTMLDivElement | null>,
+  stick: RefObject<boolean>
+) => {
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver === "undefined") return
+    const scroll = scrollRef.current
+    const transcript = transcriptRef.current
+    if (!(scroll && transcript)) return
+
+    const pinToBottom = () => {
+      if (stick.current) scroll.scrollTop = scroll.scrollHeight
+    }
+    const observer = new ResizeObserver(pinToBottom)
+    observer.observe(scroll)
+    observer.observe(transcript)
+    pinToBottom()
+    return () => observer.disconnect()
+  }, [scrollRef, transcriptRef, stick])
+}
 
 export interface ConversationViewProps {
   messages: ReadonlyArray<Message>
@@ -241,6 +263,7 @@ export function ConversationView({
   // the bottom of the same column rather than a separate strip.
   const gutter = atLeast(useWidthTier(), "mid") ? "px-[30px]" : "px-3"
   const scrollRef = useRef<HTMLDivElement>(null)
+  const transcriptRef = useRef<HTMLDivElement>(null)
   // Sticky-bottom: follow the newest content while the operator is parked at the
   // bottom, but never yank them down once they've scrolled up to read.
   const stick = useRef(true)
@@ -296,6 +319,13 @@ export function ConversationView({
     }
   }, [messages, virtualizer])
 
+  // A restored transcript is not fully sized on the first layout pass: virtual
+  // rows are measured after render, and rich content can grow later as it loads.
+  // Keep correcting those size changes while the operator is parked at the
+  // bottom. Message updates alone cannot cover this because measurement changes
+  // do not create a new `messages` array.
+  useStickyBottomOnResize(scrollRef, transcriptRef, stick)
+
   // Track whether we're parked at the bottom (within a small threshold), so
   // scrolling up to read pauses the auto-follow and scrolling back resumes it.
   const onScroll = useCallback(() => {
@@ -318,6 +348,7 @@ export function ConversationView({
         )}
         <div
           ref={scrollRef}
+          data-testid="conversation-scroll"
           onScroll={onScroll}
           className={cn(
             // `both-edges` reserves the scrollbar gutter symmetrically so the
@@ -328,7 +359,11 @@ export function ConversationView({
             archived && "opacity-60"
           )}
         >
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          <div
+            ref={transcriptRef}
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
             {virtualizer.getVirtualItems().map((item) => {
               const m = messages[item.index]!
               return (

@@ -100,16 +100,16 @@ const WINDOW_PREFIXES: Partial<Record<CliKind, ReadonlyArray<readonly [string, n
     // one can run into the harness ceiling without any way to reconcile down.
     ["haiku", 200_000]
   ],
-  // Codex reports the effective session window through
-  // `thread/tokenUsage/updated.modelContextWindow`. Current GPT-5.6 sessions
-  // report 258,400 even though the public Responses API advertises a larger
-  // model context. This table is only the conservative pre-telemetry fallback;
-  // the live runtime value replaces it as soon as the adapter receives one.
+  // GPT-5.6 has the same 1M context treatment as current Claude models. Some
+  // Codex builds still report the older 258.4k effective-session value through
+  // `thread/tokenUsage/updated.modelContextWindow`; the context manager treats
+  // this known model value as a floor so stale telemetry cannot force an early
+  // compaction.
   codex: [
-    ["gpt-5.6-sol", 258_400],
-    ["gpt-5.6-terra", 258_400],
-    ["gpt-5.6-luna", 258_400],
-    ["gpt-5.6", 258_400],
+    ["gpt-5.6-sol", 1_000_000],
+    ["gpt-5.6-terra", 1_000_000],
+    ["gpt-5.6-luna", 1_000_000],
+    ["gpt-5.6", 1_000_000],
     ["gpt-5", 272_000]
   ]
 }

@@ -50,6 +50,57 @@ const conversation = [
   }
 ]
 
+const longConversation = Array.from({ length: 40 }, (_, index) => ({
+  id: `${index % 2 === 0 ? "u" : "a"}_s_long_${index}`,
+  role: index % 2 === 0 ? "user" : "assistant",
+  parts: [
+    {
+      _tag: "Text",
+      text: [
+        `Turn ${index + 1}`,
+        "This persisted turn is deliberately tall enough to exercise transcript virtualization.",
+        "Opening an existing chat should land on its newest message, not the beginning of its history."
+      ].join("\n\n")
+    }
+  ],
+  streaming: false,
+  createdAt: `2026-07-16T00:${String(index).padStart(2, "0")}:00.000Z`
+}))
+
+test("opening a long existing chat starts at the bottom", async ({ launchApp }) => {
+  const session = baseSession({ id: "s_long", title: "Long history" })
+  const { window } = await launchApp({
+    configured: true,
+    withRepo: true,
+    sessions: [session],
+    transcripts: { s_long: longConversation }
+  })
+
+  await window.getByText("Long history").click()
+  await expect(window.getByText("Turn 40", { exact: true })).toBeAttached()
+
+  const transcript = window.getByTestId("conversation-scroll")
+  // Rich transcript content (images, highlighted code, expanded tool output)
+  // can finish sizing after the initial virtualizer pass. Simulate that late
+  // growth on the newest rendered turn: sticky-bottom must absorb it.
+  await transcript.locator("[data-index='39']").evaluate((turn) => {
+    const lateContent = document.createElement("div")
+    lateContent.style.height = "480px"
+    lateContent.dataset.testid = "late-transcript-content"
+    turn.append(lateContent)
+  })
+
+  await expect
+    .poll(
+      () =>
+        transcript.evaluate(
+          (element) => element.scrollHeight - element.scrollTop - element.clientHeight
+        ),
+      { timeout: 5_000 }
+    )
+    .toBeLessThan(5)
+})
+
 test("a session's history survives a real app restart", async ({ launchApp }) => {
   const session = baseSession({ id: "s_hist", title: "History session" })
   const first = await launchApp({

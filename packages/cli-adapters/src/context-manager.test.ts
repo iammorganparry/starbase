@@ -1273,8 +1273,8 @@ describe("ContextManager.snapshot", () => {
 
     expect(before.tokens).toBe(2_979_284)
     expect(after.tokens).toBe(193_496)
-    expect(after.window).toBe(258_400)
-    expect(after.triggerAt).toBe(193_800)
+    expect(after.window).toBe(1_000_000)
+    expect(after.triggerAt).toBe(500_000)
     expect(after.phase).toBe("idle")
   })
 

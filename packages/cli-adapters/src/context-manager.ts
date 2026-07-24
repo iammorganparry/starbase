@@ -90,10 +90,9 @@ interface SessionContext {
   /**
    * The ceiling the harness itself reported, when it reports one.
    *
-   * Measured beats inferred: this retires the model-id prefix table for any
-   * harness that answers, which is the difference between compacting a 1M-window
-   * model at the budget as designed and compacting it at 170k because the table only
-   * knew the family name.
+   * A larger measured value raises a conservative model-table entry. A smaller
+   * value cannot lower a known window: Codex builds can retain an older
+   * effective-session figure after the model family has moved to 1M.
    */
   readonly window: number | null
   readonly failures: number
@@ -121,6 +120,12 @@ const EMPTY: SessionContext = {
   lastCompactedAt: null,
   deferrals: 0,
   heldReason: null
+}
+
+const resolveWindow = (inferred: number | null, reported: number | null): number | null => {
+  if (reported === null) return inferred
+  if (inferred === null) return reported
+  return Math.max(inferred, reported)
 }
 
 export type DigestEnv =
@@ -213,6 +218,8 @@ export class ContextManager extends Effect.Service<ContextManager>()(
           const provider = config?.providers?.[session.cli]
 
           const cli = (yield* listClis()).find((c) => c.kind === session.cli)
+          const inferredWindow = contextWindowFor(session.cli, session.model ?? null)
+          const measuredWindow = resolveWindow(inferredWindow, reported)
 
           // A harness that reports no usage gives us nothing to measure, so it is
           // left alone rather than compacted against a fabricated number.
@@ -225,10 +232,12 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             session,
             auto,
             budget: ctx.budgetTokens,
-            // Precedence: the user's explicit Settings value, then whatever the
-            // harness measured for this very run, then the guessed table. The
-            // override stays on top because it is also the escape hatch for a
-            // harness that reports a ceiling we have reason to distrust.
+            // The user's explicit Settings value stays on top because it is the
+            // escape hatch for a harness report we have reason to distrust.
+            // Otherwise, a known model window is a floor: stale Codex telemetry
+            // must not lower GPT-5.6 from 1M to its former 258.4k session value.
+            // A larger live report still raises an old or conservative table
+            // entry, and an unknown table entry can still use live telemetry.
             //
             // Whatever that resolves to is then reconciled against the largest
             // occupancy this session has actually reported. A model-id table is a
@@ -238,7 +247,7 @@ export class ContextManager extends Effect.Service<ContextManager>()(
             window: reconcileWindow(
               provider?.contextWindow !== undefined && provider.contextWindow !== null
                 ? contextWindowFor(session.cli, session.model ?? null, provider.contextWindow)
-                : reported ?? contextWindowFor(session.cli, session.model ?? null),
+                : measuredWindow,
               peak
             ),
             binPath: cli?.binPath ?? null,
