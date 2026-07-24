@@ -469,6 +469,29 @@ describe("runCodexAppServer", () => {
     expect(server.state.closed).toBe(true)
   })
 
+  it("fails instead of waiting forever when an active turn stops emitting events", async () => {
+    vi.useFakeTimers()
+    try {
+      server.state.hangMessages = true
+      const { ctx } = harness()
+      const run = expect(
+        Effect.runPromise(runCodexAppServer("s1", spec(), ctx, new Map()))
+      ).rejects.toThrow("Codex turn produced no events")
+
+      await vi.waitFor(() => {
+        expect(
+          server.state.requests.some((request) => request.method === "turn/start")
+        ).toBe(true)
+      })
+      await vi.runAllTimersAsync()
+
+      await run
+      expect(server.state.closed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("starts a resumed thread directly when replay usage is below the safety band", async () => {
     server.state.replay = [
       {

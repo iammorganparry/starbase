@@ -31,6 +31,7 @@ const MAX_PLAN_ROUNDS = 6
 const EMERGENCY_COMPACTION_RATIO = 0.9
 const RESUME_REPLAY_WAIT_MS = 1_000
 const INTERRUPT_REQUEST_TIMEOUT_MS = 2_000
+const TURN_INACTIVITY_TIMEOUT_MS = 10 * 60_000
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -107,6 +108,34 @@ const turnIdFromResponse = (response: unknown): string | null => {
   if (!isRecord(response)) return null
   const turn = recordAt(response, "turn")
   return turn === null ? null : stringAt(turn, "id")
+}
+
+/**
+ * A started turn must eventually emit another protocol message. Codex can
+ * otherwise leave the transport open forever after replacement or compaction,
+ * which keeps Starbase's run and renderer permanently busy.
+ *
+ * This is an inactivity deadline, not a total turn limit: every usage, tool,
+ * assistant, or terminal event starts a fresh window.
+ */
+const nextTurnMessage = async (
+  connection: CodexAppServerConnection
+): Promise<JsonRpcMessage | null> => {
+  let timeout: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      connection.nextMessage(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Codex turn produced no events for 10 minutes")),
+          TURN_INACTIVITY_TIMEOUT_MS
+        )
+        timeout.unref()
+      })
+    ])
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+  }
 }
 
 const nativeQuestions = (params: Record<string, unknown>): ReadonlyArray<{
@@ -424,7 +453,7 @@ export const runCodexAppServer = (
             let terminal: ReturnType<typeof completedTurn> = null
             while (terminal === null) {
               if (abort.signal.aborted) throw new Error("Codex run interrupted")
-              const message = await connection.nextMessage()
+              const message = await nextTurnMessage(connection)
               if (message === null) throw new Error("Codex app-server closed during the turn")
               if (await handleServerRequest(connection, message, ctx, runP, sessionId)) {
                 continue
